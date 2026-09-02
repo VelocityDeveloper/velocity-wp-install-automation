@@ -59,6 +59,29 @@ WP_INSTALL_ADMIN_PASSWORD_FILE=/run/secrets/wp-install-admin-password \
 
 `apply` is destructive: it writes WordPress files and database state on target server. Backup/rollback remains operator responsibility.
 
+## Development workflow
+
+Develop anywhere:
+
+```bash
+git clone https://github.com/VelocityDeveloper/velocity-wp-install-automation.git
+cd velocity-wp-install-automation
+# edit files
+git add .
+git commit -m "Describe change"
+git push origin main
+```
+
+Update server with one command:
+
+```bash
+cd /opt/velocity-wp-install-automation
+git pull --ff-only origin main
+./deploy.sh
+```
+
+`deploy.sh` validates Bash and workflow JSON, installs runtime files, restarts status API, checks Nginx, and reloads Nginx. It never changes credential files or n8n encryption settings. Keep server-only secrets outside repository.
+
 ## Installer status page
 
 - `web/installer/index.html` — terminal-style `/installer/` page.
