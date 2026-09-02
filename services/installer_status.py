@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import secrets as pysecrets
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +12,8 @@ from urllib.parse import urlparse
 ROOT = Path('/home/project')
 STATE = Path('/var/lib/velocity/installer')
 RUNNER = Path('/opt/velocity-wp-install-automation/scripts/installer-runner')
+SECRETS = Path('/etc/velocity/secrets')
+SSH_KEY_CANDIDATES = [SECRETS / 'ssh_key', Path('/root/.ssh/id_ed25519'), Path('/root/.ssh/id_rsa')]
 DOMAIN_RE = re.compile(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 SERVERS_FILE_CANDIDATES = [
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
@@ -161,6 +164,80 @@ def domain_row(domain, manifest):
     return row
 
 
+def _write_secret(name: str, content: str, perms: int = 0o600):
+    SECRETS.mkdir(parents=True, exist_ok=True)
+    os.chmod(SECRETS, 0o700)
+    p = SECRETS / name
+    p.write_text(content)
+    os.chmod(p, perms)
+    return p
+
+
+def ssh_key_file():
+    for p in SSH_KEY_CANDIDATES:
+        if p.is_file():
+            return p
+    return None
+
+
+def generate_manifest(domain: str):
+    """Auto-generate manifest + secrets for domain from existing data."""
+    if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
+        return None, 'invalid_domain'
+    folder = ROOT / domain
+    if not folder.is_dir():
+        return None, 'no_folder'
+    manifest = folder / f'{domain}.txt'
+    if manifest.is_file():
+        ok, detail = validate_manifest(manifest)
+        if ok:
+            return {'generated': False, 'reason': 'already_valid'}, None
+    # derive defaults
+    labels = domain.split('.')[0]
+    da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:31] or 'admin'
+    if not re.match(r'^[a-z_]', da_user):
+        da_user = 'u' + da_user
+    ssh_user = 'root'
+    admin_email = ''
+    notes = folder / 'notes-credentials.txt'
+    if notes.is_file():
+        for line in notes.read_text(errors='replace').splitlines():
+            if '@' in line and ' ' not in line and not admin_email:
+                cand = line.strip().strip('*').strip()
+                if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', cand):
+                    admin_email = cand
+    content = (
+        f'target_host=103.103.175.182\n'
+        f'ssh_port=22\n'
+        f'ssh_user={ssh_user}\n'
+        f'da_user={da_user}\n'
+        f'domain={domain}\n'
+        f'db_name={da_user}_wp\n'
+        f'db_user={da_user}_wp\n'
+        f'admin_user=admin\n'
+        f'admin_email={admin_email or ("admin@" + domain)}\n'
+        f'site_title={labels.replace("-", " ").title()}\n'
+    )
+    tmp = manifest.with_suffix('.txt.tmp')
+    tmp.write_text(content)
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, manifest)
+    # secrets (only if absent - never overwrite existing)
+    db_pass = pysecrets.token_urlsafe(18)
+    admin_pass = pysecrets.token_urlsafe(18)
+    for name, val in (
+        (f'db_password_{domain}.txt', db_pass),
+        (f'admin_password_{domain}.txt', admin_pass),
+    ):
+        p = SECRETS / name
+        if not p.is_file():
+            _write_secret(name, val)
+    if not ssh_key_file():
+        # best-effort: leave absent; start_run will reject apply with missing key
+        pass
+    return {'generated': True, 'manifest': str(manifest)}, None
+
+
 def start_run(domain: str, mode: str):
     """Start installer-runner for domain. mode: dry-run | apply."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
@@ -178,6 +255,15 @@ def start_run(domain: str, mode: str):
         return None, 'already_running'
     STATE.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, INSTALL_MODE=mode)
+    if mode == 'apply':
+        if not ssh_key_file():
+            return None, 'ssh_key_missing'
+        env['WP_INSTALL_SSH_KEY_FILE'] = str(ssh_key_file())
+        env['WP_INSTALL_DB_PASSWORD_FILE'] = str(SECRETS / f'db_password_{domain}.txt')
+        env['WP_INSTALL_ADMIN_PASSWORD_FILE'] = str(SECRETS / f'admin_password_{domain}.txt')
+        for f in (env['WP_INSTALL_DB_PASSWORD_FILE'], env['WP_INSTALL_ADMIN_PASSWORD_FILE']):
+            if not Path(f).is_file():
+                return None, 'secret_file_missing:' + Path(f).name
     logf = open(STATE / f'{domain}.log', 'a')
     try:
         p = subprocess.Popen(
@@ -236,7 +322,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
-        if path != '/api/installer/run':
+        if path not in ('/api/installer/run', '/api/installer/generate'):
             self.send_error(404)
             return
         if not _check_auth(self):
@@ -252,6 +338,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'invalid_json'}, 400)
             return
         domain = str(payload.get('domain') or '')
+        if path == '/api/installer/generate':
+            result, err = generate_manifest(domain)
+            if result is None:
+                code = {'invalid_domain': 400, 'no_folder': 404}.get(err, 422)
+                self._send_json({'error': err, 'domain': domain}, code)
+                return
+            self._send_json({'status': 'ok', **result})
+            return
         mode = str(payload.get('mode') or 'dry-run')
         result, err = start_run(domain, mode)
         if result is None:
