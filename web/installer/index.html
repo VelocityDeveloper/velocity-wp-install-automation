@@ -178,6 +178,15 @@
         color: var(--green);
         background: #55e87918;
       }
+      .action.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+      .action.danger:hover {
+        background: #ff737318;
+        border-color: var(--red);
+        color: var(--red);
+      }
       .action + .action {
         margin-left: 6px;
       }
@@ -188,6 +197,10 @@
       .missing {
         border-color: var(--yellow);
         color: var(--yellow);
+      }
+      .failed {
+        border-color: var(--red);
+        color: var(--red);
       }
       .empty {
         padding: 28px;
@@ -282,6 +295,25 @@
         display: flex;
         gap: 10px;
         justify-content: flex-end;
+      }
+      .mode-choice {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 0 0 14px;
+        padding: 12px;
+        border: 1px dashed var(--line);
+        background: #0a0e0c;
+      }
+      .mode-choice label {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .mode-choice input {
+        accent-color: var(--green);
       }
       .btn {
         padding: 8px 14px;
@@ -393,18 +425,32 @@
     </main>
     <div id="confirm-modal" class="modal" role="dialog" aria-modal="true">
       <div class="modal-box">
-        <h3>Konfirmasi Install</h3>
+        <h3 id="confirm-title">Konfirmasi Install</h3>
         <p id="confirm-text"></p>
-        <div class="modal-actions">
-          <button class="btn btn-cancel" onclick="closeModal()">Batal</button
-          ><button class="btn btn-confirm" onclick="confirmInstall()">
-            Ya, lanjutkan
-          </button>
+        <div class="mode-choice">
+          <label
+            ><input type="radio" name="run-mode" value="dry-run" checked /> Dry
+            run — validasi manifest saja (aman)</label
+          >
+          <label
+            ><input type="radio" name="run-mode" value="apply" /> Apply —
+            eksekusi nyata (timpa public_html &amp; tulis DB)</label
+          >
         </div>
         <p class="meta" style="margin: 10px 0 0">
-          Destruktif: akan menimpa <code>public_html</code> &amp; menulis DB.
-          Backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.
+          Apply destruktif: backup otomatis dibuat di
+          <code>/home/&lt;da_user&gt;/backup/</code>.
         </p>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" onclick="closeModal()">Batal</button
+          ><button
+            class="btn btn-confirm"
+            id="confirm-btn"
+            onclick="confirmInstall()"
+          >
+            Jalankan
+          </button>
+        </div>
       </div>
     </div>
     <div id="log-modal" class="modal" role="dialog" aria-modal="true">
@@ -493,18 +539,26 @@
             .map((x) => {
               const isReady = x.status === "READY" || x.status === "SUCCESS";
               const isRunning = x.status === "RUNNING";
-              const pillClass = isReady ? "ready" : "missing";
+              const isFailed =
+                x.status === "FAILED" || x.status === "installer_error";
+              const pillClass = isFailed
+                ? "failed"
+                : isReady
+                  ? "ready"
+                  : "missing";
               const stage = x.stage ? " / " + esc(x.stage) : "";
               const logLines = (x.log || []).join("\n");
-              // enable only READY/SUCCESS, disable RUNNING/invalid
+              // enable READY/SUCCESS (install) & FAILED (retry); disable RUNNING/invalid
+              const actionLabel = isFailed ? "[ retry ]" : "[ install ]";
+              const actionClass = isFailed ? "action danger" : "action";
               const btnDisabled =
-                isReady && !isRunning
+                (isReady || isFailed) && !isRunning
                   ? ""
                   : 'disabled title="' + esc(x.status) + '"';
               const logBtn = logLines
                 ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>`
                 : "";
-              return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || "-")}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${logBtn}<button class="action" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>[ install ]</button></td></tr>`;
+              return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || "-")}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${logBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
             })
             .join("");
           rows
@@ -530,43 +584,67 @@
       }
 
       function onInstallClick(domain, status) {
-        if (status !== "READY" && status !== "SUCCESS") {
+        const isFailed = status === "FAILED" || status === "installer_error";
+        if (status !== "READY" && status !== "SUCCESS" && !isFailed) {
           showDetail({ error: status, domain });
           return;
         }
-        if (!serverSelect.value) {
-          serverNote.textContent = "Pilih server tujuan terlebih dahulu.";
-          serverSelect.focus();
-          return;
-        }
         pendingDomain = domain;
-        const serverLabel =
-          serverSelect.options[serverSelect.selectedIndex].text;
-        confirmText.textContent =
-          'Pasang "' + domain + '" ke ' + serverLabel + "?";
+        const title = document.getElementById("confirm-title");
+        const btn = document.getElementById("confirm-btn");
+        title.textContent = isFailed
+          ? "Retry Install: " + domain
+          : "Konfirmasi Install";
+        btn.textContent = isFailed ? "Retry" : "Jalankan";
+        confirmText.textContent = isFailed
+          ? 'Install "' + domain + '" sebelumnya gagal. Jalankan ulang?'
+          : 'Pasang "' + domain + '" sekarang?';
         modal.classList.add("open");
       }
       function closeModal() {
         modal.classList.remove("open");
         pendingDomain = null;
       }
-      function confirmInstall() {
+      function selectedMode() {
+        const el = document.querySelector('input[name="run-mode"]:checked');
+        return el ? el.value : "dry-run";
+      }
+      async function confirmInstall() {
         if (!pendingDomain) return;
         const d = pendingDomain;
+        const mode = selectedMode();
         closeModal();
         serverNote.textContent =
-          "Domain " +
-          d +
-          ' siap. Jalankan via n8n: POST {domain:"' +
-          d +
-          '"} ke workflow Velocity WP Install (dry-run → apply).';
-        showDetail({
-          info:
-            'Install dieksekusi via n8n, bukan browser. Trigger workflow dengan payload {domain:"' +
-            d +
-            '"}',
-          server: serverSelect.value,
-        });
+          "Menjalankan " + mode + ' untuk "' + d + '" ...';
+        try {
+          const r = await fetch("/api/installer/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ domain: d, mode }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && j.status === "started") {
+            serverNote.textContent =
+              mode +
+              ' "' +
+              d +
+              '" dimulai (PID ' +
+              j.pid +
+              "). Log diperbarui otomatis.";
+            showDetail({ info: mode + " dimulai", ...j });
+            setTimeout(load, 1500);
+          } else {
+            serverNote.textContent = "Gagal memulai: " + (j.error || r.status);
+            showDetail({
+              error: j.error || "http_" + r.status,
+              domain: d,
+              mode,
+            });
+          }
+        } catch (e) {
+          serverNote.textContent =
+            "Gagal menghubungi API: " + esc(String(e.message || e));
+        }
       }
       modal.addEventListener("click", (e) => {
         if (e.target === modal) closeModal();

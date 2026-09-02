@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 ROOT = Path('/home/project')
 STATE = Path('/var/lib/velocity/installer')
+RUNNER = Path(__file__).resolve().parent.parent / 'scripts' / 'installer-runner'
+DOMAIN_RE = re.compile(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 SERVERS_FILE_CANDIDATES = [
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
     Path('/etc/velocity/servers.json'),
@@ -20,6 +22,7 @@ RATE_LIMIT = 30
 RATE_WINDOW = 60
 _cron_cache = {'at': 0, 'value': []}
 CACHE_TTL = 30
+_running = {}  # domain -> subprocess.Popen
 
 
 def _rate_ok(ip: str) -> bool:
@@ -158,6 +161,39 @@ def domain_row(domain, manifest):
     return row
 
 
+def start_run(domain: str, mode: str):
+    """Start installer-runner for domain. mode: dry-run | apply."""
+    if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
+        return None, 'invalid_domain'
+    if mode not in ('dry-run', 'apply'):
+        return None, 'invalid_mode'
+    manifest = ROOT / domain / f'{domain}.txt'
+    if not manifest.is_file():
+        return None, 'manifest_not_found'
+    ok, detail = validate_manifest(manifest)
+    if not ok:
+        return None, 'manifest_invalid:' + detail
+    proc = _running.get(domain)
+    if proc is not None and proc.poll() is None:
+        return None, 'already_running'
+    STATE.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, INSTALL_MODE=mode)
+    logf = open(STATE / f'{domain}.log', 'a')
+    try:
+        p = subprocess.Popen(
+            [str(RUNNER), domain],
+            stdout=logf, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env,
+            start_new_session=True,
+        )
+    except OSError as e:
+        logf.close()
+        return None, 'spawn_failed:' + str(e)
+    logf.close()
+    _running[domain] = p
+    return {'domain': domain, 'mode': mode, 'pid': p.pid}, 'started'
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
         body = json.dumps(obj, separators=(',', ':')).encode()
@@ -193,6 +229,36 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs()})
             return
         self.send_error(404)
+
+    def do_POST(self):
+        ip = self.client_address[0] if self.client_address else 'unknown'
+        if not _rate_ok(ip):
+            self._send_json({'error': 'rate_limited'}, 429)
+            return
+        path = urlparse(self.path).path
+        if path != '/api/installer/run':
+            self.send_error(404)
+            return
+        if not _check_auth(self):
+            self._send_json({'error': 'unauthorized'}, 401)
+            return
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+            if length > 4096:
+                self._send_json({'error': 'payload_too_large'}, 413)
+                return
+            payload = json.loads(self.rfile.read(length) or b'{}')
+        except (ValueError, OSError):
+            self._send_json({'error': 'invalid_json'}, 400)
+            return
+        domain = str(payload.get('domain') or '')
+        mode = str(payload.get('mode') or 'dry-run')
+        result, err = start_run(domain, mode)
+        if err:
+            code = {'already_running': 409, 'invalid_domain': 400, 'invalid_mode': 400}.get(err.split(':')[0], 422)
+            self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
+            return
+        self._send_json({'status': 'started', **result})
 
     def log_message(self, fmt, *args):
         try:

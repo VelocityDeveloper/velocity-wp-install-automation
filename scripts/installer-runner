@@ -26,4 +26,8 @@ state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
 INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
-state SUCCESS COMPLETE
+if [[ "$MODE" == "dry-run" ]]; then
+  state SUCCESS DRY_RUN_OK
+else
+  state SUCCESS COMPLETE
+fi
