@@ -109,8 +109,9 @@ Endpoints:
 - `GET /health` — no auth
 - `GET /api/servers` — daftar server (dari `config/servers.json` atau env `INSTALLER_SERVERS` JSON)
 - `GET /api/installer` — daftar domain + validasi manifest per-file + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`
+- `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry.
 
-Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy.
+Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy (blok location referensi: `config/nginx-installer.conf`).
 
 Konfigurasi server tujuan: `config/servers.json` (array `[{name,host,port}]`) atau env `INSTALLER_SERVERS`.
 
@@ -120,7 +121,8 @@ Terminal-style `/installer/`.
 
 - pilih server tujuan (dari `/api/servers`)
 - lihat validasi manifest (READY vs `missing_*/invalid_*`) + log 30 baris terakhir
-- tombol `[ install ]` → modal konfirmasi → info trigger n8n (tidak eksekusi langsung dari browser)
+- tombol `[ install ]` (status READY/SUCCESS) atau `[ retry ]` merah (status FAILED/installer_error) → modal konfirmasi dengan pilihan mode: **Dry run** (validasi saja) atau **Apply** (eksekusi nyata) → `POST /api/installer/run`
+- tombol `[ log ]` → popup detail log 30 baris terakhir
 - polling 10s, pause saat `document.hidden`
 
 ## Workflow (`workflows/website-install-workflow.json`)
