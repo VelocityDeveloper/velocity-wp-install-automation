@@ -1,0 +1,33 @@
+{
+  "name": "Velocity WP Install",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run install",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "command": "INSTALL_MODE=dry-run MANIFEST=/home/project/{{$json.domain}}/{{$json.domain}}.txt /opt/velocity-wp-install-automation/scripts/website-install-from-manifest"
+      },
+      "id": "manifest-installer",
+      "name": "Validate manifest",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Run install": {
+      "main": [[{"node": "Validate manifest", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "velocity-wp-install-v1",
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}

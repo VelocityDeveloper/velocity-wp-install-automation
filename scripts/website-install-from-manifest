@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=/home/project
+MODE=${INSTALL_MODE:-dry-run}
+MANIFEST=${MANIFEST:-}
+[[ -n "$MANIFEST" ]] || { printf '{"status":"error","error":"MANIFEST_required"}\n'; exit 2; }
+[[ "$MANIFEST" == "$ROOT/"* && -f "$MANIFEST" ]] || { printf '{"status":"error","error":"invalid_manifest"}\n'; exit 2; }
+
+read_secret() {
+  local file=$1 name=$2
+  [[ -r "$file" ]] || { printf '{"status":"error","error":"missing_secret_file","name":"%s"}\n' "$name"; exit 2; }
+  tr -d '\r\n' < "$file"
+}
+
+json() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()), separators=(",", ":")))'; }
+
+declare -A cfg=()
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  key=${key//[$' \t\r']/}
+  [[ -z "$key" || "$key" == \#* ]] && continue
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { printf '{"status":"error","error":"invalid_key"}\n'; exit 2; }
+  cfg[$key]=$value
+done < "$MANIFEST"
+
+for key in target_host ssh_user da_user domain db_name db_user admin_user admin_email site_title; do
+  [[ -n "${cfg[$key]:-}" ]] || { printf '{"status":"error","error":"missing_%s"}\n' "$key"; exit 2; }
+done
+[[ "${cfg[target_host]}" =~ ^[A-Za-z0-9.-]+$ ]] || { printf '{"status":"error","error":"invalid_target_host"}\n'; exit 2; }
+[[ "${cfg[domain]}" =~ ^[A-Za-z0-9.-]+$ ]] || { printf '{"status":"error","error":"invalid_domain"}\n'; exit 2; }
+[[ "${cfg[ssh_port]:-22}" =~ ^[0-9]+$ ]] || { printf '{"status":"error","error":"invalid_ssh_port"}\n'; exit 2; }
+
+printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "${cfg[ssh_port]:-22}" "${cfg[da_user]}"
+[[ "$MODE" == dry-run ]] && exit 0
+[[ "$MODE" == apply ]] || { printf '{"status":"error","error":"invalid_INSTALL_MODE"}\n'; exit 2; }
+
+: "${WP_INSTALL_SSH_KEY_FILE:?WP_INSTALL_SSH_KEY_FILE_required}"
+: "${WP_INSTALL_DB_PASSWORD_FILE:?WP_INSTALL_DB_PASSWORD_FILE_required}"
+: "${WP_INSTALL_ADMIN_PASSWORD_FILE:?WP_INSTALL_ADMIN_PASSWORD_FILE_required}"
+SSH_KEY=$(read_secret "$WP_INSTALL_SSH_KEY_FILE" ssh_key)
+DB_PASSWORD=$(read_secret "$WP_INSTALL_DB_PASSWORD_FILE" db_password)
+ADMIN_PASSWORD=$(read_secret "$WP_INSTALL_ADMIN_PASSWORD_FILE" admin_password)
+
+remote=(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "${cfg[ssh_port]:-22}" "${cfg[ssh_user]}@${cfg[target_host]}")
+q() { printf '%q' "$1"; }
+remote_cmd="set -Eeuo pipefail
+cd $(q "/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html")
+command -v wp >/dev/null || { echo 'wp-cli_missing' >&2; exit 10; }
+wp core download --force
+wp config create --dbname=$(q "${cfg[db_name]}") --dbuser=$(q "${cfg[db_user]}") --dbpass=\"\$WP_DB_PASSWORD\" --skip-check
+wp core install --url=$(q "https://${cfg[domain]}") --title=$(q "${cfg[site_title]}") --admin_user=$(q "${cfg[admin_user]}") --admin_password=\"\$WP_ADMIN_PASSWORD\" --admin_email=$(q "${cfg[admin_email]}")
+wp plugin install $(q "${cfg[velocity_addons_repo]:-https://github.com/VelocityDeveloper/velocity-addons.git}") --activate
+wp theme install $(q "${cfg[velocity_theme_repo]:-https://github.com/VelocityDeveloper/velocity-theme.git}") --activate
+"
+printf 'WP_DB_PASSWORD=%q\nWP_ADMIN_PASSWORD=%q\n%s\n' "$DB_PASSWORD" "$ADMIN_PASSWORD" "$remote_cmd" | "${remote[@]}" 'bash -s'
+printf '{"status":"applied","domain":"%s"}\n' "${cfg[domain]}"
