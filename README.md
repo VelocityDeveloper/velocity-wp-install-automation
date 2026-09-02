@@ -1,6 +1,6 @@
 # Velocity WordPress install automation
 
-n8n-driven WordPress installer for DirectAdmin servers.
+n8n-driven WordPress installer for DirectAdmin servers only. cPanel is not supported.
 
 ## Arsitektur
 
