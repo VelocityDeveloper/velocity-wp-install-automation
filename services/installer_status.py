@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 ROOT = Path('/home/project')
 STATE = Path('/var/lib/velocity/installer')
-RUNNER = Path(__file__).resolve().parent.parent / 'scripts' / 'installer-runner'
+RUNNER = Path('/opt/velocity-wp-install-automation/scripts/installer-runner')
 DOMAIN_RE = re.compile(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 SERVERS_FILE_CANDIDATES = [
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
