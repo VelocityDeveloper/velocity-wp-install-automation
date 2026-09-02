@@ -254,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
         domain = str(payload.get('domain') or '')
         mode = str(payload.get('mode') or 'dry-run')
         result, err = start_run(domain, mode)
-        if err:
+        if result is None:
             code = {'already_running': 409, 'invalid_domain': 400, 'invalid_mode': 400}.get(err.split(':')[0], 422)
             self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
             return
