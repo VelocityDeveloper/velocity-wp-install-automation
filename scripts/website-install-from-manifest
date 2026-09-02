@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=/home/project
+MODE=${INSTALL_MODE:-dry-run}
+shopt -s nullglob
+files=("$ROOT"/*.txt)
+if ((${#files[@]} == 0)); then
+  printf '{"status":"no_manifest","root":"%s"}\n' "$ROOT"
+  exit 0
+fi
+
+manifest=${MANIFEST:-${files[0]}}
+[[ -f "$manifest" && "$manifest" == "$ROOT/"*.txt ]] || { printf '{"status":"error","error":"invalid_manifest"}\n'; exit 2; }
+domain=${manifest##*/}
+domain=${domain%.txt}
+[[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || { printf '{"status":"error","error":"invalid_domain","manifest":"%s"}\n' "$manifest"; exit 2; }
+
+#ponytail: key=value only; add YAML/JSON parser only when manifest format requires it.
+declare -A cfg=()
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  key=${key//[$' \t\r']/}
+  [[ -z "$key" || "$key" == \#* ]] && continue
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { printf '{"status":"error","error":"invalid_key","key":"%s"}\n' "$key"; exit 2; }
+  cfg[$key]=$value
+done < "$manifest"
+
+for key in target_host target_user template; do
+  [[ -n "${cfg[$key]:-}" ]] || { printf '{"status":"error","error":"missing_%s","manifest":"%s"}\n' "$key" "$manifest"; exit 2; }
+done
+[[ "${cfg[target_host]}" != *[[:space:]]* && "${cfg[target_host]}" != *';'* && "${cfg[target_host]}" != *'|'* ]] || { printf '{"status":"error","error":"invalid_target_host"}\n'; exit 2; }
+
+printf '{"status":"%s","domain":"%s","manifest":"%s","target_host":"%s","target_user":"%s","template":"%s"}\n' \
+  "$MODE" "$domain" "$manifest" "${cfg[target_host]}" "${cfg[target_user]}" "${cfg[template]}"
+
+if [[ "$MODE" == apply ]]; then
+  printf '%s\n' 'apply mode blocked: installer template not configured' >&2
+  exit 3
+fi
