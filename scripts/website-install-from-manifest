@@ -73,7 +73,7 @@ port=${cfg[ssh_port]:-22}
 # optional repos
 for rk in velocity_addons_repo velocity_theme_repo; do
   if [[ -n "${cfg[$rk]:-}" ]]; then
-    [[ "${cfg[$rk]}" =~ ^https://[A-Za-z0-9._~:/?#\[\]@!$&\'\(\)*+,;=%-]+$ ]] || fail "invalid_${rk}"
+    [[ "${cfg[$rk]}" == https://* && "${cfg[$rk]}" != *[[:space:]]* ]] || fail "invalid_${rk}"
   fi
 done
 
