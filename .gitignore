@@ -1,0 +1,7 @@
+credential.txt
+*.env
+.env
+*.key
+*.pem
+*.log
+__pycache__/

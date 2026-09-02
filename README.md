@@ -78,6 +78,29 @@ Behavior apply:
 
 Destruktif: tulis file WP & DB state di target. Backup dibuat otomatis; rollback operator: `tar -xzf backup.tar.gz -C public_html`.
 
+## Development workflow
+
+Develop anywhere:
+
+```bash
+git clone https://github.com/VelocityDeveloper/velocity-wp-install-automation.git
+cd velocity-wp-install-automation
+# edit files
+git add .
+git commit -m "Describe change"
+git push origin main
+```
+
+Update server with one command:
+
+```bash
+cd /opt/velocity-wp-install-automation
+git pull --ff-only origin main
+./deploy.sh
+```
+
+`deploy.sh` validates Bash and workflow JSON, installs runtime files, restarts status API, checks Nginx, and reloads Nginx. It never changes credential files or n8n encryption settings. Keep server-only secrets outside repository.
+
 ## Installer status API (`services/installer_status.py`)
 
 Loopback `127.0.0.1:9121`.
@@ -85,7 +108,7 @@ Loopback `127.0.0.1:9121`.
 Endpoints:
 - `GET /health` — no auth
 - `GET /api/servers` — daftar server (dari `config/servers.json` atau env `INSTALLER_SERVERS` JSON)
-- `GET /api/installer` — daftar domain + validasi manifest per-file + cronjobs summary (cache 30s, tidak bocor raw crontab)
+- `GET /api/installer` — daftar domain + validasi manifest per-file + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`
 
 Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy.
 
@@ -96,12 +119,12 @@ Konfigurasi server tujuan: `config/servers.json` (array `[{name,host,port}]`) at
 Terminal-style `/installer/`.
 
 - pilih server tujuan (dari `/api/servers`)
-- lihat validasi manifest (READY vs `missing_*/invalid_*`)
+- lihat validasi manifest (READY vs `missing_*/invalid_*`) + log 30 baris terakhir
 - tombol `[ install ]` → modal konfirmasi → info trigger n8n (tidak eksekusi langsung dari browser)
 - polling 10s, pause saat `document.hidden`
 
 ## Workflow (`workflows/website-install-workflow.json`)
 
-Import ke n8n. Trigger: Manual Trigger dengan `{"domain":"example.com"}`. Node `Execute Command` pakai wrapper `scripts/n8n-run-install` (validasi & escape domain, cegah injection).
+Import ke n8n. Trigger: Manual Trigger dengan `{"domain":"example.com"}`. Node `Execute Command` pakai wrapper `scripts/installer-runner` (validasi & escape domain, cegah injection, tulis STATE).
 
 Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.

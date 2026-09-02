@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "command": "/opt/velocity-wp-install-automation/scripts/n8n-run-install dry-run {{$json.domain}}",
+        "command": "INSTALL_MODE=dry-run /opt/velocity-wp-install-automation/scripts/installer-runner {{$json.domain}}",
         "options": { "timeout": 30000 }
       },
       "id": "dry-run",
@@ -38,7 +38,7 @@
     },
     {
       "parameters": {
-        "command": "/opt/velocity-wp-install-automation/scripts/n8n-run-install apply {{$json.domain}}",
+        "command": "INSTALL_MODE=apply /opt/velocity-wp-install-automation/scripts/installer-runner {{$json.domain}}",
         "options": { "timeout": 300000 }
       },
       "id": "apply",

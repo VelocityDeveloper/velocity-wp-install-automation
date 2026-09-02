@@ -6,20 +6,18 @@ import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 ROOT = Path('/home/project')
-# servers config: env INSTALLER_SERVERS (JSON array) or file
+STATE = Path('/var/lib/velocity/installer')
 SERVERS_FILE_CANDIDATES = [
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
     Path('/etc/velocity/servers.json'),
 ]
 API_TOKEN = os.environ.get('INSTALLER_API_TOKEN', '').strip()
-# simple in-memory rate limit: ip -> list[timestamps]
 _rate = {}
-RATE_LIMIT = 30  # req per 60s
+RATE_LIMIT = 30
 RATE_WINDOW = 60
-
 _cron_cache = {'at': 0, 'value': []}
 CACHE_TTL = 30
 
@@ -44,7 +42,6 @@ def _check_auth(handler: BaseHTTPRequestHandler) -> bool:
 
 
 def load_servers():
-    # env takes precedence
     raw = os.environ.get('INSTALLER_SERVERS', '').strip()
     if raw:
         try:
@@ -102,12 +99,8 @@ def cronjobs():
     now = time.time()
     if now - _cron_cache['at'] < CACHE_TTL:
         return _cron_cache['value']
-    commands = [
-        ['systemctl', 'list-timers', '--all', '--no-legend', '--no-pager'],
-        ['crontab', '-l'],
-    ]
     rows = []
-    for command in commands:
+    for command in (['systemctl', 'list-timers', '--all', '--no-legend', '--no-pager'], ['crontab', '-l']):
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
         except (OSError, subprocess.TimeoutExpired):
@@ -116,7 +109,6 @@ def cronjobs():
             line = line.strip()
             if line and not line.startswith('#') and 'No timers listed' not in line:
                 rows.append(line)
-    # do not leak full raw crontab — only summary + truncated preview
     summary = {'count': len(rows), 'preview': rows[:5]}
     _cron_cache['at'] = now
     _cron_cache['value'] = summary
@@ -131,18 +123,9 @@ def domains():
         manifests = sorted(folder.glob('*.txt'))
         for manifest in manifests or [None]:
             domain = folder.name
-            if manifest:
-                ok, detail = validate_manifest(manifest)
-                status = 'READY' if ok else detail
-            else:
-                status = 'NO_MANIFEST'
-            rows.append({
-                'domain': domain,
-                'manifest': manifest.name if manifest else None,
-                'folder': True,
-                'status': status,
-            })
+            rows.append(domain_row(domain, manifest))
     for manifest in sorted(ROOT.glob('*.txt')):
+        # stray manifest outside folder structure
         rows.append({
             'domain': manifest.stem,
             'manifest': manifest.name,
@@ -150,6 +133,29 @@ def domains():
             'status': 'READY' if (ROOT / manifest.stem).is_dir() else 'NO_FOLDER',
         })
     return rows
+
+
+def domain_row(domain, manifest):
+    if manifest:
+        ok, detail = validate_manifest(manifest)
+        base_status = 'READY' if ok else detail
+    else:
+        base_status = 'NO_MANIFEST'
+    row = {'domain': domain, 'manifest': manifest.name if manifest else None,
+           'folder': True, 'status': base_status}
+    state = STATE / f'{domain}.json'
+    log = STATE / f'{domain}.log'
+    try:
+        saved = json.loads(state.read_text())
+        if isinstance(saved, dict):
+            row.update({k: str(saved[k]) for k in ('status', 'stage', 'message', 'updated_at') if k in saved})
+    except (OSError, ValueError):
+        pass
+    try:
+        row['log'] = log.read_text(errors='replace').splitlines()[-30:]
+    except OSError:
+        row['log'] = []
+    return row
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -189,7 +195,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def log_message(self, fmt, *args):
-        # structured stdout log
         try:
             print(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'msg': fmt % args}))
         except Exception:
@@ -197,6 +202,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    # ensure config dir exists for servers.json
     (Path(__file__).resolve().parent.parent / 'config').mkdir(exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True)
     ThreadingHTTPServer(('127.0.0.1', 9121), Handler).serve_forever()
