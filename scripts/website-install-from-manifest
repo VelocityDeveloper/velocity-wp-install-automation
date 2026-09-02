@@ -4,53 +4,242 @@ set -Eeuo pipefail
 ROOT=/home/project
 MODE=${INSTALL_MODE:-dry-run}
 MANIFEST=${MANIFEST:-}
-[[ -n "$MANIFEST" ]] || { printf '{"status":"error","error":"MANIFEST_required"}\n'; exit 2; }
-[[ "$MANIFEST" == "$ROOT/"* && -f "$MANIFEST" ]] || { printf '{"status":"error","error":"invalid_manifest"}\n'; exit 2; }
 
+fail() { printf '{"status":"error","error":"%s"%s}\n' "$1" "${2:-}"; exit 2; }
+[[ -n "$MANIFEST" ]] || fail "MANIFEST_required"
+[[ "$MANIFEST" == "$ROOT/"* && -f "$MANIFEST" ]] || fail "invalid_manifest"
+
+# --- helpers ---
 read_secret() {
   local file=$1 name=$2
   [[ -r "$file" ]] || { printf '{"status":"error","error":"missing_secret_file","name":"%s"}\n' "$name"; exit 2; }
+  # permission check: must not be world-readable (others = 0)
+  if command -v stat >/dev/null 2>&1; then
+    local perms
+    perms=$(stat -c %a "$file" 2>/dev/null || stat -f %p "$file" 2>/dev/null || echo "600")
+    # allow 400, 600, 440, 640, 660 etc but last digit must be 0
+    if [[ "$perms" =~ [0-9]{3,4}$ ]]; then
+      local last=${perms: -1}
+      if [[ "$last" != "0" ]]; then
+        printf '{"status":"error","error":"insecure_secret_permissions","name":"%s","perms":"%s"}\n' "$name" "$perms" >&2
+        printf '{"status":"error","error":"insecure_secret_permissions","name":"%s"}\n' "$name"; exit 2
+      fi
+    fi
+  fi
   tr -d '\r\n' < "$file"
 }
 
-json() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()), separators=(",", ":")))'; }
+trim() {
+  local s=$1
+  # trim leading/trailing whitespace
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# flock check
+if ! command -v flock >/dev/null 2>&1; then
+  printf '{"status":"error","error":"flock_missing"}\n' >&2
+fi
 
 declare -A cfg=()
 while IFS='=' read -r key value || [[ -n "$key" ]]; do
-  key=${key//[$' \t\r']/}
+  key=$(trim "$key")
+  # keep value as-is then trim spaces (preserve inner spaces for site_title)
+  value=$(trim "${value:-}")
   [[ -z "$key" || "$key" == \#* ]] && continue
-  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { printf '{"status":"error","error":"invalid_key"}\n'; exit 2; }
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "invalid_key"
   cfg[$key]=$value
 done < "$MANIFEST"
 
 for key in target_host ssh_user da_user domain db_name db_user admin_user admin_email site_title; do
   [[ -n "${cfg[$key]:-}" ]] || { printf '{"status":"error","error":"missing_%s"}\n' "$key"; exit 2; }
 done
-[[ "${cfg[target_host]}" =~ ^[A-Za-z0-9.-]+$ ]] || { printf '{"status":"error","error":"invalid_target_host"}\n'; exit 2; }
-[[ "${cfg[domain]}" =~ ^[A-Za-z0-9.-]+$ ]] || { printf '{"status":"error","error":"invalid_domain"}\n'; exit 2; }
-[[ "${cfg[ssh_port]:-22}" =~ ^[0-9]+$ ]] || { printf '{"status":"error","error":"invalid_ssh_port"}\n'; exit 2; }
 
-printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "${cfg[ssh_port]:-22}" "${cfg[da_user]}"
+# --- validation ---
+[[ "${cfg[target_host]}" =~ ^[A-Za-z0-9.-]+$ ]] || fail "invalid_target_host"
+[[ "${cfg[domain]}" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || fail "invalid_domain"
+[[ "${cfg[ssh_port]:-22}" =~ ^[0-9]+$ ]] || fail "invalid_ssh_port"
+port=${cfg[ssh_port]:-22}
+(( port >= 1 && port <= 65535 )) || fail "invalid_ssh_port"
+
+[[ "${cfg[da_user]}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "invalid_da_user"
+[[ "${cfg[ssh_user]}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "invalid_ssh_user"
+[[ "${cfg[db_name]}" =~ ^[A-Za-z0-9_]+$ ]] || fail "invalid_db_name"
+[[ "${cfg[db_user]}" =~ ^[A-Za-z0-9_]+$ ]] || fail "invalid_db_user"
+[[ "${cfg[admin_user]}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid_admin_user"
+[[ "${cfg[admin_email]}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || fail "invalid_admin_email"
+[[ -n "${cfg[site_title]}" ]] || fail "invalid_site_title"
+# optional repos
+for rk in velocity_addons_repo velocity_theme_repo; do
+  if [[ -n "${cfg[$rk]:-}" ]]; then
+    [[ "${cfg[$rk]}" =~ ^https://[A-Za-z0-9._~:/?#\[\]@!$&\'\(\)*+,;=%-]+$ ]] || fail "invalid_${rk}"
+  fi
+done
+
+# output dry-run info (structured)
+printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
 [[ "$MODE" == dry-run ]] && exit 0
-[[ "$MODE" == apply ]] || { printf '{"status":"error","error":"invalid_INSTALL_MODE"}\n'; exit 2; }
+[[ "$MODE" == apply ]] || fail "invalid_INSTALL_MODE"
 
+# --- flock lock per domain to prevent parallel apply ---
+LOCK_FILE="/tmp/velocity-install-${cfg[domain]}.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  printf '{"status":"error","error":"already_running","domain":"%s"}\n' "${cfg[domain]}"; exit 2
+fi
+
+# --- secrets ---
 : "${WP_INSTALL_SSH_KEY_FILE:?WP_INSTALL_SSH_KEY_FILE_required}"
 : "${WP_INSTALL_DB_PASSWORD_FILE:?WP_INSTALL_DB_PASSWORD_FILE_required}"
 : "${WP_INSTALL_ADMIN_PASSWORD_FILE:?WP_INSTALL_ADMIN_PASSWORD_FILE_required}"
-SSH_KEY=$(read_secret "$WP_INSTALL_SSH_KEY_FILE" ssh_key)
+[[ -r "$WP_INSTALL_SSH_KEY_FILE" ]] || fail "missing_secret_file" ',"name":"ssh_key"'
 DB_PASSWORD=$(read_secret "$WP_INSTALL_DB_PASSWORD_FILE" db_password)
 ADMIN_PASSWORD=$(read_secret "$WP_INSTALL_ADMIN_PASSWORD_FILE" admin_password)
+GITHUB_TOKEN=""
+if [[ -n "${WP_INSTALL_GITHUB_TOKEN_FILE:-}" && -r "$WP_INSTALL_GITHUB_TOKEN_FILE" ]]; then
+  GITHUB_TOKEN=$(read_secret "$WP_INSTALL_GITHUB_TOKEN_FILE" github_token)
+fi
+[[ -n "$DB_PASSWORD" ]] || fail "empty_db_password"
+[[ -n "$ADMIN_PASSWORD" ]] || fail "empty_admin_password"
 
-remote=(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "${cfg[ssh_port]:-22}" "${cfg[ssh_user]}@${cfg[target_host]}")
+# ssh key permission check
+if command -v stat >/dev/null 2>&1; then
+  perms=$(stat -c %a "$WP_INSTALL_SSH_KEY_FILE" 2>/dev/null || echo "600")
+  last=${perms: -1}
+  if [[ "$last" != "0" ]]; then
+    printf '{"status":"error","error":"insecure_ssh_key_permissions","perms":"%s"}\n' "$perms"; exit 2
+  fi
+fi
+
+remote=(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p "$port" "${cfg[ssh_user]}@${cfg[target_host]}")
 q() { printf '%q' "$1"; }
-remote_cmd="set -Eeuo pipefail
-cd $(q "/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html")
+# single-quote escape for env values
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# build remote script — secrets injected via stdin exports (not argv)
+remote_script=$(cat <<'REMOTE_EOF'
+set -Eeuo pipefail
+DOCROOT="__DOCROOT__"
+DA_USER="__DA_USER__"
+DOMAIN="__DOMAIN__"
+
+[[ -d "$DOCROOT" ]] || { echo '{"status":"error","error":"missing_docroot","docroot":"'"$DOCROOT"'"}' >&2; exit 11; }
 command -v wp >/dev/null || { echo 'wp-cli_missing' >&2; exit 10; }
-wp core download --force
-wp config create --dbname=$(q "${cfg[db_name]}") --dbuser=$(q "${cfg[db_user]}") --dbpass=\"\$WP_DB_PASSWORD\" --skip-check
-wp core install --url=$(q "https://${cfg[domain]}") --title=$(q "${cfg[site_title]}") --admin_user=$(q "${cfg[admin_user]}") --admin_password=\"\$WP_ADMIN_PASSWORD\" --admin_email=$(q "${cfg[admin_email]}")
-wp plugin install $(q "${cfg[velocity_addons_repo]:-https://github.com/VelocityDeveloper/velocity-addons.git}") --activate
-wp theme install $(q "${cfg[velocity_theme_repo]:-https://github.com/VelocityDeveloper/velocity-theme.git}") --activate
+command -v git >/dev/null 2>&1 || { echo 'git_missing' >&2; exit 10; }
+command -v php >/dev/null || { echo 'php_missing' >&2; exit 10; }
+
+# disk space check (need at least 500MB free on DOCROOT filesystem)
+if command -v df >/dev/null 2>&1; then
+  avail_kb=$(df -k "$DOCROOT" | awk 'NR==2{print $4}')
+  if [[ "$avail_kb" =~ ^[0-9]+$ ]] && (( avail_kb < 512000 )); then
+    echo "disk_space_low:${avail_kb}KB" >&2; exit 13
+  fi
+fi
+
+# backup existing public_html if not empty
+BACKUP_DIR="/home/$DA_USER/backup"
+BACKUP_FILE="$BACKUP_DIR/pre-install-$DOMAIN-$(date +%Y%m%d-%H%M%S).tar.gz"
+mkdir -p "$BACKUP_DIR"
+if [[ -d "$DOCROOT" && -n "$(ls -A "$DOCROOT" 2>/dev/null)" ]]; then
+  if tar -czf "$BACKUP_FILE" -C "$DOCROOT" . 2>/dev/null; then
+    echo "backup_created:$BACKUP_FILE" >&2
+  else
+    echo "backup_failed" >&2; exit 12
+  fi
+fi
+
+# download wordpress
+wp core download --path="$DOCROOT" --force
+
+# create wp-config (fail fast without --skip-check)
+if [[ -f "$DOCROOT/wp-config.php" ]]; then
+  echo "wp-config_exists_skip_create" >&2
+else
+  wp config create --path="$DOCROOT" --dbname=__DB_NAME_Q__ --dbuser=__DB_USER_Q__ --dbpass="$WP_DB_PASSWORD" --skip-check=false
+fi
+
+# core install idempotency
+if wp core is-installed --path="$DOCROOT" 2>/dev/null; then
+  echo "already_installed_skip_core_install" >&2
+else
+  wp core install --path="$DOCROOT" --url=__URL_Q__ --title=__TITLE_Q__ --admin_user=__ADMIN_USER_Q__ --admin_password="$WP_ADMIN_PASSWORD" --admin_email=__ADMIN_EMAIL_Q__
+fi
+
+# helper to install from git
+install_from_git() {
+  local repo=$1 type=$2 # plugin|theme
+  local slug=$3
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' RETURN
+  local clone_cmd=(git clone --depth 1)
+  if [[ -n "${GITHUB_TOKEN:-}" && "$repo" == *"github.com"* ]]; then
+    clone_cmd=(git -c http.extraHeader="Authorization: Bearer $GITHUB_TOKEN" clone --depth 1)
+  fi
+  echo "cloning $repo -> $tmpdir/src" >&2
+  "${clone_cmd[@]}" "$repo" "$tmpdir/src" || { echo "git_clone_failed:$repo" >&2; return 1; }
+  # slug from repo or folder name
+  if [[ "$type" == "plugin" ]]; then
+    # copy to wp-content/plugins
+    local dest="$DOCROOT/wp-content/plugins/$slug"
+    mkdir -p "$(dirname "$dest")"
+    rm -rf "$dest"
+    cp -a "$tmpdir/src" "$dest"
+    wp plugin activate "$slug" --path="$DOCROOT" 2>&2 || wp plugin activate "$slug" --path="$DOCROOT" --network 2>&2 || echo "plugin_activate_failed:$slug" >&2
+  else
+    local dest="$DOCROOT/wp-content/themes/$slug"
+    mkdir -p "$(dirname "$dest")"
+    rm -rf "$dest"
+    cp -a "$tmpdir/src" "$dest"
+    wp theme activate "$slug" --path="$DOCROOT" 2>&2 || echo "theme_activate_failed:$slug" >&2
+  fi
+  rm -rf "$tmpdir"
+}
+
+# velocity addons
+if [[ -n "__ADDONS_REPO__" ]]; then
+  install_from_git "__ADDONS_REPO__" plugin "velocity-addons" || exit 14
+fi
+if [[ -n "__THEME_REPO__" ]]; then
+  install_from_git "__THEME_REPO__" theme "velocity-theme" || exit 15
+fi
+
+echo "install_complete" >&2
+REMOTE_EOF
+)
+
+# substitute placeholders safely
+remote_script=${remote_script//__DOCROOT__/$(printf '%s' "/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html")}
+remote_script=${remote_script//__DA_USER__/$(printf '%s' "${cfg[da_user]}")}
+remote_script=${remote_script//__DOMAIN__/$(printf '%s' "${cfg[domain]}")}
+remote_script=${remote_script//__DB_NAME_Q__/$(q "${cfg[db_name]}")}
+remote_script=${remote_script//__DB_USER_Q__/$(q "${cfg[db_user]}")}
+remote_script=${remote_script//__URL_Q__/$(q "https://${cfg[domain]}")}
+remote_script=${remote_script//__TITLE_Q__/$(q "${cfg[site_title]}")}
+remote_script=${remote_script//__ADMIN_USER_Q__/$(q "${cfg[admin_user]}")}
+remote_script=${remote_script//__ADMIN_EMAIL_Q__/$(q "${cfg[admin_email]}")}
+remote_script=${remote_script//__ADDONS_REPO__/$(printf '%s' "${cfg[velocity_addons_repo]:-}") }
+remote_script=${remote_script//__THEME_REPO__/$(printf '%s' "${cfg[velocity_theme_repo]:-}")}
+
+# inject secrets as exports at top of remote script via stdin (single-quote escaped)
+secret_header=$(printf 'export WP_DB_PASSWORD=%s\nexport WP_ADMIN_PASSWORD=%s\n' "$(sq "$DB_PASSWORD")" "$(sq "$ADMIN_PASSWORD")")
+if [[ -n "$GITHUB_TOKEN" ]]; then
+  secret_header+=$(printf '\nexport GITHUB_TOKEN=%s\n' "$(sq "$GITHUB_TOKEN")")
+fi
+# clear local secret vars
+unset DB_PASSWORD ADMIN_PASSWORD GITHUB_TOKEN
+
+full_remote_script="$secret_header
+$remote_script
+# clear secrets from env after use
+unset WP_DB_PASSWORD WP_ADMIN_PASSWORD GITHUB_TOKEN
 "
-printf 'WP_DB_PASSWORD=%q\nWP_ADMIN_PASSWORD=%q\n%s\n' "$DB_PASSWORD" "$ADMIN_PASSWORD" "$remote_cmd" | "${remote[@]}" 'bash -s'
-printf '{"status":"applied","domain":"%s"}\n' "${cfg[domain]}"
+
+# execute remote
+printf '%s\n' "$full_remote_script" | "${remote[@]}" 'bash -s'
+rc=$?
+if (( rc != 0 )); then
+  printf '{"status":"error","error":"remote_failed","domain":"%s","exit_code":%d}\n' "${cfg[domain]}" "$rc"; exit $rc
+fi
+printf '{"status":"applied","domain":"%s","backup_dir":"/home/%s/backup"}\n' "${cfg[domain]}" "${cfg[da_user]}"

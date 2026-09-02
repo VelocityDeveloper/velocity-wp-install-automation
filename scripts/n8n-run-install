@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# Wrapper for n8n: validates domain arg, resolves manifest, runs installer.
+# Usage: n8n-run-install <mode> <domain>
+# mode: dry-run | apply
+MODE=${1:-}
+DOMAIN=${2:-}
+
+[[ "$MODE" == dry-run || "$MODE" == apply ]] || { printf '{"status":"error","error":"invalid_mode"}\n'; exit 2; }
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { printf '{"status":"error","error":"invalid_domain"}\n'; exit 2; }
+# prevent path traversal
+[[ "$DOMAIN" != *"/"* && "$DOMAIN" != *".."* ]] || { printf '{"status":"error","error":"invalid_domain"}\n'; exit 2; }
+
+MANIFEST="/home/project/${DOMAIN}/${DOMAIN}.txt"
+[[ -f "$MANIFEST" ]] || { printf '{"status":"error","error":"manifest_not_found","domain":"%s"}\n' "$DOMAIN"; exit 2; }
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export INSTALL_MODE="$MODE"
+export MANIFEST
+exec "$SCRIPT_DIR/website-install-from-manifest"

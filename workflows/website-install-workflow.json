@@ -4,30 +4,137 @@
     {
       "parameters": {},
       "id": "manual-trigger",
-      "name": "Run install",
+      "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [260, 300]
+      "position": [260, 220]
     },
     {
       "parameters": {
-        "command": "INSTALL_MODE=dry-run MANIFEST=/home/project/{{$json.domain}}/{{$json.domain}}.txt /opt/velocity-wp-install-automation/scripts/website-install-from-manifest"
+        "command": "/opt/velocity-wp-install-automation/scripts/n8n-run-install dry-run {{$json.domain}}",
+        "options": { "timeout": 30000 }
       },
-      "id": "manifest-installer",
-      "name": "Validate manifest",
+      "id": "dry-run",
+      "name": "Dry-run validate",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [520, 220],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.stdout }}", "operation": "contains", "value2": "\"dry_run\":\"ok\"" }]
+        }
+      },
+      "id": "check-dry-run",
+      "name": "Dry-run OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [780, 220]
+    },
+    {
+      "parameters": {
+        "command": "/opt/velocity-wp-install-automation/scripts/n8n-run-install apply {{$json.domain}}",
+        "options": { "timeout": 300000 }
+      },
+      "id": "apply",
+      "name": "Apply install",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1040, 140],
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.stdout }}", "operation": "contains", "value2": "\"status\":\"applied\"" }]
+        }
+      },
+      "id": "check-applied",
+      "name": "Applied?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1300, 140]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            { "name": "status", "value": "success" },
+            { "name": "domain", "value": "={{ $('Manual Trigger').item.json.domain }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "success",
+      "name": "Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1560, 80]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            { "name": "status", "value": "failed" },
+            { "name": "domain", "value": "={{ $('Manual Trigger').item.json.domain }}" },
+            { "name": "detail", "value": "={{ $json.stdout || $json.stderr || $json.error || 'unknown' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "failed-apply",
+      "name": "Failed (apply)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            { "name": "status", "value": "validation_failed" },
+            { "name": "domain", "value": "={{ $('Manual Trigger').item.json.domain }}" },
+            { "name": "detail", "value": "={{ $json.stdout || $json.stderr || 'dry-run failed' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "failed-dryrun",
+      "name": "Failed (dry-run)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1040, 320]
     }
   ],
   "connections": {
-    "Run install": {
-      "main": [[{"node": "Validate manifest", "type": "main", "index": 0}]]
+    "Manual Trigger": { "main": [[{ "node": "Dry-run validate", "type": "main", "index": 0 }]] },
+    "Dry-run validate": { "main": [[{ "node": "Dry-run OK?", "type": "main", "index": 0 }]] },
+    "Dry-run OK?": {
+      "main": [
+        [{ "node": "Apply install", "type": "main", "index": 0 }],
+        [{ "node": "Failed (dry-run)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Apply install": { "main": [[{ "node": "Applied?", "type": "main", "index": 0 }]] },
+    "Applied?": {
+      "main": [
+        [{ "node": "Success", "type": "main", "index": 0 }],
+        [{ "node": "Failed (apply)", "type": "main", "index": 0 }]
+      ]
     }
   },
   "active": false,
-  "settings": {},
-  "versionId": "velocity-wp-install-v1",
-  "meta": {"templateCredsSetupCompleted": true},
+  "settings": { "executionOrder": "v1" },
+  "versionId": "velocity-wp-install-v2",
+  "meta": { "templateCredsSetupCompleted": true },
   "tags": []
 }

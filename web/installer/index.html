@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex,nofollow">
   <style>
     :root{--bg:#080b0a;--panel:#0d1210;--line:#1b2b22;--text:#c8d7cc;--muted:#718579;--green:#55e879;--cyan:#68d9e8;--yellow:#e9d36b;--red:#ff7373}
-    *{box-sizing:border-box}html{background:var(--bg)}body{margin:0;padding:24px;color:var(--text);background:radial-gradient(circle at 50% -20%,#15301f 0,#080b0a 45%);font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}.terminal{width:min(1100px,100%);margin:auto;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0a0e0c;box-shadow:0 20px 80px #0009}.bar{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);background:#111814;color:var(--muted)}.dot{width:10px;height:10px;border-radius:50%;background:#33463a}.dot:first-child{background:#e46d65}.dot:nth-child(2){background:#d4b75d}.dot:nth-child(3){background:#62bd72}.title{margin:auto;font-size:12px}.screen{padding:28px clamp(18px,4vw,42px) 34px}.prompt{color:var(--green)}.prompt b{color:var(--cyan);font-weight:400}.command{margin:0 0 25px}.command a,.nav a{color:var(--cyan);text-decoration:none}.command a:hover,.nav a:hover{color:#fff;text-decoration:underline}.heading{margin:0;color:var(--green);font-size:clamp(1.4rem,4vw,2rem)}.meta{margin:5px 0 25px;color:var(--muted)}code{color:var(--yellow)}.panel{overflow:hidden;border:1px solid var(--line);background:var(--panel)}table{width:100%;border-collapse:collapse}th,td{padding:14px 16px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:12px;font-weight:400;text-transform:uppercase}tr:last-child td{border:0}.domain{color:var(--cyan)}.pill{display:inline-block;padding:2px 8px;border:1px solid;font-size:11px;font-weight:700}.action{padding:5px 9px;border:1px solid var(--cyan);border-radius:3px;background:transparent;color:var(--cyan);font:inherit;font-size:12px;cursor:pointer}.action:hover,.action.selected{border-color:var(--green);color:var(--green);background:#55e87918}.ready{border-color:var(--green);color:var(--green)}.missing{border-color:var(--yellow);color:var(--yellow)}.empty{padding:28px;text-align:center;color:var(--muted)}.nav{display:flex;justify-content:space-between;gap:16px;margin-top:24px;color:var(--muted)}.refresh{padding:0;border:0;background:none;color:var(--cyan);font:inherit;cursor:pointer}.refresh:hover{text-decoration:underline;color:#fff}.server-select{margin-bottom:20px;padding:16px;border:1px solid var(--line);background:var(--panel)}.server-select label{display:flex;align-items:center;gap:14px;color:var(--yellow)}select{min-width:260px;padding:9px 12px;border:1px solid var(--cyan);border-radius:3px;background:var(--bg);color:var(--text);font:inherit}select:focus{outline:1px solid var(--green)}@media(max-width:600px){.server-select label{display:grid;gap:8px}select{width:100%;min-width:0}}@media(max-width:600px){body{padding:0}.terminal{min-height:100vh;border:0;border-radius:0}.screen{padding:22px 15px}th,td{padding:11px 9px}.hide-mobile{display:none}.nav{font-size:12px}}
+    *{box-sizing:border-box}html{background:var(--bg)}body{margin:0;padding:24px;color:var(--text);background:radial-gradient(circle at 50% -20%,#15301f 0,#080b0a 45%);font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}.terminal{width:min(1100px,100%);margin:auto;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0a0e0c;box-shadow:0 20px 80px #0009}.bar{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);background:#111814;color:var(--muted)}.dot{width:10px;height:10px;border-radius:50%;background:#33463a}.dot:first-child{background:#e46d65}.dot:nth-child(2){background:#d4b75d}.dot:nth-child(3){background:#62bd72}.title{margin:auto;font-size:12px}.screen{padding:28px clamp(18px,4vw,42px) 34px}.prompt{color:var(--green)}.prompt b{color:var(--cyan);font-weight:400}.command{margin:0 0 25px}.command a,.nav a{color:var(--cyan);text-decoration:none}.command a:hover,.nav a:hover{color:#fff;text-decoration:underline}.heading{margin:0;color:var(--green);font-size:clamp(1.4rem,4vw,2rem)}.meta{margin:5px 0 25px;color:var(--muted)}code{color:var(--yellow)}.panel{overflow:hidden;border:1px solid var(--line);background:var(--panel)}table{width:100%;border-collapse:collapse}th,td{padding:14px 16px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:12px;font-weight:400;text-transform:uppercase}tr:last-child td{border:0}.domain{color:var(--cyan)}.pill{display:inline-block;padding:2px 8px;border:1px solid;font-size:11px;font-weight:700}.action{padding:5px 9px;border:1px solid var(--cyan);border-radius:3px;background:transparent;color:var(--cyan);font:inherit;font-size:12px;cursor:pointer}.action:hover,.action.selected{border-color:var(--green);color:var(--green);background:#55e87918}.ready{border-color:var(--green);color:var(--green)}.missing{border-color:var(--yellow);color:var(--yellow)}.empty{padding:28px;text-align:center;color:var(--muted)}.nav{display:flex;justify-content:space-between;gap:16px;margin-top:24px;color:var(--muted)}.refresh{padding:0;border:0;background:none;color:var(--cyan);font:inherit;cursor:pointer}.refresh:hover{text-decoration:underline;color:#fff}.server-select{margin-bottom:20px;padding:16px;border:1px solid var(--line);background:var(--panel)}.server-select label{display:flex;align-items:center;gap:14px;color:var(--yellow)}select{min-width:260px;padding:9px 12px;border:1px solid var(--cyan);border-radius:3px;background:var(--bg);color:var(--text);font:inherit}select:focus{outline:1px solid var(--green)}.detail{margin:10px 0 0;padding:10px 12px;border:1px dashed var(--line);background:#0a0e0c;color:var(--muted);font-size:12px;white-space:pre-wrap;word-break:break-all}.detail strong{color:var(--yellow)}.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#0008;z-index:99}.modal.open{display:flex}.modal-box{max-width:520px;margin:16px;padding:22px;border:1px solid var(--yellow);background:var(--panel);color:var(--text)}.modal-box h3{margin:0 0 8px;color:var(--yellow)}.modal-box p{margin:0 0 16px;color:var(--muted)}.modal-actions{display:flex;gap:10px;justify-content:flex-end}.btn{padding:8px 14px;border:1px solid;font:inherit;cursor:pointer;border-radius:3px}.btn-cancel{border-color:var(--line);background:transparent;color:var(--muted)}.btn-confirm{border-color:var(--red);background:var(--red);color:#000;font-weight:700}@media(max-width:600px){.server-select label{display:grid;gap:8px}select{width:100%;min-width:0}}@media(max-width:600px){body{padding:0}.terminal{min-height:100vh;border:0;border-radius:0}.screen{padding:22px 15px}th,td{padding:11px 9px}.hide-mobile{display:none}.nav{font-size:12px}}
   </style>
 </head>
 <body>
@@ -16,14 +16,64 @@
     <section class="screen">
       <p class="command"><span class="prompt">velocity@server</span>:<b>~/installer</b>$ <a href="/">cd ..</a></p>
       <h1 class="heading">Website Installer</h1>
-      <p class="meta">$ scan --path <code>/home/project/*.txt</code> --watch 10s</p>
-      <section class="server-select"><label for="target-server">Server tujuan<select id="target-server" required><option value="">Memuat server...</option></select></label><div id="server-note" class="meta" style="margin:8px 0 0">Pilih server untuk instalasi.</div></section>
+      <p class="meta">$ scan --path <code>/home/project/*.txt</code> --watch 10s &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)</p>
+      <section class="server-select"><label for="target-server">Server tujuan <select id="target-server" required><option value="">Memuat server...</option></select></label><div id="server-note" class="meta" style="margin:8px 0 0">Pilih server untuk instalasi.</div></section>
       <section class="panel"><table><thead><tr><th>Domain</th><th class="hide-mobile">Manifest</th><th>Status</th><th>Tindakan</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="empty">Memuat...</td></tr></tbody></table></section>
+      <div id="detail" class="detail" style="display:none"></div>
       <nav class="nav"><span>source: <code>/home/project/</code></span><span><button class="refresh" onclick="load()">[ refresh ]</button> <a href="/">[ home ]</a></span></nav>
     </section>
   </main>
+  <div id="confirm-modal" class="modal" role="dialog" aria-modal="true"><div class="modal-box"><h3>Konfirmasi Install</h3><p id="confirm-text"></p><div class="modal-actions"><button class="btn btn-cancel" onclick="closeModal()">Batal</button><button class="btn btn-confirm" onclick="confirmInstall()">Ya, lanjutkan</button></div><p class="meta" style="margin:10px 0 0">Destruktif: akan menimpa <code>public_html</code> &amp; menulis DB. Backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.</p></div></div>
   <script>
-    const serverSelect=document.getElementById('target-server'),serverNote=document.getElementById('server-note');async function loadServers(){try{const d=await fetch('/api/servers',{cache:'no-store'}).then(r=>r.json()),servers=d.servers||[];serverSelect.innerHTML=servers.length?servers.map(x=>`<option value="${esc(x.host)}:${esc(x.port)}">${esc(x.name)} — ${esc(x.host)}:${esc(x.port)}</option>`).join(''):'<option value="">Belum ada server terhubung</option>';serverNote.textContent=servers.length?'Server tujuan siap dipilih.':'Tambahkan server dari halaman /server/.'}catch(e){serverSelect.innerHTML='<option value="">API server tidak tersedia</option>';serverNote.textContent='Gagal membaca daftar server.'}}serverSelect.addEventListener('change',()=>{serverNote.textContent=serverSelect.value?'Target: '+serverSelect.options[serverSelect.selectedIndex].text:'Pilih server untuk instalasi.'});async function load(){const rows=document.getElementById('rows');try{const d=await fetch('/api/installer',{cache:'no-store'}).then(r=>r.json());rows.innerHTML=d.domains.length?d.domains.map(x=>`<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest)}</code></td><td><span class="pill ${x.folder?'ready':'missing'}">${esc(x.status)}</span></td><td><button class="action" type="button" data-domain="${esc(x.domain)}">[ install ]</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">Belum ada file domain.txt</td></tr>';rows.querySelectorAll('[data-domain]').forEach(b=>b.addEventListener('click',()=>{if(!serverSelect.value){serverNote.textContent='Pilih server tujuan terlebih dahulu.';serverSelect.focus();return}serverNote.textContent='Domain '+b.dataset.domain+' siap dipasang ke '+serverSelect.options[serverSelect.selectedIndex].text;b.classList.add('selected')}))}catch(e){rows.innerHTML='<tr><td colspan="3" class="empty">API tidak tersedia</td></tr>'}}function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}loadServers();load();setInterval(load,10000)
+    const serverSelect=document.getElementById('target-server'),serverNote=document.getElementById('server-note'),detailEl=document.getElementById('detail'),modal=document.getElementById('confirm-modal'),confirmText=document.getElementById('confirm-text');
+    let pendingDomain=null, pollTimer=null;
+
+    async function loadServers(){try{const d=await fetch('/api/servers',{cache:'no-store'}).then(r=>{if(!r.ok) throw new Error(r.status);return r.json()}),servers=d.servers||[];serverSelect.innerHTML=servers.length?servers.map(x=>`<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name||x.host)} — ${esc(x.host)}:${esc(String(x.port))}</option>`).join(''):'<option value="">Belum ada server terhubung</option>';serverNote.textContent=servers.length?'Server tujuan siap dipilih.':'Tambahkan server di config/servers.json atau env INSTALLER_SERVERS.'}catch(e){serverSelect.innerHTML='<option value="">API server tidak tersedia</option>';serverNote.textContent='Gagal membaca daftar server ('+esc(String(e.message||e))+').'}}
+    serverSelect.addEventListener('change',()=>{serverNote.textContent=serverSelect.value?'Target: '+serverSelect.options[serverSelect.selectedIndex].text:'Pilih server untuk instalasi.'});
+
+    function showDetail(obj){detailEl.style.display='block';detailEl.innerHTML='<strong>Detail:</strong> '+esc(JSON.stringify(obj,null,2));}
+    function hideDetail(){detailEl.style.display='none';detailEl.textContent='';}
+
+    async function load(){
+      const rows=document.getElementById('rows');
+      try{
+        const d=await fetch('/api/installer',{cache:'no-store'}).then(r=>{if(!r.ok) throw new Error(r.status);return r.json()});
+        if(!d.domains.length){rows.innerHTML='<tr><td colspan="4" class="empty">Belum ada file domain.txt</td></tr>';return;}
+        rows.innerHTML=d.domains.map(x=>{
+          const isReady=x.status==='READY';
+          const pillClass=isReady?'ready':'missing';
+          return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest||'-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}</span></td><td><button class="action" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${isReady?'':'disabled title="Manifest tidak valid"'}>[ install ]</button></td></tr>`;
+        }).join('');
+        rows.querySelectorAll('[data-domain]').forEach(b=>b.addEventListener('click',()=>onInstallClick(b.dataset.domain,b.dataset.status)));
+      }catch(e){rows.innerHTML='<tr><td colspan="4" class="empty">API tidak tersedia: '+esc(String(e.message||e))+'</td></tr>';}
+    }
+
+    function onInstallClick(domain,status){
+      if(status!=='READY'){showDetail({error:status,domain});return;}
+      if(!serverSelect.value){serverNote.textContent='Pilih server tujuan terlebih dahulu.';serverSelect.focus();return;}
+      pendingDomain=domain;
+      const serverLabel=serverSelect.options[serverSelect.selectedIndex].text;
+      confirmText.textContent='Pasang "'+domain+'" ke '+serverLabel+'?';
+      modal.classList.add('open');
+    }
+    function closeModal(){modal.classList.remove('open');pendingDomain=null;}
+    function confirmInstall(){
+      if(!pendingDomain) return;
+      const d=pendingDomain; closeModal();
+      // informatif: install sebenarnya via n8n, bukan browser
+      serverNote.textContent='Domain '+d+' siap. Jalankan via n8n: POST {domain:"'+d+'"} ke workflow Velocity WP Install (dry-run → apply).';
+      showDetail({info:'Install dieksekusi via n8n, bukan browser. Trigger workflow dengan payload {domain:"'+d+'"}',server:serverSelect.value});
+    }
+    modal.addEventListener('click',e=>{if(e.target===modal) closeModal();});
+
+    function startPoll(){
+      if(pollTimer) clearInterval(pollTimer);
+      pollTimer=setInterval(()=>{if(!document.hidden) load();},10000);
+      document.addEventListener('visibilitychange',()=>{if(document.hidden){/* pause */} else load();});
+    }
+
+    function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    loadServers();load();startPoll();
   </script>
 </body>
 </html>
