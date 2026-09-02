@@ -180,6 +180,20 @@ def ssh_key_file():
     return None
 
 
+def _ensure_secrets(domain: str):
+    """Create per-domain password secrets if absent. Never overwrites."""
+    created = []
+    for name, val in (
+        (f'db_password_{domain}.txt', pysecrets.token_urlsafe(18)),
+        (f'admin_password_{domain}.txt', pysecrets.token_urlsafe(18)),
+    ):
+        p = SECRETS / name
+        if not p.is_file():
+            _write_secret(name, val)
+            created.append(name)
+    return created
+
+
 def generate_manifest(domain: str):
     """Auto-generate manifest + secrets for domain from existing data."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
@@ -191,6 +205,7 @@ def generate_manifest(domain: str):
     if manifest.is_file():
         ok, detail = validate_manifest(manifest)
         if ok:
+            _ensure_secrets(domain)
             return {'generated': False, 'reason': 'already_valid'}, None
     # derive defaults
     labels = domain.split('.')[0]
@@ -222,19 +237,7 @@ def generate_manifest(domain: str):
     tmp.write_text(content)
     os.chmod(tmp, 0o640)
     os.replace(tmp, manifest)
-    # secrets (only if absent - never overwrite existing)
-    db_pass = pysecrets.token_urlsafe(18)
-    admin_pass = pysecrets.token_urlsafe(18)
-    for name, val in (
-        (f'db_password_{domain}.txt', db_pass),
-        (f'admin_password_{domain}.txt', admin_pass),
-    ):
-        p = SECRETS / name
-        if not p.is_file():
-            _write_secret(name, val)
-    if not ssh_key_file():
-        # best-effort: leave absent; start_run will reject apply with missing key
-        pass
+    _ensure_secrets(domain)
     return {'generated': True, 'manifest': str(manifest)}, None
 
 
