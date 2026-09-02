@@ -58,3 +58,10 @@ WP_INSTALL_ADMIN_PASSWORD_FILE=/run/secrets/wp-install-admin-password \
 ```
 
 `apply` is destructive: it writes WordPress files and database state on target server. Backup/rollback remains operator responsibility.
+
+## Installer status page
+
+- `web/installer/index.html` — terminal-style `/installer/` page.
+- `services/installer_status.py` — loopback read-only API on `127.0.0.1:9121`.
+
+The page displays manifest status only. Its `[ install ]` button does not execute installation. Apply remains an explicit n8n operation. Deploy files through a reviewed server configuration; do not expose API port `9121` directly.
