@@ -126,10 +126,9 @@ def domains():
     if not ROOT.exists():
         return rows
     for folder in sorted(p for p in ROOT.iterdir() if p.is_dir()):
-        manifests = sorted(folder.glob('*.txt'))
-        for manifest in manifests or [None]:
-            domain = folder.name
-            rows.append(domain_row(domain, manifest))
+        # one row per folder: exact <domain>.txt manifest only (other .txt = notes, ignored)
+        manifest = folder / f'{folder.name}.txt'
+        rows.append(domain_row(folder.name, manifest if manifest.is_file() else None))
     for manifest in sorted(ROOT.glob('*.txt')):
         # stray manifest outside folder structure
         rows.append({
