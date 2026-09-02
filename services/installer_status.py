@@ -5,23 +5,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path('/home/project')
+STATE = Path('/var/lib/velocity/installer')
 
 
 def cronjobs():
-    commands = [
-        ['systemctl', 'list-timers', '--all', '--no-legend', '--no-pager'],
-        ['crontab', '-l'],
-    ]
     rows = []
-    for command in commands:
+    for command in (['systemctl', 'list-timers', '--all', '--no-legend', '--no-pager'], ['crontab', '-l']):
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
         except (OSError, subprocess.TimeoutExpired):
             continue
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line and not line.startswith('#') and 'No timers listed' not in line:
-                rows.append(line)
+        rows.extend(line.strip() for line in result.stdout.splitlines()
+                    if line.strip() and not line.strip().startswith('#') and 'No timers listed' not in line)
     return rows
 
 
@@ -31,20 +26,26 @@ def domains():
         manifests = sorted(folder.glob('*.txt'))
         for manifest in manifests or [None]:
             domain = folder.name
-            rows.append({
-                'domain': domain,
-                'manifest': manifest.name if manifest else None,
-                'folder': True,
-                'status': 'READY' if manifest else 'NO_MANIFEST',
-            })
-    for manifest in sorted(ROOT.glob('*.txt')):
-        rows.append({
-            'domain': manifest.stem,
-            'manifest': manifest.name,
-            'folder': (ROOT / manifest.stem).is_dir(),
-            'status': 'READY' if (ROOT / manifest.stem).is_dir() else 'NO_FOLDER',
-        })
+            rows.append(domain_row(domain, manifest))
     return rows
+
+
+def domain_row(domain, manifest):
+    row = {'domain': domain, 'manifest': manifest.name if manifest else None,
+           'folder': True, 'status': 'READY' if manifest else 'NO_MANIFEST'}
+    state = STATE / f'{domain}.json'
+    log = STATE / f'{domain}.log'
+    try:
+        saved = json.loads(state.read_text())
+        if isinstance(saved, dict):
+            row.update({k: str(saved[k]) for k in ('status', 'stage', 'message', 'updated_at') if k in saved})
+    except (OSError, ValueError):
+        pass
+    try:
+        row['log'] = log.read_text(errors='replace').splitlines()[-30:]
+    except OSError:
+        row['log'] = []
+    return row
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -64,4 +65,5 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+STATE.mkdir(parents=True, exist_ok=True)
 ThreadingHTTPServer(('127.0.0.1', 9121), Handler).serve_forever()

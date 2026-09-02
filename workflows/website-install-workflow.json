@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "command": "INSTALL_MODE=dry-run MANIFEST=/home/project/{{$json.domain}}/{{$json.domain}}.txt /opt/velocity-wp-install-automation/scripts/website-install-from-manifest"
+        "command": "INSTALL_MODE=dry-run /opt/velocity-wp-install-automation/scripts/installer-runner {{$json.domain}}"
       },
       "id": "manifest-installer",
       "name": "Validate manifest",

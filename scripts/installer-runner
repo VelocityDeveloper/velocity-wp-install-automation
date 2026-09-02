@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DOMAIN=${1:?domain_required}
+MODE=${INSTALL_MODE:-dry-run}
+ROOT=/home/project
+MANIFEST="$ROOT/$DOMAIN/$DOMAIN.txt"
+STATE_DIR=/var/lib/velocity/installer
+STATE="$STATE_DIR/$DOMAIN.json"
+LOG="$STATE_DIR/$DOMAIN.log"
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+
+state() {
+  python3 - "$STATE" "$DOMAIN" "$1" "$2" <<'PY'
+import json, os, sys, tempfile
+path, domain, status, stage = sys.argv[1:]
+data={'domain':domain,'status':status,'stage':stage,'message':stage,'updated_at':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()}
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(path)); os.close(fd)
+with open(tmp,'w') as f: json.dump(data,f,separators=(',',':'))
+os.chmod(tmp,0o600); os.replace(tmp,path)
+PY
+  printf '[%s] %s: %s\n' "$(date -Is)" "$1" "$2" >> "$LOG"
+}
+trap 'state FAILED "installer_error"' ERR
+state RUNNING VALIDATING
+[[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; exit 2; }
+state RUNNING RUNNING_INSTALLER
+INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
+state SUCCESS COMPLETE
