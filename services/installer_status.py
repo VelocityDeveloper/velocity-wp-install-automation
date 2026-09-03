@@ -206,12 +206,18 @@ def generate_manifest(domain: str):
         if ok:
             _ensure_secrets(domain)
             return {'generated': False, 'reason': 'already_valid'}, None
-    # derive defaults
+    # derive defaults; ssh target from server store (managed via /server/ panel), fallback static
     labels = domain.split('.')[0]
     da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:31] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
-    ssh_user = 'root'
+    servers = load_servers()
+    srv = servers[0] if servers else {}
+    target = str(srv.get('host') or '103.103.175.182')
+    port = str(srv.get('port') or '22')
+    if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
+        port = '22'
+    ssh_user = str(srv.get('user') or 'root')
     admin_email = ''
     notes = folder / 'notes-credentials.txt'
     if notes.is_file():
@@ -221,8 +227,8 @@ def generate_manifest(domain: str):
                 if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', cand):
                     admin_email = cand
     content = (
-        f'target_host=103.103.175.182\n'
-        f'ssh_port=22\n'
+        f'target_host={target}\n'
+        f'ssh_port={port}\n'
         f'ssh_user={ssh_user}\n'
         f'da_user={da_user}\n'
         f'domain={domain}\n'
@@ -355,6 +361,61 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
             return
         self._send_json({'status': 'started', **result})
+
+    def do_PUT(self):
+        ip = self.client_address[0] if self.client_address else 'unknown'
+        if not _rate_ok(ip):
+            self._send_json({'error': 'rate_limited'}, 429)
+            return
+        if urlparse(self.path).path != '/api/servers':
+            self.send_error(404)
+            return
+        if not _check_auth(self):
+            self._send_json({'error': 'unauthorized'}, 401)
+            return
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+            if length > 4096:
+                self._send_json({'error': 'payload_too_large'}, 413)
+                return
+            payload = json.loads(self.rfile.read(length) or b'{}')
+        except (ValueError, OSError):
+            self._send_json({'error': 'invalid_json'}, 400)
+            return
+        servers = load_servers()
+        # update first server by name, else replace entry with same host, else append
+        name = str(payload.get('name') or '').strip()
+        host = str(payload.get('host') or '').strip()
+        user = str(payload.get('user') or '').strip()
+        port = str(payload.get('port') or '22').strip()
+        notes = str(payload.get('notes') or '').strip()
+        if not name or not re.match(r'^[A-Za-z0-9._ -]{1,80}$', name):
+            self._send_json({'error': 'invalid_name'}, 422)
+            return
+        if not re.match(r'^[A-Za-z0-9.-]+$', host):
+            self._send_json({'error': 'invalid_host'}, 422)
+            return
+        if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', user):
+            self._send_json({'error': 'invalid_user'}, 422)
+            return
+        if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
+            self._send_json({'error': 'invalid_port'}, 422)
+            return
+        entry = {'name': name, 'host': host, 'user': user, 'port': port, 'notes': notes}
+        idx = next((i for i, s in enumerate(servers) if s.get('name') == name), None)
+        if idx is None:
+            idx = next((i for i, s in enumerate(servers) if s.get('host') == host), None)
+        if idx is None:
+            servers.append(entry)
+        else:
+            servers[idx] = entry
+        dest = next((p for p in SERVERS_FILE_CANDIDATES if p.is_file()), SERVERS_FILE_CANDIDATES[0])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps({'servers': servers}, indent=2))
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, dest)
+        self._send_json({'status': 'ok', 'servers': servers})
 
     def log_message(self, fmt, *args):
         try:
