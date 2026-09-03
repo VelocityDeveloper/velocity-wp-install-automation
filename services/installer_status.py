@@ -16,6 +16,7 @@ SECRETS = Path('/etc/velocity/secrets')
 SSH_KEY_CANDIDATES = [SECRETS / 'ssh_key', Path('/root/.ssh/id_ed25519'), Path('/root/.ssh/id_rsa')]
 DOMAIN_RE = re.compile(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 SERVERS_FILE_CANDIDATES = [
+    Path('/var/lib/velocity/servers.json'),  # server-registry store (managed via /server/ panel)
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
     Path('/etc/velocity/servers.json'),
 ]
@@ -361,61 +362,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
             return
         self._send_json({'status': 'started', **result})
-
-    def do_PUT(self):
-        ip = self.client_address[0] if self.client_address else 'unknown'
-        if not _rate_ok(ip):
-            self._send_json({'error': 'rate_limited'}, 429)
-            return
-        if urlparse(self.path).path != '/api/servers':
-            self.send_error(404)
-            return
-        if not _check_auth(self):
-            self._send_json({'error': 'unauthorized'}, 401)
-            return
-        try:
-            length = int(self.headers.get('Content-Length') or 0)
-            if length > 4096:
-                self._send_json({'error': 'payload_too_large'}, 413)
-                return
-            payload = json.loads(self.rfile.read(length) or b'{}')
-        except (ValueError, OSError):
-            self._send_json({'error': 'invalid_json'}, 400)
-            return
-        servers = load_servers()
-        # update first server by name, else replace entry with same host, else append
-        name = str(payload.get('name') or '').strip()
-        host = str(payload.get('host') or '').strip()
-        user = str(payload.get('user') or '').strip()
-        port = str(payload.get('port') or '22').strip()
-        notes = str(payload.get('notes') or '').strip()
-        if not name or not re.match(r'^[A-Za-z0-9._ -]{1,80}$', name):
-            self._send_json({'error': 'invalid_name'}, 422)
-            return
-        if not re.match(r'^[A-Za-z0-9.-]+$', host):
-            self._send_json({'error': 'invalid_host'}, 422)
-            return
-        if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', user):
-            self._send_json({'error': 'invalid_user'}, 422)
-            return
-        if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
-            self._send_json({'error': 'invalid_port'}, 422)
-            return
-        entry = {'name': name, 'host': host, 'user': user, 'port': port, 'notes': notes}
-        idx = next((i for i, s in enumerate(servers) if s.get('name') == name), None)
-        if idx is None:
-            idx = next((i for i, s in enumerate(servers) if s.get('host') == host), None)
-        if idx is None:
-            servers.append(entry)
-        else:
-            servers[idx] = entry
-        dest = next((p for p in SERVERS_FILE_CANDIDATES if p.is_file()), SERVERS_FILE_CANDIDATES[0])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps({'servers': servers}, indent=2))
-        os.chmod(tmp, 0o640)
-        os.replace(tmp, dest)
-        self._send_json({'status': 'ok', 'servers': servers})
 
     def log_message(self, fmt, *args):
         try:

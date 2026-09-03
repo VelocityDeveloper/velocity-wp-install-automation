@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>velocity@server:~/manage</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <style>
+      :root {
+        --bg: #080b0a;
+        --panel: #0d1210;
+        --line: #1b2b22;
+        --text: #c8d7cc;
+        --muted: #718579;
+        --green: #55e879;
+        --cyan: #68d9e8;
+        --yellow: #e9d36b;
+        --red: #ff7373;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--bg);
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        color: var(--text);
+        background: radial-gradient(circle at 50% -20%, #15301f 0, #080b0a 45%);
+        font:
+          14px/1.6 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Monaco,
+          Consolas,
+          "Liberation Mono",
+          monospace;
+      }
+      .terminal {
+        width: min(1100px, 100%);
+        margin: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #0a0e0c;
+        box-shadow: 0 20px 80px #0009;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #111814;
+        color: var(--muted);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #33463a;
+      }
+      .dot:first-child {
+        background: #e46d65;
+      }
+      .dot:nth-child(2) {
+        background: #d4b75d;
+      }
+      .dot:nth-child(3) {
+        background: #62bd72;
+      }
+      .title {
+        margin: auto;
+        font-size: 12px;
+      }
+      .screen {
+        padding: 28px clamp(18px, 4vw, 42px) 34px;
+      }
+      .prompt {
+        color: var(--green);
+      }
+      .prompt b {
+        color: var(--cyan);
+        font-weight: 400;
+      }
+      .command {
+        margin: 0 0 25px;
+      }
+      .command a,
+      .nav a {
+        color: var(--cyan);
+        text-decoration: none;
+      }
+      .command a:hover,
+      .nav a:hover {
+        color: #fff;
+        text-decoration: underline;
+      }
+      .heading {
+        margin: 0;
+        color: var(--green);
+        font-size: clamp(1.4rem, 4vw, 2rem);
+      }
+      .meta {
+        margin: 5px 0 25px;
+        color: var(--muted);
+      }
+      .section {
+        margin: 25px 0;
+      }
+      .section-title {
+        margin-bottom: 12px;
+        color: var(--yellow);
+      }
+      .section-title:before {
+        content: "## ";
+        color: var(--muted);
+      }
+      .panel {
+        padding: 20px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+      h2 {
+        margin: 0 0 12px;
+        color: var(--yellow);
+        font-size: 15px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      input,
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: #080b0a;
+        color: var(--text);
+        font: inherit;
+      }
+      input:focus,
+      textarea:focus {
+        outline: 1px solid var(--cyan);
+        border-color: var(--cyan);
+      }
+      textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+      .full {
+        grid-column: 1/-1;
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 18px;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        padding: 20px;
+        background: #000b;
+        align-items: center;
+        justify-content: center;
+      }
+      .modal.open {
+        display: flex;
+      }
+      .modal-box {
+        width: min(620px, 100%);
+        border: 1px solid var(--cyan);
+        background: var(--panel);
+        box-shadow: 0 20px 80px #000;
+        color: var(--text);
+      }
+      .modal-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        color: var(--yellow);
+      }
+      .modal-close {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 18px;
+        cursor: pointer;
+      }
+      .modal-close:hover {
+        color: #fff;
+      }
+      .modal-body {
+        padding: 20px;
+      }
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .button,
+      .refresh {
+        padding: 8px 13px;
+        border: 1px solid var(--green);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--green);
+        font: inherit;
+        cursor: pointer;
+      }
+      .button:hover,
+      .refresh:hover {
+        background: #55e87918;
+        color: #fff;
+      }
+      .status {
+        font-size: 12px;
+      }
+      .status.ok {
+        color: var(--green);
+      }
+      .status.err {
+        color: var(--red);
+      }
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .empty {
+        color: var(--muted);
+        font-style: italic;
+      }
+      @media (max-width: 600px) {
+        body {
+          padding: 0;
+        }
+        .terminal {
+          min-height: 100vh;
+          border: 0;
+          border-radius: 0;
+        }
+        .screen {
+          padding: 22px 15px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .full {
+          grid-column: auto;
+        }
+        .nav {
+          font-size: 11px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="terminal">
+      <header class="bar">
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i
+        ><span class="title">velocity@server: ~/manage</span>
+      </header>
+      <section class="screen">
+        <p class="command">
+          <span class="prompt">velocity@server</span>:<b>~/manage</b>$
+          <a href="/">cd ..</a>
+        </p>
+        <h1 class="heading">Manage Server</h1>
+        <p class="meta">$ ssh-credentials --mode internal</p>
+        <section class="section">
+          <div class="section-title">server terhubung</div>
+          <div id="server-list"></div>
+        </section>
+        <section class="section">
+          <div class="section-title">tambah / edit credential</div>
+          <div class="panel">
+            <p class="meta">
+              Data tersimpan di /var/lib/velocity/servers.json — sumber data
+              installer &amp; panel ini.
+            </p>
+            <form id="form">
+              <div class="grid">
+                <label
+                  >Nama server<input
+                    name="name"
+                    required
+                    maxlength="80"
+                    placeholder="Server produksi" /></label
+                ><label
+                  >Host / IP<input
+                    name="host"
+                    required
+                    maxlength="253"
+                    placeholder="100.x.x.x atau hostname" /></label
+                ><label
+                  >Username SSH<input
+                    name="user"
+                    required
+                    maxlength="64"
+                    value="deploy" /></label
+                ><label
+                  >Port<input
+                    name="port"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    value="22"
+                    required /></label
+                ><label class="full"
+                  >Catatan<textarea
+                    name="notes"
+                    maxlength="500"
+                    placeholder="OS, fungsi server, atau batasan akses"
+                  ></textarea>
+                </label>
+              </div>
+              <div class="actions">
+                <button class="button">[ simpan ]</button
+                ><span class="status" id="status" role="status"></span>
+              </div>
+            </form>
+          </div>
+        </section>
+        <nav class="nav">
+          <span>mode: <code>read/write</code></span
+          ><span
+            ><a href="/installer/">[ installer ]</a>
+            <a href="/">[ home ]</a></span
+          >
+        </nav>
+      </section>
+    </main>
+    <div
+      class="modal"
+      id="edit-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
+      <div class="modal-box">
+        <div class="modal-head">
+          <span id="modal-title">edit server</span
+          ><button
+            class="modal-close"
+            id="close-modal"
+            type="button"
+            aria-label="Tutup"
+          >
+            ×
+          </button>
+        </div>
+        <form class="modal-body" id="server-edit-form">
+          <div class="grid">
+            <label
+              >Nama server<input name="name" required maxlength="80" /></label
+            ><label
+              >Host / IP<input name="host" required maxlength="253" /></label
+            ><label
+              >Username SSH<input name="user" required maxlength="64" /></label
+            ><label
+              >Port<input
+                name="port"
+                type="number"
+                min="1"
+                max="65535"
+                required /></label
+            ><label class="full"
+              >Catatan<textarea name="notes" maxlength="500"></textarea>
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button class="refresh" id="cancel-modal" type="button">
+              [ batal ]</button
+            ><button class="button" type="submit">[ simpan ]</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <script>
+      const listEl = document.getElementById("server-list");
+      const form = document.getElementById("form");
+      const editModal = document.getElementById("edit-modal");
+      const editForm = document.getElementById("server-edit-form");
+      const statusEl = document.getElementById("status");
+      let servers = [];
+
+      function esc(s) {
+        return String(s ?? "").replace(
+          /[&<>]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        );
+      }
+
+      function render() {
+        if (!servers.length) {
+          listEl.innerHTML =
+            '<p class="empty">Belum ada server. Tambahkan via form di bawah.</p>';
+          return;
+        }
+        listEl.innerHTML = servers
+          .map(
+            (s, i) =>
+              `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px"><div><strong style="color:var(--cyan)">${esc(s.name)}</strong> <span style="color:var(--muted)">${esc(s.host)}:${esc(s.port)}</span> <span style="color:var(--muted)">@${esc(s.user)}</span>${s.notes ? " — " + esc(s.notes) : ""}</div><div style="display:flex;gap:10px"><button class="refresh" data-edit="${i}" type="button">[ edit ]</button></div></div>`,
+          )
+          .join("");
+        listEl
+          .querySelectorAll("[data-edit]")
+          .forEach((b) =>
+            b.addEventListener("click", () => openEdit(b.dataset.edit)),
+          );
+      }
+
+      async function load() {
+        try {
+          const r = await fetch("/api/servers", { cache: "no-store" });
+          const d = await r.json();
+          servers = d.servers || [];
+          render();
+        } catch (e) {
+          listEl.innerHTML =
+            '<p class="empty">Gagal memuat server: ' +
+            esc(String(e.message || e)) +
+            "</p>";
+        }
+      }
+
+      function openEdit(i) {
+        const s = servers[i];
+        ["name", "host", "user", "port", "notes"].forEach((k) => {
+          if (editForm.elements[k]) editForm.elements[k].value = s[k] ?? "";
+        });
+        editModal.classList.add("open");
+        editForm.elements.name.focus();
+      }
+      function closeModal() {
+        editModal.classList.remove("open");
+      }
+      document
+        .getElementById("close-modal")
+        .addEventListener("click", closeModal);
+      document
+        .getElementById("cancel-modal")
+        .addEventListener("click", closeModal);
+      editModal.addEventListener("click", (e) => {
+        if (e.target === editModal) closeModal();
+      });
+
+      async function save(payload) {
+        const r = await fetch("/api/servers", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        return r;
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const s = Object.fromEntries(new FormData(form));
+        if (/[\s;&|`$]/.test(s.host)) {
+          statusEl.className = "status err";
+          statusEl.textContent = "Host tidak valid (ada karakter terlarang).";
+          return;
+        }
+        const r = await save(s);
+        if (r.ok) {
+          statusEl.className = "status ok";
+          statusEl.textContent =
+            "Data tersimpan di /var/lib/velocity/servers.json.";
+          form.reset();
+          await load();
+        } else {
+          statusEl.className = "status err";
+          statusEl.textContent = "Gagal menyimpan (HTTP " + r.status + ").";
+        }
+      });
+
+      editForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const s = Object.fromEntries(new FormData(editForm));
+        if (/[\s;&|`$]/.test(s.host)) {
+          return;
+        }
+        const r = await save(s);
+        if (r.ok) {
+          closeModal();
+          await load();
+        }
+      });
+
+      load();
+    </script>
+  </body>
+</html>

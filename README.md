@@ -107,14 +107,16 @@ Loopback `127.0.0.1:9121`.
 
 Endpoints:
 - `GET /health` — no auth
-- `GET /api/servers` — daftar server (dari `config/servers.json` atau env `INSTALLER_SERVERS` JSON)
-- `GET /api/installer` — daftar domain + validasi manifest per-file + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`
+- `GET /api/servers` — daftar server dari `/var/lib/velocity/servers.json` (managed panel `/server/`) atau fallback `config/servers.json` / env `INSTALLER_SERVERS`.
+- `GET /api/installer` — daftar domain + validasi manifest + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`.
 - `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry. Saat `apply`, service menyetel `WP_INSTALL_SSH_KEY_FILE` (auto-detect `/etc/velocity/secrets/ssh_key` atau `/root/.ssh/id_ed25519`/`id_rsa`) + `WP_INSTALL_DB_PASSWORD_FILE`/`WP_INSTALL_ADMIN_PASSWORD_FILE` per-domain dari `/etc/velocity/secrets/`.
 - `POST /api/installer/generate` — body `{"domain":"example.com"}`. Auto-generate manifest (da_user/db dari label domain, admin_email dari `notes-credentials.txt` bila ada) + secret password random per-domain (tidak pernah menimpa yang sudah ada). Domain tanpa manifest valid bisa langsung di-generate dari tombol `[ generate ]` di halaman installer.
 
 Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy (blok location referensi: `config/nginx-installer.conf`).
 
-Konfigurasi server tujuan: `config/servers.json` (array `[{name,host,port}]`) atau env `INSTALLER_SERVERS`.
+## Manage server page (`web/server/index.html`)
+
+Terminal-style `/server/`. Read/write `/var/lib/velocity/servers.json` via `GET/PUT /api/servers` (server-registry service di port 9122). Form validasi + edit modal, sumber data installer & panel ini.
 
 ## Installer page (`web/installer/index.html`)
 

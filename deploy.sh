@@ -20,6 +20,8 @@ fi
 install -m 644 services/installer_status.py /usr/local/bin/installer_status.py
 install -d -m 755 "$WEB_ROOT/installer"
 install -m 644 web/installer/index.html "$WEB_ROOT/installer/index.html"
+install -d -m 755 "$WEB_ROOT/server"
+install -m 644 web/server/index.html "$WEB_ROOT/server/index.html"
 
 systemctl restart installer-status.service
 nginx -t
