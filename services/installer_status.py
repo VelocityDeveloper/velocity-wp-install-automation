@@ -226,7 +226,19 @@ def generate_manifest(domain: str):
             return {'generated': False, 'reason': 'already_valid'}, None
     # derive defaults; ssh target from server store (managed via /server/ panel), fallback static
     labels = domain.split('.')[0]
-    da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:31] or 'admin'
+    # DirectAdmin limit = 8 chars, prioritize username from notes if present
+    da_user = ''
+    for nf in [folder / 'notes-credentials.txt', folder / 'notes.txt', folder / 'FORM ISIAN WEBSITE - paket g.doc']:
+        try:
+            if nf.is_file():
+                txt = nf.read_text(errors='replace')
+                m = re.search(r'username\s*[:=]\s*([A-Za-z0-9_-]+)', txt, re.I)
+                if m:
+                    da_user = re.sub(r'[^a-z0-9_-]', '', m.group(1).lower())[:8]
+                    break
+        except: pass
+    if not da_user:
+        da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:8] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
     servers = load_servers()
@@ -244,14 +256,15 @@ def generate_manifest(domain: str):
                 cand = line.strip().strip('*').strip()
                 if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', cand):
                     admin_email = cand
+    labels_clean = re.sub(r'[^a-z0-9_]', '', labels.lower()) or 'site'
     content = (
         f'target_host={target}\n'
         f'ssh_port={port}\n'
         f'ssh_user={ssh_user}\n'
         f'da_user={da_user}\n'
         f'domain={domain}\n'
-        f'db_name={da_user}_wp\n'
-        f'db_user={da_user}_wp\n'
+        f'db_name={labels_clean}_wp\n'
+        f'db_user={labels_clean}_wp\n'
         f'admin_user=admin\n'
         f'admin_email={admin_email or ("admin@" + domain)}\n'
         f'site_title={labels.replace("-", " ").title()}\n'
