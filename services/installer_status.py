@@ -441,11 +441,49 @@ def test_ai_model(model_id):
                 'Authorization': f'Bearer {api_key}'
             }
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read()
+            # Some providers return SSE-style tail like "data: [DONE]" or extra JSON lines
+            # Try to extract first valid JSON object
+            text = raw.decode('utf-8', errors='replace').strip()
+            result = None
+            # Try direct parse
+            try:
+                result = json.loads(text)
+            except ValueError:
+                # Try to find first {...} block
+                import re as _re
+                m = _re.search(r'\{.*\}', text, _re.DOTALL)
+                if m:
+                    try:
+                        result = json.loads(m.group(0))
+                    except: pass
+                # SSE fallback: look for data: {...}
+                if result is None:
+                    for line in text.splitlines():
+                        line=line.strip()
+                        if line.startswith('data:'):
+                            payload_str=line[5:].strip()
+                            if payload_str and payload_str != '[DONE]':
+                                try:
+                                    result = json.loads(payload_str)
+                                    break
+                                except: continue
+            if result is None:
+                # last attempt: truncate before "data:" if present
+                if 'data:' in text:
+                    try:
+                        result = json.loads(text.split('data:')[0].strip())
+                    except: pass
+            if result is None:
+                return None, f'test_failed:unparseable_response:{text[:400]}'
+            if isinstance(result, dict) and 'error' in result:
+                err = result.get('error')
+                if isinstance(err, dict): err = err.get('message') or str(err)
+                return None, f'provider_error:{err}'
             if 'choices' in result:
                 return {'status': 'ok', 'response': result['choices'][0]['message']['content']}, None
-            return None, 'unexpected_response'
+            return None, f'unexpected_response:{str(result)[:400]}'
     except Exception as e:
         return None, f'test_failed:{e}'
 

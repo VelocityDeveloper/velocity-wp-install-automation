@@ -445,21 +445,50 @@
 
       async function testModel(modelId) {
         const statusEl = document.getElementById('ai-status');
-        statusEl.innerHTML = '<p class="status-running">Testing model ' + esc(modelId) + '...</p>';
+        // find card for inline feedback
+        const cards = document.querySelectorAll('.model-card');
+        let cardStatus = null;
+        for (const c of cards) {
+          if (c.innerHTML.includes("testModel('" + modelId + "')") || c.innerHTML.includes('testModel(&#x27;' + modelId)) {
+            cardStatus = c;
+            break;
+          }
+        }
+        let inline = null;
+        if (cardStatus) {
+          inline = document.createElement('p');
+          inline.className = 'status-running';
+          inline.style.marginTop = '8px';
+          inline.textContent = 'Testing ' + modelId + '...';
+          // remove old inline if any
+          const old = cardStatus.querySelector('.inline-test-status');
+          if (old) old.remove();
+          inline.classList.add('inline-test-status');
+          cardStatus.appendChild(inline);
+        }
+        statusEl.innerHTML = '<p class="status-running">Testing model ' + esc(modelId) + '... (mohon tunggu ~30s)</p>';
+        // disable test buttons
+        const btns = document.querySelectorAll('button[onclick*="testModel"]');
+        btns.forEach(b => b.disabled = true);
         try {
           const r = await fetch('/api/ai/models/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model_id: modelId })
           });
-          const j = await r.json();
+          const j = await r.json().catch(() => ({ error: 'invalid_json ' + r.status }));
           if (r.ok && j.status === 'ok') {
             statusEl.innerHTML = '<p class="status-completed">✓ Test OK: ' + esc(j.response || 'Connected') + '</p>';
+            if (inline) { inline.className = 'status-completed inline-test-status'; inline.textContent = '✓ OK: ' + (j.response || 'Connected'); }
           } else {
             statusEl.innerHTML = '<p class="status-error">✗ Test failed: ' + esc(j.error || r.status) + '</p>';
+            if (inline) { inline.className = 'status-error inline-test-status'; inline.textContent = '✗ ' + (j.error || r.status); }
           }
         } catch (e) {
           statusEl.innerHTML = '<p class="status-error">✗ Error: ' + esc(e.message) + '</p>';
+          if (inline) { inline.className = 'status-error inline-test-status'; inline.textContent = '✗ ' + e.message; }
+        } finally {
+          btns.forEach(b => b.disabled = false);
         }
       }
 
