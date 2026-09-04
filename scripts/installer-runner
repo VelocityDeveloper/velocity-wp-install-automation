@@ -26,6 +26,11 @@ state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
 INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
+# Run AI content generation after successful install
+if [[ "$MODE" == "apply" ]]; then
+  echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
+  INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
+fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
 else

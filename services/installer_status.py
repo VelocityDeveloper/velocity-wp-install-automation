@@ -29,12 +29,21 @@ API_TOKEN = os.environ.get('INSTALLER_API_TOKEN', '').strip()
 PACKAGES_DIR = Path('/var/lib/velocity/packages')
 PACKAGES_META = PACKAGES_DIR / 'packages.json'
 PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
+AI_CONFIG_DIR = Path('/var/lib/velocity/ai')
+AI_MODELS = AI_CONFIG_DIR / 'models.json'
+AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
+AI_GENERATED = AI_CONFIG_DIR / 'generated'
+AI_SCRIPT = Path(__file__).resolve().parent.parent / 'scripts' / 'ai-content-generator.py'
+AI_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+AI_PROMPTS.mkdir(parents=True, exist_ok=True)
+AI_GENERATED.mkdir(parents=True, exist_ok=True)
 _rate = {}
 RATE_LIMIT = 30
 RATE_WINDOW = 60
 _cron_cache = {'at': 0, 'value': []}
 CACHE_TTL = 30
 _running = {}  # domain -> subprocess.Popen
+_ai_running = {}  # domain -> subprocess.Popen
 
 
 def _rate_ok(ip: str) -> bool:
@@ -297,6 +306,210 @@ def start_run(domain: str, mode: str):
     return {'domain': domain, 'mode': mode, 'pid': p.pid}, 'started'
 
 
+# --- AI Model Management ---
+
+def load_ai_models():
+    """Load AI models configuration."""
+    try:
+        if AI_MODELS.is_file():
+            return json.loads(AI_MODELS.read_text())
+    except (OSError, ValueError):
+        pass
+    return {'models': [], 'default_provider': 'openai'}
+
+
+def save_ai_models(data):
+    """Save AI models configuration."""
+    tmp = AI_MODELS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=2, default=str))
+    os.chmod(tmp, 0o600)
+    tmp.replace(AI_MODELS)
+
+
+def add_ai_model(model_data):
+    """Add a new AI model."""
+    if not re.match(r'^[a-zA-Z0-9_-]+$', model_data.get('id', '')):
+        return None, 'invalid_id'
+    if model_data.get('provider') not in ('openai', 'anthropic', 'openai_compatible', 'ollama'):
+        return None, 'invalid_provider'
+    if not model_data.get('model'):
+        return None, 'model_required'
+    if not model_data.get('api_key_file'):
+        return None, 'api_key_file_required'
+    if not Path(model_data['api_key_file']).is_file():
+        return None, 'api_key_file_not_found'
+    
+    data = load_ai_models()
+    models = data.get('models', [])
+    
+    # Check for duplicate ID
+    for i, m in enumerate(models):
+        if m['id'] == model_data['id']:
+            # Update existing
+            models[i] = model_data
+            data['models'] = models
+            if model_data.get('is_default'):
+                for m in models:
+                    m['is_default'] = (m['id'] == model_data['id'])
+            save_ai_models(data)
+            return model_data, None
+    
+    # Add new
+    models.append(model_data)
+    data['models'] = models
+    if model_data.get('is_default') or len(models) == 1:
+        for m in models:
+            m['is_default'] = (m['id'] == model_data['id'])
+    save_ai_models(data)
+    return model_data, None
+
+
+def remove_ai_model(model_id):
+    """Remove an AI model."""
+    data = load_ai_models()
+    models = data.get('models', [])
+    new_models = [m for m in models if m['id'] != model_id]
+    if len(new_models) == len(models):
+        return False
+    data['models'] = new_models
+    save_ai_models(data)
+    return True
+
+
+def set_default_ai_model(model_id):
+    """Set default AI model."""
+    data = load_ai_models()
+    models = data.get('models', [])
+    found = False
+    for m in models:
+        if m['id'] == model_id:
+            m['is_default'] = True
+            found = True
+        else:
+            m['is_default'] = False
+    if not found:
+        return False
+    save_ai_models(data)
+    return True
+
+
+def test_ai_model(model_id):
+    """Test AI model by making a simple API call."""
+    data = load_ai_models()
+    model = None
+    for m in data.get('models', []):
+        if m['id'] == model_id:
+            model = m
+            break
+    if not model:
+        return None, 'model_not_found'
+    
+    api_key_file = model.get('api_key_file', '')
+    if not Path(api_key_file).is_file():
+        return None, 'api_key_file_not_found'
+    
+    api_key = Path(api_key_file).read_text().strip()
+    base_url = model.get('base_url', 'https://api.openai.com/v1')
+    model_name = model.get('model', '')
+    
+    try:
+        import urllib.request
+        payload = json.dumps({
+            'model': model_name,
+            'messages': [{'role': 'user', 'content': 'Say "OK" if you can hear me.'}],
+            'max_tokens': 10
+        }).encode()
+        req = urllib.request.Request(
+            f'{base_url}/chat/completions',
+            data=payload,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {api_key}'
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+            if 'choices' in result:
+                return {'status': 'ok', 'response': result['choices'][0]['message']['content']}, None
+            return None, 'unexpected_response'
+    except Exception as e:
+        return None, f'test_failed:{e}'
+
+
+# --- AI Content Generation ---
+
+def start_ai_content(domain: str, mode: str = 'dry-run'):
+    """Start AI content generation for domain."""
+    if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
+        return None, 'invalid_domain'
+    if mode not in ('dry-run', 'apply'):
+        return None, 'invalid_mode'
+    manifest = ROOT / domain / f'{domain}.txt'
+    if not manifest.is_file():
+        return None, 'manifest_not_found'
+    
+    # Check if AI is already running for this domain
+    proc = _ai_running.get(domain)
+    if proc is not None and proc.poll() is None:
+        return None, 'already_running'
+    
+    # Check if AI script exists
+    if not AI_SCRIPT.is_file():
+        return None, 'ai_script_missing'
+    
+    # Check if models are configured
+    ai_data = load_ai_models()
+    if not ai_data.get('models'):
+        return None, 'no_ai_models_configured'
+    
+    STATE.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, INSTALL_MODE=mode)
+    if mode == 'apply':
+        if not ssh_key_file():
+            return None, 'ssh_key_missing'
+        env['WP_INSTALL_SSH_KEY_FILE'] = str(ssh_key_file())
+    
+    logf = open(STATE / f'{domain}.ai.log', 'a')
+    try:
+        p = subprocess.Popen(
+            [str(AI_SCRIPT), str(manifest)],
+            stdout=logf, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env,
+            start_new_session=True,
+        )
+    except OSError as e:
+        logf.close()
+        return None, 'spawn_failed:' + str(e)
+    logf.close()
+    _ai_running[domain] = p
+    return {'domain': domain, 'mode': mode, 'pid': p.pid}, 'started'
+
+
+def get_ai_content_status(domain: str):
+    """Get AI content generation status for domain."""
+    proc = _ai_running.get(domain)
+    if proc is not None:
+        if proc.poll() is None:
+            return {'status': 'running', 'pid': proc.pid}
+        else:
+            del _ai_running[domain]
+            return {'status': 'completed', 'exit_code': proc.poll()}
+    
+    # Check if generated content exists
+    pages_file = AI_GENERATED / f'{domain}-pages.json'
+    articles_file = AI_GENERATED / f'{domain}-articles.json'
+    
+    result = {'status': 'idle'}
+    if pages_file.is_file():
+        result['pages_generated'] = True
+        result['pages_file'] = str(pages_file)
+    if articles_file.is_file():
+        result['articles_generated'] = True
+        result['articles_file'] = str(articles_file)
+    
+    return result
+
+
 # --- packages management ---
 
 def load_packages():
@@ -413,6 +626,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({'packages': load_packages()})
             return
+        # AI endpoints
+        if path == '/api/ai/models':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(load_ai_models())
+            return
+        if path.startswith('/api/ai/content/'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            domain = path[len('/api/ai/content/'):]
+            self._send_json(get_ai_content_status(domain))
+            return
         self.send_error(404)
 
     def do_POST(self):
@@ -421,7 +648,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
-        if path not in ('/api/installer/run', '/api/installer/generate', '/api/packages', '/api/packages/download'):
+        # Check allowed paths (including dynamic ones)
+        allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/packages', '/api/packages/download',
+                          '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
+                          '/api/ai/content/run')
+        is_allowed = path in allowed_static or path.startswith('/api/ai/models/')
+        if not is_allowed:
             self.send_error(404)
             return
         if not _check_auth(self):
@@ -517,6 +749,81 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({'status': 'ok', 'path': str(dest), 'size': dest.stat().st_size})
             return
+        # AI Model Management
+        if path == '/api/ai/models':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            result, err = add_ai_model(payload)
+            if result is None:
+                err_key = err.split(':')[0] if err else ''
+                code = {'invalid_id': 400, 'invalid_provider': 400, 'model_required': 400, 'api_key_file_required': 400, 'api_key_file_not_found': 404}.get(err_key, 422)
+                self._send_json({'error': err}, code)
+                return
+            self._send_json({'status': 'ok', 'model': result})
+            return
+        if path == '/api/ai/models/test':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            model_id = payload.get('model_id', '')
+            result, err = test_ai_model(model_id)
+            if result is None:
+                err_key = err.split(':')[0] if err else ''
+                code = {'model_not_found': 404, 'api_key_file_not_found': 404}.get(err_key, 422)
+                self._send_json({'error': err, 'model_id': model_id}, code)
+                return
+            self._send_json({'status': 'ok', 'model_id': model_id, **result})
+            return
+        if path == '/api/ai/models/set-default':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            model_id = payload.get('model_id', '')
+            if set_default_ai_model(model_id):
+                self._send_json({'status': 'ok', 'default_model': model_id})
+            else:
+                self._send_json({'error': 'model_not_found', 'model_id': model_id}, 404)
+            return
+        if path.startswith('/api/ai/models/') and path.endswith('/delete'):
+            model_id = path[len('/api/ai/models/'):-len('/delete')]
+            if not model_id or not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
+                self._send_json({'error': 'invalid_model_id'}, 400)
+                return
+            if remove_ai_model(model_id):
+                self._send_json({'status': 'ok', 'removed': model_id})
+            else:
+                self._send_json({'error': 'not_found'}, 404)
+            return
+        # AI Content Generation
+        if path == '/api/ai/content/run':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if length > 4096:
+                    self._send_json({'error': 'payload_too_large'}, 413)
+                    return
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            domain = str(payload.get('domain') or '')
+            mode = str(payload.get('mode') or 'dry-run')
+            result, err = start_ai_content(domain, mode)
+            if result is None:
+                code = {'already_running': 409, 'invalid_domain': 400, 'invalid_mode': 400, 'no_ai_models_configured': 422, 'ai_script_missing': 422}.get(err.split(':')[0], 422)
+                self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
+                return
+            self._send_json({'status': 'started', **result})
+            return
         # Installer actions (JSON only)
         try:
             length = int(self.headers.get('Content-Length') or 0)
@@ -550,20 +857,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
-        if not path.startswith('/api/packages/'):
-            self.send_error(404)
+        if path.startswith('/api/packages/'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            slug = path[len('/api/packages/'):]
+            if not slug or not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+                self._send_json({'error': 'invalid_slug'}, 400)
+                return
+            if remove_package(slug):
+                self._send_json({'status': 'ok', 'removed': slug})
+            else:
+                self._send_json({'error': 'not_found'}, 404)
             return
-        if not _check_auth(self):
-            self._send_json({'error': 'unauthorized'}, 401)
-            return
-        slug = path[len('/api/packages/'):]
-        if not slug or not re.match(r'^[a-zA-Z0-9_-]+$', slug):
-            self._send_json({'error': 'invalid_slug'}, 400)
-            return
-        if remove_package(slug):
-            self._send_json({'status': 'ok', 'removed': slug})
-        else:
-            self._send_json({'error': 'not_found'}, 404)
+        self.send_error(404)
 
     def log_message(self, fmt, *args):
         try:

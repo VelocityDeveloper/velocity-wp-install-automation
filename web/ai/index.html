@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>velocity@server:~/installer/ai</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <style>
+      :root {
+        --bg: #080b0a;
+        --panel: #0d1210;
+        --line: #1b2b22;
+        --text: #c8d7cc;
+        --muted: #718579;
+        --green: #55e879;
+        --cyan: #68d9e8;
+        --yellow: #e9d36b;
+        --red: #ff7373;
+        --purple: #c084fc;
+      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body {
+        margin: 0;
+        padding: 24px;
+        color: var(--text);
+        background: radial-gradient(circle at 50% -20%, #15301f 0, #080b0a 45%);
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      }
+      .terminal {
+        width: min(1100px, 100%);
+        margin: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #0a0e0c;
+        box-shadow: 0 20px 80px #0009;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #111814;
+        color: var(--muted);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #33463a;
+      }
+      .dot:first-child { background: #e46d65; }
+      .dot:nth-child(2) { background: #d4b75d; }
+      .dot:nth-child(3) { background: #62bd72; }
+      .title { margin: auto; font-size: 12px; }
+      .screen { padding: 28px clamp(18px, 4vw, 42px) 34px; }
+      .prompt { color: var(--green); }
+      .prompt b { color: var(--cyan); font-weight: 400; }
+      .command { margin: 0 0 25px; }
+      .command a, .nav a { color: var(--cyan); text-decoration: none; }
+      .command a:hover, .nav a:hover { color: #fff; text-decoration: underline; }
+      .heading { margin: 0; color: var(--green); font-size: clamp(1.4rem, 4vw, 2rem); }
+      .meta { margin: 5px 0 25px; color: var(--muted); }
+      code { color: var(--yellow); }
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: uppercase; }
+      tr:last-child td { border: 0; }
+      .domain { color: var(--cyan); }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border: 1px solid;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .action {
+        padding: 5px 9px;
+        border: 1px solid var(--cyan);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--cyan);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .action:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
+      .action.danger { border-color: var(--red); color: var(--red); }
+      .action.danger:hover { background: #ff737318; }
+      .action + .action { margin-left: 6px; }
+      .ready { border-color: var(--green); color: var(--green); }
+      .missing { border-color: var(--yellow); color: var(--yellow); }
+      .failed { border-color: var(--red); color: var(--red); }
+      .empty { padding: 28px; text-align: center; color: var(--muted); }
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 24px;
+        color: var(--muted);
+      }
+      .refresh {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--cyan);
+        font: inherit;
+        cursor: pointer;
+      }
+      .refresh:hover { text-decoration: underline; color: #fff; }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: #0008;
+        z-index: 99;
+      }
+      .modal.open { display: flex; }
+      .modal-box {
+        max-width: 520px;
+        margin: 16px;
+        padding: 22px;
+        border: 1px solid var(--yellow);
+        background: var(--panel);
+        color: var(--text);
+      }
+      .modal-box h3 { margin: 0 0 8px; color: var(--yellow); }
+      .modal-box p { margin: 0 0 16px; color: var(--muted); }
+      .modal-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      .mode-choice {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 0 0 14px;
+        padding: 12px;
+        border: 1px dashed var(--line);
+        background: #0a0e0c;
+      }
+      .mode-choice label {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .mode-choice input { accent-color: var(--green); }
+      .btn {
+        padding: 8px 14px;
+        border: 1px solid;
+        font: inherit;
+        cursor: pointer;
+        border-radius: 3px;
+      }
+      .btn-cancel {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+      .btn-confirm {
+        border-color: var(--red);
+        background: var(--red);
+        color: #000;
+        font-weight: 700;
+      }
+      .btn-primary {
+        border-color: var(--cyan);
+        background: var(--cyan);
+        color: #000;
+        font-weight: 700;
+      }
+      .form-group {
+        margin-bottom: 14px;
+      }
+      .form-group label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .form-group input, .form-group select {
+        width: 100%;
+        padding: 9px 12px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      .form-group input:focus, .form-group select:focus {
+        outline: 1px solid var(--green);
+        border-color: var(--green);
+      }
+      .model-card {
+        padding: 14px;
+        border: 1px solid var(--line);
+        margin-bottom: 10px;
+        background: #0a0e0c;
+      }
+      .model-card.default {
+        border-color: var(--green);
+      }
+      .model-card h4 {
+        margin: 0 0 6px;
+        color: var(--cyan);
+      }
+      .model-card p {
+        margin: 2px 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .model-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 6px;
+      }
+      .status-running { color: var(--cyan); }
+      .status-completed { color: var(--green); }
+      .status-error { color: var(--red); }
+      .status-idle { color: var(--muted); }
+      pre.log-view {
+        margin: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: #070a08;
+        color: var(--text);
+        font: 12px/1.55 ui-monospace, Consolas, monospace;
+        max-height: 40vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      @media (max-width: 600px) {
+        body { padding: 0; }
+        .terminal { min-height: 100vh; border: 0; border-radius: 0; }
+        .screen { padding: 22px 15px; }
+        th, td { padding: 11px 9px; }
+        .hide-mobile { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="terminal">
+      <header class="bar">
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i
+        ><span class="title">velocity@server: ~/installer/ai</span>
+      </header>
+      <section class="screen">
+        <p class="command">
+          <span class="prompt">velocity@server</span>:<b>~/installer</b>$
+          <a href="/">cd ..</a>
+        </p>
+        <h1 class="heading">AI Content Generator</h1>
+        <p class="meta">
+          $ ai --manage &nbsp;|&nbsp; generate pages + articles via OpenAI-compatible API
+        </p>
+
+        <!-- AI Models Section -->
+        <section class="panel" style="margin-bottom: 20px;">
+          <div style="padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; color: var(--cyan);">AI Models</h3>
+            <button class="action" onclick="showAddModelModal()">[ + add model ]</button>
+          </div>
+          <div id="models-list" style="padding: 16px;">
+            <p class="empty">Memuat...</p>
+          </div>
+        </section>
+
+        <!-- AI Content Generation Section -->
+        <section class="panel">
+          <div style="padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; color: var(--cyan);">Content Generation</h3>
+          </div>
+          <div style="padding: 16px;">
+            <div class="form-group">
+              <label>Domain</label>
+              <select id="ai-domain-select">
+                <option value="">Pilih domain...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Mode</label>
+              <select id="ai-mode-select">
+                <option value="dry-run">Dry Run (generate only, not published)</option>
+                <option value="apply">Apply (generate & publish as draft)</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="runAiContent()">[ generate content ]</button>
+            <div id="ai-status" style="margin-top: 14px;"></div>
+          </div>
+        </section>
+
+        <nav class="nav">
+          <span>source: <code>/var/lib/velocity/ai/</code></span
+          ><span
+            ><button class="refresh" onclick="load()">[ refresh ]</button>
+            <a href="/installer/">[ installer ]</a>
+            <a href="/">[ home ]</a></span
+          >
+        </nav>
+      </section>
+    </main>
+
+    <!-- Add Model Modal -->
+    <div id="model-modal" class="modal" role="dialog" aria-modal="true">
+      <div class="modal-box">
+        <h3 id="model-modal-title">Add AI Model</h3>
+        <div class="form-group">
+          <label>Model ID (unique, alphanumeric)</label>
+          <input type="text" id="model-id" placeholder="gpt-4o-mini">
+        </div>
+        <div class="form-group">
+          <label>Display Name</label>
+          <input type="text" id="model-name" placeholder="GPT-4o Mini">
+        </div>
+        <div class="form-group">
+          <label>Provider</label>
+          <select id="model-provider">
+            <option value="openai">OpenAI</option>
+            <option value="openai_compatible">OpenAI Compatible</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="ollama">Ollama (Local)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Model Name (API identifier)</label>
+          <input type="text" id="model-model" placeholder="gpt-4o-mini">
+        </div>
+        <div class="form-group">
+          <label>Base URL (API endpoint)</label>
+          <input type="text" id="model-base-url" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="form-group">
+          <label>API Key File Path</label>
+          <input type="text" id="model-api-key-file" placeholder="/etc/velocity/secrets/ai_openai_key.txt">
+        </div>
+        <div class="form-group">
+          <label>Max Tokens</label>
+          <input type="number" id="model-max-tokens" placeholder="4096">
+        </div>
+        <div class="form-group">
+          <label>Temperature</label>
+          <input type="number" step="0.1" id="model-temperature" placeholder="0.7">
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px; cursor: pointer;">
+          <input type="checkbox" id="model-is-default" /> Set as default model
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" onclick="closeModelModal()">Batal</button>
+          <button class="btn btn-primary" onclick="saveModel()">Simpan</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function esc(s) {
+        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+      }
+
+      async function loadModels() {
+        try {
+          const d = await fetch('/api/ai/models', { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(r.status);
+            return r.json();
+          });
+          const models = d.models || [];
+          const container = document.getElementById('models-list');
+          if (!models.length) {
+            container.innerHTML = '<p class="empty">Belum ada model AI. Tambahkan model untuk mulai generate konten.</p>';
+            return;
+          }
+          container.innerHTML = models.map(m => `
+            <div class="model-card ${m.is_default ? 'default' : ''}">
+              <h4>${esc(m.name || m.id)} ${m.is_default ? '<span style="color: var(--green)">[default]</span>' : ''}</h4>
+              <p><strong>ID:</strong> ${esc(m.id)} | <strong>Provider:</strong> ${esc(m.provider)} | <strong>Model:</strong> ${esc(m.model)}</p>
+              <p><strong>Base URL:</strong> ${esc(m.base_url)}</p>
+              <p><strong>API Key File:</strong> ${esc(m.api_key_file)}</p>
+              <div class="model-actions">
+                <button class="action" onclick="testModel('${esc(m.id)}')">[ test ]</button>
+                ${!m.is_default ? `<button class="action" onclick="setDefaultModel('${esc(m.id)}')">[ set default ]</button>` : ''}
+                <button class="action danger" onclick="deleteModel('${esc(m.id)}')">[ delete ]</button>
+              </div>
+            </div>
+          `).join('');
+        } catch (e) {
+          document.getElementById('models-list').innerHTML = '<p class="empty" style="color: var(--red)">Gagal memuat model: ' + esc(e.message) + '</p>';
+        }
+      }
+
+      async function loadDomains() {
+        try {
+          const d = await fetch('/api/installer', { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(r.status);
+            return r.json();
+          });
+          const domains = d.domains || [];
+          const select = document.getElementById('ai-domain-select');
+          select.innerHTML = '<option value="">Pilih domain...</option>' + 
+            domains.filter(x => x.status === 'READY' || x.status === 'SUCCESS')
+              .map(x => `<option value="${esc(x.domain)}">${esc(x.domain)}</option>`).join('');
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      function showAddModelModal() {
+        document.getElementById('model-modal-title').textContent = 'Add AI Model';
+        document.getElementById('model-id').value = '';
+        document.getElementById('model-name').value = '';
+        document.getElementById('model-provider').value = 'openai';
+        document.getElementById('model-model').value = '';
+        document.getElementById('model-base-url').value = 'https://api.openai.com/v1';
+        document.getElementById('model-api-key-file').value = '/etc/velocity/secrets/ai_openai_key.txt';
+        document.getElementById('model-max-tokens').value = '4096';
+        document.getElementById('model-temperature').value = '0.7';
+        document.getElementById('model-is-default').checked = false;
+        document.getElementById('model-modal').classList.add('open');
+      }
+
+      function closeModelModal() {
+        document.getElementById('model-modal').classList.remove('open');
+      }
+
+      async function saveModel() {
+        const payload = {
+          id: document.getElementById('model-id').value.trim(),
+          name: document.getElementById('model-name').value.trim(),
+          provider: document.getElementById('model-provider').value,
+          model: document.getElementById('model-model').value.trim(),
+          base_url: document.getElementById('model-base-url').value.trim(),
+          api_key_file: document.getElementById('model-api-key-file').value.trim(),
+          max_tokens: parseInt(document.getElementById('model-max-tokens').value) || 4096,
+          temperature: parseFloat(document.getElementById('model-temperature').value) || 0.7,
+          is_default: document.getElementById('model-is-default').checked
+        };
+        try {
+          const r = await fetch('/api/ai/models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const j = await r.json();
+          if (r.ok && j.status === 'ok') {
+            closeModelModal();
+            loadModels();
+          } else {
+            alert('Error: ' + (j.error || r.status));
+          }
+        } catch (e) {
+          alert('Error: ' + e.message);
+        }
+      }
+
+      async function testModel(modelId) {
+        const statusEl = document.getElementById('ai-status');
+        statusEl.innerHTML = '<p class="status-running">Testing model ' + esc(modelId) + '...</p>';
+        try {
+          const r = await fetch('/api/ai/models/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_id: modelId })
+          });
+          const j = await r.json();
+          if (r.ok && j.status === 'ok') {
+            statusEl.innerHTML = '<p class="status-completed">✓ Test OK: ' + esc(j.response || 'Connected') + '</p>';
+          } else {
+            statusEl.innerHTML = '<p class="status-error">✗ Test failed: ' + esc(j.error || r.status) + '</p>';
+          }
+        } catch (e) {
+          statusEl.innerHTML = '<p class="status-error">✗ Error: ' + esc(e.message) + '</p>';
+        }
+      }
+
+      async function setDefaultModel(modelId) {
+        try {
+          const r = await fetch('/api/ai/models/set-default', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_id: modelId })
+          });
+          const j = await r.json();
+          if (r.ok && j.status === 'ok') {
+            loadModels();
+          } else {
+            alert('Error: ' + (j.error || r.status));
+          }
+        } catch (e) {
+          alert('Error: ' + e.message);
+        }
+      }
+
+      async function deleteModel(modelId) {
+        if (!confirm('Hapus model ' + modelId + '?')) return;
+        try {
+          const r = await fetch('/api/ai/models/' + encodeURIComponent(modelId) + '/delete', {
+            method: 'DELETE'
+          });
+          const j = await r.json();
+          if (r.ok && j.status === 'ok') {
+            loadModels();
+          } else {
+            alert('Error: ' + (j.error || r.status));
+          }
+        } catch (e) {
+          alert('Error: ' + e.message);
+        }
+      }
+
+      async function runAiContent() {
+        const domain = document.getElementById('ai-domain-select').value;
+        const mode = document.getElementById('ai-mode-select').value;
+        const statusEl = document.getElementById('ai-status');
+        if (!domain) {
+          statusEl.innerHTML = '<p class="status-error">Pilih domain terlebih dahulu!</p>';
+          return;
+        }
+        statusEl.innerHTML = '<p class="status-running">Starting AI content generation for ' + esc(domain) + '...</p>';
+        try {
+          const r = await fetch('/api/ai/content/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain, mode })
+          });
+          const j = await r.json();
+          if (r.ok && j.status === 'started') {
+            statusEl.innerHTML = '<p class="status-running">AI generation started (PID ' + j.pid + '). Check status...</p>';
+            // Poll status
+            const pollInterval = setInterval(async () => {
+              const sr = await fetch('/api/ai/content/' + encodeURIComponent(domain), { cache: 'no-store' });
+              const sj = await sr.json();
+              if (sj.status !== 'running') {
+                clearInterval(pollInterval);
+                if (sj.status === 'completed') {
+                  statusEl.innerHTML = '<p class="status-completed">✓ AI generation completed! Pages: ' + (sj.pages_generated ? 'yes' : 'no') + ', Articles: ' + (sj.articles_generated ? 'yes' : 'no') + '</p>';
+                } else {
+                  statusEl.innerHTML = '<p class="status-idle">Status: ' + esc(sj.status) + '</p>';
+                }
+              }
+            }, 5000);
+          } else {
+            statusEl.innerHTML = '<p class="status-error">✗ Failed: ' + esc(j.error || r.status) + '</p>';
+          }
+        } catch (e) {
+          statusEl.innerHTML = '<p class="status-error">✗ Error: ' + esc(e.message) + '</p>';
+        }
+      }
+
+      function load() {
+        loadModels();
+        loadDomains();
+      }
+      load();
+    </script>
+  </body>
+</html>

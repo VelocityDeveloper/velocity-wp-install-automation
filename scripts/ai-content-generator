@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# AI Content Generator for Velocity WP Install
+# Reads manifest + client folder data, calls OpenAI-compatible API,
+# generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
+
+MANIFEST=${1:?usage: ai-content-generator <manifest>}
+MODE=${INSTALL_MODE:-dry-run}
+AI_CONFIG_DIR=/var/lib/velocity/ai
+AI_MODELS="$AI_CONFIG_DIR/models.json"
+PROMPT_DIR="$AI_CONFIG_DIR/prompts"
+GENERATED_DIR="$AI_CONFIG_DIR/generated"
+LOG_FILE="/var/lib/velocity/installer/ai-$(basename "$MANIFEST" .txt).log"
+
+mkdir -p "$AI_CONFIG_DIR" "$PROMPT_DIR" "$GENERATED_DIR"
+chmod 700 "$AI_CONFIG_DIR"
+
+log() { printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "$LOG_FILE" >&2; }
+log "AI content generation started for manifest: $MANIFEST"
+
+# --- Read manifest ---
+declare -A cfg=()
+while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  key=$(echo "$key" | tr -d '[:space:]')
+  value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [[ -z "$key" || "$key" == \#* ]] && continue
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+  cfg[$key]="$value"
+done < "$MANIFEST"
+
+DOMAIN="${cfg[domain]:-}"
+DA_USER="${cfg[da_user]:-}"
+SSH_PORT="${cfg[ssh_port]:-22}"
+SSH_USER="${cfg[ssh_user]:-root}"
+TARGET_HOST="${cfg[target_host]:-}"
+SITE_TITLE="${cfg[site_title]:-}"
+
+[[ -n "$DOMAIN" ]] || { log "ERROR: domain not in manifest"; exit 2; }
+
+# --- Read client folder data ---
+CLIENT_DIR="$(dirname "$MANIFEST")"
+CLIENT_DATA=""
+for f in "$CLIENT_DIR"/*.txt; do
+  [[ -f "$f" ]] || continue
+  fname=$(basename "$f")
+  [[ "$fname" == "$DOMAIN.txt" ]] && continue  # skip manifest itself
+  CLIENT_DATA+="=== $fname ===$(cat "$f")"
+done
+
+# --- Read AI model config ---
+[[ -f "$AI_MODELS" ]] || { log "ERROR: no AI models config at $AI_MODELS"; exit 2; }
+
+DEFAULT_MODEL=$(python3 -c "
+import json
+with open('$AI_MODELS') as f:
+    data = json.load(f)
+models = data.get('models', [])
+for m in models:
+    if m.get('is_default'):
+        print(m.get('id',''))
+        break
+if not any(m.get('is_default') for m in models) and models:
+    print(models[0].get('id',''))
+")
+[[ -n "$DEFAULT_MODEL" ]] || { log "ERROR: no default AI model configured"; exit 2; }
+
+log "Using AI model: $DEFAULT_MODEL"
+
+MODEL_INFO=$(python3 -c "
+import json
+with open('$AI_MODELS') as f:
+    data = json.load(f)
+for m in data.get('models', []):
+    if m.get('id') == '$DEFAULT_MODEL':
+        print(json.dumps(m))
+        break
+")
+
+MODEL_PROVIDER=$(echo "$MODEL_INFO" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('provider',''))")
+MODEL_NAME=$(echo "$MODEL_INFO" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('model',''))")
+MODEL_BASE_URL=$(echo "$MODEL_INFO" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('base_url','https://api.openai.com/v1'))")
+API_KEY_FILE=$(echo "$MODEL_INFO" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('api_key_file',''))")
+
+[[ -f "$API_KEY_FILE" ]] || { log "ERROR: API key file not found: $API_KEY_FILE"; exit 2; }
+API_KEY=$(tr -d '\r\n' < "$API_KEY_FILE")
+
+# --- AI API call function ---
+ai_call() {
+  local system_prompt="$1" user_prompt="$2"
+  local response_file
+  response_file=$(mktemp)
+  
+  local payload
+  payload=$(python3 -c "
+import json
+msg = [
+    {'role':'system','content':'''$system_prompt'''},
+    {'role':'user','content':'''$user_prompt'''}
+]
+print(json.dumps({'model':'$MODEL_NAME','messages':msg,'temperature':0.7,'max_tokens':4000}))
+")
+  # Fix: use proper escaping
+  payload=$(python3 << PYEOF
+import json
+sys_msg = """$system_prompt"""
+usr_msg = """$user_prompt"""
+msg = [
+    {"role": "system", "content": sys_msg},
+    {"role": "user", "content": usr_msg}
+]
+print(json.dumps({"model": "$MODEL_NAME", "messages": msg, "temperature": 0.7, "max_tokens": 4000}))
+PYEOF
+)
+
+  local http_code
+  http_code=$(curl -s -w '%{http_code}' -o "$response_file" \
+    -X POST "$MODEL_BASE_URL/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $API_KEY" \
+    -d "$payload" 2>/dev/null)
+  
+  if [[ "$http_code" != "200" ]]; then
+    log "ERROR: AI API returned HTTP $http_code: $(cat "$response_file")"
+    rm -f "$response_file"
+    return 1
+  fi
+  
+  cat "$response_file"
+  rm -f "$response_file"
+}
+
+# --- Extract JSON from AI response ---
+extract_content() {
+  local response="$1"
+  echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    content = data['choices'][0]['message']['content']
+    # Strip markdown code fences if present
+    content = content.strip()
+    if content.startswith('\`\`\`'):
+        lines = content.split('\n')
+        if lines[0].strip().startswith('\`\`\`'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '\`\`\`':
+            lines = lines[:-1]
+        content = '\n'.join(lines)
+    print(content)
+except Exception as e:
+    print(f'PARSE_ERROR: {e}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+# --- Build system prompt ---
+SYSTEM_PROMPT="You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language unless specified otherwise. Output ONLY valid JSON, no markdown fences, no extra text."
+
+# --- Generate pages ---
+log "Generating pages content..."
+
+PAGES_PROMPT="Generate WordPress page content for a website with these details:
+- Site title: $SITE_TITLE
+- Domain: $DOMAIN
+- Client data: $CLIENT_DATA
+
+Generate 4 pages. Return JSON array:
+[
+  {\"slug\":\"home\",\"title\":\"Home\",\"template\":\"\",\"content\":\"<HTML content for homepage with hero section, features, CTA>\"},
+  {\"slug\":\"profile\",\"title\":\"Profil\",\"template\":\"\",\"content\":\"<HTML content about the company/organization profile>\"},
+  {\"slug\":\"gallery\",\"title\":\"Gallery\",\"template\":\"\",\"content\":\"<HTML content for gallery page with image placeholders>\"},
+  {\"slug\":\"contact\",\"title\":\"Kontak\",\"template\":\"\",\"content\":\"<HTML content for contact page with form, address, map placeholder>\"}
+]
+
+Use Indonesian language. Content should be professional HTML with inline styles or simple layout. Include [gallery] or image placeholders where needed. Each content should be 300-500 words."
+
+PAGES_RESPONSE=$(ai_call "$SYSTEM_PROMPT" "$PAGES_PROMPT") || { log "ERROR: Failed to generate pages"; exit 3; }
+PAGES_JSON=$(extract_content "$PAGES_RESPONSE")
+echo "$PAGES_JSON" > "$GENERATED_DIR/$DOMAIN-pages.json"
+log "Pages content saved to $GENERATED_DIR/$DOMAIN-pages.json"
+
+# --- Generate articles ---
+log "Generating articles..."
+
+NUM_ARTICLES="${cfg[num_articles]:-5}"
+CATEGORY_NAME="${cfg[article_category]:-Blog}"
+
+ARTICLES_PROMPT="Generate $NUM_ARTICLES blog articles for a website with these details:
+- Site title: $SITE_TITLE
+- Domain: $DOMAIN
+- Category: $CATEGORY_NAME
+- Client data: $CLIENT_DATA
+
+Return JSON array:
+[
+  {\"title\":\"<article title>\",\"slug\":\"<url-slug>\",\"category\":\"$CATEGORY_NAME\",\"content\":\"<article content in HTML, 400-600 words>\",\"excerpt\":\"<short excerpt 20-30 words>\"}
+]
+
+Use Indonesian language. Topics should be relevant to the business/niche. Content should be professional HTML."
+
+ARTICLES_RESPONSE=$(ai_call "$SYSTEM_PROMPT" "$ARTICLES_PROMPT") || { log "ERROR: Failed to generate articles"; exit 3; }
+ARTICLES_JSON=$(extract_content "$ARTICLES_RESPONSE")
+echo "$ARTICLES_JSON" > "$GENERATED_DIR/$DOMAIN-articles.json"
+log "Articles content saved to $GENERATED_DIR/$DOMAIN-articles.json"
+
+# --- If dry-run, stop here ---
+[[ "$MODE" == "dry-run" ]] && { log "DRY-RUN complete. Content generated but not published."; printf '{"status":"dry_run","domain":"%s","pages":"%s","articles":"%s"}\n" "$DOMAIN" "$GENERATED_DIR/$DOMAIN-pages.json" "$GENERATED_DIR/$DOMAIN-articles.json"; exit 0; }
+[[ "$MODE" == "apply" ]] || { log "ERROR: invalid INSTALL_MODE=$MODE"; exit 2; }
+
+# --- Apply: push content to remote via WP-CLI ---
+: "${WP_INSTALL_SSH_KEY_FILE:?WP_INSTALL_SSH_KEY_FILE required}"
+remote=(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p "$SSH_PORT" "$SSH_USER@${TARGET_HOST}")
+DOCROOT="/home/$DA_USER/domains/$DOMAIN/public_html"
+q() { printf '%q' "$1"; }
+
+log "Publishing pages to remote..."
+
+# Build remote script to create pages
+PAGES_REMOTE_SCRIPT=$(python3 << PYEOF
+import json
+
+with open('$GENERATED_DIR/$DOMAIN-pages.json') as f:
+    pages = json.load(f)
+
+commands = []
+commands.append('set -e')
+commands.append('export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"')
+commands.append('WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done')
+commands.append('[[ -n "\$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }')
+commands.append('DOCROOT="$HOME/${DA_USER}/domains/${DOMAIN}/public_html"')
+
+for page in pages:
+    slug = page['slug']
+    title = page['title']
+    content = page['content'].replace("'", "'\\''")
+    template = page.get('template', '')
+    
+    # Check if page exists
+    cmd = f'''if \$WP_BIN post list --post_type=page --post_status=any --slug={q(slug)} --path=\$DOCROOT --allow-root --format=count 2>/dev/null | grep -q '^0$'; then'''
+    cmd += f''' echo "page_created:{slug}"; \$WP_BIN post create --post_type=page --post_status=draft --post_title='{title}' --post_name='{slug}' --post_content='{content}' --path=\$DOCROOT --allow-root 2>/dev/null;'''
+    if template:
+        cmd += f''' \$WP_BIN post meta update \$(WP_BIN post list --post_type=page --post_status=draft --slug={slug} --path=\$DOCROOT --allow-root --field=ID | head -1) _wp_page_template '{template}' --path=\$DOCROOT --allow-root 2>/dev/null || true;'''
+    cmd += f''' else echo "page_exists:{slug}"; fi'''
+    commands.append(cmd)
+
+print('\n'.join(commands))
+PYEOF
+)
+
+# Execute pages creation
+log "Creating pages on remote..."
+page_output=$(printf '%s\n' "$PAGES_REMOTE_SCRIPT" | "${remote[@]}" 'bash -s' 2>&1) || true
+log "Pages output: $page_output"
+
+# Set homepage
+log "Setting homepage..."
+homepage_script=$(cat <<'HOMEEOF'
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+DOCROOT="__DOCROOT__"
+# Set show_on_front to page
+$WP_BIN option set show_on_front 'page' --path="$DOCROOT" --allow-root 2>/dev/null
+# Get home page ID
+home_id=$($WP_BIN post list --post_type=page --post_status=draft --slug=home --path="$DOCROOT" --allow-root --field=ID 2>/dev/null | head -1)
+if [[ -n "$home_id" ]]; then
+  $WP_BIN option set page_on_front "$home_id" --path="$DOCROOT" --allow-root 2>/dev/null && echo "homepage_set:$home_id"
+fi
+HOMEEOF
+)
+homepage_script=${homepage_script//__DOCROOT__/$DOCROOT}
+printf '%s\n' "$homepage_script" | "${remote[@]}" 'bash -s' 2>&1 || true
+
+# Create category
+log "Creating article category..."
+cat_script=$(cat <<'CATEOF'
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+DOCROOT="__DOCROOT__"
+CAT_NAME="__CAT_NAME__"
+# Check if category exists
+cat_id=$($WP_BIN term list category --path="$DOCROOT" --allow-root --format=ids 2>/dev/null | tr ',' '\n' | while read id; do
+  name=$($WP_BIN term get category "$id" --field=name --path="$DOCROOT" --allow-root 2>/dev/null)
+  [[ "$name" == "$CAT_NAME" ]] && echo "$id" && break
+done | head -1)
+if [[ -z "$cat_id" ]]; then
+  cat_id=$($WP_BIN term create category "$CAT_NAME" --path="$DOCROOT" --allow-root 2>/dev/null | grep -o '[0-9]*$')
+  echo "category_created:$CAT_NAME:$cat_id"
+else
+  echo "category_exists:$CAT_NAME:$cat_id"
+fi
+CATEOF
+)
+cat_script=${cat_script//__DOCROOT__/$DOCROOT}
+cat_script=${cat_script//__CAT_NAME__/$CATEGORY_NAME}
+cat_output=$(printf '%s\n' "$cat_script" | "${remote[@]}" 'bash -s' 2>&1) || true
+log "Category output: $cat_output"
+
+# Extract category ID
+CAT_ID=$(echo "$cat_output" | grep -oP 'category_(created|exists):\K[^:]+:\K[0-9]+' || echo "")
+
+# Create articles
+log "Publishing articles..."
+articles_remote_script=$(python3 << PYEOF
+import json
+
+with open('$GENERATED_DIR/$DOMAIN-articles.json') as f:
+    articles = json.load(f)
+
+cat_id = '$CAT_ID'
+
+commands = []
+commands.append('set -e')
+commands.append('export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"')
+commands.append('WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done')
+commands.append('DOCROOT="$HOME/${DA_USER}/domains/${DOMAIN}/public_html"')
+
+for art in articles:
+    title = art['title'].replace("'", "'\\''")
+    slug = art['slug']
+    content = art['content'].replace("'", "'\\''")
+    excerpt = art.get('excerpt', '').replace("'", "'\\''")
+    
+    cmd = f'''if \$WP_BIN post list --post_type=post --post_status=any --slug='{slug}' --path=\$DOCROOT --allow-root --format=count 2>/dev/null | grep -q '^0$'; then'''
+    cmd += f''' echo "article_created:{slug}"; \$WP_BIN post create --post_type=post --post_status=draft --post_title='{title}' --post_name='{slug}' --post_content='{content}' --post_excerpt='{excerpt}' --path=\$DOCROOT --allow-root 2>/dev/null'''
+    if cat_id:
+        cmd += f''' && \$WP_BIN post term set \$(WP_BIN post list --post_type=post --post_status=draft --slug='{slug}' --path=\$DOCROOT --allow-root --field=ID | head -1) category {cat_id} --path=\$DOCROOT --allow-root 2>/dev/null || true'''
+    cmd += f''' else echo "article_exists:{slug}"; fi'''
+    commands.append(cmd)
+
+print('\n'.join(commands))
+PYEOF
+)
+
+log "Creating articles on remote..."
+article_output=$(printf '%s\n' "$articles_remote_script" | "${remote[@]}" 'bash -s' 2>&1) || true
+log "Articles output: $article_output"
+
+# Count results
+pages_created=$(echo "$page_output" | grep -c "page_created" || echo 0)
+articles_created=$(echo "$article_output" | grep -c "article_created" || echo 0)
+log "Summary: $pages_created pages created, $articles_created articles created"
+
+printf '{"status":"applied","domain":"%s","pages_created":%d,"articles_created":%d}\n' "$DOMAIN" "$pages_created" "$articles_created"
