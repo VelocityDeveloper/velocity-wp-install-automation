@@ -225,6 +225,12 @@
 .checklist-summary .stat { text-align: center; }
 .checklist-summary .stat-num { font-size: 20px; font-weight: 700; color: var(--green); }
 .checklist-summary .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.checklist-loader{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;border:1px dashed var(--cyan);background:#0a0e0c;color:var(--cyan);font-size:12px}
+.spinner{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--cyan);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.check.running{border-color:var(--cyan);color:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.55}}
+
       pre.log-view {
         margin: 0;
         padding: 12px;
@@ -353,6 +359,7 @@
     <div id="checklist-modal" class="modal checklist-modal" role="dialog" aria-modal="true">
       <div class="modal-box">
         <h3>Checklist: <span id="checklist-domain"></span></h3>
+        <div id="checklist-loader" class="checklist-loader" style="display:none"><span class="spinner"></span><span id="checklist-loader-text">Sedang berjalan — refresh otomatis...</span></div>
         <div id="checklist-summary" class="checklist-summary"></div>
         <ul class="checklist" id="checklist-items"></ul>
         <div class="modal-actions" style="margin-top: 14px">
@@ -374,7 +381,9 @@
         checklistSummaryEl = document.getElementById('checklist-summary'),
         checklistItemsEl = document.getElementById('checklist-items');
       let pendingDomain = null,
-        pollTimer = null;
+        pollTimer = null,
+        checklistPoll = null,
+        checklistDomain = null;
 
       async function loadServers() {
         try {
@@ -594,12 +603,7 @@
       function closeLogModal() { logModal.classList.remove('open'); }
       logModal.addEventListener('click', e => { if (e.target === logModal) closeLogModal(); });
 
-      function openChecklistModal(domain, domains) {
-        const row = (domains || []).find(x => x.domain === domain);
-        const logLines = row && row.log ? row.log : [];
-        checklistDomainEl.textContent = domain;
-        
-        const tasks = [
+      const _checklistTasks = [
           { id: "validate", label: "Validasi Manifest", patterns: ["VALIDATING", "dry_run", "ok"] },
           { id: "connect", label: "Koneksi SSH", patterns: ["using DA password", "Transferring package", "Creating MySQL", "admin_user_updated", "admin_user_created", "admin_user_renamed"] },
           { id: "db", label: "Setup Database MySQL", patterns: ["MySQL user/database ready", "Creating MySQL"] },
@@ -622,20 +626,57 @@
           { id: "rename_index", label: "Rename index.html DA", patterns: ["renamed index.html"] },
           { id: "complete", label: "Install Complete", patterns: ["install_complete", "COMPLETE", "SUCCESS"] }
         ];
-        
+
+      function _renderChecklist(row) {
+        const logLines = row && row.log ? row.log : [];
         const logText = logLines.join("\n");
+        const isRunning = row && (row.status === "RUNNING" || (row.stage && String(row.stage).includes("RUNNING")));
         let doneCount = 0;
-        const items = tasks.map(t => {
+        let firstPendingIdx = -1;
+        const items = _checklistTasks.map((t, idx) => {
           const done = t.patterns.some(p => logText.includes(p));
           if (done) doneCount++;
-          return `<li><span class="check ${done ? "done" : "pending"}">${done ? "✓" : "○"}</span><span class="task-name ${done ? "done-text" : "pending-text"}">${esc(t.label)}</span></li>`;
+          else if (firstPendingIdx === -1) firstPendingIdx = idx;
+          const isActive = isRunning && !done && idx === firstPendingIdx;
+          const checkCls = done ? "done" : isActive ? "running" : "pending";
+          const icon = done ? "✓" : isActive ? '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>' : "○";
+          return `<li><span class="check ${checkCls}">${icon}</span><span class="task-name ${done ? "done-text" : isActive ? "" : "pending-text"}" style="${isActive ? "color:var(--cyan)" : ""}">${esc(t.label)}${isActive ? " — berjalan..." : ""}</span></li>`;
         }).join("");
-        
-        checklistSummaryEl.innerHTML = `<div class="stat"><div class="stat-num">${doneCount}/${tasks.length}</div><div class="stat-label">Tasks</div></div><div class="stat"><div class="stat-num" style="color: var(--cyan)">${row && row.status ? esc(row.status) : "-"}</div><div class="stat-label">Status</div></div>`;
+        const statusColor = isRunning ? "var(--cyan)" : (row && row.status === "FAILED" ? "var(--red)" : "var(--green)");
+        checklistSummaryEl.innerHTML = `<div class="stat"><div class="stat-num">${doneCount}/${_checklistTasks.length}</div><div class="stat-label">Tasks</div></div><div class="stat"><div class="stat-num" style="color:${statusColor}">${row && row.status ? esc(row.status) : "-"}${row && row.stage ? "/" + esc(row.stage) : ""}</div><div class="stat-label">Status</div></div>`;
         checklistItemsEl.innerHTML = items;
-        checklistModal.classList.add("open");
+        const loader = document.getElementById("checklist-loader");
+        const loaderText = document.getElementById("checklist-loader-text");
+        if (isRunning) {
+          loader.style.display = "flex";
+          if (loaderText) loaderText.textContent = `Sedang berjalan ${doneCount}/${_checklistTasks.length} — auto-refresh 2s (refresh tidak hentikan proses)`;
+        } else {
+          loader.style.display = "none";
+        }
+        return isRunning;
       }
-      function closeChecklistModal() { checklistModal.classList.remove("open"); }
+
+      function openChecklistModal(domain, domains) {
+        checklistDomain = domain;
+        checklistDomainEl.textContent = domain;
+        const row = (domains || []).find(x => x.domain === domain);
+        const running = _renderChecklist(row || { domain, log: [], status: "-" });
+        checklistModal.classList.add("open");
+        if (checklistPoll) clearInterval(checklistPoll);
+        if (running) {
+          checklistPoll = setInterval(async () => {
+            try {
+              const d = await fetch("/api/installer", { cache: "no-store" }).then(r => r.json());
+              const r2 = (d.domains || []).find(x => x.domain === checklistDomain);
+              if (r2) {
+                const stillRunning = _renderChecklist(r2);
+                if (!stillRunning) { clearInterval(checklistPoll); checklistPoll = null; load(); }
+              }
+            } catch (e) {}
+          }, 2000);
+        }
+      }
+      function closeChecklistModal() { checklistModal.classList.remove("open"); if (checklistPoll) { clearInterval(checklistPoll); checklistPoll = null; } }
       checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
 
       function startPoll() {
