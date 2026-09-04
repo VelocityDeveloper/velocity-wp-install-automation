@@ -211,6 +211,20 @@
         max-width: 760px;
         width: min(760px, 94vw);
       }
+.checklist-modal .modal-box { max-width: 600px; width: min(600px, 94vw); }
+.checklist { list-style: none; margin: 0; padding: 0; }
+.checklist li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.checklist li:last-child { border: 0; }
+.checklist .check { width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; }
+.checklist .check.done { border-color: var(--green); background: #55e87918; color: var(--green); }
+.checklist .check.pending { border-color: var(--muted); color: var(--muted); }
+.checklist .task-name { flex: 1; }
+.checklist .task-name.done-text { color: var(--green); }
+.checklist .task-name.pending-text { color: var(--muted); }
+.checklist-summary { display: flex; gap: 16px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.checklist-summary .stat { text-align: center; }
+.checklist-summary .stat-num { font-size: 20px; font-weight: 700; color: var(--green); }
+.checklist-summary .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
       pre.log-view {
         margin: 0;
         padding: 12px;
@@ -329,6 +343,16 @@
         </div>
       </div>
     </div>
+    <div id="checklist-modal" class="modal checklist-modal" role="dialog" aria-modal="true">
+      <div class="modal-box">
+        <h3>Checklist: <span id="checklist-domain"></span></h3>
+        <div id="checklist-summary" class="checklist-summary"></div>
+        <ul class="checklist" id="checklist-items"></ul>
+        <div class="modal-actions" style="margin-top: 14px">
+          <button class="btn btn-cancel" onclick="closeChecklistModal()">Tutup</button>
+        </div>
+      </div>
+    </div>
     <script>
       const serverSelect = document.getElementById('target-server'),
         serverNote = document.getElementById('server-note'),
@@ -338,6 +362,10 @@
         logModal = document.getElementById('log-modal'),
         logDomainEl = document.getElementById('log-domain'),
         logViewEl = document.getElementById('log-view');
+        checklistModal = document.getElementById('checklist-modal'),
+        checklistDomainEl = document.getElementById('checklist-domain'),
+        checklistSummaryEl = document.getElementById('checklist-summary'),
+        checklistItemsEl = document.getElementById('checklist-items');
       let pendingDomain = null,
         pollTimer = null;
 
@@ -393,8 +421,9 @@
             const actionLabel = isFailed ? '[ retry ]' : '[ install ]';
             const actionClass = isFailed ? 'action danger' : 'action';
             const btnDisabled = (isReady || isFailed) && !isRunning ? '' : 'disabled title="generate dulu"';
+            const checklistBtn = `<button class="action checklist-btn" type="button" data-checklist-domain="${esc(x.domain)}">[ checklist ]</button>`;
             const logBtn = logLines ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>` : '';
-            return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
+            return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
           }).join('');
           rows.querySelectorAll('[data-domain]').forEach(b =>
             b.addEventListener('click', () => onInstallClick(b.dataset.domain, b.dataset.status))
@@ -404,6 +433,9 @@
           );
           rows.querySelectorAll('[data-gen-domain]').forEach(b =>
             b.addEventListener('click', () => generateManifest(b.dataset.genDomain))
+          );
+          rows.querySelectorAll('[data-checklist-domain]').forEach(b =>
+            b.addEventListener('click', () => openChecklistModal(b.dataset.checklistDomain, d.domains))
           );
         } catch (e) {
           rows.innerHTML = '<tr><td colspan="4" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
@@ -484,6 +516,41 @@
       }
       function closeLogModal() { logModal.classList.remove('open'); }
       logModal.addEventListener('click', e => { if (e.target === logModal) closeLogModal(); });
+
+      function openChecklistModal(domain, domains) {
+        const row = (domains || []).find(x => x.domain === domain);
+        const logLines = row && row.log ? row.log : [];
+        checklistDomainEl.textContent = domain;
+        
+        const tasks = [
+          { id: "validate", label: "Validasi Manifest", patterns: ["VALIDATING", "dry_run", "ok"] },
+          { id: "connect", label: "Koneksi SSH", patterns: ["using DA password", "Transferring package", "Creating MySQL", "admin_user_updated", "admin_user_created", "admin_user_renamed"] },
+          { id: "db", label: "Setup Database MySQL", patterns: ["MySQL user/database ready", "Creating MySQL"] },
+          { id: "backup", label: "Backup Existing Files", patterns: ["backup_created"] },
+          { id: "download_wp", label: "Download WordPress", patterns: ["WordPress downloaded", "Using cached"] },
+          { id: "config", label: "Buat wp-config.php", patterns: ["Generated .wp-config.php.", "wp-config"] },
+          { id: "install_wp", label: "Install WordPress Core", patterns: ["WordPress installed", "already_installed", "core install"] },
+          { id: "admin_user", label: "Setup Admin User", patterns: ["admin_user_updated", "admin_user_created", "admin_user_renamed"] },
+          { id: "plugin", label: "Install Plugin Velocity Addons", patterns: ["velocity-addons", "Plugin already activated", "plugin activate"] },
+          { id: "theme", label: "Install Theme Velocity", patterns: ["velocity-theme", "theme activate", "velocity"] },
+          { id: "rename_index", label: "Rename index.html DA", patterns: ["renamed index.html"] },
+          { id: "complete", label: "Install Complete", patterns: ["install_complete", "COMPLETE", "SUCCESS"] }
+        ];
+        
+        const logText = logLines.join("\n");
+        let doneCount = 0;
+        const items = tasks.map(t => {
+          const done = t.patterns.some(p => logText.includes(p));
+          if (done) doneCount++;
+          return `<li><span class="check ${done ? "done" : "pending"}">${done ? "✓" : "○"}</span><span class="task-name ${done ? "done-text" : "pending-text"}">${esc(t.label)}</span></li>`;
+        }).join("");
+        
+        checklistSummaryEl.innerHTML = `<div class="stat"><div class="stat-num">${doneCount}/${tasks.length}</div><div class="stat-label">Tasks</div></div><div class="stat"><div class="stat-num" style="color: var(--cyan)">${row && row.status ? esc(row.status) : "-"}</div><div class="stat-label">Status</div></div>`;
+        checklistItemsEl.innerHTML = items;
+        checklistModal.classList.add("open");
+      }
+      function closeChecklistModal() { checklistModal.classList.remove("open"); }
+      checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
 
       function startPoll() {
         if (pollTimer) clearInterval(pollTimer);
