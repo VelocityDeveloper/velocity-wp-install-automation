@@ -101,8 +101,11 @@ fi
 : "${WP_INSTALL_ADMIN_PASSWORD_FILE:?WP_INSTALL_ADMIN_PASSWORD_FILE_required}"
 [[ -r "$WP_INSTALL_SSH_KEY_FILE" ]] || fail "missing_secret_file" ',"name":"ssh_key"'
 DB_PASSWORD=$(read_secret "$WP_INSTALL_DB_PASSWORD_FILE" db_password)
-# DA password override: if manifest has da_password_file, use DA password for WP admin
-if [[ -n "${cfg[da_password_file]:-}" && -r "${cfg[da_password_file]}" ]]; then
+# DA password: priority 1 = manifest `password=`, 2 = da_password_file, 3 = shared admin password file
+if [[ -n "${cfg[password]:-}" ]]; then
+  ADMIN_PASSWORD="${cfg[password]}"
+  echo "using manifest password for WP admin" >&2
+elif [[ -n "${cfg[da_password_file]:-}" && -r "${cfg[da_password_file]}" ]]; then
   ADMIN_PASSWORD=$(read_secret "${cfg[da_password_file]}" da_password)
   echo "using DA password for WP admin" >&2
 else
