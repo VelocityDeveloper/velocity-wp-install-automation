@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>velocity@server:~/packages</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <style>
+      :root {
+        --bg: #080b0a;
+        --panel: #0d1210;
+        --line: #1b2b22;
+        --text: #c8d7cc;
+        --muted: #718579;
+        --green: #55e879;
+        --cyan: #68d9e8;
+        --yellow: #e9d36b;
+        --red: #ff7373;
+      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body {
+        margin: 0;
+        padding: 24px;
+        color: var(--text);
+        background: radial-gradient(circle at 50% -20%, #15301f 0, #080b0a 45%);
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      }
+      .terminal {
+        width: min(1100px, 100%);
+        margin: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #0a0e0c;
+        box-shadow: 0 20px 80px #0009;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #111814;
+        color: var(--muted);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #33463a;
+      }
+      .dot:first-child { background: #e46d65; }
+      .dot:nth-child(2) { background: #d4b75d; }
+      .dot:nth-child(3) { background: #62bd72; }
+      .title { margin: auto; font-size: 12px; }
+      .screen { padding: 28px clamp(18px, 4vw, 42px) 34px; }
+      .prompt { color: var(--green); }
+      .prompt b { color: var(--cyan); font-weight: 400; }
+      .command { margin: 0 0 25px; }
+      .command a, .nav a { color: var(--cyan); text-decoration: none; }
+      .command a:hover, .nav a:hover { color: #fff; text-decoration: underline; }
+      .heading { margin: 0; color: var(--green); font-size: clamp(1.4rem, 4vw, 2rem); }
+      .meta { margin: 5px 0 25px; color: var(--muted); }
+      code { color: var(--yellow); }
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        margin-bottom: 24px;
+      }
+      .panel h3 {
+        margin: 0;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        color: var(--cyan);
+        font-size: 13px;
+        text-transform: uppercase;
+        font-weight: 400;
+      }
+      .panel-body { padding: 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: uppercase; }
+      tr:last-child td { border: 0; }
+      .slug { color: var(--cyan); }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border: 1px solid;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .plugin { border-color: var(--cyan); color: var(--cyan); }
+      .theme { border-color: var(--yellow); color: var(--yellow); }
+      .action {
+        padding: 5px 9px;
+        border: 1px solid var(--cyan);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--cyan);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .action:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
+      .action.danger { border-color: var(--red); color: var(--red); }
+      .action.danger:hover { background: #ff737318; }
+      .action + .action { margin-left: 6px; }
+      .empty { padding: 28px; text-align: center; color: var(--muted); }
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 24px;
+        color: var(--muted);
+      }
+      .refresh {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--cyan);
+        font: inherit;
+        cursor: pointer;
+      }
+      .refresh:hover { text-decoration: underline; color: #fff; }
+      form { display: grid; gap: 14px; }
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      input, select {
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      input:focus, select:focus { outline: 1px solid var(--green); border-color: var(--green); }
+      .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .btn {
+        padding: 10px 16px;
+        border: 1px solid var(--cyan);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--cyan);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        justify-self: start;
+      }
+      .btn:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .tabs {
+        display: flex;
+        gap: 0;
+        margin-bottom: 0;
+      }
+      .tab {
+        padding: 10px 18px;
+        border: 1px solid var(--line);
+        border-bottom: 0;
+        background: var(--panel);
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+      }
+      .tab.active { color: var(--green); background: var(--bg); }
+      .tab:hover { color: var(--text); }
+      .tab-content { display: none; }
+      .tab-content.active { display: block; }
+      .status-msg {
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 12px;
+      }
+      .status-msg.ok { border-color: var(--green); color: var(--green); }
+      .status-msg.err { border-color: var(--red); color: var(--red); }
+      .progress {
+        height: 4px;
+        background: var(--line);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-top: 8px;
+      }
+      .progress-bar {
+        height: 100%;
+        background: var(--cyan);
+        width: 0%;
+        transition: width 0.3s;
+      }
+      @media (max-width: 600px) {
+        body { padding: 0; }
+        .terminal { min-height: 100vh; border: 0; border-radius: 0; }
+        .screen { padding: 22px 15px; }
+        th, td { padding: 11px 9px; }
+        .hide-mobile { display: none; }
+        .form-row { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="terminal">
+      <header class="bar">
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i
+        ><span class="title">velocity@server: ~/packages</span>
+      </header>
+      <section class="screen">
+        <p class="command">
+          <span class="prompt">velocity@server</span>:<b>~/packages</b>$
+          <a href="/">cd ..</a>
+        </p>
+        <h1 class="heading">Package Manager</h1>
+        <p class="meta">
+          $ manage --plugins-themes &nbsp;|&nbsp; upload zip or fetch from URL
+        </p>
+
+        <section class="panel">
+          <h3>Tambah Package</h3>
+          <div class="panel-body">
+            <div class="tabs">
+              <div class="tab active" onclick="switchTab('upload')">Upload ZIP</div>
+              <div class="tab" onclick="switchTab('url')">From URL</div>
+            </div>
+
+            <div id="tab-upload" class="tab-content active" style="padding-top: 16px">
+              <form id="upload-form" onsubmit="return uploadFile(event)" enctype="multipart/form-data">
+                <label>
+                  File ZIP
+                  <input type="file" id="file-input" accept=".zip" required />
+                </label>
+                <div class="form-row">
+                  <label>
+                    Tipe
+                    <select id="upload-type">
+                      <option value="plugin">Plugin</option>
+                      <option value="theme">Theme</option>
+                    </select>
+                  </label>
+                  <label>
+                    Slug (opsional)
+                    <input type="text" id="upload-slug" placeholder="auto dari nama file" />
+                  </label>
+                </div>
+                <button type="submit" class="btn" id="upload-btn">[ upload ]</button>
+                <div id="upload-status" class="status-msg" style="display:none"></div>
+              </form>
+            </div>
+
+            <div id="tab-url" class="tab-content" style="padding-top: 16px">
+              <form id="url-form" onsubmit="return addFromUrl(event)">
+                <label>
+                  URL ZIP
+                  <input type="url" id="url-input" placeholder="https://example.com/plugin.zip" required />
+                </label>
+                <div class="form-row">
+                  <label>
+                    Tipe
+                    <select id="url-type">
+                      <option value="plugin">Plugin</option>
+                      <option value="theme">Theme</option>
+                    </select>
+                  </label>
+                  <label>
+                    Slug
+                    <input type="text" id="url-slug" placeholder="my-plugin" required />
+                  </label>
+                </div>
+                <label>
+                  Nama (opsional)
+                  <input type="text" id="url-name" placeholder="My Plugin" />
+                </label>
+                <button type="submit" class="btn" id="url-btn">[ add from url ]</button>
+                <div id="url-status" class="status-msg" style="display:none"></div>
+                <div class="progress" id="url-progress" style="display:none">
+                  <div class="progress-bar" id="url-progress-bar"></div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3>Daftar Package</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Slug</th>
+                <th>Nama</th>
+                <th class="hide-mobile">Tipe</th>
+                <th class="hide-mobile">Ukuran</th>
+                <th class="hide-mobile">Source</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="pkg-rows">
+              <tr><td colspan="6" class="empty">Memuat...</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <nav class="nav">
+          <span>storage: <code>/var/lib/velocity/packages/</code></span
+          ><span
+            ><button class="refresh" onclick="load()">[ refresh ]</button>
+            <a href="/installer/">[ installer ]</a>
+            <a href="/">[ home ]</a></span
+          >
+        </nav>
+      </section>
+    </main>
+
+    <script>
+      function esc(s) {
+        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+      }
+      function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.getElementById('tab-' + name).classList.add('active');
+        event.target.classList.add('active');
+      }
+      function fmtSize(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+        return (b/1048576).toFixed(1) + ' MB';
+      }
+      async function load() {
+        const rows = document.getElementById('pkg-rows');
+        try {
+          const d = await fetch('/api/packages', { cache: 'no-store' }).then(r => r.json());
+          const pkgs = Object.values(d.packages || {});
+          if (!pkgs.length) {
+            rows.innerHTML = '<tr><td colspan="6" class="empty">Belum ada package. Upload atau tambah dari URL.</td></tr>';
+            return;
+          }
+          rows.innerHTML = pkgs.map(p => {
+            const src = (p.source || '').length > 40 ? (p.source || '').slice(0,37) + '...' : (p.source || '');
+            return `<tr>
+              <td><strong class="slug">${esc(p.slug)}</strong></td>
+              <td>${esc(p.name || p.slug)}</td>
+              <td class="hide-mobile"><span class="pill ${p.type}">${esc(p.type)}</span></td>
+              <td class="hide-mobile">${esc(fmtSize(p.size || 0))}</td>
+              <td class="hide-mobile"><code title="${esc(p.source || '')}">${esc(src)}</code></td>
+              <td><button class="action danger" type="button" onclick="removePkg('${esc(p.slug)}')">[ hapus ]</button></td>
+            </tr>`;
+          }).join('');
+        } catch(e) {
+          rows.innerHTML = '<tr><td colspan="6" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
+        }
+      }
+      async function removePkg(slug) {
+        if (!confirm('Hapus package "' + slug + '"?')) return;
+        try {
+          const r = await fetch('/api/packages/' + encodeURIComponent(slug), { method: 'DELETE' });
+          if (r.ok) { load(); }
+          else { alert('Gagal menghapus: ' + r.status); }
+        } catch(e) {
+          alert('Error: ' + e.message);
+        }
+      }
+      async function uploadFile(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById('file-input');
+        const slugInput = document.getElementById('upload-slug');
+        const typeInput = document.getElementById('upload-type');
+        const statusEl = document.getElementById('upload-status');
+        const btn = document.getElementById('upload-btn');
+        if (!fileInput.files.length) return false;
+        const file = fileInput.files[0];
+        const slug = slugInput.value.trim() || file.name.replace(/\.zip$/i, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+        btn.disabled = true;
+        statusEl.style.display = 'block';
+        statusEl.className = 'status-msg';
+        statusEl.textContent = 'Mengupload ' + file.name + ' (' + fmtSize(file.size) + ')...';
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          fd.append('slug', slug);
+          fd.append('type', typeInput.value);
+          const r = await fetch('/api/packages', { method: 'POST', body: fd });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && j.status === 'ok') {
+            statusEl.className = 'status-msg ok';
+            statusEl.textContent = '✓ Package "' + slug + '" berhasil ditambahkan.';
+            fileInput.value = '';
+            slugInput.value = '';
+            load();
+          } else {
+            statusEl.className = 'status-msg err';
+            statusEl.textContent = 'Gagal: ' + (j.error || r.status);
+          }
+        } catch(err) {
+          statusEl.className = 'status-msg err';
+          statusEl.textContent = 'Error: ' + err.message;
+        } finally {
+          btn.disabled = false;
+        }
+        return false;
+      }
+      async function addFromUrl(e) {
+        e.preventDefault();
+        const urlInput = document.getElementById('url-input');
+        const slugInput = document.getElementById('url-slug');
+        const typeInput = document.getElementById('url-type');
+        const nameInput = document.getElementById('url-name');
+        const statusEl = document.getElementById('url-status');
+        const progressEl = document.getElementById('url-progress');
+        const progressBar = document.getElementById('url-progress-bar');
+        const btn = document.getElementById('url-btn');
+        const url = urlInput.value.trim();
+        const slug = slugInput.value.trim();
+        if (!url || !slug) return false;
+        btn.disabled = true;
+        progressEl.style.display = 'block';
+        progressBar.style.width = '30%';
+        statusEl.style.display = 'block';
+        statusEl.className = 'status-msg';
+        statusEl.textContent = 'Mengunduh dari ' + url + '...';
+        try {
+          const r = await fetch('/api/packages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, slug, type: typeInput.value, name: nameInput.value.trim() }),
+          });
+          const j = await r.json().catch(() => ({}));
+          progressBar.style.width = '100%';
+          if (r.ok && j.status === 'ok') {
+            statusEl.className = 'status-msg ok';
+            statusEl.textContent = '✓ Package "' + slug + '" berhasil ditambahkan (' + fmtSize(j.package?.size || 0) + ').';
+            urlInput.value = '';
+            slugInput.value = '';
+            nameInput.value = '';
+            load();
+          } else {
+            statusEl.className = 'status-msg err';
+            statusEl.textContent = 'Gagal: ' + (j.error || r.status);
+          }
+        } catch(err) {
+          statusEl.className = 'status-msg err';
+          statusEl.textContent = 'Error: ' + err.message;
+        } finally {
+          btn.disabled = false;
+          setTimeout(() => { progressEl.style.display = 'none'; progressBar.style.width = '0%'; }, 2000);
+        }
+        return false;
+      }
+      load();
+    </script>
+  </body>
+</html>

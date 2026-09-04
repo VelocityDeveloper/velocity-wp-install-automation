@@ -17,44 +17,14 @@
         --yellow: #e9d36b;
         --red: #ff7373;
       }
-      .modal-box.wide {
-        max-width: 760px;
-        width: min(760px, 94vw);
-      }
-      pre.log-view {
-        margin: 0;
-        padding: 12px;
-        border: 1px solid var(--line);
-        background: #070a08;
-        color: var(--text);
-        font:
-          12px/1.55 ui-monospace,
-          Consolas,
-          monospace;
-        max-height: 60vh;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      html {
-        background: var(--bg);
-      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
       body {
         margin: 0;
         padding: 24px;
         color: var(--text);
         background: radial-gradient(circle at 50% -20%, #15301f 0, #080b0a 45%);
-        font:
-          14px/1.6 ui-monospace,
-          SFMono-Regular,
-          Menlo,
-          Monaco,
-          Consolas,
-          "Liberation Mono",
-          monospace;
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       }
       .terminal {
         width: min(1100px, 100%);
@@ -80,81 +50,29 @@
         border-radius: 50%;
         background: #33463a;
       }
-      .dot:first-child {
-        background: #e46d65;
-      }
-      .dot:nth-child(2) {
-        background: #d4b75d;
-      }
-      .dot:nth-child(3) {
-        background: #62bd72;
-      }
-      .title {
-        margin: auto;
-        font-size: 12px;
-      }
-      .screen {
-        padding: 28px clamp(18px, 4vw, 42px) 34px;
-      }
-      .prompt {
-        color: var(--green);
-      }
-      .prompt b {
-        color: var(--cyan);
-        font-weight: 400;
-      }
-      .command {
-        margin: 0 0 25px;
-      }
-      .command a,
-      .nav a {
-        color: var(--cyan);
-        text-decoration: none;
-      }
-      .command a:hover,
-      .nav a:hover {
-        color: #fff;
-        text-decoration: underline;
-      }
-      .heading {
-        margin: 0;
-        color: var(--green);
-        font-size: clamp(1.4rem, 4vw, 2rem);
-      }
-      .meta {
-        margin: 5px 0 25px;
-        color: var(--muted);
-      }
-      code {
-        color: var(--yellow);
-      }
+      .dot:first-child { background: #e46d65; }
+      .dot:nth-child(2) { background: #d4b75d; }
+      .dot:nth-child(3) { background: #62bd72; }
+      .title { margin: auto; font-size: 12px; }
+      .screen { padding: 28px clamp(18px, 4vw, 42px) 34px; }
+      .prompt { color: var(--green); }
+      .prompt b { color: var(--cyan); font-weight: 400; }
+      .command { margin: 0 0 25px; }
+      .command a, .nav a { color: var(--cyan); text-decoration: none; }
+      .command a:hover, .nav a:hover { color: #fff; text-decoration: underline; }
+      .heading { margin: 0; color: var(--green); font-size: clamp(1.4rem, 4vw, 2rem); }
+      .meta { margin: 5px 0 25px; color: var(--muted); }
+      code { color: var(--yellow); }
       .panel {
         overflow: hidden;
         border: 1px solid var(--line);
         background: var(--panel);
       }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      th,
-      td {
-        padding: 14px 16px;
-        text-align: left;
-        border-bottom: 1px solid var(--line);
-      }
-      th {
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 400;
-        text-transform: uppercase;
-      }
-      tr:last-child td {
-        border: 0;
-      }
-      .domain {
-        color: var(--cyan);
-      }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: uppercase; }
+      tr:last-child td { border: 0; }
+      .domain { color: var(--cyan); }
       .pill {
         display: inline-block;
         padding: 2px 8px;
@@ -172,41 +90,14 @@
         font-size: 12px;
         cursor: pointer;
       }
-      .action:hover,
-      .action.selected {
-        border-color: var(--green);
-        color: var(--green);
-        background: #55e87918;
-      }
-      .action.danger {
-        border-color: var(--red);
-        color: var(--red);
-      }
-      .action.danger:hover {
-        background: #ff737318;
-        border-color: var(--red);
-        color: var(--red);
-      }
-      .action + .action {
-        margin-left: 6px;
-      }
-      .ready {
-        border-color: var(--green);
-        color: var(--green);
-      }
-      .missing {
-        border-color: var(--yellow);
-        color: var(--yellow);
-      }
-      .failed {
-        border-color: var(--red);
-        color: var(--red);
-      }
-      .empty {
-        padding: 28px;
-        text-align: center;
-        color: var(--muted);
-      }
+      .action:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
+      .action.danger { border-color: var(--red); color: var(--red); }
+      .action.danger:hover { background: #ff737318; }
+      .action + .action { margin-left: 6px; }
+      .ready { border-color: var(--green); color: var(--green); }
+      .missing { border-color: var(--yellow); color: var(--yellow); }
+      .failed { border-color: var(--red); color: var(--red); }
+      .empty { padding: 28px; text-align: center; color: var(--muted); }
       .nav {
         display: flex;
         justify-content: space-between;
@@ -222,10 +113,7 @@
         font: inherit;
         cursor: pointer;
       }
-      .refresh:hover {
-        text-decoration: underline;
-        color: #fff;
-      }
+      .refresh:hover { text-decoration: underline; color: #fff; }
       .server-select {
         margin-bottom: 20px;
         padding: 16px;
@@ -247,9 +135,7 @@
         color: var(--text);
         font: inherit;
       }
-      select:focus {
-        outline: 1px solid var(--green);
-      }
+      select:focus { outline: 1px solid var(--green); }
       .detail {
         margin: 10px 0 0;
         padding: 10px 12px;
@@ -260,9 +146,7 @@
         white-space: pre-wrap;
         word-break: break-all;
       }
-      .detail strong {
-        color: var(--yellow);
-      }
+      .detail strong { color: var(--yellow); }
       .modal {
         position: fixed;
         inset: 0;
@@ -272,9 +156,7 @@
         background: #0008;
         z-index: 99;
       }
-      .modal.open {
-        display: flex;
-      }
+      .modal.open { display: flex; }
       .modal-box {
         max-width: 520px;
         margin: 16px;
@@ -283,14 +165,8 @@
         background: var(--panel);
         color: var(--text);
       }
-      .modal-box h3 {
-        margin: 0 0 8px;
-        color: var(--yellow);
-      }
-      .modal-box p {
-        margin: 0 0 16px;
-        color: var(--muted);
-      }
+      .modal-box h3 { margin: 0 0 8px; color: var(--yellow); }
+      .modal-box p { margin: 0 0 16px; color: var(--muted); }
       .modal-actions {
         display: flex;
         gap: 10px;
@@ -312,9 +188,7 @@
         cursor: pointer;
         font-size: 13px;
       }
-      .mode-choice input {
-        accent-color: var(--green);
-      }
+      .mode-choice input { accent-color: var(--green); }
       .btn {
         padding: 8px 14px;
         border: 1px solid;
@@ -333,38 +207,30 @@
         color: #000;
         font-weight: 700;
       }
-      @media (max-width: 600px) {
-        .server-select label {
-          display: grid;
-          gap: 8px;
-        }
-        select {
-          width: 100%;
-          min-width: 0;
-        }
+      .log-modal .modal-box {
+        max-width: 760px;
+        width: min(760px, 94vw);
+      }
+      pre.log-view {
+        margin: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: #070a08;
+        color: var(--text);
+        font: 12px/1.55 ui-monospace, Consolas, monospace;
+        max-height: 60vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
       @media (max-width: 600px) {
-        body {
-          padding: 0;
-        }
-        .terminal {
-          min-height: 100vh;
-          border: 0;
-          border-radius: 0;
-        }
-        .screen {
-          padding: 22px 15px;
-        }
-        th,
-        td {
-          padding: 11px 9px;
-        }
-        .hide-mobile {
-          display: none;
-        }
-        .nav {
-          font-size: 12px;
-        }
+        body { padding: 0; }
+        .terminal { min-height: 100vh; border: 0; border-radius: 0; }
+        .screen { padding: 22px 15px; }
+        .server-select label { display: grid; gap: 8px; }
+        select { width: 100%; min-width: 0; }
+        th, td { padding: 11px 9px; }
+        .hide-mobile { display: none; }
       }
     </style>
   </head>
@@ -418,6 +284,7 @@
           <span>source: <code>/home/project/</code></span
           ><span
             ><button class="refresh" onclick="load()">[ refresh ]</button>
+            <a href="/packages/">[ packages ]</a>
             <a href="/">[ home ]</a></span
           >
         </nav>
@@ -429,8 +296,8 @@
         <p id="confirm-text"></p>
         <div class="mode-choice">
           <label
-            ><input type="radio" name="run-mode" value="dry-run" checked /> Dry
-            run — validasi manifest saja (aman)</label
+            ><input type="radio" name="run-mode" value="dry-run" checked />
+            Dry run — validasi manifest saja (aman)</label
           >
           <label
             ><input type="radio" name="run-mode" value="apply" /> Apply —
@@ -453,288 +320,179 @@
         </div>
       </div>
     </div>
-    <div id="log-modal" class="modal" role="dialog" aria-modal="true">
-      <div class="modal-box wide">
+    <div id="log-modal" class="modal log-modal" role="dialog" aria-modal="true">
+      <div class="modal-box">
         <h3>Log: <span id="log-domain"></span></h3>
         <pre class="log-view" id="log-view"></pre>
         <div class="modal-actions" style="margin-top: 14px">
-          <button class="btn btn-cancel" onclick="closeLogModal()">
-            Tutup
-          </button>
+          <button class="btn btn-cancel" onclick="closeLogModal()">Tutup</button>
         </div>
       </div>
     </div>
     <script>
-      const serverSelect = document.getElementById("target-server"),
-        serverNote = document.getElementById("server-note"),
-        detailEl = document.getElementById("detail"),
-        modal = document.getElementById("confirm-modal"),
-        confirmText = document.getElementById("confirm-text"),
-        logModal = document.getElementById("log-modal"),
-        logDomainEl = document.getElementById("log-domain"),
-        logViewEl = document.getElementById("log-view");
+      const serverSelect = document.getElementById('target-server'),
+        serverNote = document.getElementById('server-note'),
+        detailEl = document.getElementById('detail'),
+        modal = document.getElementById('confirm-modal'),
+        confirmText = document.getElementById('confirm-text'),
+        logModal = document.getElementById('log-modal'),
+        logDomainEl = document.getElementById('log-domain'),
+        logViewEl = document.getElementById('log-view');
       let pendingDomain = null,
         pollTimer = null;
 
       async function loadServers() {
         try {
-          const d = await fetch("/api/servers", { cache: "no-store" }).then(
-              (r) => {
-                if (!r.ok) throw new Error(r.status);
-                return r.json();
-              },
-            ),
-            servers = d.servers || [];
+          const d = await fetch('/api/servers', { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(r.status);
+            return r.json();
+          });
+          const servers = d.servers || [];
           serverSelect.innerHTML = servers.length
-            ? servers
-                .map(
-                  (x) =>
-                    `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} — ${esc(x.host)}:${esc(String(x.port))}</option>`,
-                )
-                .join("")
+            ? servers.map(x => `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} — ${esc(x.host)}:${esc(String(x.port))}</option>`).join('')
             : '<option value="">Belum ada server terhubung</option>';
-          serverNote.textContent = servers.length
-            ? "Server tujuan siap dipilih."
-            : "Tambahkan server di config/servers.json atau env INSTALLER_SERVERS.";
+          serverNote.textContent = servers.length ? 'Server tujuan siap dipilih.' : 'Tambahkan server di config/servers.json.';
         } catch (e) {
-          serverSelect.innerHTML =
-            '<option value="">API server tidak tersedia</option>';
-          serverNote.textContent =
-            "Gagal membaca daftar server (" +
-            esc(String(e.message || e)) +
-            ").";
+          serverSelect.innerHTML = '<option value="">API server tidak tersedia</option>';
+          serverNote.textContent = 'Gagal membaca daftar server.';
         }
       }
-      serverSelect.addEventListener("change", () => {
-        serverNote.textContent = serverSelect.value
-          ? "Target: " + serverSelect.options[serverSelect.selectedIndex].text
-          : "Pilih server untuk instalasi.";
+      serverSelect.addEventListener('change', () => {
+        serverNote.textContent = serverSelect.value ? 'Target: ' + serverSelect.options[serverSelect.selectedIndex].text : 'Pilih server untuk instalasi.';
       });
 
       function showDetail(obj) {
-        detailEl.style.display = "block";
-        detailEl.innerHTML =
-          "<strong>Detail:</strong> " + esc(JSON.stringify(obj, null, 2));
+        detailEl.style.display = 'block';
+        detailEl.innerHTML = '<strong>Detail:</strong> ' + esc(JSON.stringify(obj, null, 2));
       }
       function hideDetail() {
-        detailEl.style.display = "none";
-        detailEl.textContent = "";
+        detailEl.style.display = 'none';
+        detailEl.textContent = '';
       }
 
       async function load() {
-        const rows = document.getElementById("rows");
+        const rows = document.getElementById('rows');
         try {
-          const d = await fetch("/api/installer", { cache: "no-store" }).then(
-            (r) => {
-              if (!r.ok) throw new Error(r.status);
-              return r.json();
-            },
-          );
+          const d = await fetch('/api/installer', { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(r.status);
+            return r.json();
+          });
           if (!d.domains.length) {
-            rows.innerHTML =
-              '<tr><td colspan="4" class="empty">Belum ada file domain.txt</td></tr>';
+            rows.innerHTML = '<tr><td colspan="4" class="empty">Belum ada file domain.txt</td></tr>';
             return;
           }
-          rows.innerHTML = d.domains
-            .map((x) => {
-              const isReady = x.status === "READY" || x.status === "SUCCESS";
-              const isRunning = x.status === "RUNNING";
-              const isFailed =
-                x.status === "FAILED" || x.status === "installer_error";
-              const pillClass = isFailed
-                ? "failed"
-                : isReady
-                  ? "ready"
-                  : "missing";
-              const stage = x.stage ? " / " + esc(x.stage) : "";
-              const logLines = (x.log || []).join("\n");
-              // generate for NO_MANIFEST / invalid manifest states
-              const canGenerate =
-                x.status === "NO_MANIFEST" ||
-                x.manifest === null ||
-                x.status.startsWith("missing_") ||
-                x.status.startsWith("invalid_") ||
-                x.status === "manifest_invalid:invalid_line";
-              const genBtn = canGenerate
-                ? `<button class="action gen-btn" type="button" data-gen-domain="${esc(x.domain)}" data-status="${esc(x.status)}">[ generate ]</button>`
-                : "";
-              // enable READY/SUCCESS (install) & FAILED (retry); disable RUNNING/invalid
-              const actionLabel = isFailed ? "[ retry ]" : "[ install ]";
-              const actionClass = isFailed ? "action danger" : "action";
-              const btnDisabled =
-                (isReady || isFailed) && !isRunning
-                  ? ""
-                  : 'disabled title="generate dulu jika manifest belum valid"';
-              const logBtn = logLines
-                ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>`
-                : "";
-              return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || "-")}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
-            })
-            .join("");
-          rows
-            .querySelectorAll("[data-domain]")
-            .forEach((b) =>
-              b.addEventListener("click", () =>
-                onInstallClick(b.dataset.domain, b.dataset.status),
-              ),
-            );
-          rows
-            .querySelectorAll("[data-log-domain]")
-            .forEach((b) =>
-              b.addEventListener("click", () =>
-                openLogModal(b.dataset.logDomain, d.domains),
-              ),
-            );
-          rows
-            .querySelectorAll("[data-gen-domain]")
-            .forEach((b) =>
-              b.addEventListener("click", () =>
-                generateManifest(b.dataset.genDomain),
-              ),
-            );
+          rows.innerHTML = d.domains.map(x => {
+            const isReady = x.status === 'READY' || x.status === 'SUCCESS';
+            const isRunning = x.status === 'RUNNING';
+            const isFailed = x.status === 'FAILED' || x.status === 'installer_error';
+            const pillClass = isFailed ? 'failed' : isReady ? 'ready' : 'missing';
+            const stage = x.stage ? ' / ' + esc(x.stage) : '';
+            const logLines = (x.log || []).join('\\n');
+            const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
+            const genBtn = canGenerate ? `<button class="action gen-btn" type="button" data-gen-domain="${esc(x.domain)}">[ generate ]</button>` : '';
+            const actionLabel = isFailed ? '[ retry ]' : '[ install ]';
+            const actionClass = isFailed ? 'action danger' : 'action';
+            const btnDisabled = (isReady || isFailed) && !isRunning ? '' : 'disabled title="generate dulu"';
+            const logBtn = logLines ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>` : '';
+            return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
+          }).join('');
+          rows.querySelectorAll('[data-domain]').forEach(b =>
+            b.addEventListener('click', () => onInstallClick(b.dataset.domain, b.dataset.status))
+          );
+          rows.querySelectorAll('[data-log-domain]').forEach(b =>
+            b.addEventListener('click', () => openLogModal(b.dataset.logDomain, d.domains))
+          );
+          rows.querySelectorAll('[data-gen-domain]').forEach(b =>
+            b.addEventListener('click', () => generateManifest(b.dataset.genDomain))
+          );
         } catch (e) {
-          rows.innerHTML =
-            '<tr><td colspan="4" class="empty">API tidak tersedia: ' +
-            esc(String(e.message || e)) +
-            "</td></tr>";
+          rows.innerHTML = '<tr><td colspan="4" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
         }
       }
 
       async function generateManifest(domain) {
-        serverNote.textContent = "Generate manifest untuk " + domain + " ...";
+        serverNote.textContent = 'Generate manifest untuk ' + domain + ' ...';
         try {
-          const r = await fetch("/api/installer/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+          const r = await fetch('/api/installer/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ domain }),
           });
           const j = await r.json().catch(() => ({}));
-          if (r.ok && j.status === "ok") {
-            serverNote.textContent =
-              j.generated === false
-                ? 'Manifest "' + domain + '" sudah valid.'
-                : 'Manifest "' +
-                  domain +
-                  '" digenerate. Verifikasi lalu install.';
+          if (r.ok && j.status === 'ok') {
+            serverNote.textContent = j.generated === false ? 'Manifest "' + domain + '" sudah valid.' : 'Manifest "' + domain + '" digenerate.';
             setTimeout(load, 500);
           } else {
-            serverNote.textContent = "Generate gagal: " + (j.error || r.status);
-            showDetail({ error: j.error || "http_" + r.status, domain });
+            serverNote.textContent = 'Generate gagal: ' + (j.error || r.status);
+            showDetail({ error: j.error || 'http_' + r.status, domain });
           }
         } catch (e) {
-          serverNote.textContent =
-            "Gagal menghubungi API: " + esc(String(e.message || e));
+          serverNote.textContent = 'Gagal menghubungi API: ' + esc(String(e.message || e));
         }
       }
 
       function onInstallClick(domain, status) {
-        const isFailed = status === "FAILED" || status === "installer_error";
-        if (status !== "READY" && status !== "SUCCESS" && !isFailed) {
+        const isFailed = status === 'FAILED' || status === 'installer_error';
+        if (status !== 'READY' && status !== 'SUCCESS' && !isFailed) {
           showDetail({ error: status, domain });
           return;
         }
         pendingDomain = domain;
-        const title = document.getElementById("confirm-title");
-        const btn = document.getElementById("confirm-btn");
-        title.textContent = isFailed
-          ? "Retry Install: " + domain
-          : "Konfirmasi Install";
-        btn.textContent = isFailed ? "Retry" : "Jalankan";
-        confirmText.textContent = isFailed
-          ? 'Install "' + domain + '" sebelumnya gagal. Jalankan ulang?'
-          : 'Pasang "' + domain + '" sekarang?';
-        modal.classList.add("open");
+        document.getElementById('confirm-title').textContent = isFailed ? 'Retry Install: ' + domain : 'Konfirmasi Install';
+        document.getElementById('confirm-btn').textContent = isFailed ? 'Retry' : 'Jalankan';
+        confirmText.textContent = isFailed ? 'Install "' + domain + '" sebelumnya gagal. Jalankan ulang?' : 'Pasang "' + domain + '" sekarang?';
+        modal.classList.add('open');
       }
-      function closeModal() {
-        modal.classList.remove("open");
-        pendingDomain = null;
-      }
+      function closeModal() { modal.classList.remove('open'); pendingDomain = null; }
       function selectedMode() {
         const el = document.querySelector('input[name="run-mode"]:checked');
-        return el ? el.value : "dry-run";
+        return el ? el.value : 'dry-run';
       }
       async function confirmInstall() {
         if (!pendingDomain) return;
         const d = pendingDomain;
         const mode = selectedMode();
         closeModal();
-        serverNote.textContent =
-          "Menjalankan " + mode + ' untuk "' + d + '" ...';
+        serverNote.textContent = 'Menjalankan ' + mode + ' untuk "' + d + '" ...';
         try {
-          const r = await fetch("/api/installer/run", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+          const r = await fetch('/api/installer/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ domain: d, mode }),
           });
           const j = await r.json().catch(() => ({}));
-          if (r.ok && j.status === "started") {
-            serverNote.textContent =
-              mode +
-              ' "' +
-              d +
-              '" dimulai (PID ' +
-              j.pid +
-              "). Log diperbarui otomatis.";
-            showDetail({ info: mode + " dimulai", ...j });
+          if (r.ok && j.status === 'started') {
+            serverNote.textContent = mode + ' "' + d + '" dimulai (PID ' + j.pid + ').';
+            showDetail({ info: mode + ' dimulai', ...j });
             setTimeout(load, 1500);
           } else {
-            serverNote.textContent = "Gagal memulai: " + (j.error || r.status);
-            showDetail({
-              error: j.error || "http_" + r.status,
-              domain: d,
-              mode,
-            });
+            serverNote.textContent = 'Gagal memulai: ' + (j.error || r.status);
+            showDetail({ error: j.error || 'http_' + r.status, domain: d, mode });
           }
         } catch (e) {
-          serverNote.textContent =
-            "Gagal menghubungi API: " + esc(String(e.message || e));
+          serverNote.textContent = 'Gagal menghubungi API: ' + esc(String(e.message || e));
         }
       }
-      modal.addEventListener("click", (e) => {
-        if (e.target === modal) closeModal();
-      });
+      modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
       function openLogModal(domain, domains) {
-        const row = (domains || []).find((x) => x.domain === domain);
+        const row = (domains || []).find(x => x.domain === domain);
         logDomainEl.textContent = domain;
-        logViewEl.textContent =
-          row && row.log && row.log.length
-            ? row.log.join("\n")
-            : "(log kosong)";
-        logModal.classList.add("open");
+        logViewEl.textContent = row && row.log && row.log.length ? row.log.join('\\n') : '(log kosong)';
+        logModal.classList.add('open');
         logViewEl.scrollTop = logViewEl.scrollHeight;
       }
-      function closeLogModal() {
-        logModal.classList.remove("open");
-      }
-      logModal.addEventListener("click", (e) => {
-        if (e.target === logModal) closeLogModal();
-      });
+      function closeLogModal() { logModal.classList.remove('open'); }
+      logModal.addEventListener('click', e => { if (e.target === logModal) closeLogModal(); });
 
       function startPoll() {
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(() => {
-          if (!document.hidden) load();
-        }, 10000);
-        document.addEventListener("visibilitychange", () => {
-          if (document.hidden) {
-            /* pause */
-          } else load();
-        });
+        pollTimer = setInterval(() => { if (!document.hidden) load(); }, 10000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
       }
 
       function esc(s) {
-        return String(s).replace(
-          /[&<>"']/g,
-          (c) =>
-            ({
-              "&": "&amp;",
-              "<": "&lt;",
-              ">": "&gt;",
-              '"': "&quot;",
-              "'": "&#39;",
-            })[c],
-        );
+        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
       }
       loadServers();
       load();

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# da-user-setup — pre-flight: ensure DA user + domain exist via local DA binary
+# Usage: da-user-setup <domain> <da_user> <admin_email>
+set -Eeuo pipefail
+
+DOMAIN=${1:?DOMAIN_required}
+DA_USER=${2:?DA_USER_required}
+ADMIN_EMAIL=${3:?ADMIN_EMAIL_required}
+
+# only create user if it doesn't exist
+if /usr/local/directadmin/directadmin CMD_API_SHOW_USERS 2>/dev/null | grep -q "^list\\[\\]=$DA_USER"; then
+  echo "user_exists:$DA_USER"
+else
+  # generate a random password for the user
+  USER_PASS=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)
+  # create user via DA API
+  RESULT=$(/usr/local/directadmin/directadmin CMD_API_USER_CREATE 2>/dev/null <<EOF
+username=$DA_USER
+email=$ADMIN_EMAIL
+passwd=$USER_PASS
+passwd2=$USER_PASS
+domain=$DOMAIN
+package=admin
+ip=103.103.175.182
+notify=no
+EOF
+)
+  if echo "$RESULT" | grep -q "^error=0\|result=OK\|created="; then
+    echo "user_created:$DA_USER"
+  else
+    echo "user_create_failed:$DA_USER:$RESULT"
+    exit 1
+  fi
+fi
+
+# check if domain exists for user
+if /usr/local/directadmin/directadmin CMD_API_ADDITIONAL_DOMAINS 2>/dev/null | grep -q "$DOMAIN"; then
+  echo "domain_exists:$DOMAIN"
+else
+  # add domain to user via DA API
+  RESULT=$(/usr/local/directadmin/directadmin CMD_API_DOMAIN_CREATE 2>/dev/null <<EOF
+domain=$DOMAIN
+owner=$DA_USER
+EOF
+)
+  if echo "$RESULT" | grep -q "^error=0\|result=OK\|added="; then
+    echo "domain_added:$DOMAIN"
+  else
+    echo "domain_add_failed:$DOMAIN:$RESULT"
+    exit 1
+  fi
+fi

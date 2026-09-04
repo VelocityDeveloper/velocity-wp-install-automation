@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
+import base64
+import hashlib
+import io
 import json
+import mimetypes
 import os
 import re
 import secrets as pysecrets
 import subprocess
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 ROOT = Path('/home/project')
 STATE = Path('/var/lib/velocity/installer')
@@ -21,6 +26,9 @@ SERVERS_FILE_CANDIDATES = [
     Path('/etc/velocity/servers.json'),
 ]
 API_TOKEN = os.environ.get('INSTALLER_API_TOKEN', '').strip()
+PACKAGES_DIR = Path('/var/lib/velocity/packages')
+PACKAGES_META = PACKAGES_DIR / 'packages.json'
+PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
 _rate = {}
 RATE_LIMIT = 30
 RATE_WINDOW = 60
@@ -89,7 +97,7 @@ def validate_manifest(path: Path):
         if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', k):
             return False, 'invalid_key:' + k
         cfg[k] = v
-    required = ['target_host', 'ssh_user', 'da_user', 'domain', 'db_name', 'db_user', 'admin_user', 'admin_email', 'site_title']
+    required = ['target_host', 'ssh_user', 'da_user', 'domain', 'db_name', 'db_user', 'admin_email', 'site_title']
     for k in required:
         if not cfg.get(k):
             return False, 'missing_' + k
@@ -289,6 +297,82 @@ def start_run(domain: str, mode: str):
     return {'domain': domain, 'mode': mode, 'pid': p.pid}, 'started'
 
 
+# --- packages management ---
+
+def load_packages():
+    try:
+        if PACKAGES_META.is_file():
+            return json.loads(PACKAGES_META.read_text())
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def save_packages(pkgs):
+    tmp = PACKAGES_META.with_suffix('.tmp')
+    tmp.write_text(json.dumps(pkgs, indent=2, default=str))
+    os.chmod(tmp, 0o600)
+    tmp.replace(PACKAGES_META)
+
+
+def add_package(slug, ptype, name, source, size, version=''):
+    if ptype not in ('plugin', 'theme'):
+        return None, 'invalid_type'
+    if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+        return None, 'invalid_slug'
+    pkgs = load_packages()
+    pkgs[slug] = {
+        'slug': slug,
+        'type': ptype,
+        'name': name or slug,
+        'source': source,
+        'size': size,
+        'version': version,
+        'added_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+    save_packages(pkgs)
+    return pkgs[slug], None
+
+
+def remove_package(slug):
+    pkgs = load_packages()
+    if slug not in pkgs:
+        return False
+    # remove file if exists
+    for ext in ('.zip', '.tar.gz'):
+        f = PACKAGES_DIR / f'{slug}{ext}'
+        if f.is_file():
+            f.unlink()
+    del pkgs[slug]
+    save_packages(pkgs)
+    return True
+
+
+def download_package_url(url, slug):
+    """Download a package from URL to packages dir. Returns path or error."""
+    if not url.startswith(('http://', 'https://')):
+        return None, 'invalid_url'
+    if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+        return None, 'invalid_slug'
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Velocity-Installer/1.0'})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = resp.read()
+            if len(data) > 200 * 1024 * 1024:  # 200MB limit
+                return None, 'file_too_large'
+            ct = resp.headers.get('Content-Type', '')
+            if 'zip' in ct or url.endswith('.zip'):
+                ext = '.zip'
+            else:
+                ext = '.zip'  # default to zip
+            dest = PACKAGES_DIR / f'{slug}{ext}'
+            dest.write_bytes(data)
+            os.chmod(dest, 0o644)
+            return dest, None
+    except Exception as e:
+        return None, f'download_failed:{e}'
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
         body = json.dumps(obj, separators=(',', ':')).encode()
@@ -323,6 +407,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs()})
             return
+        if path == '/api/packages':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json({'packages': load_packages()})
+            return
         self.send_error(404)
 
     def do_POST(self):
@@ -331,12 +421,103 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
-        if path not in ('/api/installer/run', '/api/installer/generate'):
+        if path not in ('/api/installer/run', '/api/installer/generate', '/api/packages', '/api/packages/download'):
             self.send_error(404)
             return
         if not _check_auth(self):
             self._send_json({'error': 'unauthorized'}, 401)
             return
+        # Package upload / URL add
+        if path == '/api/packages':
+            ct = self.headers.get('Content-Type', '')
+            if ct.startswith('multipart/form-data'):
+                # File upload
+                size = int(self.headers.get('Content-Length') or 0)
+                if size > 200 * 1024 * 1024:
+                    self._send_json({'error': 'file_too_large'}, 413)
+                    return
+                boundary = ct.split('boundary=')[1].strip()
+                body = self.rfile.read(size)
+                parts = body.split(('--' + boundary).encode())
+                upload_field = None
+                filename = None
+                file_data = b''
+                slug = None
+                ptype = 'plugin'
+                for part in parts:
+                    if b'Content-Disposition' not in part:
+                        continue
+                    header, data = part.split(b'\r\n\r\n', 1)
+                    header = header.decode('utf-8', errors='replace')
+                    if 'name="file"' in header:
+                        # extract filename
+                        m = re.search(r'filename="([^"]+)"', header)
+                        if m:
+                            filename = m.group(1)
+                        upload_field = data.rstrip(b'\r\n')
+                    elif 'name="slug"' in header:
+                        slug = data.rstrip(b'\r\n').decode('utf-8', errors='replace').strip()
+                    elif 'name="type"' in header:
+                        ptype = data.rstrip(b'\r\n').decode('utf-8', errors='replace').strip()
+                if not upload_field or not filename:
+                    self._send_json({'error': 'no_file'}, 400)
+                    return
+                if not slug:
+                    slug = re.sub(r'[^a-zA-Z0-9_-]', '', Path(filename).stem)[:40]
+                ext = '.zip' if filename.endswith('.zip') else '.zip'
+                dest = PACKAGES_DIR / f'{slug}{ext}'
+                dest.write_bytes(upload_field)
+                os.chmod(dest, 0o644)
+                result, err = add_package(slug, ptype, Path(filename).stem, f'upload:{filename}', len(upload_field))
+                if result is None:
+                    self._send_json({'error': err}, 400)
+                    return
+                self._send_json({'status': 'ok', 'package': result})
+                return
+            else:
+                # JSON: add by URL
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    payload = json.loads(self.rfile.read(length) or b'{}')
+                except (ValueError, OSError):
+                    self._send_json({'error': 'invalid_json'}, 400)
+                    return
+                url = payload.get('url', '')
+                slug = payload.get('slug', '')
+                ptype = payload.get('type', 'plugin')
+                name = payload.get('name', slug)
+                if not url or not slug:
+                    self._send_json({'error': 'url_and_slug_required'}, 400)
+                    return
+                dest, err = download_package_url(url, slug)
+                if dest is None:
+                    self._send_json({'error': err}, 422)
+                    return
+                result, err = add_package(slug, ptype, name, url, dest.stat().st_size)
+                if result is None:
+                    self._send_json({'error': err}, 400)
+                    return
+                self._send_json({'status': 'ok', 'package': result})
+                return
+        if path == '/api/packages/download':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            url = payload.get('url', '')
+            slug = payload.get('slug', '')
+            if not url or not slug:
+                self._send_json({'error': 'url_and_slug_required'}, 400)
+                return
+            dest, err = download_package_url(url, slug)
+            if dest is None:
+                self._send_json({'error': err}, 422)
+                return
+            self._send_json({'status': 'ok', 'path': str(dest), 'size': dest.stat().st_size})
+            return
+        # Installer actions (JSON only)
         try:
             length = int(self.headers.get('Content-Length') or 0)
             if length > 4096:
@@ -362,6 +543,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': err, 'domain': domain, 'mode': mode}, code)
             return
         self._send_json({'status': 'started', **result})
+
+    def do_DELETE(self):
+        ip = self.client_address[0] if self.client_address else 'unknown'
+        if not _rate_ok(ip):
+            self._send_json({'error': 'rate_limited'}, 429)
+            return
+        path = urlparse(self.path).path
+        if not path.startswith('/api/packages/'):
+            self.send_error(404)
+            return
+        if not _check_auth(self):
+            self._send_json({'error': 'unauthorized'}, 401)
+            return
+        slug = path[len('/api/packages/'):]
+        if not slug or not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+            self._send_json({'error': 'invalid_slug'}, 400)
+            return
+        if remove_package(slug):
+            self._send_json({'status': 'ok', 'removed': slug})
+        else:
+            self._send_json({'error': 'not_found'}, 404)
 
     def log_message(self, fmt, *args):
         try:

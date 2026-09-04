@@ -52,9 +52,15 @@ while IFS='=' read -r key value || [[ -n "$key" ]]; do
   cfg[$key]=$value
 done < "$MANIFEST"
 
-for key in target_host ssh_user da_user domain db_name db_user admin_user admin_email site_title; do
+for key in target_host ssh_user da_user domain db_name db_user admin_email site_title; do
   [[ -n "${cfg[$key]:-}" ]] || { printf '{"status":"error","error":"missing_%s"}\n' "$key"; exit 2; }
 done
+
+# WP admin username defaults to DA user (so WP login matches DA login)
+cfg[admin_user]="${cfg[admin_user]:-${cfg[da_user]}}"
+
+# DA password file (so WP admin password matches DA password)
+cfg[da_password_file]="${cfg[da_password_file]:-}"
 
 # --- validation ---
 [[ "${cfg[target_host]}" =~ ^[A-Za-z0-9.-]+$ ]] || fail "invalid_target_host"
@@ -95,7 +101,13 @@ fi
 : "${WP_INSTALL_ADMIN_PASSWORD_FILE:?WP_INSTALL_ADMIN_PASSWORD_FILE_required}"
 [[ -r "$WP_INSTALL_SSH_KEY_FILE" ]] || fail "missing_secret_file" ',"name":"ssh_key"'
 DB_PASSWORD=$(read_secret "$WP_INSTALL_DB_PASSWORD_FILE" db_password)
-ADMIN_PASSWORD=$(read_secret "$WP_INSTALL_ADMIN_PASSWORD_FILE" admin_password)
+# DA password override: if manifest has da_password_file, use DA password for WP admin
+if [[ -n "${cfg[da_password_file]:-}" && -r "${cfg[da_password_file]}" ]]; then
+  ADMIN_PASSWORD=$(read_secret "${cfg[da_password_file]}" da_password)
+  echo "using DA password for WP admin" >&2
+else
+  ADMIN_PASSWORD=$(read_secret "$WP_INSTALL_ADMIN_PASSWORD_FILE" admin_password)
+fi
 GITHUB_TOKEN=""
 if [[ -n "${WP_INSTALL_GITHUB_TOKEN_FILE:-}" && -r "$WP_INSTALL_GITHUB_TOKEN_FILE" ]]; then
   GITHUB_TOKEN=$(read_secret "$WP_INSTALL_GITHUB_TOKEN_FILE" github_token)
@@ -124,14 +136,63 @@ DOCROOT="__DOCROOT__"
 DA_USER="__DA_USER__"
 DOMAIN="__DOMAIN__"
 
-[[ -d "$DOCROOT" ]] || { echo '{"status":"error","error":"missing_docroot","docroot":"'"$DOCROOT"'"}' >&2; exit 11; }
-command -v wp >/dev/null || { echo 'wp-cli_missing' >&2; exit 10; }
+# Ensure PATH includes common binary locations for non-interactive SSH
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:$PATH"
+
+# Find wp CLI - try common locations first, then PATH search
+WP_BIN=""
+for p in /usr/local/bin/wp /usr/bin/wp; do
+  if [[ -x "$p" ]]; then WP_BIN="$p"; break; fi
+done
+if [[ -z "$WP_BIN" ]]; then
+  WP_BIN=$(type -P wp 2>/dev/null || true)
+fi
+[[ -n "$WP_BIN" ]] || { echo 'wp-cli_missing' >&2; exit 10; }
+
 command -v git >/dev/null 2>&1 || { echo 'git_missing' >&2; exit 10; }
 command -v php >/dev/null || { echo 'php_missing' >&2; exit 10; }
 
-# disk space check (need at least 500MB free on DOCROOT filesystem)
+# Validate DA user home exists on remote server
+[[ -d "/home/$DA_USER" ]] || { echo "da_user_home_missing:/home/$DA_USER" >&2; exit 11; }
+
+# Ensure domain directory exists (create if needed)
+mkdir -p "$DOCROOT" || { echo "docroot_create_failed:$DOCROOT" >&2; exit 11; }
+
+# create MySQL user + database via DA admin credentials (idempotent)
+DA_MYSQL_CONF="/usr/local/directadmin/conf/mysql.conf"
+if [[ -f "$DA_MYSQL_CONF" ]]; then
+  DA_USER_MYSQL=""
+  DA_PASS_MYSQL=""
+  DA_SOCKET_MYSQL=""
+  while IFS='=' read -r key val; do
+    key=$(echo "$key" | tr -d ' ')
+    case "$key" in
+      user|da_user) DA_USER_MYSQL="$val" ;;
+      passwd|password|da_passwd) DA_PASS_MYSQL="$val" ;;
+      socket|mysql_socket) DA_SOCKET_MYSQL="$val" ;;
+    esac
+  done < "$DA_MYSQL_CONF"
+  DA_USER_MYSQL="${DA_USER_MYSQL:-root}"
+  DA_SOCKET_MYSQL="${DA_SOCKET_MYSQL:-/var/lib/mysql/mysql.sock}"
+  
+  echo "Creating MySQL user and database for WordPress..." >&2
+  mysql -u "$DA_USER_MYSQL" ${DA_PASS_MYSQL:+-p"$DA_PASS_MYSQL"} --socket="$DA_SOCKET_MYSQL" 2>/dev/null -e "
+  CREATE DATABASE IF NOT EXISTS __DB_NAME_Q__;
+  CREATE USER IF NOT EXISTS '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
+  ALTER USER '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
+  GRANT ALL PRIVILEGES ON __DB_NAME_Q__.* TO '__DB_USER_Q__'@'localhost';
+  FLUSH PRIVILEGES;
+  " || true
+  echo "MySQL user/database ready." >&2
+else
+  echo "Warning: DA MySQL config not found, assuming database exists" >&2
+fi
+
+# disk space check (need at least 500MB free on DOCROOT filesystem, fallback to /home if DOCROOT missing)
 if command -v df >/dev/null 2>&1; then
-  avail_kb=$(df -k "$DOCROOT" | awk 'NR==2{print $4}')
+  df_target="$DOCROOT"
+  [[ ! -d "$DOCROOT" ]] && df_target="/home"
+  avail_kb=$(df -k "$df_target" | awk 'NR==2{print $4}')
   if [[ "$avail_kb" =~ ^[0-9]+$ ]] && (( avail_kb < 512000 )); then
     echo "disk_space_low:${avail_kb}KB" >&2; exit 13
   fi
@@ -149,60 +210,115 @@ if [[ -d "$DOCROOT" && -n "$(ls -A "$DOCROOT" 2>/dev/null)" ]]; then
   fi
 fi
 
-# download wordpress
-wp core download --path="$DOCROOT" --force
+# download wordpress (raise memory limit for extraction)
+php -d memory_limit=512M "$WP_BIN" core download --path="$DOCROOT" --force --allow-root
 
-# create wp-config (fail fast without --skip-check)
-if [[ -f "$DOCROOT/wp-config.php" ]]; then
-  echo "wp-config_exists_skip_create" >&2
-else
-  wp config create --path="$DOCROOT" --dbname=__DB_NAME_Q__ --dbuser=__DB_USER_Q__ --dbpass="$WP_DB_PASSWORD" --skip-check=false
-fi
+# create wp-config (force overwrite to ensure correct password)
+php -d memory_limit=512M "$WP_BIN" config create --path="$DOCROOT" --dbname=__DB_NAME_Q__ --dbuser=__DB_USER_Q__ --dbpass="$WP_DB_PASSWORD" --skip-check=false --allow-root --force
 
 # core install idempotency
-if wp core is-installed --path="$DOCROOT" 2>/dev/null; then
+if php -d memory_limit=512M "$WP_BIN" core is-installed --path="$DOCROOT" --allow-root 2>/dev/null; then
   echo "already_installed_skip_core_install" >&2
 else
-  wp core install --path="$DOCROOT" --url=__URL_Q__ --title=__TITLE_Q__ --admin_user=__ADMIN_USER_Q__ --admin_password="$WP_ADMIN_PASSWORD" --admin_email=__ADMIN_EMAIL_Q__
+  php -d memory_limit=512M "$WP_BIN" core install --path="$DOCROOT" --url=__URL_Q__ --title=__TITLE_Q__ --admin_user=__ADMIN_USER_Q__ --admin_password="$WP_ADMIN_PASSWORD" --admin_email=__ADMIN_EMAIL_Q__ --allow-root
 fi
+
+# ensure admin user matches manifest (update email/password, create if missing, rename if different username)
+php -d memory_limit=512M "$WP_BIN" user get __ADMIN_USER_Q__ --path="$DOCROOT" --allow-root 2>/dev/null && {
+  php -d memory_limit=512M "$WP_BIN" user update __ADMIN_USER_Q__ --user_pass="$WP_ADMIN_PASSWORD" --user_email=__ADMIN_EMAIL_Q__ --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_user_updated:__ADMIN_USER_Q__" >&2
+} || {
+  # DA user doesn't exist — rename existing admin via temp email trick
+  existing_admin=$(php -d memory_limit=512M "$WP_BIN" user list --role=administrator --field=user_login --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+  if [[ -n "$existing_admin" && "$existing_admin" != "__ADMIN_USER_Q__" ]]; then
+    temp_email="temp-rename@__DOMAIN__"
+    php -d memory_limit=512M "$WP_BIN" user update "$existing_admin" --user_email="$temp_email" --path="$DOCROOT" --allow-root 2>/dev/null
+    php -d memory_limit=512M "$WP_BIN" user create __ADMIN_USER_Q__ __ADMIN_EMAIL_Q__ --user_pass="$WP_ADMIN_PASSWORD" --role=administrator --path="$DOCROOT" --allow-root 2>/dev/null
+    php -d memory_limit=512M "$WP_BIN" user delete "$existing_admin" --reassign=__ADMIN_USER_Q__ --path="$DOCROOT" --allow-root --yes 2>/dev/null || true
+    echo "admin_user_renamed:__ADMIN_USER_Q__" >&2
+  else
+    php -d memory_limit=512M "$WP_BIN" user create __ADMIN_USER_Q__ __ADMIN_EMAIL_Q__ --user_pass="$WP_ADMIN_PASSWORD" --role=administrator --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_user_created:__ADMIN_USER_Q__" >&2
+  fi
+}
+
+# helper to install a plugin/theme from a pre-transferred package zip
+# package is already SCP'd to /tmp/pkg-${slug}.zip by the local launcher
+install_from_zip() {
+  local slug=$1 type=$2 # plugin|theme
+  local tmpzip="/tmp/pkg-${slug}.zip"
+  if [[ ! -f "$tmpzip" ]]; then
+    echo "package_zip_missing:$slug" >&2
+    return 1
+  fi
+  # extract to destination on remote
+  if [[ "$type" == "plugin" ]]; then
+    local dest="$DOCROOT/wp-content/plugins/$slug"
+    mkdir -p "$(dirname "$dest")"
+    rm -rf "$dest"
+    unzip -q "$tmpzip" -d "$(dirname "$dest")" || { echo "unzip_failed:$slug" >&2; return 1; }
+    # if zip contains a single folder, move it to dest
+    local contents
+    contents=($(ls -A "$(dirname "$dest")"))
+    if [[ ${#contents[@]} -eq 1 && -d "$(dirname "$dest")/${contents[0]}" && "${contents[0]}" != "$slug" ]]; then
+      mv "$(dirname "$dest")/${contents[0]}" "$dest"
+    fi
+    php -d memory_limit=512M "$WP_BIN" plugin activate "$slug" --path="$DOCROOT" --allow-root 2>/dev/null || php -d memory_limit=512M "$WP_BIN" plugin activate "$slug" --path="$DOCROOT" --network --allow-root 2>/dev/null || echo "plugin_activate_failed:$slug" >&2
+  else
+    local dest="$DOCROOT/wp-content/themes/$slug"
+    mkdir -p "$(dirname "$dest")"
+    rm -rf "$dest"
+    unzip -q "$tmpzip" -d "$(dirname "$dest")" || { echo "unzip_failed:$slug" >&2; return 1; }
+    local contents
+    contents=($(ls -A "$(dirname "$dest")"))
+    if [[ ${#contents[@]} -eq 1 && -d "$(dirname "$dest")/${contents[0]}" && "${contents[0]}" != "$slug" ]]; then
+      mv "$(dirname "$dest")/${contents[0]}" "$dest"
+    fi
+    php -d memory_limit=512M "$WP_BIN" theme activate "$slug" --path="$DOCROOT" --allow-root 2>/dev/null || echo "theme_activate_failed:$slug" >&2
+  fi
+  # cleanup
+  rm -f "$tmpzip"
+}
 
 # helper to install from git
 install_from_git() {
-  local repo=$1 type=$2 # plugin|theme
-  local slug=$3
+  local repo=$1 type=$2 slug=$3
   local tmpdir
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' RETURN
-  local clone_cmd=(git clone --depth 1)
-  if [[ -n "${GITHUB_TOKEN:-}" && "$repo" == *"github.com"* ]]; then
-    clone_cmd=(git -c http.extraHeader="Authorization: Bearer $GITHUB_TOKEN" clone --depth 1)
-  fi
   echo "cloning $repo -> $tmpdir/src" >&2
-  "${clone_cmd[@]}" "$repo" "$tmpdir/src" || { echo "git_clone_failed:$repo" >&2; return 1; }
-  # slug from repo or folder name
+  git clone --depth 1 "$repo" "$tmpdir/src" || { echo "git_clone_failed:$repo" >&2; return 1; }
   if [[ "$type" == "plugin" ]]; then
-    # copy to wp-content/plugins
     local dest="$DOCROOT/wp-content/plugins/$slug"
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest"
     cp -a "$tmpdir/src" "$dest"
-    wp plugin activate "$slug" --path="$DOCROOT" 2>&2 || wp plugin activate "$slug" --path="$DOCROOT" --network 2>&2 || echo "plugin_activate_failed:$slug" >&2
+    php -d memory_limit=512M "$WP_BIN" plugin activate "$slug" --path="$DOCROOT" --allow-root 2>/dev/null || php -d memory_limit=512M "$WP_BIN" plugin activate "$slug" --path="$DOCROOT" --network --allow-root 2>/dev/null || echo "plugin_activate_failed:$slug" >&2
   else
     local dest="$DOCROOT/wp-content/themes/$slug"
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest"
     cp -a "$tmpdir/src" "$dest"
-    wp theme activate "$slug" --path="$DOCROOT" 2>&2 || echo "theme_activate_failed:$slug" >&2
+    php -d memory_limit=512M "$WP_BIN" theme activate "$slug" --path="$DOCROOT" --allow-root 2>/dev/null || echo "theme_activate_failed:$slug" >&2
   fi
   rm -rf "$tmpdir"
 }
 
-# velocity addons
-if [[ -n "__ADDONS_REPO__" ]]; then
+# velocity addons — package (zip) takes priority over git repo
+if [[ -n "__ADDONS_PKG__" ]]; then
+  install_from_zip "__ADDONS_PKG__" plugin || exit 14
+elif [[ -n "__ADDONS_REPO__" ]]; then
   install_from_git "__ADDONS_REPO__" plugin "velocity-addons" || exit 14
 fi
-if [[ -n "__THEME_REPO__" ]]; then
+
+# velocity theme — package (zip) takes priority over git repo
+if [[ -n "__THEME_PKG__" ]]; then
+  install_from_zip "__THEME_PKG__" theme || exit 15
+elif [[ -n "__THEME_REPO__" ]]; then
   install_from_git "__THEME_REPO__" theme "velocity-theme" || exit 15
+fi
+
+# rename default DirectAdmin index.html so WordPress index.php takes over
+if [[ -f "$DOCROOT/index.html" ]]; then
+  mv "$DOCROOT/index.html" "$DOCROOT/index.html.da.bak" 2>/dev/null && echo "renamed index.html -> index.html.da.bak" >&2 || true
 fi
 
 echo "install_complete" >&2
@@ -219,8 +335,24 @@ remote_script=${remote_script//__URL_Q__/$(q "https://${cfg[domain]}")}
 remote_script=${remote_script//__TITLE_Q__/$(q "${cfg[site_title]}")}
 remote_script=${remote_script//__ADMIN_USER_Q__/$(q "${cfg[admin_user]}")}
 remote_script=${remote_script//__ADMIN_EMAIL_Q__/$(q "${cfg[admin_email]}")}
-remote_script=${remote_script//__ADDONS_REPO__/$(printf '%s' "${cfg[velocity_addons_repo]:-}") }
+remote_script=${remote_script//__SSH_PORT__/$(q "${cfg[ssh_port]:-22}")}
+remote_script=${remote_script//__SSH_USER__/$(q "${cfg[ssh_user]}")}
+remote_script=${remote_script//__SSH_HOST__/$(q "${cfg[target_host]}")}
+remote_script=${remote_script//__ADDONS_REPO__/$(printf '%s' "${cfg[velocity_addons_repo]:-}")}
 remote_script=${remote_script//__THEME_REPO__/$(printf '%s' "${cfg[velocity_theme_repo]:-}")}
+remote_script=${remote_script//__ADDONS_PKG__/$(printf '%s' "${cfg[velocity_addons_pkg]:-}")}
+remote_script=${remote_script//__THEME_PKG__/$(printf '%s' "${cfg[velocity_theme_pkg]:-}")}
+
+# pre-transfer package zips from local to remote
+for pkg_key in velocity_addons_pkg velocity_theme_pkg; do
+  pkg_slug="${cfg[$pkg_key]:-}"
+  [[ -n "$pkg_slug" ]] || continue
+  local_zip="/var/lib/velocity/packages/${pkg_slug}.zip"
+  [[ -f "$local_zip" ]] || continue
+  echo "Transferring package $pkg_slug to remote..." >&2
+  scp -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=15 -P "${cfg[ssh_port]:-22}" "$local_zip" "${cfg[ssh_user]}@${cfg[target_host]}:/tmp/pkg-${pkg_slug}.zip" >&2 || { echo "scp_failed:$pkg_slug" >&2; exit 16; }
+  echo "Package $pkg_slug transferred." >&2
+done
 
 # inject secrets as exports at top of remote script via stdin (single-quote escaped)
 secret_header=$(printf 'export WP_DB_PASSWORD=%s\nexport WP_ADMIN_PASSWORD=%s\n' "$(sq "$DB_PASSWORD")" "$(sq "$ADMIN_PASSWORD")")
