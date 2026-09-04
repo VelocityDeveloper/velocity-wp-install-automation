@@ -632,7 +632,16 @@ class Handler(BaseHTTPRequestHandler):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
-            self._send_json(load_ai_models())
+            data = load_ai_models()
+            # mask api_key for listing
+            safe = {'models': [], 'default_provider': data.get('default_provider', 'openai')}
+            for m in data.get('models', []):
+                mm = dict(m)
+                if mm.get('api_key'):
+                    mm['api_key'] = '***'
+                    mm['api_key_set'] = True
+                safe['models'].append(mm)
+            self._send_json(safe)
             return
         if path.startswith('/api/ai/content/'):
             if not _check_auth(self):
@@ -764,7 +773,8 @@ class Handler(BaseHTTPRequestHandler):
                 code = {'invalid_id': 400, 'endpoint_required': 400, 'api_key_required': 400}.get(err_key, 422)
                 self._send_json({'error': err}, code)
                 return
-            self._send_json({'status': 'ok', 'model': result})
+            safe_model = dict(result); safe_model['api_key'] = '***' if safe_model.get('api_key') else ''; safe_model['api_key_set'] = bool(result.get('api_key'))
+            self._send_json({'status': 'ok', 'model': safe_model})
             return
         if path == '/api/ai/models/test':
             try:
@@ -868,6 +878,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if remove_package(slug):
                 self._send_json({'status': 'ok', 'removed': slug})
+            else:
+                self._send_json({'error': 'not_found'}, 404)
+            return
+        if path.startswith('/api/ai/models/') and path.endswith('/delete'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            model_id = path[len('/api/ai/models/'):-len('/delete')]
+            if not model_id or not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
+                self._send_json({'error': 'invalid_model_id'}, 400)
+                return
+            if remove_ai_model(model_id):
+                self._send_json({'status': 'ok', 'removed': model_id})
             else:
                 self._send_json({'error': 'not_found'}, 404)
             return
