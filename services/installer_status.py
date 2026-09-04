@@ -330,14 +330,17 @@ def add_ai_model(model_data):
     """Add a new AI model."""
     if not re.match(r'^[a-zA-Z0-9_-]+$', model_data.get('id', '')):
         return None, 'invalid_id'
-    if model_data.get('provider') not in ('openai', 'anthropic', 'openai_compatible', 'ollama'):
-        return None, 'invalid_provider'
+    if not model_data.get('endpoint'):
+        return None, 'endpoint_required'
+    if not model_data.get('api_key'):
+        return None, 'api_key_required'
+    
+    # Use id as model name if not provided
+    if not model_data.get('name'):
+        model_data['name'] = model_data['id']
+    # Use id as model name for API calls if model not specified
     if not model_data.get('model'):
-        return None, 'model_required'
-    if not model_data.get('api_key_file'):
-        return None, 'api_key_file_required'
-    if not Path(model_data['api_key_file']).is_file():
-        return None, 'api_key_file_not_found'
+        model_data['model'] = model_data['id']
     
     data = load_ai_models()
     models = data.get('models', [])
@@ -404,23 +407,21 @@ def test_ai_model(model_id):
     if not model:
         return None, 'model_not_found'
     
-    api_key_file = model.get('api_key_file', '')
-    if not Path(api_key_file).is_file():
-        return None, 'api_key_file_not_found'
+    api_key = model.get('api_key', '')
+    if not api_key:
+        return None, 'api_key_missing'
     
-    api_key = Path(api_key_file).read_text().strip()
-    base_url = model.get('base_url', 'https://api.openai.com/v1')
+    endpoint = model.get('endpoint', 'https://api.openai.com/v1')
     model_name = model.get('model', '')
     
     try:
-        import urllib.request
         payload = json.dumps({
             'model': model_name,
             'messages': [{'role': 'user', 'content': 'Say "OK" if you can hear me.'}],
             'max_tokens': 10
         }).encode()
         req = urllib.request.Request(
-            f'{base_url}/chat/completions',
+            f'{endpoint}/chat/completions',
             data=payload,
             headers={
                 'Content-Type': 'application/json',
@@ -760,7 +761,7 @@ class Handler(BaseHTTPRequestHandler):
             result, err = add_ai_model(payload)
             if result is None:
                 err_key = err.split(':')[0] if err else ''
-                code = {'invalid_id': 400, 'invalid_provider': 400, 'model_required': 400, 'api_key_file_required': 400, 'api_key_file_not_found': 404}.get(err_key, 422)
+                code = {'invalid_id': 400, 'endpoint_required': 400, 'api_key_required': 400}.get(err_key, 422)
                 self._send_json({'error': err}, code)
                 return
             self._send_json({'status': 'ok', 'model': result})

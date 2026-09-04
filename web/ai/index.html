@@ -127,11 +127,13 @@
       .modal.open { display: flex; }
       .modal-box {
         max-width: 520px;
+        max-height: 80vh;
         margin: 16px;
         padding: 22px;
         border: 1px solid var(--yellow);
         background: var(--panel);
         color: var(--text);
+        overflow-y: auto;
       }
       .modal-box h3 { margin: 0 0 8px; color: var(--yellow); }
       .modal-box p { margin: 0 0 16px; color: var(--muted); }
@@ -271,7 +273,10 @@
         <section class="panel" style="margin-bottom: 20px;">
           <div style="padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
             <h3 style="margin: 0; color: var(--cyan);">AI Models</h3>
-            <button class="action" onclick="showAddModelModal()">[ + add model ]</button>
+            <div style="display: flex; gap: 6px;">
+              <button class="action" onclick="fill9Router()">[ 9router ]</button>
+              <button class="action" onclick="showAddModelModal()">[ + add model ]</button>
+            </div>
           </div>
           <div id="models-list" style="padding: 16px;">
             <p class="empty">Memuat...</p>
@@ -319,40 +324,15 @@
         <h3 id="model-modal-title">Add AI Model</h3>
         <div class="form-group">
           <label>Model ID (unique, alphanumeric)</label>
-          <input type="text" id="model-id" placeholder="gpt-4o-mini">
+          <input type="text" id="model-id" placeholder="my-model">
         </div>
         <div class="form-group">
-          <label>Display Name</label>
-          <input type="text" id="model-name" placeholder="GPT-4o Mini">
+          <label>Endpoint URL</label>
+          <input type="text" id="model-endpoint" placeholder="https://9router.com/api/v1">
         </div>
         <div class="form-group">
-          <label>Provider</label>
-          <select id="model-provider">
-            <option value="openai">OpenAI</option>
-            <option value="openai_compatible">OpenAI Compatible</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="ollama">Ollama (Local)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Model Name (API identifier)</label>
-          <input type="text" id="model-model" placeholder="gpt-4o-mini">
-        </div>
-        <div class="form-group">
-          <label>Base URL (API endpoint)</label>
-          <input type="text" id="model-base-url" placeholder="https://api.openai.com/v1">
-        </div>
-        <div class="form-group">
-          <label>API Key File Path</label>
-          <input type="text" id="model-api-key-file" placeholder="/etc/velocity/secrets/ai_openai_key.txt">
-        </div>
-        <div class="form-group">
-          <label>Max Tokens</label>
-          <input type="number" id="model-max-tokens" placeholder="4096">
-        </div>
-        <div class="form-group">
-          <label>Temperature</label>
-          <input type="number" step="0.1" id="model-temperature" placeholder="0.7">
+          <label>API Key</label>
+          <input type="text" id="model-api-key" placeholder="sk-...">
         </div>
         <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px; cursor: pointer;">
           <input type="checkbox" id="model-is-default" /> Set as default model
@@ -369,6 +349,14 @@
         return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
       }
 
+      function fill9Router() {
+        showAddModelModal();
+        document.getElementById('model-id').value = '9router';
+        document.getElementById('model-endpoint').value = 'https://9router.com/api/v1';
+        document.getElementById('model-api-key').value = '';
+        document.getElementById('model-is-default').checked = true;
+      }
+
       async function loadModels() {
         try {
           const d = await fetch('/api/ai/models', { cache: 'no-store' }).then(r => {
@@ -383,10 +371,8 @@
           }
           container.innerHTML = models.map(m => `
             <div class="model-card ${m.is_default ? 'default' : ''}">
-              <h4>${esc(m.name || m.id)} ${m.is_default ? '<span style="color: var(--green)">[default]</span>' : ''}</h4>
-              <p><strong>ID:</strong> ${esc(m.id)} | <strong>Provider:</strong> ${esc(m.provider)} | <strong>Model:</strong> ${esc(m.model)}</p>
-              <p><strong>Base URL:</strong> ${esc(m.base_url)}</p>
-              <p><strong>API Key File:</strong> ${esc(m.api_key_file)}</p>
+              <h4>${esc(m.id)} ${m.is_default ? '<span style="color: var(--green)">[default]</span>' : ''}</h4>
+              <p><strong>Endpoint:</strong> ${esc(m.endpoint)}</p>
               <div class="model-actions">
                 <button class="action" onclick="testModel('${esc(m.id)}')">[ test ]</button>
                 ${!m.is_default ? `<button class="action" onclick="setDefaultModel('${esc(m.id)}')">[ set default ]</button>` : ''}
@@ -418,13 +404,8 @@
       function showAddModelModal() {
         document.getElementById('model-modal-title').textContent = 'Add AI Model';
         document.getElementById('model-id').value = '';
-        document.getElementById('model-name').value = '';
-        document.getElementById('model-provider').value = 'openai';
-        document.getElementById('model-model').value = '';
-        document.getElementById('model-base-url').value = 'https://api.openai.com/v1';
-        document.getElementById('model-api-key-file').value = '/etc/velocity/secrets/ai_openai_key.txt';
-        document.getElementById('model-max-tokens').value = '4096';
-        document.getElementById('model-temperature').value = '0.7';
+        document.getElementById('model-endpoint').value = '';
+        document.getElementById('model-api-key').value = '';
         document.getElementById('model-is-default').checked = false;
         document.getElementById('model-modal').classList.add('open');
       }
@@ -436,15 +417,14 @@
       async function saveModel() {
         const payload = {
           id: document.getElementById('model-id').value.trim(),
-          name: document.getElementById('model-name').value.trim(),
-          provider: document.getElementById('model-provider').value,
-          model: document.getElementById('model-model').value.trim(),
-          base_url: document.getElementById('model-base-url').value.trim(),
-          api_key_file: document.getElementById('model-api-key-file').value.trim(),
-          max_tokens: parseInt(document.getElementById('model-max-tokens').value) || 4096,
-          temperature: parseFloat(document.getElementById('model-temperature').value) || 0.7,
+          endpoint: document.getElementById('model-endpoint').value.trim(),
+          api_key: document.getElementById('model-api-key').value.trim(),
           is_default: document.getElementById('model-is-default').checked
         };
+        if (!payload.id || !payload.endpoint) {
+          alert('Model ID dan Endpoint wajib diisi!');
+          return;
+        }
         try {
           const r = await fetch('/api/ai/models', {
             method: 'POST',

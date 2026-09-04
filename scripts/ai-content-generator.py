@@ -71,13 +71,12 @@ def get_default_model():
 
 def ai_call(system_prompt, user_prompt, model):
     """Call OpenAI-compatible API"""
-    api_key_file = model.get('api_key_file', '')
-    if not Path(api_key_file).is_file():
-        log(f'ERROR: API key file not found: {api_key_file}')
+    api_key = model.get('api_key', '')
+    if not api_key:
+        log('ERROR: API key not found in model config')
         return None
     
-    api_key = Path(api_key_file).read_text().strip()
-    base_url = model.get('base_url', 'https://api.openai.com/v1')
+    endpoint = model.get('endpoint', 'https://api.openai.com/v1')
     model_name = model.get('model', '')
     temperature = model.get('temperature', 0.7)
     max_tokens = model.get('max_tokens', 4096)
@@ -93,7 +92,7 @@ def ai_call(system_prompt, user_prompt, model):
     }).encode()
     
     req = urllib.request.Request(
-        f'{base_url}/chat/completions',
+        f'{endpoint}/chat/completions',
         data=payload,
         headers={
             'Content-Type': 'application/json',
