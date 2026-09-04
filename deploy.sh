@@ -18,10 +18,16 @@ if [[ "$(realpath scripts/installer-runner)" != "$(realpath "$INSTALL_ROOT/scrip
   install -m 755 scripts/installer-runner "$INSTALL_ROOT/scripts/installer-runner"
 fi
 install -m 644 services/installer_status.py /usr/local/bin/installer_status.py
+install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
 install -d -m 755 "$WEB_ROOT/installer"
 install -m 644 web/installer/index.html "$WEB_ROOT/installer/index.html"
 install -d -m 755 "$WEB_ROOT/server"
 install -m 644 web/server/index.html "$WEB_ROOT/server/index.html"
+install -d -m 755 "$WEB_ROOT/ai"
+install -m 644 web/ai/index.html "$WEB_ROOT/ai/index.html"
+install -d -m 755 "$WEB_ROOT/packages"
+install -m 644 web/packages/index.html "$WEB_ROOT/packages/index.html"
+install -m 644 web/index.html "$WEB_ROOT/index.html"
 
 systemctl restart installer-status.service
 nginx -t

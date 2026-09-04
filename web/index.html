@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>velocity@server:~</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    :root{--bg:#080b0a;--panel:#0d1210;--line:#1b2b22;--text:#c8d7cc;--muted:#718579;--green:#55e879;--cyan:#68d9e8;--yellow:#e9d36b;--red:#ff7373}
+    *{box-sizing:border-box}html{background:var(--bg)}body{margin:0;padding:24px;color:var(--text);background:radial-gradient(circle at 50% -20%,#15301f 0,#080b0a 45%);font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}.terminal{width:min(1100px,100%);margin:auto;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0a0e0c;box-shadow:0 20px 80px #0009}.bar{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);background:#111814;color:var(--muted)}.dot{width:10px;height:10px;border-radius:50%;background:#33463a}.dot:first-child{background:#e46d65}.dot:nth-child(2){background:#d4b75d}.dot:nth-child(3){background:#62bd72}.title{margin:auto;font-size:12px}.screen{padding:28px clamp(18px,4vw,42px) 34px}.prompt{color:var(--green)}.prompt b{color:var(--cyan);font-weight:400}.command{margin:0 0 25px}.ascii{margin:0 0 24px;color:var(--green);font-size:clamp(10px,1.55vw,16px);line-height:1.25;white-space:pre;overflow:auto}.intro{margin:0 0 25px;color:var(--muted)}.section{margin:25px 0}.section-title{margin-bottom:12px;color:var(--yellow)}.section-title:before{content:"## ";color:var(--muted)}.stats,.services{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.box{padding:13px 15px;border:1px solid var(--line);background:var(--panel)}.label{color:var(--muted);font-size:12px}.value{display:block;margin:3px 0;color:var(--cyan);font-size:20px}.detail{color:var(--muted);font-size:12px}.meter{height:5px;margin:8px 0 3px;background:#18221b}.meter i{display:block;height:100%;width:0;background:var(--green)}.service{display:flex;flex-direction:column;min-height:135px}.service h3{margin:0 0 5px;color:var(--green);font-size:15px}.service p{flex:1;margin:0;color:var(--muted);font-size:12px}.service a{color:var(--cyan);text-decoration:none}.service a:hover,.service a:focus{color:#fff;text-decoration:underline}.footer{margin-top:30px;color:var(--muted);font-size:12px}.cursor{display:inline-block;width:8px;height:16px;margin-left:4px;vertical-align:-3px;background:var(--green);animation:blink 1s steps(2,start) infinite}@keyframes blink{50%{opacity:0}}@media(max-width:700px){body{padding:0}.terminal{min-height:100vh;border:0;border-radius:0}.stats,.services{grid-template-columns:1fr 1fr}}@media(max-width:420px){.stats,.services{grid-template-columns:1fr}.screen{padding:22px 15px}}
+  </style>
+</head>
+<body>
+  <main class="terminal">
+    <header class="bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="title">velocity@server: ~</span></header>
+    <section class="screen">
+      <p class="command"><span class="prompt">velocity@server</span>:<b>~</b>$ ./dashboard<span class="cursor"></span></p>
+      <pre class="ascii">██╗   ██╗███████╗██╗      ██████╗  ██████╗██╗████████╗██╗   ██╗
+██║   ██║██╔════╝██║     ██╔═══██╗██╔════╝██║╚══██╔══╝╚██╗ ██╔╝
+██║   ██║█████╗  ██║     ██║   ██║██║     ██║   ██║    ╚████╔╝ 
+╚██╗ ██╔╝██╔══╝  ██║     ██║   ██║██║     ██║   ██║     ╚██╔╝  
+ ╚████╔╝ ███████╗███████╗╚██████╔╝╚██████╗██║   ██║      ██║   
+  ╚═══╝  ╚══════╝╚══════╝ ╚═════╝  ╚═════╝╚═╝   ╚═╝      ╚═╝</pre>
+      <p class="intro">Local PC Velocity Developer // layanan internal kantor // status: <span class="prompt">ONLINE</span></p>
+      <section class="section"><div class="section-title">server status</div><div class="stats">
+        <article class="box"><span class="label">CPU</span><strong class="value" id="cpu">-</strong><div class="meter"><i id="cpu-bar"></i></div><span class="detail" id="cores">-</span></article>
+        <article class="box"><span class="label">MEMORY</span><strong class="value" id="memory">-</strong><div class="meter"><i id="memory-bar"></i></div><span class="detail" id="memory-detail">-</span></article>
+        <article class="box"><span class="label">DISK /</span><strong class="value" id="disk">-</strong><div class="meter"><i id="disk-bar"></i></div><span class="detail" id="disk-detail">-</span></article>
+        <article class="box"><span class="label">LOAD / UPTIME</span><strong class="value" id="load">-</strong><span class="detail" id="uptime">-</span></article>
+      </div></section>
+      <section class="section"><div class="section-title">cronjobs aktif</div><div class="box"><div id="cronjobs" class="cron-list"><span class="detail">Memuat...</span></div></div></section>
+      <section class="section"><div class="section-title">available services</div><div class="services">
+        <article class="box service"><h3>[01] n8n</h3><p>Otomasi workflow dan integrasi aplikasi.</p><a href="/n8n/">$ open /n8n/</a></article>
+        <article class="box service"><h3>[02] Hermes</h3><p>Asisten AI internal untuk tim.</p><a href="/hermes/">$ open /hermes/</a></article>
+        <article class="box service"><h3>[03] File Manager</h3><p>Penyimpanan dan berbagi file kantor.</p><a href="/files/">$ open /files/</a></article>
+        <article class="box service"><h3>[04] Website Installer</h3><p>Install dan pantau website dari manifest.</p><a href="/installer/">$ open /installer/</a></article>
+        <article class="box service"><h3>[05] Manage Server</h3><p>Kelola dan pantau konfigurasi server internal.</p><a href="/server/">$ open /server/</a></article>
+        <article class="box service"><h3>[06] Package Manager</h3><p>Upload dan kelola plugin/theme ZIP untuk website.</p><a href="/packages/">$ open /packages/</a></article>
+        <article class="box service"><h3>[07] Manage Model</h3><p>Kelola model AI (endpoint & API key) untuk generate konten.</p><a href="/ai/">$ open /ai/</a></article>
+      </div></section>
+      <p class="footer">velocity@server · restricted internal network · <span id="clock">-</span></p>
+    </section>
+  </main>
+  <script>
+    const fmt=n=>{const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${u[i]}`};
+    const set=(id,text)=>document.getElementById(id).textContent=text;
+    const poll=async()=>{try{const d=await fetch('/api/stats',{cache:'no-store'}).then(r=>r.json());set('cpu',`${d.cpu}%`);document.getElementById('cpu-bar').style.width=`${d.cpu}%`;set('cores',`${d.cores} CPU core${d.cores===1?'':'s'}`);set('memory',`${d.memory.percent}%`);document.getElementById('memory-bar').style.width=`${d.memory.percent}%`;set('memory-detail',`${fmt(d.memory.used)} / ${fmt(d.memory.total)}`);set('disk',`${d.disk.percent}%`);document.getElementById('disk-bar').style.width=`${d.disk.percent}%`;set('disk-detail',`${fmt(d.disk.used)} / ${fmt(d.disk.total)}`);set('load',d.load.join(' · '));set('uptime',`Uptime ${Math.floor(d.uptime/86400)}d ${Math.floor(d.uptime%86400/3600)}h`)}catch{set('load','OFFLINE')}};
+    const cron=async()=>{try{const d=await fetch('/api/installer',{cache:'no-store'}).then(r=>r.json());const el=document.getElementById('cronjobs');el.textContent='';(d.cronjobs||[]).forEach(row=>{const p=document.createElement('div');p.className='detail';p.textContent=`$ ${row}`;el.appendChild(p)});if(!d.cronjobs?.length)el.innerHTML='<span class="detail">Tidak ada cronjob aktif.</span>'}catch{document.getElementById('cronjobs').textContent='Gagal memuat cronjob'}};poll();cron();setInterval(poll,3000);setInterval(cron,10000);setInterval(()=>set('clock',new Date().toLocaleTimeString('id-ID')),1000);set('clock',new Date().toLocaleTimeString('id-ID'));
+  </script>
+</body>
+</html>
