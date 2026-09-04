@@ -306,31 +306,37 @@
     </main>
     <div id="confirm-modal" class="modal" role="dialog" aria-modal="true">
       <div class="modal-box">
-        <h3 id="confirm-title">Konfirmasi Install</h3>
-        <p id="confirm-text"></p>
-        <div class="mode-choice">
-          <label
-            ><input type="radio" name="run-mode" value="dry-run" checked />
-            Dry run — validasi manifest saja (aman)</label
-          >
-          <label
-            ><input type="radio" name="run-mode" value="apply" /> Apply —
-            eksekusi nyata (timpa public_html &amp; tulis DB)</label
-          >
+        <h3 id="confirm-title">Install: <span id="wizard-domain"></span></h3>
+        <div id="wizard-step-server" class="wizard-step">
+          <p class="meta" style="margin: 0 0 12px">Step 1: Pilih Server Tujuan</p>
+          <label for="wizard-server" style="color: var(--yellow)">Server
+            <select id="wizard-server" style="width: 100%; margin-top: 6px">
+              <option value="">Memuat server...</option>
+            </select></label>
+          <p id="wizard-server-note" class="meta" style="margin: 8px 0 0">Pilih server untuk instalasi.</p>
         </div>
-        <p class="meta" style="margin: 10px 0 0">
-          Apply destruktif: backup otomatis dibuat di
-          <code>/home/&lt;da_user&gt;/backup/</code>.
-        </p>
+        <div id="wizard-step-manifest" class="wizard-step" style="display: none">
+          <p class="meta" style="margin: 0 0 12px">Step 2: Manifest</p>
+          <p id="wizard-manifest-status" style="margin-bottom: 10px"></p>
+          <label id="wizard-gen-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="wizard-gen-check" checked /> Generate manifest otomatis jika belum ada
+          </label>
+        </div>
+        <div id="wizard-step-mode" class="wizard-step" style="display: none">
+          <p class="meta" style="margin: 0 0 12px">Step 3: Mode Install</p>
+          <div class="mode-choice">
+            <label><input type="radio" name="run-mode" value="dry-run" checked /> Dry run — validasi manifest saja (aman)</label>
+            <label><input type="radio" name="run-mode" value="apply" /> Apply — eksekusi nyata (timpa public_html & tulis DB)</label>
+          </div>
+          <p class="meta" style="margin: 10px 0 0">Apply destruktif: backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.</p>
+        </div>
+        <div id="wizard-step-confirm" class="wizard-step" style="display: none">
+          <p class="meta" style="margin: 0 0 12px">Step 4: Konfirmasi</p>
+          <div id="wizard-summary" style="padding: 12px; border: 1px dashed var(--line); background: #0a0e0c; font-size: 13px;"></div>
+        </div>
         <div class="modal-actions">
-          <button class="btn btn-cancel" onclick="closeModal()">Batal</button
-          ><button
-            class="btn btn-confirm"
-            id="confirm-btn"
-            onclick="confirmInstall()"
-          >
-            Jalankan
-          </button>
+          <button class="btn btn-cancel" id="wizard-btn-cancel" onclick="closeModal()">Batal</button>
+          <button class="btn btn-confirm" id="wizard-btn-next" onclick="wizardNext()">Lanjut</button>
         </div>
       </div>
     </div>
@@ -463,48 +469,118 @@
         }
       }
 
+      let wizardStep = 1;
+      let wizardData = { domain: '', status: '', server: '', mode: 'dry-run', genManifest: true };
+
       function onInstallClick(domain, status) {
-        const isFailed = status === 'FAILED' || status === 'installer_error';
-        if (status !== 'READY' && status !== 'SUCCESS' && !isFailed) {
-          showDetail({ error: status, domain });
-          return;
-        }
-        pendingDomain = domain;
-        document.getElementById('confirm-title').textContent = isFailed ? 'Retry Install: ' + domain : 'Konfirmasi Install';
-        document.getElementById('confirm-btn').textContent = isFailed ? 'Retry' : 'Jalankan';
-        confirmText.textContent = isFailed ? 'Install "' + domain + '" sebelumnya gagal. Jalankan ulang?' : 'Pasang "' + domain + '" sekarang?';
+        wizardData = { domain, status, server: '', mode: 'dry-run', genManifest: true };
+        wizardStep = 1;
+        document.getElementById('wizard-domain').textContent = domain;
+        document.getElementById('wizard-server').innerHTML = serverSelect.innerHTML;
+        document.getElementById('wizard-server-note').textContent = serverNote.textContent;
+        document.getElementById('wizard-step-server').style.display = 'block';
+        document.getElementById('wizard-step-manifest').style.display = 'none';
+        document.getElementById('wizard-step-mode').style.display = 'none';
+        document.getElementById('wizard-step-confirm').style.display = 'none';
+        document.getElementById('wizard-btn-next').textContent = 'Lanjut';
+        document.getElementById('wizard-btn-next').disabled = false;
         modal.classList.add('open');
       }
-      function closeModal() { modal.classList.remove('open'); pendingDomain = null; }
+
+      function closeModal() {
+        modal.classList.remove('open');
+        wizardStep = 1;
+        pendingDomain = null;
+      }
+
       function selectedMode() {
         const el = document.querySelector('input[name="run-mode"]:checked');
         return el ? el.value : 'dry-run';
       }
-      async function confirmInstall() {
-        if (!pendingDomain) return;
-        const d = pendingDomain;
-        const mode = selectedMode();
-        closeModal();
-        serverNote.textContent = 'Menjalankan ' + mode + ' untuk "' + d + '" ...';
+
+      function wizardNext() {
+        if (wizardStep === 1) {
+          const server = document.getElementById('wizard-server').value;
+          if (!server) {
+            document.getElementById('wizard-server-note').textContent = 'Pilih server terlebih dahulu!';
+            return;
+          }
+          wizardData.server = server;
+          wizardStep = 2;
+          document.getElementById('wizard-step-server').style.display = 'none';
+          document.getElementById('wizard-step-manifest').style.display = 'block';
+          document.getElementById('wizard-manifest-status').textContent = 'Memeriksa manifest...';
+          checkManifest();
+        } else if (wizardStep === 2) {
+          wizardData.genManifest = document.getElementById('wizard-gen-check').checked;
+          wizardStep = 3;
+          document.getElementById('wizard-step-manifest').style.display = 'none';
+          document.getElementById('wizard-step-mode').style.display = 'block';
+        } else if (wizardStep === 3) {
+          wizardData.mode = selectedMode();
+          wizardStep = 4;
+          document.getElementById('wizard-step-mode').style.display = 'none';
+          document.getElementById('wizard-step-confirm').style.display = 'block';
+          document.getElementById('wizard-summary').innerHTML = '<strong>Domain:</strong> ' + esc(wizardData.domain) + '<br><strong>Server:</strong> ' + esc(wizardData.server) + '<br><strong>Mode:</strong> ' + esc(wizardData.mode) + '<br><strong>Generate Manifest:</strong> ' + (wizardData.genManifest ? 'Ya' : 'Tidak');
+          document.getElementById('wizard-btn-next').textContent = 'Jalankan';
+        } else if (wizardStep === 4) {
+          closeModal();
+          runInstall();
+        }
+      }
+
+      async function checkManifest() {
         try {
+          const r = await fetch('/api/installer', { cache: 'no-store' });
+          const d = await r.json();
+          const domain = d.domains.find(x => x.domain === wizardData.domain);
+          if (domain && domain.status === 'READY') {
+            document.getElementById('wizard-manifest-status').innerHTML = '<span style="color: var(--green)">✓ Manifest sudah valid</span>';
+            document.getElementById('wizard-gen-label').style.display = 'none';
+          } else if (domain && (domain.status === 'FAILED' || domain.status === 'installer_error')) {
+            document.getElementById('wizard-manifest-status').innerHTML = '<span style="color: var(--yellow)">⚠ Install sebelumnya gagal. Generate ulang?</span>';
+          } else {
+            document.getElementById('wizard-manifest-status').innerHTML = '<span style="color: var(--muted)">Belum ada manifest valid</span>';
+          }
+        } catch (e) {
+          document.getElementById('wizard-manifest-status').textContent = 'Gagal memeriksa manifest';
+        }
+      }
+
+      async function runInstall() {
+        serverNote.textContent = 'Menyiapkan install untuk "' + wizardData.domain + '"...';
+        try {
+          if (wizardData.genManifest) {
+            const r = await fetch('/api/installer/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ domain: wizardData.domain }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || j.status !== 'ok') {
+              serverNote.textContent = 'Generate gagal: ' + (j.error || r.status);
+              return;
+            }
+          }
           const r = await fetch('/api/installer/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: d, mode }),
+            body: JSON.stringify({ domain: wizardData.domain, mode: wizardData.mode }),
           });
           const j = await r.json().catch(() => ({}));
           if (r.ok && j.status === 'started') {
-            serverNote.textContent = mode + ' "' + d + '" dimulai (PID ' + j.pid + ').';
-            showDetail({ info: mode + ' dimulai', ...j });
+            serverNote.textContent = wizardData.mode + ' "' + wizardData.domain + '" dimulai (PID ' + j.pid + ').';
+            showDetail({ info: wizardData.mode + ' dimulai', ...j });
             setTimeout(load, 1500);
           } else {
             serverNote.textContent = 'Gagal memulai: ' + (j.error || r.status);
-            showDetail({ error: j.error || 'http_' + r.status, domain: d, mode });
+            showDetail({ error: j.error || 'http_' + r.status, domain: wizardData.domain, mode: wizardData.mode });
           }
         } catch (e) {
           serverNote.textContent = 'Gagal menghubungi API: ' + esc(String(e.message || e));
         }
       }
+
       modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
       function openLogModal(domain, domains) {
