@@ -293,7 +293,8 @@ def generate_manifest(domain: str):
         f'domain={domain}\n'
         f'db_name={db_name}\n'
         f'db_user={db_user}\n'
-        f'admin_user=admin\n'
+        # WP admin = DA user, biar login WP sesuai data di txt (username/password DA)
+        f'da_password_file=/var/lib/velocity/secret/da_password\n'
         f'admin_email={admin_email or ("admin@" + domain)}\n'
         f'site_title={labels.replace("-", " ").title()}\n'
     )
