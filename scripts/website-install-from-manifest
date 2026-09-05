@@ -179,13 +179,12 @@ if [[ -f "$DA_MYSQL_CONF" ]]; then
   DA_SOCKET_MYSQL="${DA_SOCKET_MYSQL:-/var/lib/mysql/mysql.sock}"
   
   echo "Creating MySQL user and database for WordPress..." >&2
+  # DirectAdmin enforces prefix da_user_ for ownership (panel :2222/evo/database uses LIKE 'da_user\_%')
+  # buat DB ber-prefix agar muncul di panel; juga buat mapping non-prefix untuk kompatibilitas wp-config lama
   mysql -u "$DA_USER_MYSQL" ${DA_PASS_MYSQL:+-p"$DA_PASS_MYSQL"} --socket="$DA_SOCKET_MYSQL" 2>/dev/null -e "
   CREATE DATABASE IF NOT EXISTS __DB_NAME_Q__;
-  CREATE USER IF NOT EXISTS '__DA_USER_Q____DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
-  ALTER USER '__DA_USER_Q____DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
   CREATE USER IF NOT EXISTS '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
   ALTER USER '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
-  GRANT ALL PRIVILEGES ON __DB_NAME_Q__.* TO '__DA_USER_Q____DB_USER_Q__'@'localhost';
   GRANT ALL PRIVILEGES ON __DB_NAME_Q__.* TO '__DB_USER_Q__'@'localhost';
   FLUSH PRIVILEGES;
   " || true

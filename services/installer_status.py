@@ -257,14 +257,42 @@ def generate_manifest(domain: str):
                 if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', cand):
                     admin_email = cand
     labels_clean = re.sub(r'[^a-z0-9_]', '', labels.lower()) or 'site'
+    # DirectAdmin ownership: DB must be prefixed with da_user + '_'  -> WHERE Db LIKE 'da_user\_%'
+    # Untuk pendek, buang repetisi da_user di dalam domain: akademikariset -> ariset
+    suffix = labels_clean
+    # jika suffix mengandung da_user, ambil sisa setelahnya; jika tidak, potong 6-8 char unik dari tengah/akhir
+    if suffix.startswith(da_user):
+        suffix = suffix[len(da_user):].lstrip('_')
+        if not suffix:
+            suffix = 'wp'
+    else:
+        # akademikariset vs akademik -> ambil sisa unik 'ariset' (len label - len da_user)
+        # pancarkannews vs pancarka -> 'nnews'
+        # sungailanang vs sungaila -> 'nang'
+        # agar pendek: ambil 6 char terakhir atau sisa
+        if len(suffix) > len(da_user):
+            suffix = suffix[len(da_user):].lstrip('_')
+            if len(suffix) > 6:
+                suffix = suffix[-6:]
+        if not suffix:
+            suffix = labels_clean[:6]
+    if len(suffix) > 8:
+        suffix = suffix[:8]
+    # batasi panjang agar db_name <= 32 char
+    max_suffix = 28 - len(da_user)  # reserve _ + suffix + _wp
+    if len(suffix) > max_suffix:
+        suffix = suffix[:max_suffix]
+    db_suffix = suffix + '_wp' if not suffix.endswith('_wp') else suffix
+    db_name = f'{da_user}_{db_suffix}'
+    db_user = db_name  # samakan user dan db agar simpel; DA juga pakai 1 user per DB
     content = (
         f'target_host={target}\n'
         f'ssh_port={port}\n'
         f'ssh_user={ssh_user}\n'
         f'da_user={da_user}\n'
         f'domain={domain}\n'
-        f'db_name={labels_clean}_wp\n'
-        f'db_user={labels_clean}_wp\n'
+        f'db_name={db_name}\n'
+        f'db_user={db_user}\n'
         f'admin_user=admin\n'
         f'admin_email={admin_email or ("admin@" + domain)}\n'
         f'site_title={labels.replace("-", " ").title()}\n'
