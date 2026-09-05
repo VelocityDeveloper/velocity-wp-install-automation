@@ -439,7 +439,10 @@
             const btnDisabled = (isReady || isFailed) && !isRunning ? '' : 'disabled title="generate dulu"';
             const checklistBtn = `<button class="action checklist-btn" type="button" data-checklist-domain="${esc(x.domain)}">[ checklist ]</button>`;
             const logBtn = logLines ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>` : '';
-            return `<tr><td><strong class="domain">${esc(x.domain)}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
+            const siteUrl = 'https://' + x.domain;
+            const adminUrl = siteUrl + '/wp-admin';
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a> <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
           }).join('');
           rows.querySelectorAll('[data-domain]').forEach(b =>
             b.addEventListener('click', () => onInstallClick(b.dataset.domain, b.dataset.status))
