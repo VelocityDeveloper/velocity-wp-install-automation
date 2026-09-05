@@ -324,6 +324,51 @@ if [[ -f "$DOCROOT/index.html" ]]; then
   mv "$DOCROOT/index.html" "$DOCROOT/index.html.da.bak" 2>/dev/null && echo "renamed index.html -> index.html.da.bak" >&2 || true
 fi
 
+# 1-Click Setup: permalink, timezone, date/time format, media, admin profile, pages, menu, privacy, home
+echo "=== 1-Click Setup ===" >&2
+
+# permalink
+php -d memory_limit=512M "$WP_BIN" option update permalink_structure '/%category%/%postname%/' --path="$DOCROOT" --allow-root 2>/dev/null && echo "permalink_set" >&2 || true
+
+# timezone
+php -d memory_limit=512M "$WP_BIN" option update timezone_string 'Asia/Jakarta' --path="$DOCROOT" --allow-root 2>/dev/null && echo "timezone_set" >&2 || true
+
+# date & time format
+php -d memory_limit=512M "$WP_BIN" option update date_format 'j F Y' --path="$DOCROOT" --allow-root 2>/dev/null && echo "date_format_set" >&2 || true
+php -d memory_limit=512M "$WP_BIN" option update time_format 'H:i' --path="$DOCROOT" --allow-root 2>/dev/null && echo "time_format_set" >&2 || true
+
+# media settings
+php -d memory_limit=512M "$WP_BIN" option update thumbnail_size_w 300 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update thumbnail_size_h 300 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update medium_size_w 600 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update medium_size_h 600 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update large_size_w 1200 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update large_size_h 1200 --path="$DOCROOT" --allow-root 2>/dev/null
+php -d memory_limit=512M "$WP_BIN" option update image_default_size 'medium' --path="$DOCROOT" --allow-root 2>/dev/null
+echo "media_settings_set" >&2
+
+# admin profile
+php -d memory_limit=512M "$WP_BIN" user update 1 --display_name='Admin' --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_profile_set" >&2 || true
+
+# standard pages
+php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Berita' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:berita" >&2 || true
+php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Tentang Kami' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:tentang-kami" >&2 || true
+php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Hubungi Kami' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:hubungi-kami" >&2 || true
+echo "standard_pages_created" >&2
+
+# primary menu
+php -d memory_limit=512M "$WP_BIN" menu create 'Primary Menu' --path="$DOCROOT" --allow-root 2>/dev/null && echo "menu_created" >&2 || true
+php -d memory_limit=512M "$WP_BIN" menu location assign 'Primary Menu' primary --path="$DOCROOT" --allow-root 2>/dev/null && echo "primary_menu_set" >&2 || true
+
+# privacy policy
+PRIVACY_ID=$(php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Kebijakan Privasi' --post_status=publish --post_content='Halaman kebijakan privasi.' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+[[ -n "$PRIVACY_ID" ]] && php -d memory_limit=512M "$WP_BIN" option update wp_page_for_privacy_policy "$PRIVACY_ID" --path="$DOCROOT" --allow-root 2>/dev/null && echo "privacy_policy_set" >&2 || true
+
+# home page
+php -d memory_limit=512M "$WP_BIN" option update show_on_front 'page' --path="$DOCROOT" --allow-root 2>/dev/null
+HOME_ID=$(php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Home' --post_status=publish --post_content='Selamat datang di website kami.' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+[[ -n "$HOME_ID" ]] && php -d memory_limit=512M "$WP_BIN" option update page_on_front "$HOME_ID" --path="$DOCROOT" --allow-root 2>/dev/null && echo "home_set" >&2 || true
+
 echo "install_complete" >&2
 REMOTE_EOF
 )
