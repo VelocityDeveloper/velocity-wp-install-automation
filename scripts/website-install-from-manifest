@@ -350,23 +350,58 @@ echo "media_settings_set" >&2
 # admin profile
 php -d memory_limit=512M "$WP_BIN" user update 1 --display_name='Admin' --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_profile_set" >&2 || true
 
-# standard pages
-php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Berita' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:berita" >&2 || true
-php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Tentang Kami' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:tentang-kami" >&2 || true
-php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Hubungi Kami' --post_status=publish --path="$DOCROOT" --allow-root 2>/dev/null && echo "page_created:hubungi-kami" >&2 || true
+# helper: create page only if not exist, return page id
+ensure_page() {
+  local title=$1 content=$2
+  local slug
+  slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -dc 'a-z0-9-')
+  local existing_id
+  # tab-separated: col1=ID, col2=post_title (may contain spaces)
+  existing_id=$(php -d memory_limit=512M "$WP_BIN" post list --post_type=page --post_status=publish --fields=ID,post_title --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' -v t="$title" 'NR>1 && $2==t {print $1; exit}')
+  if [[ -n "$existing_id" ]]; then
+    echo "$existing_id"
+    return 0
+  fi
+  local new_id
+  new_id=$(php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title="$title" --post_status=publish --post_content="${content:-}" --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+  if [[ -n "$new_id" ]]; then
+    echo "page_created:${slug}" >&2
+    echo "$new_id"
+    return 0
+  fi
+  return 1
+}
+
+# standard pages (idempotent: skip if exists)
+ensure_page 'Berita' 'Halaman arsip berita.' >/dev/null
+ensure_page 'Tentang Kami' 'Halaman tentang kami.' >/dev/null
+ensure_page 'Hubungi Kami' 'Halaman hubungi kami.' >/dev/null
 echo "standard_pages_created" >&2
 
-# primary menu
-php -d memory_limit=512M "$WP_BIN" menu create 'Primary Menu' --path="$DOCROOT" --allow-root 2>/dev/null && echo "menu_created" >&2 || true
-php -d memory_limit=512M "$WP_BIN" menu location assign 'Primary Menu' primary --path="$DOCROOT" --allow-root 2>/dev/null && echo "primary_menu_set" >&2 || true
+# primary menu (idempotent: reuse existing, assign location if unassigned)
+# tab-separated: col1=term_id, col2=name, col3=locations
+MENU_ID=$(php -d memory_limit=512M "$WP_BIN" menu list --fields=term_id,name,locations --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' 'NR>1 && $2=="Primary Menu" {print $1; exit}')
+if [[ -z "$MENU_ID" ]]; then
+  MENU_ID=$(php -d memory_limit=512M "$WP_BIN" menu create 'Primary Menu' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+  echo "menu_created" >&2
+fi
+if [[ -n "$MENU_ID" ]]; then
+  # check if this menu already assigned to primary location
+  CURRENT_MENU=$(php -d memory_limit=512M "$WP_BIN" menu list --fields=term_id,name,locations --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' -v mid="$MENU_ID" 'NR>1 && $1==mid && $3=="primary" {found=1} END{print found+0}')
+  if [[ "$CURRENT_MENU" == "0" ]]; then
+    php -d memory_limit=512M "$WP_BIN" menu location assign 'Primary Menu' primary --path="$DOCROOT" --allow-root 2>/dev/null && echo "primary_menu_set" >&2 || true
+  else
+    echo "primary_menu_set" >&2
+  fi
+fi
 
 # privacy policy
-PRIVACY_ID=$(php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Kebijakan Privasi' --post_status=publish --post_content='Halaman kebijakan privasi.' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+PRIVACY_ID=$(ensure_page 'Kebijakan Privasi' 'Halaman kebijakan privasi.')
 [[ -n "$PRIVACY_ID" ]] && php -d memory_limit=512M "$WP_BIN" option update wp_page_for_privacy_policy "$PRIVACY_ID" --path="$DOCROOT" --allow-root 2>/dev/null && echo "privacy_policy_set" >&2 || true
 
 # home page
 php -d memory_limit=512M "$WP_BIN" option update show_on_front 'page' --path="$DOCROOT" --allow-root 2>/dev/null
-HOME_ID=$(php -d memory_limit=512M "$WP_BIN" post create --post_type=page --post_title='Home' --post_status=publish --post_content='Selamat datang di website kami.' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+HOME_ID=$(ensure_page 'Home' 'Selamat datang di website kami.')
 [[ -n "$HOME_ID" ]] && php -d memory_limit=512M "$WP_BIN" option update page_on_front "$HOME_ID" --path="$DOCROOT" --allow-root 2>/dev/null && echo "home_set" >&2 || true
 
 echo "install_complete" >&2

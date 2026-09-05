@@ -434,7 +434,7 @@
             const logLines = (x.log || []).join('\\n');
             const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
             const genBtn = canGenerate ? `<button class="action gen-btn" type="button" data-gen-domain="${esc(x.domain)}">[ generate ]</button>` : '';
-            const actionLabel = isFailed ? '[ retry ]' : '[ install ]';
+            const actionLabel = isFailed ? '[ retry ]' : '[ set up ]';
             const actionClass = isFailed ? 'action danger' : 'action';
             const btnDisabled = (isReady || isFailed) && !isRunning ? '' : 'disabled title="generate dulu"';
             const checklistBtn = `<button class="action checklist-btn" type="button" data-checklist-domain="${esc(x.domain)}">[ checklist ]</button>`;
