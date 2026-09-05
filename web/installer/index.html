@@ -314,23 +314,15 @@
     <div id="confirm-modal" class="modal" role="dialog" aria-modal="true">
       <div class="modal-box">
         <h3 id="confirm-title">Install: <span id="wizard-domain"></span></h3>
-        <div id="wizard-step-server" class="wizard-step">
-          <p class="meta" style="margin: 0 0 12px">Step 1: Pilih Server Tujuan</p>
-          <label for="wizard-server" style="color: var(--yellow)">Server
-            <select id="wizard-server" style="width: 100%; margin-top: 6px">
-              <option value="">Memuat server...</option>
-            </select></label>
-          <p id="wizard-server-note" class="meta" style="margin: 8px 0 0">Pilih server untuk instalasi.</p>
-        </div>
-        <div id="wizard-step-manifest" class="wizard-step" style="display: none">
-          <p class="meta" style="margin: 0 0 12px">Step 2: Manifest</p>
+        <div id="wizard-step-manifest" class="wizard-step">
+          <p class="meta" style="margin: 0 0 12px">Step 1: Manifest</p>
           <p id="wizard-manifest-status" style="margin-bottom: 10px"></p>
           <label id="wizard-gen-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="wizard-gen-check" checked /> Generate manifest otomatis jika belum ada
           </label>
         </div>
         <div id="wizard-step-mode" class="wizard-step" style="display: none">
-          <p class="meta" style="margin: 0 0 12px">Step 3: Mode Install</p>
+          <p class="meta" style="margin: 0 0 12px">Step 2: Mode Install</p>
           <div class="mode-choice">
             <label><input type="radio" name="run-mode" value="dry-run" checked /> Dry run — validasi manifest saja (aman)</label>
             <label><input type="radio" name="run-mode" value="apply" /> Apply — eksekusi nyata (timpa public_html & tulis DB)</label>
@@ -338,7 +330,7 @@
           <p class="meta" style="margin: 10px 0 0">Apply destruktif: backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.</p>
         </div>
         <div id="wizard-step-confirm" class="wizard-step" style="display: none">
-          <p class="meta" style="margin: 0 0 12px">Step 4: Konfirmasi</p>
+          <p class="meta" style="margin: 0 0 12px">Step 3: Konfirmasi</p>
           <div id="wizard-summary" style="padding: 12px; border: 1px dashed var(--line); background: #0a0e0c; font-size: 13px;"></div>
         </div>
         <div class="modal-actions">
@@ -483,21 +475,20 @@
       }
 
       let wizardStep = 1;
-      let wizardData = { domain: '', status: '', server: '', mode: 'dry-run', genManifest: true };
+      let wizardData = { domain: '', status: '', mode: 'dry-run', genManifest: true };
 
       function onInstallClick(domain, status) {
-        wizardData = { domain, status, server: '', mode: 'dry-run', genManifest: true };
+        wizardData = { domain, status, mode: 'dry-run', genManifest: true };
         wizardStep = 1;
         document.getElementById('wizard-domain').textContent = domain;
-        document.getElementById('wizard-server').innerHTML = serverSelect.innerHTML;
-        document.getElementById('wizard-server-note').textContent = serverNote.textContent;
-        document.getElementById('wizard-step-server').style.display = 'block';
-        document.getElementById('wizard-step-manifest').style.display = 'none';
+        document.getElementById('wizard-step-manifest').style.display = 'block';
         document.getElementById('wizard-step-mode').style.display = 'none';
         document.getElementById('wizard-step-confirm').style.display = 'none';
         document.getElementById('wizard-btn-next').textContent = 'Lanjut';
         document.getElementById('wizard-btn-next').disabled = false;
+        document.getElementById('wizard-manifest-status').textContent = 'Memeriksa manifest...';
         modal.classList.add('open');
+        checkManifest();
       }
 
       function closeModal() {
@@ -513,30 +504,18 @@
 
       function wizardNext() {
         if (wizardStep === 1) {
-          const server = document.getElementById('wizard-server').value;
-          if (!server) {
-            document.getElementById('wizard-server-note').textContent = 'Pilih server terlebih dahulu!';
-            return;
-          }
-          wizardData.server = server;
-          wizardStep = 2;
-          document.getElementById('wizard-step-server').style.display = 'none';
-          document.getElementById('wizard-step-manifest').style.display = 'block';
-          document.getElementById('wizard-manifest-status').textContent = 'Memeriksa manifest...';
-          checkManifest();
-        } else if (wizardStep === 2) {
           wizardData.genManifest = document.getElementById('wizard-gen-check').checked;
-          wizardStep = 3;
+          wizardStep = 2;
           document.getElementById('wizard-step-manifest').style.display = 'none';
           document.getElementById('wizard-step-mode').style.display = 'block';
-        } else if (wizardStep === 3) {
+        } else if (wizardStep === 2) {
           wizardData.mode = selectedMode();
-          wizardStep = 4;
+          wizardStep = 3;
           document.getElementById('wizard-step-mode').style.display = 'none';
           document.getElementById('wizard-step-confirm').style.display = 'block';
-          document.getElementById('wizard-summary').innerHTML = '<strong>Domain:</strong> ' + esc(wizardData.domain) + '<br><strong>Server:</strong> ' + esc(wizardData.server) + '<br><strong>Mode:</strong> ' + esc(wizardData.mode) + '<br><strong>Generate Manifest:</strong> ' + (wizardData.genManifest ? 'Ya' : 'Tidak');
+          document.getElementById('wizard-summary').innerHTML = '<strong>Domain:</strong> ' + esc(wizardData.domain) + '<br><strong>Mode:</strong> ' + esc(wizardData.mode) + '<br><strong>Generate Manifest:</strong> ' + (wizardData.genManifest ? 'Ya' : 'Tidak');
           document.getElementById('wizard-btn-next').textContent = 'Jalankan';
-        } else if (wizardStep === 4) {
+        } else if (wizardStep === 3) {
           closeModal();
           runInstall();
         }
