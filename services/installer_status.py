@@ -175,7 +175,7 @@ def domain_row(domain, manifest):
     except (OSError, ValueError):
         pass
     try:
-        row['log'] = log.read_text(errors='replace').splitlines()[-30:]
+        row['log'] = log.read_text(errors='replace').splitlines()[-200:]
     except OSError:
         row['log'] = []
     return row
