@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 ROOT = Path('/home/project')
+ON_PROGRESS = Path('/home/On Progress')
 STATE = Path('/var/lib/velocity/installer')
 RUNNER = Path('/opt/velocity-wp-install-automation/scripts/installer-runner')
 SECRETS = Path('/etc/velocity/secrets')
@@ -61,6 +62,11 @@ def _rate_ok(ip: str) -> bool:
 def _check_auth(handler: BaseHTTPRequestHandler) -> bool:
     if not API_TOKEN:
         return True
+    # LAN / loopback / Tailscale bypass — tetap butuh token dari internet
+    ip = handler.client_address[0] if handler.client_address else ''
+    if ip.startswith('127.') or ip == '::1' or ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('100.'):
+        return True
+    # also allow token via header
     auth = handler.headers.get('Authorization', '')
     return auth == f'Bearer {API_TOKEN}'
 
@@ -85,6 +91,43 @@ def load_servers():
             except Exception:
                 continue
     return []
+
+
+_local_ip_cache = {'at': 0, 'value': []}
+LOCAL_IP_TTL = 300
+
+
+def local_ips():
+    """IPv4 lokal (LAN/Tailscale, tanpa loopback). Read-only, untuk badge SERVER INI."""
+    now = time.time()
+    if now - _local_ip_cache['at'] < LOCAL_IP_TTL:
+        return _local_ip_cache['value']
+    ips = set()
+    try:
+        r = subprocess.run(['ip', '-4', '-o', 'addr', 'show'],
+                           capture_output=True, text=True, timeout=3, check=False)
+        for m in re.finditer(r'inet (\d+\.\d+\.\d+\.\d+)', r.stdout or ''):
+            if m.group(1) != '127.0.0.1':
+                ips.add(m.group(1))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    _local_ip_cache.update(at=now, value=sorted(ips))
+    return _local_ip_cache['value']
+
+
+def manifest_target(manifest):
+    """Baca target_host mentah dari manifest. Read-only, tanpa validasi ulang."""
+    try:
+        for line in Path(manifest).read_text(errors='replace').splitlines():
+            s = line.strip()
+            if not s or s.startswith('#') or '=' not in s:
+                continue
+            k, _, v = s.partition('=')
+            if k.strip() == 'target_host':
+                return v.strip() or None
+    except OSError:
+        pass
+    return None
 
 
 def validate_manifest(path: Path):
@@ -139,22 +182,53 @@ def cronjobs():
     return summary
 
 
+def installed_domains():
+    """Domains already installed (state SUCCESS COMPLETE). Hidden from the list."""
+    done = set()
+    if not STATE.is_dir():
+        return done
+    for f in STATE.glob('*.json'):
+        try:
+            saved = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if (isinstance(saved, dict) and saved.get('status') == 'SUCCESS'
+                and saved.get('stage') == 'COMPLETE'):
+            done.add(f.stem)
+    return done
+
+
 def domains():
     rows = []
-    if not ROOT.exists():
-        return rows
-    for folder in sorted(p for p in ROOT.iterdir() if p.is_dir()):
-        # one row per folder: exact <domain>.txt manifest only (other .txt = notes, ignored)
-        manifest = folder / f'{folder.name}.txt'
-        rows.append(domain_row(folder.name, manifest if manifest.is_file() else None))
-    for manifest in sorted(ROOT.glob('*.txt')):
-        # stray manifest outside folder structure
-        rows.append({
-            'domain': manifest.stem,
-            'manifest': manifest.name,
-            'folder': (ROOT / manifest.stem).is_dir(),
-            'status': 'READY' if (ROOT / manifest.stem).is_dir() else 'NO_FOLDER',
-        })
+    done = installed_domains()
+    connected_hosts = {str(s.get('host', '')).strip() for s in load_servers()
+                       if isinstance(s, dict) and str(s.get('host', '')).strip()}
+    seen = set()
+    # primary source: On Progress folders synced from Google Drive
+    if ON_PROGRESS.is_dir():
+        for folder in sorted(p for p in ON_PROGRESS.iterdir() if p.is_dir()):
+            name = folder.name
+            if not DOMAIN_RE.match(name) or name in done:
+                continue
+            seen.add(name)
+            manifest = ROOT / name / f'{name}.txt'
+            row = domain_row(name, manifest if manifest.is_file() else None)
+            if row.get('target_host') not in connected_hosts:
+                continue
+            row['source'] = 'onprogress'
+            rows.append(row)
+    # fallback: existing /home/project folders (e.g. fahmi = Drive-less, yayasan = FAILED retry)
+    if ROOT.is_dir():
+        for folder in sorted(p for p in ROOT.iterdir() if p.is_dir()):
+            name = folder.name
+            if name in seen or not DOMAIN_RE.match(name) or name in done:
+                continue
+            manifest = folder / f'{folder.name}.txt'
+            row = domain_row(folder.name, manifest if manifest.is_file() else None)
+            if row.get('target_host') not in connected_hosts:
+                continue
+            row['source'] = 'project'
+            rows.append(row)
     return rows
 
 
@@ -165,7 +239,8 @@ def domain_row(domain, manifest):
     else:
         base_status = 'NO_MANIFEST'
     row = {'domain': domain, 'manifest': manifest.name if manifest else None,
-           'folder': True, 'status': base_status}
+           'folder': True, 'status': base_status,
+           'target_host': manifest_target(manifest) if manifest else manifest_target(ROOT / f'{domain}.txt')}
     state = STATE / f'{domain}.json'
     log = STATE / f'{domain}.log'
     try:
@@ -215,9 +290,14 @@ def generate_manifest(domain: str):
     """Auto-generate manifest + secrets for domain from existing data."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
         return None, 'invalid_domain'
+    # source folder: /home/project/<domain> or On Progress sync from Drive
+    src = ROOT / domain
+    if not src.is_dir():
+        src = ON_PROGRESS / domain
+        if not src.is_dir():
+            return None, 'no_folder'
     folder = ROOT / domain
-    if not folder.is_dir():
-        return None, 'no_folder'
+    folder.mkdir(parents=True, exist_ok=True)
     manifest = folder / f'{domain}.txt'
     if manifest.is_file():
         ok, detail = validate_manifest(manifest)
@@ -228,7 +308,9 @@ def generate_manifest(domain: str):
     labels = domain.split('.')[0]
     # DirectAdmin limit = 8 chars, prioritize username from notes if present
     da_user = ''
-    for nf in [folder / 'notes-credentials.txt', folder / 'notes.txt', folder / 'FORM ISIAN WEBSITE - paket g.doc']:
+    for nf in [src / 'notes-credentials.txt', src / 'notes.txt',
+               folder / 'notes-credentials.txt', folder / 'notes.txt',
+               src / 'FORM ISIAN WEBSITE - paket g.doc']:
         try:
             if nf.is_file():
                 txt = nf.read_text(errors='replace')
@@ -249,8 +331,9 @@ def generate_manifest(domain: str):
         port = '22'
     ssh_user = str(srv.get('user') or 'root')
     admin_email = ''
-    notes = folder / 'notes-credentials.txt'
-    if notes.is_file():
+    for notes in (src / 'notes-credentials.txt', folder / 'notes-credentials.txt'):
+        if admin_email or not notes.is_file():
+            continue
         for line in notes.read_text(errors='replace').splitlines():
             if '@' in line and ' ' not in line and not admin_email:
                 cand = line.strip().strip('*').strip()
@@ -699,7 +782,8 @@ class Handler(BaseHTTPRequestHandler):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
-            self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs()})
+            self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs(),
+                             'local_ips': local_ips(), 'servers': load_servers()})
             return
         if path == '/api/packages':
             if not _check_auth(self):

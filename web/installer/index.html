@@ -68,6 +68,37 @@
         border: 1px solid var(--line);
         background: var(--panel);
       }
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .filters input, .filters select {
+        min-width: 150px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      .filters input { flex: 1 1 220px; }
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-top: 0;
+        color: var(--muted);
+      }
+      .pagination .actions { display: flex; gap: 8px; }
+      .pagination .action:disabled { opacity: .4; cursor: not-allowed; }
       table { width: 100%; border-collapse: collapse; }
       th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); }
       th { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: uppercase; }
@@ -126,6 +157,23 @@
         gap: 14px;
         color: var(--yellow);
       }
+      .local-info {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .target-cell { font-size: 12px; }
+      .badge {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 1px 7px;
+        border: 1px solid;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .badge.ok { border-color: var(--green); color: var(--green); }
+      .badge.warn { border-color: var(--yellow); color: var(--yellow); }
+      .badge.local { border-color: var(--cyan); color: var(--cyan); }
       select {
         min-width: 260px;
         padding: 9px 12px;
@@ -268,8 +316,8 @@
         <h1 class="heading">Website Installer</h1>
         <p class="meta">
           $ scan --path
-          <code>/home/project/&lt;domain&gt;/&lt;domain&gt;.txt</code> --watch
-          10s &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
+          <code>/home/On Progress/</code> (Google Drive) --watch
+          10s &nbsp;|&nbsp; yang sudah terinstall disembunyikan &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
         </p>
         <section class="server-select">
           <label for="target-server"
@@ -281,12 +329,19 @@
           <div id="server-note" class="meta" style="margin: 8px 0 0">
             Pilih server untuk instalasi.
           </div>
+          <div id="local-note" class="local-info">Server ini: memuat...</div>
+        </section>
+        <section class="filters" aria-label="Filter domain">
+          <input id="domain-filter" type="search" placeholder="filter domain..." autocomplete="off" />
+          <select id="status-filter"><option value="">semua status</option></select>
+          <button class="action" type="button" id="clear-filter">[ clear ]</button>
         </section>
         <section class="panel">
           <table>
             <thead>
               <tr>
                 <th>Domain</th>
+                <th class="hide-mobile">Target</th>
                 <th class="hide-mobile">Manifest</th>
                 <th>Status</th>
                 <th>Tindakan</th>
@@ -294,14 +349,21 @@
             </thead>
             <tbody id="rows">
               <tr>
-                <td colspan="4" class="empty">Memuat...</td>
+                <td colspan="5" class="empty">Memuat...</td>
               </tr>
             </tbody>
           </table>
         </section>
+        <div class="pagination">
+          <span id="page-info">0 domain</span>
+          <span class="actions">
+            <button class="action" type="button" id="page-prev">[ prev ]</button>
+            <button class="action" type="button" id="page-next">[ next ]</button>
+          </span>
+        </div>
         <div id="detail" class="detail" style="display: none"></div>
         <nav class="nav">
-          <span>source: <code>/home/project/</code></span
+          <span>source: <code>/home/On Progress/</code> (Drive)</span
           ><span
             ><button class="refresh" onclick="load()">[ refresh ]</button>
             <a href="/packages/">[ packages ]</a>
@@ -367,7 +429,12 @@
         confirmText = document.getElementById('confirm-text'),
         logModal = document.getElementById('log-modal'),
         logDomainEl = document.getElementById('log-domain'),
-        logViewEl = document.getElementById('log-view');
+        logViewEl = document.getElementById('log-view'),
+        domainFilter = document.getElementById('domain-filter'),
+        statusFilter = document.getElementById('status-filter'),
+        pageInfo = document.getElementById('page-info'),
+        pagePrev = document.getElementById('page-prev'),
+        pageNext = document.getElementById('page-next');
         checklistModal = document.getElementById('checklist-modal'),
         checklistDomainEl = document.getElementById('checklist-domain'),
         checklistSummaryEl = document.getElementById('checklist-summary'),
@@ -375,7 +442,21 @@
       let pendingDomain = null,
         pollTimer = null,
         checklistPoll = null,
-        checklistDomain = null;
+        checklistDomain = null,
+        serverList = [],
+        localIps = [],
+        allDomains = [],
+        currentPage = 1;
+      const pageSize = 25;
+
+      function targetBadge(x, servers, lips) {
+        const t = x.target_host;
+        if (!t) return '<span style="color:var(--muted)">-</span>';
+        if ((lips || []).includes(t)) return `<code>${esc(t)}</code><br><span class="badge local">SERVER INI</span>`;
+        const s = (servers || []).find(y => y.host === t);
+        if (s) return `<code>${esc(t)}</code><br><span class="badge ok">✓ ${(esc(s.name || s.host))}</span>`;
+        return `<code>${esc(t)}</code><br><span class="badge warn">! TIDAK TERDAFTAR</span>`;
+      }
 
       async function loadServers() {
         try {
@@ -384,6 +465,7 @@
             return r.json();
           });
           const servers = d.servers || [];
+          serverList = servers;
           serverSelect.innerHTML = servers.length
             ? servers.map(x => `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} — ${esc(x.host)}:${esc(String(x.port))}</option>`).join('')
             : '<option value="">Belum ada server terhubung</option>';
@@ -413,11 +495,33 @@
             if (!r.ok) throw new Error(r.status);
             return r.json();
           });
-          if (!d.domains.length) {
-            rows.innerHTML = '<tr><td colspan="4" class="empty">Belum ada file domain.txt</td></tr>';
+          localIps = d.local_ips || localIps;
+          if (d.servers && d.servers.length) serverList = d.servers;
+          const ln = document.getElementById('local-note');
+          if (ln) ln.textContent = 'Server ini: ' + (localIps.length ? localIps.join(', ') : '(tidak terdeteksi)');
+          allDomains = d.domains || [];
+          const q = (domainFilter.value || '').trim().toLowerCase();
+          const status = statusFilter.value;
+          const filtered = allDomains.filter(x => (!q || x.domain.toLowerCase().includes(q)) && (!status || x.status === status));
+          const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+          currentPage = Math.min(currentPage, pageCount);
+          const pageDomains = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+          const knownStatuses = [...new Set(allDomains.map(x => x.status).filter(Boolean))].sort();
+          const oldStatus = statusFilter.value;
+          statusFilter.innerHTML = '<option value="">semua status</option>' + knownStatuses.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+          statusFilter.value = knownStatuses.includes(oldStatus) ? oldStatus : '';
+          pageInfo.textContent = filtered.length ? `${(currentPage - 1) * pageSize + 1}-${Math.min(currentPage * pageSize, filtered.length)} dari ${filtered.length} domain` : '0 domain';
+          pagePrev.disabled = currentPage <= 1;
+          pageNext.disabled = currentPage >= pageCount;
+          if (!allDomains.length) {
+            rows.innerHTML = '<tr><td colspan="5" class="empty">Belum ada file domain.txt</td></tr>';
             return;
           }
-          rows.innerHTML = d.domains.map(x => {
+          if (!pageDomains.length) {
+            rows.innerHTML = '<tr><td colspan="5" class="empty">Tidak ada domain cocok.</td></tr>';
+            return;
+          }
+          rows.innerHTML = pageDomains.map(x => {
             const isReady = x.status === 'READY' || x.status === 'SUCCESS';
             const isRunning = x.status === 'RUNNING';
             const isFailed = x.status === 'FAILED' || x.status === 'installer_error';
@@ -433,8 +537,10 @@
             const logBtn = logLines ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>` : '';
             const siteUrl = 'https://' + x.domain;
             const adminUrl = siteUrl + '/wp-admin';
-            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a> <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
-            return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
+            const srcBadge = x.source === 'onprogress' ? ' <span class="badge local" title="Folder dari Google Drive On Progress">DRIVE</span>' : '';
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            const targetCell = targetBadge(x, serverList, localIps);
+            return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile target-cell">${targetCell}</td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
           }).join('');
           rows.querySelectorAll('[data-domain]').forEach(b =>
             b.addEventListener('click', () => onInstallClick(b.dataset.domain, b.dataset.status))
@@ -449,7 +555,7 @@
             b.addEventListener('click', () => openChecklistModal(b.dataset.checklistDomain, d.domains))
           );
         } catch (e) {
-          rows.innerHTML = '<tr><td colspan="4" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
+          rows.innerHTML = '<tr><td colspan="5" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
         }
       }
 
@@ -661,6 +767,17 @@
       }
       function closeChecklistModal() { checklistModal.classList.remove("open"); if (checklistPoll) { clearInterval(checklistPoll); checklistPoll = null; } }
       checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
+
+      domainFilter.addEventListener('input', () => { currentPage = 1; load(); });
+      statusFilter.addEventListener('change', () => { currentPage = 1; load(); });
+      document.getElementById('clear-filter').addEventListener('click', () => {
+        domainFilter.value = '';
+        statusFilter.value = '';
+        currentPage = 1;
+        load();
+      });
+      pagePrev.addEventListener('click', () => { if (currentPage > 1) { currentPage--; load(); } });
+      pageNext.addEventListener('click', () => { currentPage++; load(); });
 
       function startPoll() {
         if (pollTimer) clearInterval(pollTimer);
