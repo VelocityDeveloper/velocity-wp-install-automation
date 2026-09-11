@@ -213,8 +213,11 @@ command -v php >/dev/null || { echo 'php_missing' >&2; exit 10; }
 
 # Ensure domain directory exists (create if needed)
 mkdir -p "$DOCROOT" || { echo "docroot_create_failed:$DOCROOT" >&2; exit 11; }
-# Installer runs as root; all site files must belong to DA user.
-chown "$DA_USER:$DA_USER" "/home/$DA_USER" "/home/$DA_USER/domains" "/home/$DA_USER/domains/$DOMAIN" "$DOCROOT" 2>/dev/null || true
+# Installer runs as root; site dirs must belong to DA user. /home/<user> sendiri
+# TIDAK disentuh: DirectAdmin memberinya grup `access` supaya webserver bisa
+# menembusnya. chown user:user di sini dulu membuat semua URL 404
+# (gapcargoexpress.com & edytravelservices.com, 2026-09-11).
+chown "$DA_USER:$DA_USER" "/home/$DA_USER/domains" "/home/$DA_USER/domains/$DOMAIN" "$DOCROOT" 2>/dev/null || true
 
 # create MySQL user + database via DA admin credentials (idempotent)
 DA_MYSQL_CONF="/usr/local/directadmin/conf/mysql.conf"
@@ -510,6 +513,18 @@ find "$DOCROOT" -type d -exec chmod 755 {} +
 find "$DOCROOT" -type f -exec chmod 644 {} +
 [[ -f "$DOCROOT/wp-config.php" ]] && chmod 640 "$DOCROOT/wp-config.php"
 echo "ownership_fixed:$DA_USER" >&2
+
+# Pulihkan grup /home/<user> ke `access` kalau pernah diubah (situs yang terkena
+# bug chown lama). Hanya grup yang dikembalikan; mode folder tidak diubah.
+if getent group access >/dev/null 2>&1 && [[ "$(stat -c %G "/home/$DA_USER")" != access ]]; then
+  chgrp access "/home/$DA_USER" && echo "home_group_restored:access" >&2
+fi
+# Instalasi yang file-nya tidak terbaca webserver tetap tampak sukses padahal
+# semua URL 404. Gagalkan di sini supaya tidak lolos diam-diam.
+if id -u apache >/dev/null 2>&1; then
+  runuser -u apache -- test -r "$DOCROOT/index.php" || { echo "webserver_cannot_read_docroot" >&2; exit 17; }
+  echo "webserver_read_ok" >&2
+fi
 
 echo "install_complete" >&2
 REMOTE_EOF

@@ -32,10 +32,26 @@ state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
 INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
-# Run AI content generation after successful install
 if [[ "$MODE" == "apply" ]]; then
-  echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
-  INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Sukses di server belum tentu situsnya bisa dibuka: 2026-09-11 dua situs lolos
+  # sebagai COMPLETE padahal semua URL 404. File statis inti WordPress ini selalu
+  # ada dan dilayani webserver langsung, tanpa bergantung tema/plugin.
+  code=$(curl -sk -o /dev/null -m 30 -L --max-redirs 3 -w '%{http_code}' \
+    "https://$DOMAIN/wp-includes/css/dashicons.min.css" || true)
+  printf '[%s] http_check: %s\n' "$(date -Is)" "$code" >> "$LOG"
+  if [[ "$code" != 200 ]]; then
+    state FAILED "http_check_$code"
+    notify FAILED "http_check_$code"
+    exit 4
+  fi
+  # Konten AI dibuat ulang tiap apply dan artikelnya tidak dicocokkan dengan yang
+  # sudah ada, jadi apply ulang (mis. memperbaiki situs) menggandakan artikel.
+  if [[ -f "/var/lib/velocity/ai/generated/$DOMAIN-articles.json" ]]; then
+    echo "[$(date -Is)] AI content dilewati: sudah pernah dibuat" >> "$LOG"
+  else
+    echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
+    INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
 fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
