@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Tentukan child theme Velocity dari referensi desain di FORM ISIAN klien.
+
+Pemakaian: velocity-child-theme <domain> [--override SLUG] [--no-download]
+
+Klien menulis pilihannya di form, mis. "Template yang dipilih:
+https://beritab2.velocitydeveloper.com/" atau "DESIGN YANG DIPILIH: ...".
+Referensi itu dicocokkan dengan daftar tema di api.velocitydeveloper.co; kalau
+ada, zip-nya diunduh (disimpan per slug + versi) untuk dipasang installer.
+`--override` (dari manifest `velocity_child_theme=`) memilih slug secara langsung.
+
+Keluaran baris key=value: status (matched | not_found | no_ref | api_error |
+download_failed), ref, slug, version, zip, error.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import re
+import shutil
+import sys
+import urllib.request
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from client_form import read_client_form  # noqa: E402
+
+API_URL = 'https://api.velocitydeveloper.co/api/v1/themes'
+ON_PROGRESS = Path('/home/On Progress')
+CACHE = Path('/var/lib/velocity/packages/child-themes')
+# Signature API = md5(dmY) menurut tanggal kantor (WIB).
+WIB = datetime.timezone(datetime.timedelta(hours=7))
+DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
+SLUG_RE = re.compile(r'^[a-z0-9-]+$')
+SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
+LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
+UA = {'User-Agent': 'velocity-installer/1.0'}
+
+
+def norm(value):
+    return re.sub(r'[^a-z0-9]', '', str(value or '').lower())
+
+
+def design_ref(text):
+    """Subdomain desain pilihan klien, atau '' kalau tidak jelas.
+
+    Form juga memuat daftar contoh desain bawaan template (bisnis1, perusahaan1,
+    berita1..18, dst.) yang identik di semua form, jadi hanya nilai di label
+    "... yang dipilih" yang dipercaya."""
+    lines = [l.strip() for l in text.splitlines()]
+    for i, line in enumerate(lines):
+        label = LABEL.search(line)
+        if not label:
+            continue
+        m = SUB.search(line[label.end():])
+        if m and m.group(1).lower() != 'www':
+            return m.group(1).lower()
+        # Nilai kadang jatuh ke baris berikutnya (hyperlink Word jadi paragraf
+        # sendiri); sesudahnya form berisi daftar contoh, jadi berhenti di sana.
+        for nxt in lines[i + 1:i + 5]:
+            if not nxt or nxt.upper().startswith('HYPERLINK'):
+                continue
+            if 'pilihannya' in nxt.lower() or nxt.lower().startswith('www.'):
+                break
+            m = re.match(r'https?://([a-z0-9-]+)\.velocitydeveloper\.com', nxt, re.I)
+            if m and m.group(1).lower() != 'www':
+                return m.group(1).lower()
+            break
+    # Form paket khusus (mis. SIA) hanya menyebut satu desain tanpa label.
+    subs = {s.lower() for s in SUB.findall(text)} - {'www'}
+    return subs.pop() if len(subs) == 1 else ''
+
+
+def fetch_themes():
+    signature = hashlib.md5(datetime.datetime.now(WIB).strftime('%d%m%Y').encode()).hexdigest()
+    headers = dict(UA, signature=signature, Accept='application/json')
+    items, page = [], 1
+    while True:
+        req = urllib.request.Request(f'{API_URL}?page={page}', headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+        items.extend(data.get('data') or [])
+        meta = data.get('meta') or {}
+        if page >= int(meta.get('last_page') or 1) or page >= 20:
+            return items
+        page += 1
+
+
+def theme_keys(theme):
+    slug = str(theme.get('slug') or '').lower()
+    name = re.sub(r'\b(velocity|child)\b', '', str(theme.get('name') or ''), flags=re.I)
+    return {norm(re.sub(r'^velocity-|-child$', '', slug)), norm(name)} - {''}
+
+
+def download(theme):
+    slug, version = theme['slug'], str(theme.get('version') or '0')
+    url = theme.get('package_file_url') or theme.get('package_external_url')
+    if not url:
+        raise ValueError('tidak ada link unduhan')
+    CACHE.mkdir(parents=True, exist_ok=True)
+    dest = CACHE / f'{slug}-{re.sub(r"[^0-9A-Za-z.]", "", version)}.zip'
+    if dest.is_file():
+        return dest
+    tmp = dest.with_suffix('.tmp')
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as resp, \
+            open(tmp, 'wb') as out:
+        shutil.copyfileobj(resp, out)
+    try:
+        with zipfile.ZipFile(tmp) as z:
+            tops = {n.split('/')[0] for n in z.namelist() if n.strip('/')}
+        # install_from_zip memasang ke wp-content/themes/<slug>, jadi folder di
+        # dalam zip harus bernama slug yang sama.
+        if tops != {slug}:
+            raise ValueError(f'isi zip tidak sesuai slug: {sorted(tops)[:3]}')
+    except (zipfile.BadZipFile, ValueError):
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(dest)
+    return dest
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('domain')
+    ap.add_argument('--override', default='')
+    ap.add_argument('--no-download', action='store_true')
+    args = ap.parse_args()
+    out = {'status': '', 'ref': '', 'slug': '', 'version': '', 'zip': '', 'error': ''}
+
+    def emit():
+        print('\n'.join(f'{k}={v}' for k, v in out.items()))
+        return 0
+
+    domain = args.domain.lower()
+    override = args.override.strip().lower()
+    if not DOMAIN_RE.match(domain) or (override and not SLUG_RE.match(override)):
+        out.update(status='no_ref', error='argumen_tidak_valid')
+        return emit()
+    if not override:
+        out['ref'] = design_ref(read_client_form(ON_PROGRESS / domain)['text'])
+        if not out['ref']:
+            out['status'] = 'no_ref'
+            return emit()
+    try:
+        themes = fetch_themes()
+    except Exception as e:  # API mati tidak boleh menggagalkan instalasi
+        out.update(status='api_error', error=type(e).__name__)
+        return emit()
+    children = [t for t in themes if t.get('type') == 'wp_theme_child'
+                and SLUG_RE.match(str(t.get('slug') or ''))]
+    if override:
+        match = next((t for t in children if t['slug'] == override), None)
+    else:
+        match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
+    if not match:
+        out['status'] = 'not_found'
+        return emit()
+    out.update(slug=match['slug'], version=str(match.get('version') or ''))
+    if args.no_download:
+        out['status'] = 'matched'
+        return emit()
+    try:
+        out.update(status='matched', zip=str(download(match)))
+    except Exception as e:
+        out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
+    return emit()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

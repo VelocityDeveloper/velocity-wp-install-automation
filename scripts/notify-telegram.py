@@ -20,6 +20,7 @@ from pathlib import Path
 CONFIG = Path('/etc/velocity/secrets/telegram.env')
 MANIFEST_ROOT = Path('/home/project')
 SENT_LOG = Path('/var/lib/velocity/installer/telegram-sent.jsonl')
+LOG_DIR = Path('/var/lib/velocity/installer')
 API = 'https://api.telegram.org/bot{token}/sendMessage'
 
 
@@ -57,13 +58,38 @@ def manifest_paket(domain):
     return ''
 
 
-def build_message(domain, status, stage, paket=''):
+def theme_note(domain):
+    """Tema aktif + hasil pencocokan child theme dari log instalasi terakhir."""
+    if not domain or '/' in domain or '..' in domain:
+        return ''
+    try:
+        lines = (LOG_DIR / f'{domain}.log').read_text(errors='replace').splitlines()[-800:]
+    except OSError:
+        return ''
+    active = next((l.split(':', 1)[1].strip() for l in reversed(lines) if l.startswith('active_theme:')), '')
+    if not active:
+        return ''
+    child = next((l.split(':') for l in reversed(lines) if l.startswith('child_theme:')), [])
+    status = child[1] if len(child) > 1 else ''
+    ref = child[2] if len(child) > 2 else ''
+    if status == 'not_found' and ref:
+        return f'{active} (referensi {ref} tidak ada di API tema)'
+    if status in ('api_error', 'download_failed'):
+        return f'{active} (child theme gagal: {status})'
+    if status == 'matched' and ref:
+        return f'{active} (referensi {ref})'
+    return active
+
+
+def build_message(domain, status, stage, paket='', theme=''):
     status = status.upper()
     stage = html.escape(stage or '-')
     head = f'Domain: <code>{domain}</code>\n'
     if paket:
         head += f'Paket: <b>{html.escape(paket)}</b>\n'
     if status == 'SUCCESS':
+        if theme:
+            head += f'Tema: <code>{html.escape(theme)}</code>\n'
         return (f'✅ <b>Instalasi selesai</b>\n{head}'
                 f'Situs: https://{domain}\n'
                 f'Admin: https://{domain}/wp-admin')
@@ -113,7 +139,8 @@ def main():
     if not token or not chats:
         print('telegram: token/chat_id belum diset, notifikasi dilewati', file=sys.stderr)
         return 1
-    text = build_message(domain, status, stage, manifest_paket(domain))
+    theme = theme_note(domain) if status.upper() == 'SUCCESS' else ''
+    text = build_message(domain, status, stage, manifest_paket(domain), theme)
     failed = 0
     for chat in chats:
         try:

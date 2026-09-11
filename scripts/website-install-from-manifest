@@ -370,6 +370,10 @@ install_from_git() {
   rm -rf "$tmpdir"
 }
 
+# Tema aktif sebelum apply: apply ulang memasang ulang tema induk dan
+# mengaktifkannya, yang akan mematikan child theme yang sudah dipakai situs.
+PREV_THEME=$(php -d memory_limit=512M "$WP_BIN" theme list --status=active --field=name --path="$DOCROOT" --allow-root 2>/dev/null | head -1 || true)
+
 # velocity addons — package (zip) takes priority over git repo
 if [[ -n "__ADDONS_PKG__" ]]; then
   install_from_zip "__ADDONS_PKG__" plugin || exit 14
@@ -383,6 +387,21 @@ if [[ -n "__THEME_PKG__" ]]; then
 elif [[ -n "__THEME_REPO__" ]]; then
   install_from_git "__THEME_REPO__" theme "velocity-theme" || exit 15
 fi
+
+# child theme sesuai referensi desain klien (scripts/velocity-child-theme).
+# Harus aktif SEBELUM 1-Click Setup: lokasi menu disimpan per tema aktif.
+if [[ -n "__CHILD_THEME_PKG__" ]]; then
+  if install_from_zip "__CHILD_THEME_PKG__" theme; then
+    echo "child_theme_installed:__CHILD_THEME_PKG__" >&2
+  else
+    echo "child_theme_install_failed:__CHILD_THEME_PKG__" >&2
+  fi
+elif [[ -n "$PREV_THEME" && "$PREV_THEME" != "__THEME_PKG__" && -f "$DOCROOT/wp-content/themes/$PREV_THEME/style.css" ]] \
+    && grep -qiE '^[[:space:]*]*Template:[[:space:]]*velocity[[:space:]]*$' "$DOCROOT/wp-content/themes/$PREV_THEME/style.css"; then
+  php -d memory_limit=512M "$WP_BIN" theme activate "$PREV_THEME" --path="$DOCROOT" --allow-root >/dev/null 2>&1 \
+    && echo "child_theme_kept:$PREV_THEME" >&2 || true
+fi
+echo "active_theme:$(php -d memory_limit=512M "$WP_BIN" theme list --status=active --field=name --path="$DOCROOT" --allow-root 2>/dev/null | head -1 || true)" >&2
 
 # rename default DirectAdmin index.html so WordPress index.php takes over
 if [[ -f "$DOCROOT/index.html" ]]; then
@@ -561,6 +580,22 @@ echo "install_complete" >&2
 REMOTE_EOF
 )
 
+# --- child theme dari referensi desain di FORM ISIAN ---
+# Diselesaikan di sisi installer (butuh API tema + folder Drive), lalu zip-nya
+# dikirim ke server tujuan bersama paket lain. Kegagalan di sini tidak
+# menggagalkan instalasi: situs tetap memakai tema induk.
+CHILD_SLUG="" CHILD_ZIP=""
+child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
+  --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
+child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
+child_status=$(child_val status)
+echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2
+if [[ "$child_status" == matched ]]; then
+  CHILD_SLUG=$(child_val slug)
+  CHILD_ZIP=$(child_val zip)
+  [[ "$CHILD_SLUG" =~ ^[a-z0-9-]+$ && -f "$CHILD_ZIP" ]] || { CHILD_SLUG=""; CHILD_ZIP=""; }
+fi
+
 # substitute placeholders safely
 remote_script=${remote_script//__DOCROOT__/$(printf '%s' "/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html")}
 remote_script=${remote_script//__DA_USER__/$(printf '%s' "${cfg[da_user]}")}
@@ -579,6 +614,7 @@ remote_script=${remote_script//__ADDONS_REPO__/$(printf '%s' "${cfg[velocity_add
 remote_script=${remote_script//__THEME_REPO__/$(printf '%s' "${cfg[velocity_theme_repo]:-}")}
 remote_script=${remote_script//__ADDONS_PKG__/$(printf '%s' "${cfg[velocity_addons_pkg]:-}")}
 remote_script=${remote_script//__THEME_PKG__/$(printf '%s' "${cfg[velocity_theme_pkg]:-}")}
+remote_script=${remote_script//__CHILD_THEME_PKG__/$(printf '%s' "$CHILD_SLUG")}
 
 # pre-transfer package zips from local to remote
 for pkg_key in velocity_addons_pkg velocity_theme_pkg; do
@@ -590,6 +626,10 @@ for pkg_key in velocity_addons_pkg velocity_theme_pkg; do
   scp -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -P "${cfg[ssh_port]:-22}" "$local_zip" "${cfg[ssh_user]}@${cfg[target_host]}:/tmp/pkg-${pkg_slug}.zip" >&2 || { echo "scp_failed:$pkg_slug" >&2; exit 16; }
   echo "Package $pkg_slug transferred." >&2
 done
+if [[ -n "$CHILD_SLUG" ]]; then
+  echo "Transferring child theme $CHILD_SLUG to remote..." >&2
+  scp -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -P "${cfg[ssh_port]:-22}" "$CHILD_ZIP" "${cfg[ssh_user]}@${cfg[target_host]}:/tmp/pkg-${CHILD_SLUG}.zip" >&2 || { echo "scp_failed:$CHILD_SLUG" >&2; exit 16; }
+fi
 
 # inject secrets as exports at top of remote script via stdin (single-quote escaped)
 secret_header=$(printf 'export WP_DB_PASSWORD=%s\nexport WP_ADMIN_PASSWORD=%s\n' "$(sq "$DB_PASSWORD")" "$(sq "$ADMIN_PASSWORD")")
