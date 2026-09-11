@@ -23,7 +23,8 @@ SKIP_LABELS = {'misal', 'keterangan', 'catatan', 'contoh', 'http', 'https',
                'dapat di lihat di sini', 'judul email', 'note'}
 # Sebagian klien menuliskan password di dalam form; jangan pernah teruskan —
 # nilai ini ikut terkirim ke API AI eksternal oleh pemanggil modul ini.
-CRED_LABEL = re.compile(r'\b(pass(word)?|sandi|user(name)?|login|akun|pin|token|api[ _-]?key)\b', re.I)
+# Tanpa \b di belakang "pass": form nyata menulis "Passwordnya: ..." dan lolos.
+CRED_LABEL = re.compile(r'pass(word)?|\bsandi\b|user ?name|\buser\b|\blogin\b|\bakun\b|\bpin\b|token|api[ _-]?key', re.I)
 
 
 def _runs(raw, step, decode):
@@ -104,7 +105,10 @@ def parse_fields(lines):
         if not m:
             continue
         label, value = m.group(1).strip(), m.group(2).strip()
-        if label.lower() in SKIP_LABELS or CRED_LABEL.search(label):
+        if label.lower() in SKIP_LABELS or CRED_LABEL.search(label) or CRED_LABEL.search(value):
+            continue
+        # Label sampah hasil baca .doc biner (mis. "iY0") tidak punya kata utuh.
+        if not re.search(r'[A-Za-z]{3}', label):
             continue
         # Teks panduan template menempel di belakang jawaban klien, dipisah
         # deretan titik atau tanda bintang.

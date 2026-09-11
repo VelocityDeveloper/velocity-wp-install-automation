@@ -14,6 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client_form import read_client_form
+from client_docs import collect_client_docs, format_for_prompt
+
+CONTENT_RULES = """Aturan konten (wajib):
+- Gunakan HANYA fakta dari data klien di atas: nama usaha, produk/layanan, keunggulan, sejarah, visi-misi, area layanan, alamat, kontak. Jangan mengarang nomor telepon, alamat, harga, angka, penghargaan, atau klaim yang tidak ada di data. Kalau suatu info tidak ada, lewati tanpa menulis contoh palsu.
+- Bagian bertanda DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau WhatsApp pribadi pemilik. Kontak publik ambil dari "Kontak utk di web" atau kontak di dokumen perusahaan.
+- Abaikan teks panduan bawaan template form (mis. "Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
+- Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ."""
 
 CREDENTIAL_RE = re.compile(r'^\s*(pass(word)?|user(name)?|sandi|login)\s*[:=]', re.I | re.M)
 
@@ -137,17 +144,19 @@ def ai_call(system_prompt, user_prompt, model):
         log(f'ERROR: AI API call failed: {e}')
         return None
 
-def generate_pages(site_title, domain, client_data, model):
+def generate_pages(site_title, domain, client_info, model):
     """Generate 4 pages: Home, Profile, Gallery, Contact"""
     system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
     
-    client_info = '\n'.join(f'{k}: {v}' for k, v in client_data.items())
+    client_info = client_info.strip() or '(tidak ada data klien)'
     
     user_prompt = f"""Generate WordPress page content for a website with these details:
 - Site title: {site_title}
 - Domain: {domain}
 - Client data:
 {client_info}
+
+{CONTENT_RULES}
 
 Generate 4 pages. Return JSON array:
 [
@@ -174,11 +183,11 @@ Use Indonesian language. Content should be professional HTML. Include image plac
         log(f'Response: {response[:500]}')
         return None
 
-def generate_articles(site_title, domain, client_data, model, num_articles=5, category='Blog'):
+def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog'):
     """Generate blog articles"""
     system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
     
-    client_info = '\n'.join(f'{k}: {v}' for k, v in client_data.items())
+    client_info = client_info.strip() or '(tidak ada data klien)'
     
     user_prompt = f"""Generate {num_articles} blog articles for a website with these details:
 - Site title: {site_title}
@@ -187,12 +196,14 @@ def generate_articles(site_title, domain, client_data, model, num_articles=5, ca
 - Client data:
 {client_info}
 
+{CONTENT_RULES}
+
 Return JSON array:
 [
   {{"title":"<article title>","slug":"<url-slug>","category":"{category}","content":"<article content in HTML, 400-600 words, professional Indonesian>","excerpt":"<short excerpt 20-30 words>"}}
 ]
 
-Use Indonesian language. Topics should be relevant to the business/niche."""
+Use Indonesian language. Topics must come from the client's actual products, services, and field of business in the client data."""
     
     response = ai_call(system_prompt, user_prompt, model)
     if not response:
@@ -381,6 +392,16 @@ def main():
             for k, v in read_client_data(folder).items():
                 client_data.setdefault(k, v)
     log(f'Client data files: {list(client_data.keys())}')
+    # Isi lengkap FORM ISIAN + dokumen lain (company profile, konsep, susunan menu).
+    # Tanpa ini AI hanya menerima nama & alamat dan menulis konten generik.
+    docs = collect_client_docs(ON_PROGRESS / domain)
+    for name, text in docs['sources']:
+        log(f'Dokumen klien: {name} ({len(text)} karakter)')
+    if docs['unreadable']:
+        log(f'Dokumen tidak terbaca (mis. PDF hasil scan): {docs["unreadable"]}')
+    if docs['skipped']:
+        log(f'Dokumen dilewati (anggaran karakter habis): {docs["skipped"]}')
+    client_info = format_for_prompt(client_data, docs)
     
     # Load AI model
     model = get_default_model()
@@ -397,7 +418,7 @@ def main():
         log('Pakai konten halaman tersimpan')
     else:
         log('Generating pages...')
-        pages = generate_pages(site_title, domain, client_data, model)
+        pages = generate_pages(site_title, domain, client_info, model)
     if not pages:
         log('ERROR: Failed to generate pages')
         sys.exit(3)
@@ -412,7 +433,7 @@ def main():
         log('Pakai konten artikel tersimpan')
     else:
         log('Generating articles...')
-        articles = generate_articles(site_title, domain, client_data, model, num_articles, article_category)
+        articles = generate_articles(site_title, domain, client_info, model, num_articles, article_category)
     if not articles:
         log('ERROR: Failed to generate articles')
         sys.exit(3)
