@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Hapus laporan Telegram installer untuk satu domain.
+
+Pemakaian: telegram-delete <domain> [--chat CHAT_ID] [--status STATUS] [--dry-run]
+
+Membaca catatan message_id dari notify-telegram.py. Telegram hanya mengizinkan
+bot menghapus pesannya sendiri yang berumur kurang dari 48 jam.
+"""
+import argparse
+import importlib.util
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location('notify', HERE / 'notify-telegram.py')
+notify = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(notify)
+
+
+def delete(token, chat, message_id):
+    data = urllib.parse.urlencode({'chat_id': chat, 'message_id': message_id}).encode()
+    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/deleteMessage', data=data)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp).get('ok', False), ''
+    except urllib.error.HTTPError as e:
+        return False, json.load(e).get('description', str(e))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('domain')
+    ap.add_argument('--chat')
+    ap.add_argument('--status')
+    ap.add_argument('--dry-run', action='store_true')
+    args = ap.parse_args()
+    token, _ = notify.load_config()
+    log = notify.SENT_LOG
+    try:
+        rows = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    except OSError:
+        rows = []
+    changed = False
+    for row in rows:
+        if row.get('domain') != args.domain or row.get('deleted_at'):
+            continue
+        if args.chat and str(row.get('chat')) != args.chat:
+            continue
+        if args.status and row.get('status') != args.status.upper():
+            continue
+        label = f"{row['status']} ke {row['chat']} (message_id {row['message_id']}, {row['at']})"
+        if args.dry_run:
+            print('akan dihapus:', label)
+            continue
+        ok, err = delete(token, row['chat'], row['message_id'])
+        print(('dihapus: ' if ok else f'gagal ({err}): ') + label)
+        if ok or 'not found' in err.lower():
+            row['deleted_at'] = notify.time.strftime('%Y-%m-%dT%H:%M:%S%z')
+            changed = True
+    if changed:
+        tmp = log.with_suffix('.tmp')
+        tmp.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, log)
+
+
+if __name__ == '__main__':
+    main()

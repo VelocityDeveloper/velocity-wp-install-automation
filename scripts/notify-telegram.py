@@ -11,6 +11,7 @@ import html
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +19,7 @@ from pathlib import Path
 
 CONFIG = Path('/etc/velocity/secrets/telegram.env')
 MANIFEST_ROOT = Path('/home/project')
+SENT_LOG = Path('/var/lib/velocity/installer/telegram-sent.jsonl')
 API = 'https://api.telegram.org/bot{token}/sendMessage'
 
 
@@ -84,7 +86,22 @@ def send(token, chat, text):
     }).encode()
     req = urllib.request.Request(API.format(token=token), data=data)
     with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode('utf-8', 'replace')).get('ok', False)
+        body = json.loads(resp.read().decode('utf-8', 'replace'))
+    return body.get('ok', False), (body.get('result') or {}).get('message_id')
+
+
+def record_sent(domain, status, chat, message_id):
+    """Catat message_id supaya pesan bisa dihapus lagi (scripts/telegram-delete).
+    Bot API tidak bisa membaca riwayat chat, jadi tanpa catatan ini pesan lama
+    tidak bisa ditemukan kembali."""
+    try:
+        SENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with SENT_LOG.open('a') as f:
+            f.write(json.dumps({'at': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'domain': domain,
+                                'status': status.upper(), 'chat': chat, 'message_id': message_id}) + '\n')
+        os.chmod(SENT_LOG, 0o600)
+    except OSError as e:
+        print(f'telegram: gagal mencatat message_id ({e})', file=sys.stderr)
 
 
 def main():
@@ -100,11 +117,13 @@ def main():
     failed = 0
     for chat in chats:
         try:
-            ok = send(token, chat, text)
+            ok, message_id = send(token, chat, text)
         except (urllib.error.URLError, OSError, ValueError) as e:
             print(f'telegram: gagal kirim ke {chat} ({e})', file=sys.stderr)
             failed += 1
             continue
+        if ok and message_id:
+            record_sent(domain, status, chat, message_id)
         print(f'telegram: terkirim ke {chat}' if ok else f'telegram: ditolak API untuk {chat}', file=sys.stderr)
         failed += 0 if ok else 1
     return 1 if failed else 0
