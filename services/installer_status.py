@@ -184,6 +184,7 @@ def manifest_target(manifest):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 from client_form import read_client_form
+from hosting_notes import read_hosting_notes
 
 # Label form yang berisi nama orang/domain, bukan nama usaha.
 _BUKAN_NAMA_SITUS = {'nama anda', 'nama domain', 'nama lengkap', 'nama pemilik'}
@@ -609,6 +610,54 @@ def _ensure_secrets(domain: str):
     return created
 
 
+def _write_manifest_lines(manifest: Path, lines):
+    tmp = manifest.with_suffix('.txt.tmp')
+    tmp.write_text('\n'.join(lines) + '\n')
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, manifest)
+
+
+def _sync_hosting_notes(domain: str, manifest: Path, allow_regenerate: bool = True):
+    """Samakan manifest dengan catatan hosting PM (<domain>.txt) sebelum dipakai.
+
+    - Password akun hosting disalin ke secret per domain dan dipakai sebagai
+      password admin WordPress. Dulu semua manifest menunjuk satu file password
+      bersama, sehingga login WordPress tidak pernah cocok dengan catatan.
+    - Username di catatan berbeda dari manifest dan situs belum terpasang ->
+      manifest dibuat ulang (PM bisa menulis catatan setelah manifest dibuat).
+    Mengembalikan daftar perubahan; nilai kredensial tidak pernah dikembalikan."""
+    changes = []
+    user, password = read_hosting_notes(domain)
+    try:
+        lines = manifest.read_text().splitlines()
+    except OSError:
+        return changes
+    cfg = {l.split('=', 1)[0].strip(): l.split('=', 1)[1].strip() for l in lines if '=' in l}
+    if (allow_regenerate and user and re.match(r'^[a-z][a-z0-9]{0,15}$', user)
+            and user != cfg.get('da_user') and domain not in installed_domains()):
+        manifest.unlink()
+        result, err = generate_manifest(domain)
+        if result is None:
+            _write_manifest_lines(manifest, lines)
+            return changes + [f'manifest_gagal_dibuat_ulang:{err}']
+        changes.append('manifest_dibuat_ulang:username_catatan')
+        lines = manifest.read_text().splitlines()
+    per_domain = SECRETS / f'da_password_{domain}.txt'
+    if password:
+        if not per_domain.is_file() or per_domain.read_text() != password:
+            _write_secret(per_domain.name, password)
+            changes.append('password_catatan_disalin')
+    new_lines = [l for l in lines if not l.startswith('da_password_file=')]
+    # Tanpa password di catatan, installer memakai password acak per domain
+    # (WP_INSTALL_ADMIN_PASSWORD_FILE), bukan lagi file password bersama.
+    if password:
+        new_lines.append(f'da_password_file={per_domain}')
+    if new_lines != lines:
+        _write_manifest_lines(manifest, new_lines)
+        changes.append('manifest_password_diperbarui')
+    return changes
+
+
 def generate_manifest(domain: str):
     """Auto-generate manifest + secrets for domain from existing data."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
@@ -626,6 +675,7 @@ def generate_manifest(domain: str):
         ok, detail = validate_manifest(manifest)
         if ok:
             _ensure_secrets(domain)
+            _sync_hosting_notes(domain, manifest, allow_regenerate=False)
             return {'generated': False, 'reason': 'already_valid'}, None
     # derive defaults; ssh target from server store (managed via /server/ panel), fallback static
     labels = domain.split('.')[0]
@@ -643,7 +693,9 @@ def generate_manifest(domain: str):
                 txt = nf.read_text(errors='replace')
                 m = re.search(r'^\s*(?:user ?name|user|login)\s*[:=]\s*([A-Za-z0-9_-]+)', txt, re.I | re.M)
                 if m:
-                    da_user = re.sub(r'[^a-z0-9]', '', m.group(1).lower())[:8]
+                    # Username asli akun dipakai utuh (bukan dipotong 8): potongan
+                    # tidak akan pernah cocok dengan akun yang dibuat PM.
+                    da_user = re.sub(r'[^a-z0-9]', '', m.group(1).lower())[:16]
                     break
         except: pass
     if not da_user:
@@ -704,8 +756,8 @@ def generate_manifest(domain: str):
         f'domain={domain}\n'
         f'db_name={db_name}\n'
         f'db_user={db_user}\n'
-        # WP admin = DA user, biar login WP sesuai data di txt (username/password DA)
-        f'da_password_file=/var/lib/velocity/secret/da_password\n'
+        # WP admin = DA user; password-nya ditambahkan _sync_hosting_notes dari
+        # catatan hosting PM (bukan file password bersama seperti dulu).
         f'admin_email={admin_email or ("admin@" + domain)}\n'
         f'site_title={_site_title_from_form((ON_PROGRESS / domain, src, folder), labels.replace("-", " ").title())}\n'
     )
@@ -726,6 +778,7 @@ def generate_manifest(domain: str):
     os.chmod(tmp, 0o640)
     os.replace(tmp, manifest)
     _ensure_secrets(domain)
+    _sync_hosting_notes(domain, manifest, allow_regenerate=False)
     return {'generated': True, 'manifest': str(manifest)}, None
 
 
@@ -743,10 +796,15 @@ def start_run(domain: str, mode: str):
     manifest = ROOT / domain / f'{domain}.txt'
     if not manifest.is_file():
         return None, 'manifest_not_found'
+    proc = _running.get(domain)
+    if proc is not None and proc.poll() is None:
+        return None, 'already_running'
+    # Catatan hosting PM bisa ditulis atau diubah setelah manifest dibuat.
+    for change in _sync_hosting_notes(domain, manifest):
+        print(json.dumps({'event': 'hosting_notes_sync', 'domain': domain, 'change': change}), flush=True)
     ok, detail = validate_manifest(manifest)
     if not ok:
         return None, 'manifest_invalid:' + detail
-    proc = _running.get(domain)
     if proc is not None and proc.poll() is None:
         return None, 'already_running'
     STATE.mkdir(parents=True, exist_ok=True)

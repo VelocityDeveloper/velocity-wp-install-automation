@@ -187,6 +187,17 @@ import_media() {
   echo "$id"
 }
 
+# Password admin WordPress = password akun hosting di catatan PM (<domain>.txt).
+# Situs lama terpasang dengan password bersama; mode finish menyamakannya.
+if [[ -n "${WP_ADMIN_PASSWORD:-}" ]]; then
+  if wp user get "$ADMIN" --field=ID >/dev/null 2>&1; then
+    wp user update "$ADMIN" --user_pass="$WP_ADMIN_PASSWORD" >/dev/null 2>&1 && echo "admin_password_synced" >&2 || echo "admin_password_sync_failed" >&2
+  else
+    echo "admin_password_skip:user_tidak_ada" >&2
+  fi
+  unset WP_ADMIN_PASSWORD
+fi
+
 if [[ -n "$LOGO_FILE" ]]; then
   logo_id=$(import_media "$LOGO_FILE" "$LOGO_KEY")
   if [[ -n "$logo_id" && -z "$(wp theme mod get custom_logo --field=value 2>/dev/null || true)" ]]; then
@@ -374,6 +385,13 @@ def main():
             f'TAGLINE={shlex.quote(tagline)}',
             f'CSS={shlex.quote(css)}',
         ])
+        # Hanya secret per domain yang disalin dari catatan hosting PM; file password
+        # bersama lama tidak boleh dipasang lagi. Dikirim lewat stdin, tidak dicetak.
+        pw_file = cfg.get('da_password_file', '')
+        if pw_file.startswith(f'/etc/velocity/secrets/da_password_{domain}') and Path(pw_file).is_file():
+            password = Path(pw_file).read_text(errors='replace').strip()
+            if password:
+                header += f'\nexport WP_ADMIN_PASSWORD={shlex.quote(password)}'
         print(f'finish: logo={logo.name if logo else "-"} foto={len(photos)} wa={"ya" if wa else "-"} '
               f'alamat={"ya" if address else "-"} tagline={"ya" if tagline else "-"} warna={"ya" if css else "-"}')
         tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
