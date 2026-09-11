@@ -273,6 +273,13 @@ def validate_manifest(path: Path):
         return False, 'invalid_domain'
     if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', cfg['admin_email']):
         return False, 'invalid_admin_email'
+    # Sama dengan validasi installer, supaya manifest rusak terlihat di halaman
+    # (dan dibuat ulang oleh generate) sebelum autopilot menjalankan dry-run.
+    for key in ('db_name', 'db_user'):
+        if not re.match(r'^[A-Za-z0-9_]+$', cfg[key]):
+            return False, 'invalid_' + key
+    if not re.match(r'^[a-z][a-z0-9]*$', cfg['da_user']):
+        return False, 'invalid_da_user'
     return True, 'ok'
 
 
@@ -624,19 +631,25 @@ def generate_manifest(domain: str):
     labels = domain.split('.')[0]
     # DirectAdmin limit = 8 chars, prioritize username from notes if present
     da_user = ''
-    for nf in [src / 'notes-credentials.txt', src / 'notes.txt',
+    # Catatan hosting dari tim ada di folder Drive sebagai <domain>.txt dan memuat
+    # username DirectAdmin asli, yang tidak selalu sama dengan 8 huruf pertama
+    # domain (surya-media-berita.com -> suryame1).
+    for nf in [ON_PROGRESS / domain / f'{domain}.txt',
+               src / 'notes-credentials.txt', src / 'notes.txt',
                folder / 'notes-credentials.txt', folder / 'notes.txt',
                src / 'FORM ISIAN WEBSITE - paket g.doc']:
         try:
             if nf.is_file():
                 txt = nf.read_text(errors='replace')
-                m = re.search(r'username\s*[:=]\s*([A-Za-z0-9_-]+)', txt, re.I)
+                m = re.search(r'^\s*(?:user ?name|user|login)\s*[:=]\s*([A-Za-z0-9_-]+)', txt, re.I | re.M)
                 if m:
-                    da_user = re.sub(r'[^a-z0-9_-]', '', m.group(1).lower())[:8]
+                    da_user = re.sub(r'[^a-z0-9]', '', m.group(1).lower())[:8]
                     break
         except: pass
     if not da_user:
-        da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:8] or 'admin'
+        # Username DirectAdmin hanya huruf & angka. Tanda hubung dari domain
+        # (surya-media-berita.com -> "surya-me") ikut ke db_name dan ditolak installer.
+        da_user = re.sub(r'[^a-z0-9]', '', labels.lower())[:8] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
     srv = default_target()
