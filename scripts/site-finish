@@ -286,6 +286,42 @@ fi
 '''
 
 
+REMOTE_CLEANUP = r'''
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+# Hanya bawaan WordPress yang tidak dipakai. Tema aktif dan induknya (velocity
+# untuk child theme) wajib tetap ada; tema/plugin lain tidak disentuh.
+active=$(wp theme list --status=active --field=name 2>/dev/null | head -1 || true)
+parent=$(wp theme get "$active" --field=template 2>/dev/null || true)
+for t in $(wp theme list --field=name 2>/dev/null || true); do
+  [[ "$t" == "$active" || "$t" == "$parent" ]] && continue
+  case "$t" in
+    twenty*) wp theme delete "$t" >/dev/null 2>&1 && echo "theme_deleted:$t" || echo "theme_delete_failed:$t" ;;
+  esac
+done
+for p in akismet hello hello-dolly; do
+  if wp plugin is-installed "$p" >/dev/null 2>&1 && ! wp plugin is-active "$p" >/dev/null 2>&1; then
+    wp plugin delete "$p" >/dev/null 2>&1 && echo "plugin_deleted:$p" || echo "plugin_delete_failed:$p"
+  fi
+done
+echo "cleanup_done"
+'''
+
+
+def cleanup_defaults(domain, da_user, ssh):
+    """Hapus tema & plugin bawaan WordPress yang tidak dipakai (instalasi baru saja)."""
+    header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_CLEANUP,
+                         capture_output=True, text=True, timeout=300)
+    for line in (run.stdout + '\n' + run.stderr).splitlines():
+        if line.strip() and not line.startswith('Warning:'):
+            print(f'cleanup: {line.strip()[:200]}')
+    return 0 if run.returncode == 0 else 1
+
+
 def ssh_command(cfg, key):
     return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
@@ -325,10 +361,11 @@ def enable_maintenance(cfg, domain, da_user, ssh):
 def main():
     args = sys.argv[1:]
     maintenance = bool(args) and args[0] == '--maintenance'
-    if maintenance:
+    cleanup = bool(args) and args[0] == '--cleanup'
+    if maintenance or cleanup:
         args = args[1:]
     if not args:
-        print('usage: site-finish [--maintenance] <manifest>', file=sys.stderr)
+        print('usage: site-finish [--maintenance|--cleanup] <manifest>', file=sys.stderr)
         return 2
     cfg = read_manifest(args[0])
     domain = cfg.get('domain', '').lower()
@@ -343,6 +380,8 @@ def main():
     ssh = ssh_command(cfg, key)
     if maintenance:
         return enable_maintenance(cfg, domain, da_user, ssh)
+    if cleanup:
+        return cleanup_defaults(domain, da_user, ssh)
     folder = ON_PROGRESS / domain
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
     fields = form['fields']

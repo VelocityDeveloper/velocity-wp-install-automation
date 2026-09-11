@@ -34,6 +34,8 @@ trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
+# Awal log run ini: dipakai untuk tahu apakah run ini memasang WordPress dari awal.
+run_start=$(( $(wc -l < "$LOG") + 1 ))
 if [[ "$MODE" != "finish" && "$MODE" != "maintenance" ]]; then
   INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" "$SCRIPTS/website-install-from-manifest" >> "$LOG" 2>&1
 fi
@@ -59,6 +61,13 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] Finishing: aset & pengaturan dari data klien" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-finish" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Hapus tema & plugin bawaan yang tidak dipakai — hanya kalau run ini memasang
+  # WordPress dari awal; apply ulang situs lama tidak menyentuh isinya. Sebelum
+  # QA, supaya kerusakan akibat penghapusan ikut tertangkap.
+  if [[ "$MODE" == "apply" ]] && grep -q 'Success: WordPress installed successfully' <(tail -n +"$run_start" "$LOG"); then
+    echo "[$(date -Is)] Bersihkan tema & plugin bawaan" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/site-finish" --cleanup "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"
   problems=$(python3 -c 'import json, sys
