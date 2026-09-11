@@ -143,3 +143,39 @@ Terminal-style `/installer/`.
 Import ke n8n. Trigger: Manual Trigger dengan `{"domain":"example.com"}`. Node `Execute Command` pakai wrapper `scripts/installer-runner` (validasi & escape domain, cegah injection, tulis STATE).
 
 Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
+
+## Ambil alih (klaim)
+
+CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/installer/claims.json` — status di CRM tetap "Belum dikerjakan". Domain yang diklaim tidak lagi tampil sebagai `belum diambil`.
+
+- `POST /api/installer/claim` — body `{"domain":"example.com","by":"manual"|"autopilot"}`. Idempoten.
+- `POST /api/installer/release` — body `{"domain":"example.com"}`.
+- Halaman installer: menu **Ambil alih** / **Lepas klaim**, badge `DIAMBIL: MANUAL|AUTOPILOT`.
+
+## Autopilot (`scripts/installer-autopilot`)
+
+`installer-autopilot.timer` tiap 10 menit. Satu putaran:
+
+1. Domain yang sedang dipegang autopilot dilanjutkan: dry-run OK + `site=empty` → apply. Dry-run gagal, situs sudah berisi (`site=wordpress|not_empty`), atau run macet >2 jam → fase `manual` + notifikasi Telegram.
+2. Kalau tidak ada run berjalan, ambil **satu** project `belum diambil` yang lolos saringan (deadline terdekat dulu): klaim → generate manifest → dry-run.
+
+Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), deadline belum terlewat, FORM ISIAN klien terbaca, belum pernah ditangani autopilot.
+
+Mode di `/etc/velocity/installer-autopilot.env`: `AUTOPILOT_MODE=observe` (default — hanya mencatat rencana ke `/var/lib/velocity/installer/autopilot-last.json` + journald) atau `AUTOPILOT_MODE=active`. Jejak per domain: `/var/lib/velocity/installer/autopilot.json`.
+
+## Sync Google Drive (`scripts/onprogress-sync`)
+
+- `onprogress-sync-queue.timer` — tiap 10 menit, hanya folder domain yang ada di antrean installer.
+- `onprogress-sync-full.timer` — tiap malam 22:00, seluruh `gdrive:On Progress`; maksimal 30G per malam dan batal kalau sisa disk `/home` < 40G. Progres di `/tmp/onprogress-sync.log` (dibaca dashboard).
+
+Selalu `rclone copy` (tidak pernah menghapus file lokal).
+
+## Pasang unit systemd
+
+```bash
+install -m 644 config/onprogress-sync@.service config/onprogress-sync-queue.timer \
+  config/onprogress-sync-full.timer config/installer-autopilot.service \
+  config/installer-autopilot.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now onprogress-sync-queue.timer onprogress-sync-full.timer installer-autopilot.timer
+```

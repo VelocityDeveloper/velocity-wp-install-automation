@@ -665,6 +665,11 @@
               title: noFolder ? 'folder Drive belum tersinkron' : '',
               run: () => generateManifest(x.domain),
             });
+            if (x.status === 'belum diambil') {
+              acts.unshift({ label: 'Ambil alih', run: () => claimAction(x.domain, 'claim') });
+            } else if (x.claim) {
+              acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
+            }
             acts.push({ label: 'Checklist', run: () => openChecklistModal(x.domain, allDomains) });
             if (logLines) acts.push({ label: 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
             rowActions[x.domain] = acts;
@@ -675,7 +680,10 @@
               : x.source === 'crm'
               ? ' <span class="badge warn" title="Ada di CRM tapi folder Drive belum tersinkron, jadi manifest belum bisa dibuat">TANPA FOLDER</span>'
               : '';
-            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            const claimBadge = x.claim
+              ? ` <span class="badge ${x.claim.by === 'autopilot' ? 'local' : 'ok'}" title="Diambil alih ${esc(x.claim.at || '')}">DIAMBIL: ${x.claim.by === 'autopilot' ? 'AUTOPILOT' : 'MANUAL'}</span>`
+              : '';
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
             const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
             const dash = '<span style="color:var(--muted)">—</span>';
             const paketCell = x.paket ? esc(x.paket) : dash;
@@ -711,8 +719,30 @@
         }
       }
 
+      async function claimAction(domain, action) {
+        const claim = action === 'claim';
+        if (!claim && !confirm('Lepas klaim ' + domain + '? Domain kembali ke antrean "belum diambil".')) return;
+        serverNote.textContent = (claim ? 'Mengambil alih ' : 'Melepas klaim ') + domain + ' ...';
+        try {
+          const r = await fetch('/api/installer/' + action, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain, by: 'manual' }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && j.status === 'ok') {
+            serverNote.textContent = (claim ? 'Diambil alih: ' : 'Klaim dilepas: ') + domain;
+            setTimeout(load, 500);
+          } else {
+            serverNote.textContent = (claim ? 'Ambil alih' : 'Lepas klaim') + ' gagal: ' + (j.error || r.status);
+          }
+        } catch (e) {
+          serverNote.textContent = 'Gagal menghubungi API: ' + esc(String(e.message || e));
+        }
+      }
+
       let wizardStep = 1;
-      let wizardData = { domain: '', status: '', mode: 'dry-run', genManifest: true };
+      let wizardData ={ domain: '', status: '', mode: 'dry-run', genManifest: true };
 
       function onInstallClick(domain, status) {
         wizardData = { domain, status, mode: 'dry-run', genManifest: true };

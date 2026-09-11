@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync Google Drive On Progress (%i)
+After=network-online.target installer-status.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/velocity-wp-install-automation/scripts/onprogress-sync %i
+Nice=10
+IOSchedulingClass=idle
+# Sync penuh bisa berjam-jam; batas ini hanya mencegah proses menggantung selamanya.
+TimeoutStartSec=20h

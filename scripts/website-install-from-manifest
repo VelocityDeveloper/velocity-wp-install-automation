@@ -94,6 +94,8 @@ if [[ "$MODE" == dry-run ]]; then
       "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
     exit 0
   fi
+  # site:* memberi tahu autopilot apakah public_html masih kosong (hanya file
+  # bawaan DirectAdmin). Autopilot tidak boleh menimpa situs yang sudah hidup.
   probe=$(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
     -o ConnectTimeout=15 -p "$port" "${cfg[ssh_user]}@${cfg[target_host]}" \
     "test -d /home/${cfg[da_user]} && echo home_ok || echo home_missing;
@@ -104,6 +106,9 @@ if [[ "$MODE" == dry-run ]]; then
      if id -u apache >/dev/null 2>&1; then
        runuser -u apache -- test -x /home/${cfg[da_user]} && echo traverse_ok || echo traverse_denied;
      else echo traverse_unknown; fi;
+     if test -e /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html/wp-config.php; then echo site:wordpress;
+     elif ls -A /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html 2>/dev/null | grep -qvxE 'index\\.html|logo\\.png|cgi-bin|\\.well-known|\\.htaccess'; then echo site:not_empty;
+     else echo site:empty; fi;
      for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
      df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
     || probe="ssh_failed:$probe"
@@ -128,8 +133,9 @@ if [[ "$MODE" == dry-run ]]; then
       "${cfg[domain]}" "${cfg[target_host]}" "${problems% }"
     exit 3
   fi
-  printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"ok"}\n' \
-    "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
+  site=$(grep -o 'site:[a-z_]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
+  printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"ok","site":"%s"}\n' \
+    "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}" "${site:-unknown}"
   exit 0
 fi
 printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"

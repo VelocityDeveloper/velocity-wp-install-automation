@@ -2,11 +2,12 @@
 """Kirim notifikasi hasil instalasi ke Telegram.
 
 Pemakaian: notify-telegram.py <domain> <status> [tahap]
-Status: SUCCESS | FAILED
+Status: SUCCESS | FAILED | CLAIMED | MANUAL (dua terakhir dari autopilot)
 
 Kegagalan notifikasi tidak boleh menggagalkan instalasi, jadi semua error
 ditelan dan hanya dilaporkan lewat exit code (0 terkirim, 1 tidak).
 """
+import html
 import json
 import os
 import sys
@@ -36,14 +37,24 @@ def load_config():
 
 
 def build_message(domain, status, stage):
-    if status.upper() == 'SUCCESS':
+    status = status.upper()
+    stage = html.escape(stage or '-')
+    if status == 'SUCCESS':
         return (f'✅ <b>Instalasi selesai</b>\n'
                 f'Domain: <code>{domain}</code>\n'
                 f'Situs: https://{domain}\n'
                 f'Admin: https://{domain}/wp-admin')
+    if status == 'CLAIMED':
+        return (f'🤖 <b>Diambil alih autopilot</b>\n'
+                f'Domain: <code>{domain}</code>\n'
+                f'Tahap: <code>{stage}</code>')
+    if status == 'MANUAL':
+        return (f'⚠️ <b>Autopilot berhenti, perlu ditangani manual</b>\n'
+                f'Domain: <code>{domain}</code>\n'
+                f'Alasan: <code>{stage}</code>')
     return (f'❌ <b>Instalasi gagal</b>\n'
             f'Domain: <code>{domain}</code>\n'
-            f'Tahap: <code>{stage or "-"}</code>')
+            f'Tahap: <code>{stage}</code>')
 
 
 def send(token, chat, text):

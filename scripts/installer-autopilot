@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Autopilot installer: ambil alih project baru dari antrean CRM lalu pasang.
+
+Dijalankan installer-autopilot.timer. Satu putaran:
+  1. Lanjutkan domain yang sedang dipegang autopilot. Dry-run OK dan situs
+     masih kosong -> apply. Dry-run gagal, situs sudah berisi, atau run macet ->
+     berhenti (fase manual) dan kabari lewat Telegram.
+  2. Kalau tidak ada run berjalan, ambil SATU project "belum diambil" yang lolos
+     saringan (deadline terdekat dulu): klaim -> generate manifest -> dry-run.
+
+AUTOPILOT_MODE=observe (default) hanya mencatat rencana ke autopilot-last.json
+dan journald tanpa klaim/instalasi apa pun. AUTOPILOT_MODE=active menjalankannya.
+"""
+import datetime
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from collections import Counter
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / 'scripts'))
+from client_form import read_client_form  # noqa: E402
+
+API = os.environ.get('INSTALLER_API', 'http://127.0.0.1:9121')
+MODE = os.environ.get('AUTOPILOT_MODE', 'observe').strip().lower()
+STATE = Path('/var/lib/velocity/installer')
+JOURNAL = STATE / 'autopilot.json'
+SUMMARY = STATE / 'autopilot-last.json'
+ON_PROGRESS = Path('/home/On Progress')
+NOTIFY = REPO / 'scripts' / 'notify-telegram.py'
+# Redesign sengaja tidak termasuk: situsnya sudah hidup, dan menimpanya tanpa
+# ada manusia yang memeriksa terlalu berisiko.
+AUTO_JENIS = {'Pembuatan', 'Pembuatan apk biasa', 'Pembuatan Tanpa Domain'}
+ACTIVE_PHASES = ('dry-run', 'apply')
+STUCK_AFTER = datetime.timedelta(hours=2)
+
+
+def utcnow():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def read_json(path, default):
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+    return data if isinstance(data, type(default)) else default
+
+
+def write_json(path, data):
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True, ensure_ascii=False))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def api(method, path, body=None, timeout=180):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(API + path, data=data, method=method,
+                                 headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b'{}')
+        except ValueError:
+            return e.code, {}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return 0, {'error': str(getattr(e, 'reason', e))}
+
+
+def run_state(domain, since):
+    """(status, stage) dari installer-runner, hanya kalau ditulis setelah
+    autopilot memulai run. State lama (mis. FAILED minggu lalu) tidak boleh
+    terbaca sebagai hasil run yang baru saja dimulai."""
+    saved = read_json(STATE / f'{domain}.json', {})
+    try:
+        updated = datetime.datetime.fromisoformat(str(saved.get('updated_at')))
+        started = datetime.datetime.fromisoformat(str(since))
+    except ValueError:
+        return None, None
+    if updated < started:
+        return None, None
+    return saved.get('status'), saved.get('stage')
+
+
+def last_result(domain):
+    """Baris JSON hasil run terakhir di log domain (setelah penanda VALIDATING
+    terakhir, supaya hasil run lama tidak ikut terbaca)."""
+    found = {}
+    try:
+        lines = (STATE / f'{domain}.log').read_text(errors='replace').splitlines()
+    except OSError:
+        return found
+    for line in lines:
+        if '] RUNNING: VALIDATING' in line:
+            found = {}
+        elif line.startswith('{'):
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and 'status' in obj:
+                found = obj
+    return found
+
+
+def notify(domain, status, stage=''):
+    try:
+        subprocess.run([sys.executable, str(NOTIFY), domain, status, stage],
+                       timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def skip_reason(row, journal, today):
+    domain = row['domain']
+    if domain in journal:
+        return 'pernah_ditangani_autopilot'
+    if not row.get('folder'):
+        return 'folder_belum_tersinkron'
+    jenis = set(row.get('jenis') or [])
+    if 'Redesign' in jenis or not jenis & AUTO_JENIS:
+        return 'jenis_redesign_atau_lain'
+    if row.get('deadline') and row['deadline'] < today:
+        return 'deadline_terlewat'
+    if not read_client_form(ON_PROGRESS / domain)['fields']:
+        return 'form_isian_klien_tidak_terbaca'
+    return None
+
+
+def take(domain, journal):
+    """Klaim -> generate -> dry-run. Mengembalikan alasan gagal, atau None."""
+    code, res = api('POST', '/api/installer/claim', {'domain': domain, 'by': 'autopilot'})
+    if code != 200:
+        return f"klaim_gagal:{res.get('error') or code}"
+    journal[domain] = {'phase': 'claimed', 'claimed_at': utcnow().isoformat()}
+    write_json(JOURNAL, journal)
+    code, res = api('POST', '/api/installer/generate', {'domain': domain})
+    if code != 200:
+        return f"generate_gagal:{res.get('error') or code}"
+    started = utcnow().isoformat()
+    code, res = api('POST', '/api/installer/run', {'domain': domain, 'mode': 'dry-run'})
+    if code != 200:
+        return f"dry_run_tidak_mulai:{res.get('error') or code}"
+    journal[domain].update(phase='dry-run', started_at=started)
+    write_json(JOURNAL, journal)
+    notify(domain, 'CLAIMED', 'dry-run')
+    return None
+
+
+def main():
+    if MODE not in ('observe', 'active'):
+        print(json.dumps({'event': 'autopilot_mode_tidak_dikenal', 'mode': MODE}), flush=True)
+        return 2
+    active = MODE == 'active'
+    today = datetime.date.today().isoformat()
+    journal = read_json(JOURNAL, {})
+    actions = []
+
+    def stop(domain, reason, send=True):
+        actions.append({'domain': domain, 'aksi': 'manual', 'alasan': reason})
+        if active:
+            journal[domain].update(phase='manual', reason=reason, at=utcnow().isoformat())
+            write_json(JOURNAL, journal)
+            if send:
+                notify(domain, 'MANUAL', reason)
+
+    # 1) Lanjutkan domain yang sedang dipegang autopilot.
+    for domain, entry in list(journal.items()):
+        phase = entry.get('phase')
+        if phase not in ACTIVE_PHASES:
+            continue
+        status, stage = run_state(domain, entry.get('started_at'))
+        if status in (None, 'RUNNING'):
+            try:
+                started = datetime.datetime.fromisoformat(entry['started_at'])
+            except (KeyError, ValueError):
+                started = utcnow()
+            if utcnow() - started > STUCK_AFTER:
+                stop(domain, f'{phase}_macet')
+            continue
+        if phase == 'dry-run':
+            result = last_result(domain)
+            if status != 'SUCCESS' or stage != 'DRY_RUN_OK':
+                stop(domain, 'dry_run_gagal:' + str(result.get('problems') or result.get('error') or stage))
+            elif result.get('remote_check') != 'ok':
+                stop(domain, f"server_tidak_diperiksa:{result.get('remote_check')}")
+            elif result.get('site') != 'empty':
+                stop(domain, f"situs_sudah_berisi:{result.get('site')}")
+            else:
+                actions.append({'domain': domain, 'aksi': 'apply'})
+                if active:
+                    started = utcnow().isoformat()
+                    code, res = api('POST', '/api/installer/run', {'domain': domain, 'mode': 'apply'})
+                    if code == 200:
+                        entry.update(phase='apply', started_at=started)
+                        write_json(JOURNAL, journal)
+                    else:
+                        stop(domain, f"apply_tidak_mulai:{res.get('error') or code}")
+        elif status == 'SUCCESS' and stage == 'COMPLETE':
+            actions.append({'domain': domain, 'aksi': 'selesai'})
+            if active:
+                entry.update(phase='done', at=utcnow().isoformat())
+                write_json(JOURNAL, journal)
+        else:
+            # installer-runner sudah mengirim notifikasi gagal untuk apply.
+            stop(domain, f'apply_gagal:{stage}', send=False)
+
+    # 2) Ambil satu project baru kalau tidak ada yang sedang berjalan.
+    code, data = api('GET', '/api/installer')
+    if code != 200:
+        print(json.dumps({'event': 'autopilot_api_gagal', 'code': code, 'error': data.get('error')}), flush=True)
+        return 1
+    rows = data.get('domains') or []
+    busy = (any(e.get('phase') in ACTIVE_PHASES for e in journal.values())
+            or any(r.get('status') == 'RUNNING' for r in rows))
+    reasons = Counter()
+    candidates = []
+    for row in rows:
+        if row.get('status') != 'belum diambil':
+            continue
+        reason = skip_reason(row, journal, today)
+        if reason:
+            reasons[reason] += 1
+        else:
+            candidates.append(row)
+    candidates.sort(key=lambda r: r.get('deadline') or '9999-12-31')
+    if candidates and not busy:
+        domain = candidates[0]['domain']
+        actions.append({'domain': domain, 'aksi': 'ambil_alih_dan_dry_run'})
+        if active:
+            err = take(domain, journal)
+            if err and domain in journal:
+                stop(domain, err)
+            elif err:
+                actions.append({'domain': domain, 'aksi': 'gagal', 'alasan': err})
+
+    summary = {
+        'at': utcnow().isoformat(),
+        'mode': MODE,
+        'antrean_belum_diambil': sum(reasons.values()) + len(candidates),
+        'lolos_saringan': len(candidates),
+        'kandidat': [{'domain': r['domain'], 'deadline': r.get('deadline'), 'paket': r.get('paket')}
+                     for r in candidates[:20]],
+        'dilewati': dict(reasons),
+        'sibuk': busy,
+        'aksi': actions,
+    }
+    write_json(SUMMARY, summary)
+    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

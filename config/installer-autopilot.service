@@ -1,0 +1,11 @@
+[Unit]
+Description=Installer autopilot (ambil alih + pasang project baru dari CRM)
+After=installer-status.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# AUTOPILOT_MODE=observe|active. Tanpa file ini autopilot hanya mengamati.
+EnvironmentFile=-/etc/velocity/installer-autopilot.env
+ExecStart=/usr/bin/python3 -u /opt/velocity-wp-install-automation/scripts/installer-autopilot
+TimeoutStartSec=15min

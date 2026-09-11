@@ -1,0 +1,10 @@
+[Unit]
+Description=Sync folder antrean installer dari Google Drive tiap 10 menit
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=10min
+Unit=onprogress-sync@queue.service
+
+[Install]
+WantedBy=timers.target

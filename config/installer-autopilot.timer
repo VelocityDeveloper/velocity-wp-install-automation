@@ -1,0 +1,10 @@
+[Unit]
+Description=Jalankan installer autopilot tiap 10 menit
+
+[Timer]
+OnBootSec=8min
+OnUnitInactiveSec=10min
+Unit=installer-autopilot.service
+
+[Install]
+WantedBy=timers.target

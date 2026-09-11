@@ -67,6 +67,11 @@ PROJECT_LIST_PER_PAGE = 2000
 PROJECT_LIST_MAX_PAGES = 25
 _belum_diambil_cache = {'at': 0, 'value': {}, 'fetching': False, 'error': ''}
 _belum_diambil_lock = threading.Lock()
+# "Ambil alih" dicatat lokal: CRM belum punya API tulis, jadi status "Belum
+# dikerjakan" di sana tidak berubah walau installer sudah memegang project-nya.
+CLAIMS_FILE = STATE / 'claims.json'
+CLAIM_BY_RE = re.compile(r'^[a-z0-9:._-]{1,40}$')
+_claims_lock = threading.Lock()
 
 
 def _rate_ok(ip: str) -> bool:
@@ -346,7 +351,8 @@ def _fetch_belum_diambil_domains_now():
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode('utf-8', errors='replace'))
         for item in data.get('data', []):
-            if str(item.get('jenis') or '').strip() not in INSTALL_JENIS:
+            jenis = str(item.get('jenis') or '').strip()
+            if jenis not in INSTALL_JENIS:
                 continue
             wh = item.get('webhost') or {}
             name = str(wh.get('nama_web') or '').strip().lower()
@@ -357,7 +363,10 @@ def _fetch_belum_diambil_domains_now():
             # Satu domain bisa punya beberapa project: pertahankan nilai yang
             # terisi supaya baris kosong tidak menimpanya, dan untuk deadline
             # ambil yang paling dekat karena itu yang paling mendesak.
-            cur = found.setdefault(name, {'paket': '', 'deadline': ''})
+            cur = found.setdefault(name, {'paket': '', 'deadline': '', 'jenis': []})
+            # Autopilot perlu jenisnya: Redesign berarti situsnya sudah hidup.
+            if jenis not in cur['jenis']:
+                cur['jenis'].append(jenis)
             if paket and not cur['paket']:
                 cur['paket'] = paket
             if deadline and (not cur['deadline'] or deadline < cur['deadline']):
@@ -415,12 +424,83 @@ def belum_diambil_domains():
     return _belum_diambil_cache['value']
 
 
+def load_claims():
+    try:
+        data = json.loads(CLAIMS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_claims(claims):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = CLAIMS_FILE.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(claims, indent=1, sort_keys=True))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, CLAIMS_FILE)
+
+
+def claim_domain(domain: str, by: str):
+    """Tandai project sudah diambil alih. Idempoten: klaim yang sudah ada tidak ditimpa."""
+    if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
+        return None, 'invalid_domain'
+    by = (by or 'manual').strip().lower()
+    if not CLAIM_BY_RE.match(by):
+        return None, 'invalid_by'
+    name = domain.lower()
+    # Hanya pekerjaan yang memang ada: di antrean CRM atau sudah punya folder.
+    if (name not in belum_diambil_domains() and not (ON_PROGRESS / name).is_dir()
+            and not (ROOT / name).is_dir()):
+        return None, 'unknown_domain'
+    with _claims_lock:
+        claims = load_claims()
+        if name in claims:
+            return {'domain': name, 'claimed': False, **claims[name]}, None
+        claims[name] = {'by': by, 'at': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
+        _save_claims(claims)
+    return {'domain': name, 'claimed': True, **claims[name]}, None
+
+
+def release_claim(domain: str):
+    if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
+        return None, 'invalid_domain'
+    name = domain.lower()
+    with _claims_lock:
+        claims = load_claims()
+        if claims.pop(name, None) is None:
+            return None, 'not_claimed'
+        _save_claims(claims)
+    return {'domain': name, 'released': True}, None
+
+
+def _queue_row(name, source, belum_diambil, claims, connected_hosts):
+    """Baris antrean untuk satu folder project, atau None kalau tidak perlu tampil."""
+    manifest = ROOT / name / f'{name}.txt'
+    has_manifest = manifest.is_file()
+    row = domain_row(name, manifest if has_manifest else None)
+    key = name.lower()
+    crm = belum_diambil.get(key) or {}
+    row['paket'] = crm.get('paket') or None
+    row['deadline'] = crm.get('deadline') or None
+    row['jenis'] = crm.get('jenis') or []
+    row['claim'] = claims.get(key)
+    if key in belum_diambil and not row['claim']:
+        row['status'] = 'belum diambil'
+    elif not has_manifest and not row['claim']:
+        return None
+    elif has_manifest and row.get('target_host') not in connected_hosts:
+        return None
+    row['source'] = source
+    return row
+
+
 def domains():
     rows = []
     done = installed_domains()
     connected_hosts = {str(s.get('host', '')).strip() for s in load_servers()
                        if isinstance(s, dict) and str(s.get('host', '')).strip()}
     belum_diambil = belum_diambil_domains()
+    claims = load_claims()
     seen = set()
     # primary source: On Progress folders synced from Google Drive
     if ON_PROGRESS.is_dir():
@@ -429,40 +509,18 @@ def domains():
             if not DOMAIN_RE.match(name) or name in done:
                 continue
             seen.add(name)
-            manifest = ROOT / name / f'{name}.txt'
-            has_manifest = manifest.is_file()
-            row = domain_row(name, manifest if has_manifest else None)
-            crm = belum_diambil.get(name.lower()) or {}
-            row['paket'] = crm.get('paket') or None
-            row['deadline'] = crm.get('deadline') or None
-            if name.lower() in belum_diambil:
-                row['status'] = 'belum diambil'
-            elif not has_manifest:
-                continue
-            elif row.get('target_host') not in connected_hosts:
-                continue
-            row['source'] = 'onprogress'
-            rows.append(row)
+            row = _queue_row(name, 'onprogress', belum_diambil, claims, connected_hosts)
+            if row:
+                rows.append(row)
     # fallback: existing /home/project folders (e.g. fahmi = Drive-less, yayasan = FAILED retry)
     if ROOT.is_dir():
         for folder in sorted(p for p in ROOT.iterdir() if p.is_dir()):
             name = folder.name
             if name in seen or not DOMAIN_RE.match(name) or name in done:
                 continue
-            manifest = folder / f'{folder.name}.txt'
-            has_manifest = manifest.is_file()
-            row = domain_row(folder.name, manifest if has_manifest else None)
-            crm = belum_diambil.get(name.lower()) or {}
-            row['paket'] = crm.get('paket') or None
-            row['deadline'] = crm.get('deadline') or None
-            if name.lower() in belum_diambil:
-                row['status'] = 'belum diambil'
-            elif not has_manifest:
-                continue
-            elif row.get('target_host') not in connected_hosts:
-                continue
-            row['source'] = 'project'
-            rows.append(row)
+            row = _queue_row(name, 'project', belum_diambil, claims, connected_hosts)
+            if row:
+                rows.append(row)
     # CRM adalah sumber kebenaran soal pekerjaan yang ada. Daftar di atas
     # digerakkan oleh folder di disk, jadi project yang foldernya belum
     # tersinkron dari Drive tidak pernah muncul sama sekali — padahal itu justru
@@ -473,14 +531,17 @@ def domains():
         if name in emitted or name in done_lower or not DOMAIN_RE.match(name):
             continue
         crm = belum_diambil.get(name) or {}
+        claim = claims.get(name)
         rows.append({
             'domain': name,
             'manifest': None,
             'folder': False,
-            'status': 'belum diambil',
+            'status': 'NO_FOLDER' if claim else 'belum diambil',
             'target_host': None,
             'paket': crm.get('paket') or None,
             'deadline': crm.get('deadline') or None,
+            'jenis': crm.get('jenis') or [],
+            'claim': claim,
             'log': [],
             'source': 'crm',
         })
@@ -1088,7 +1149,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         # Check allowed paths (including dynamic ones)
-        allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/packages', '/api/packages/download',
+        allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/installer/claim',
+                          '/api/installer/release', '/api/packages', '/api/packages/download',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
         is_allowed = path in allowed_static or path.startswith('/api/ai/models/')
@@ -1280,6 +1342,21 @@ class Handler(BaseHTTPRequestHandler):
             if result is None:
                 code = {'invalid_domain': 400, 'no_folder': 404}.get(err, 422)
                 self._send_json({'error': err, 'domain': domain}, code)
+                return
+            self._send_json({'status': 'ok', **result})
+            return
+        if path == '/api/installer/claim':
+            result, err = claim_domain(domain, str(payload.get('by') or 'manual'))
+            if result is None:
+                code = {'invalid_domain': 400, 'invalid_by': 400, 'unknown_domain': 404}.get(err, 422)
+                self._send_json({'error': err, 'domain': domain}, code)
+                return
+            self._send_json({'status': 'ok', **result})
+            return
+        if path == '/api/installer/release':
+            result, err = release_claim(domain)
+            if result is None:
+                self._send_json({'error': err, 'domain': domain}, 400 if err == 'invalid_domain' else 404)
                 return
             self._send_json({'status': 'ok', **result})
             return
