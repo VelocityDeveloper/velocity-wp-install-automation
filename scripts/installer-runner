@@ -66,6 +66,12 @@ try:
 except Exception:
     print("qa_gagal_dijalankan")' "$qa")
 fi
+if [[ "$MODE" == "apply" ]]; then
+  # Langkah terakhir: tutup situs dengan maintenance mode velocity-addons sampai PM
+  # menyerahkannya ke klien. Sesudah QA, karena QA membaca situs sebagai pengunjung.
+  echo "[$(date -Is)] Maintenance mode" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/site-finish" --maintenance "$MANIFEST" >> "$LOG" 2>&1 || true
+fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
 else

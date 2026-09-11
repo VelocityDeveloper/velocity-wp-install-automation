@@ -2,7 +2,7 @@
 """Kirim notifikasi hasil instalasi ke Telegram.
 
 Pemakaian: notify-telegram.py <domain> <status> [tahap]
-Status: SUCCESS | CHECK (terpasang, perlu dicek) | FAILED | CLAIMED | MANUAL (dua terakhir dari autopilot)
+Status: SUCCESS | CHECK (terpasang, perlu dicek) | FAILED | CLAIMED | MANUAL | WAITING (tiga terakhir dari autopilot)
 
 Kegagalan notifikasi tidak boleh menggagalkan instalasi, jadi semua error
 ditelan dan hanya dilaporkan lewat exit code (0 terkirim, 1 tidak).
@@ -81,15 +81,37 @@ def theme_note(domain):
     return active
 
 
-def build_message(domain, status, stage, paket='', theme=''):
+def maintenance_note(domain):
+    """'aktif' kalau langkah maintenance di instalasi terakhir berhasil menyala."""
+    if not domain or '/' in domain or '..' in domain:
+        return ''
+    try:
+        lines = (LOG_DIR / f'{domain}.log').read_text(errors='replace').splitlines()[-400:]
+    except OSError:
+        return ''
+    last = next((l for l in reversed(lines) if l.startswith('maintenance: maintenance_')), '')
+    if 'maintenance_active' in last or 'maintenance_enabled' in last:
+        return 'aktif (pengunjung melihat halaman perawatan)'
+    if 'maintenance_not_visible' in last:
+        return 'dinyalakan, tapi halaman perawatan belum tampil'
+    return ''
+
+
+def build_message(domain, status, stage, paket='', theme='', maintenance=''):
     status = status.upper()
     stage = html.escape(stage or '-')
     head = f'Domain: <code>{domain}</code>\n'
     if paket:
         head += f'Paket: <b>{html.escape(paket)}</b>\n'
+    if status == 'WAITING':
+        return (f'⏳ <b>Menunggu akun DirectAdmin</b>\n{head}'
+                f'Akun hosting belum dibuat PM. Autopilot mengecek ulang tiap 30 menit '
+                f'dan melanjutkan instalasi begitu akun tersedia.')
     if status in ('SUCCESS', 'CHECK'):
         if theme:
             head += f'Tema: <code>{html.escape(theme)}</code>\n'
+        if maintenance:
+            head += f'Maintenance: <b>{html.escape(maintenance)}</b>\n'
         links = f'Situs: https://{domain}\nAdmin: https://{domain}/wp-admin'
         if status == 'CHECK':
             # Terpasang, tapi pemeriksaan akhir (scripts/site-qa) menemukan masalah.
@@ -142,8 +164,9 @@ def main():
     if not token or not chats:
         print('telegram: token/chat_id belum diset, notifikasi dilewati', file=sys.stderr)
         return 1
-    theme = theme_note(domain) if status.upper() in ('SUCCESS', 'CHECK') else ''
-    text = build_message(domain, status, stage, manifest_paket(domain), theme)
+    done = status.upper() in ('SUCCESS', 'CHECK')
+    text = build_message(domain, status, stage, manifest_paket(domain),
+                         theme_note(domain) if done else '', maintenance_note(domain) if done else '')
     failed = 0
     for chat in chats:
         try:

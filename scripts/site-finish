@@ -15,10 +15,13 @@ import os
 import re
 import shlex
 import shutil
+import ssl
 import struct
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -249,11 +252,74 @@ echo "finish_done" >&2
 '''
 
 
+REMOTE_MAINT = r'''
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+# Hanya sekali per situs: PM mematikan maintenance saat serah terima ke klien, dan
+# apply ulang sesudahnya tidak boleh menyalakannya lagi.
+if [[ -n "$(wp option get velocity_installer_maintenance 2>/dev/null || true)" ]]; then
+  echo "maintenance_skip:sudah_pernah_diaktifkan_installer"
+elif wp option get maintenance_mode >/dev/null 2>&1; then
+  echo "maintenance_skip:sudah_diatur_manual"
+elif ! wp plugin is-active velocity-addons >/dev/null 2>&1; then
+  echo "maintenance_skip:velocity_addons_tidak_aktif"
+else
+  wp option update maintenance_mode_data "$MAINT_DATA" --format=json >/dev/null
+  wp option update maintenance_mode 1 >/dev/null
+  wp option update velocity_installer_maintenance "$(date -Is)" >/dev/null
+  echo "maintenance_enabled"
+fi
+'''
+
+
+def ssh_command(cfg, key):
+    return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+
+
+def enable_maintenance(cfg, domain, da_user, ssh):
+    """Langkah terakhir instalasi: tutup situs dengan maintenance mode velocity-addons
+    sampai PM menyerahkannya ke klien."""
+    title = cfg.get('site_title') or domain
+    data = {'header': 'Website Sedang Disiapkan',
+            'body': f'{title} sedang dalam tahap pengerjaan. Silakan kunjungi kembali dalam waktu dekat.',
+            'background': 0}
+    header = '\n'.join([f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+                        f'MAINT_DATA={shlex.quote(json.dumps(data))}'])
+    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_MAINT,
+                         capture_output=True, text=True, timeout=180)
+    out = [l.strip() for l in (run.stdout + '\n' + run.stderr).splitlines()
+           if l.strip() and not l.startswith('Warning:')]
+    for line in out:
+        print(f'maintenance: {line[:200]}')
+    if any('maintenance_enabled' in l for l in out):
+        # Pastikan pengunjung tanpa login benar-benar melihat halaman perawatan.
+        req = urllib.request.Request(f'https://{domain}/', headers={'User-Agent': 'velocity-installer/1.0'})
+        try:
+            try:
+                with urllib.request.urlopen(req, timeout=25, context=ssl._create_unverified_context()) as resp:
+                    page = resp.read().decode('utf-8', 'replace')
+            except urllib.error.HTTPError as e:
+                page = e.read().decode('utf-8', 'replace')
+            print('maintenance: ' + ('maintenance_active' if 'maintenance-shell' in page else 'maintenance_not_visible'))
+        except (urllib.error.URLError, OSError) as e:
+            print(f'maintenance: maintenance_check_failed:{type(e).__name__}')
+    return 0 if run.returncode == 0 else 1
+
+
 def main():
-    if len(sys.argv) < 2:
-        print('usage: site-finish <manifest>', file=sys.stderr)
+    args = sys.argv[1:]
+    maintenance = bool(args) and args[0] == '--maintenance'
+    if maintenance:
+        args = args[1:]
+    if not args:
+        print('usage: site-finish [--maintenance] <manifest>', file=sys.stderr)
         return 2
-    cfg = read_manifest(sys.argv[1])
+    cfg = read_manifest(args[0])
     domain = cfg.get('domain', '').lower()
     da_user = cfg.get('da_user', '')
     key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
@@ -263,6 +329,9 @@ def main():
     if not key or not Path(key).is_file():
         print('finish: kunci SSH tidak ada')
         return 2
+    ssh = ssh_command(cfg, key)
+    if maintenance:
+        return enable_maintenance(cfg, domain, da_user, ssh)
     folder = ON_PROGRESS / domain
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
     fields = form['fields']
@@ -305,9 +374,6 @@ def main():
             f'TAGLINE={shlex.quote(tagline)}',
             f'CSS={shlex.quote(css)}',
         ])
-        ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-               '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
-               f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
         print(f'finish: logo={logo.name if logo else "-"} foto={len(photos)} wa={"ya" if wa else "-"} '
               f'alamat={"ya" if address else "-"} tagline={"ya" if tagline else "-"} warna={"ya" if css else "-"}')
         tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)

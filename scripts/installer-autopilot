@@ -37,6 +37,11 @@ NOTIFY = REPO / 'scripts' / 'notify-telegram.py'
 AUTO_JENIS = {'Pembuatan', 'Pembuatan apk biasa', 'Pembuatan Tanpa Domain'}
 ACTIVE_PHASES = ('dry-run', 'apply')
 STUCK_AFTER = datetime.timedelta(hours=2)
+# Akun DirectAdmin selalu dibuat manual oleh PM. Dry-run yang gagal karena akun
+# belum ada bukan kegagalan: cek ulang berkala sampai akun dibuat.
+DA_MISSING = ('da_user_home_missing', 'domain_dir_missing')
+WAIT_DA_EVERY = datetime.timedelta(minutes=30)
+WAIT_DA_MAX = datetime.timedelta(days=14)
 
 
 def utcnow():
@@ -174,6 +179,30 @@ def main():
     # 1) Lanjutkan domain yang sedang dipegang autopilot.
     for domain, entry in list(journal.items()):
         phase = entry.get('phase')
+        # Jejak lama: berhenti manual karena akun DA belum ada -> ikut menunggu.
+        if phase == 'manual' and any(p in str(entry.get('reason', '')) for p in DA_MISSING):
+            phase = 'waiting_da'
+            if active:
+                entry.update(phase=phase, since=entry.get('at') or utcnow().isoformat(),
+                             next_check=utcnow().isoformat(), da_notified=True)
+                write_json(JOURNAL, journal)
+        if phase == 'waiting_da':
+            try:
+                next_check = datetime.datetime.fromisoformat(entry.get('next_check') or '')
+                since = datetime.datetime.fromisoformat(entry.get('since') or '')
+            except ValueError:
+                next_check = since = utcnow()
+            if utcnow() - since > WAIT_DA_MAX:
+                stop(domain, 'akun_directadmin_tidak_kunjung_dibuat')
+            elif utcnow() >= next_check:
+                actions.append({'domain': domain, 'aksi': 'cek_ulang_akun_directadmin'})
+                if active:
+                    started = utcnow().isoformat()
+                    code, res = api('POST', '/api/installer/run', {'domain': domain, 'mode': 'dry-run'})
+                    if code == 200:
+                        entry.update(phase='dry-run', started_at=started)
+                        write_json(JOURNAL, journal)
+            continue
         if phase not in ACTIVE_PHASES:
             continue
         status, stage = run_state(domain, entry.get('started_at'))
@@ -188,7 +217,19 @@ def main():
         if phase == 'dry-run':
             result = last_result(domain)
             if status != 'SUCCESS' or stage != 'DRY_RUN_OK':
-                stop(domain, 'dry_run_gagal:' + str(result.get('problems') or result.get('error') or stage))
+                problems = str(result.get('problems') or result.get('error') or stage)
+                if any(p in problems for p in DA_MISSING):
+                    actions.append({'domain': domain, 'aksi': 'menunggu_akun_directadmin'})
+                    if active:
+                        now = utcnow()
+                        entry.update(phase='waiting_da', since=entry.get('since') or now.isoformat(),
+                                     next_check=(now + WAIT_DA_EVERY).isoformat(), reason=problems)
+                        if not entry.get('da_notified'):
+                            entry['da_notified'] = True
+                            notify(domain, 'WAITING', 'akun_directadmin_belum_dibuat')
+                        write_json(JOURNAL, journal)
+                else:
+                    stop(domain, 'dry_run_gagal:' + problems)
             elif result.get('remote_check') != 'ok':
                 stop(domain, f"server_tidak_diperiksa:{result.get('remote_check')}")
             elif result.get('site') != 'empty':

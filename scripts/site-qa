@@ -85,8 +85,12 @@ def main():
     if status != 200 and 'situs_tidak_bisa_dibuka' not in problems:
         problems.append(f'beranda_http_{status}')
 
+    # Situs dalam maintenance mode (velocity-addons) menyajikan halaman perawatan ke
+    # pengunjung: pemeriksaan berbasis beranda tidak berlaku, pemeriksaan REST tetap.
+    maintenance = 'maintenance-shell' in home
+    info['maintenance'] = maintenance
     menu = {s for s in ('tentang-kami', 'hubungi-kami') if re.search(rf'href="[^"]*/{s}/?"', home)}
-    if home and len(menu) < 2:
+    if home and not maintenance and len(menu) < 2:
         problems.append('menu_tidak_lengkap')
 
     pages = fetch_json(f'{base}wp-json/wp/v2/pages?per_page=50&_fields=slug,content') or []
@@ -96,7 +100,8 @@ def main():
         srcs.update(re.findall(r'<img[^>]+src="([^"]+)"', content))
         if has_placeholder(content):
             ph_pages.append(page.get('slug'))
-    srcs.update(re.findall(r'<img[^>]+src="([^"]+)"', home))
+    if not maintenance:
+        srcs.update(re.findall(r'<img[^>]+src="([^"]+)"', home))
     if ph_pages:
         problems.append('teks_placeholder:' + ','.join(sorted(set(ph_pages))))
 
