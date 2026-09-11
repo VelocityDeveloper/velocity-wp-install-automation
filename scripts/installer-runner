@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 DOMAIN=${1:?domain_required}
 # dry-run | apply | finish (rapikan ulang situs terpasang: konten, aset klien,
-# pemeriksaan — tanpa memasang ulang WordPress dan tanpa notifikasi)
+# pemeriksaan — tanpa memasang ulang WordPress dan tanpa notifikasi) |
+# maintenance (hanya nyalakan maintenance mode untuk situs terpasang)
 MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
 SCRIPTS=/opt/velocity-wp-install-automation/scripts
@@ -33,7 +34,7 @@ trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
-if [[ "$MODE" != "finish" ]]; then
+if [[ "$MODE" != "finish" && "$MODE" != "maintenance" ]]; then
   INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" "$SCRIPTS/website-install-from-manifest" >> "$LOG" 2>&1
 fi
 problems=""
@@ -66,7 +67,7 @@ try:
 except Exception:
     print("qa_gagal_dijalankan")' "$qa")
 fi
-if [[ "$MODE" == "apply" ]]; then
+if [[ "$MODE" == "apply" || "$MODE" == "maintenance" ]]; then
   # Langkah terakhir: tutup situs dengan maintenance mode velocity-addons sampai PM
   # menyerahkannya ke klien. Sesudah QA, karena QA membaca situs sebagai pengunjung.
   echo "[$(date -Is)] Maintenance mode" >> "$LOG"

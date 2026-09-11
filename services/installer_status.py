@@ -783,15 +783,17 @@ def generate_manifest(domain: str):
 
 
 def start_run(domain: str, mode: str):
-    """Start installer-runner for domain. mode: dry-run | apply | finish.
+    """Start installer-runner for domain. mode: dry-run | apply | finish | maintenance.
 
     finish merapikan ulang situs yang sudah terpasang (konten bersih, aset klien,
-    pemeriksaan akhir) tanpa memasang ulang WordPress dan tanpa notifikasi."""
+    pemeriksaan akhir) tanpa memasang ulang WordPress dan tanpa notifikasi.
+    maintenance hanya menyalakan maintenance mode velocity-addons (langkah terakhir
+    apply) untuk situs yang terpasang sebelum langkah itu ada."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
         return None, 'invalid_domain'
-    if mode not in ('dry-run', 'apply', 'finish'):
+    if mode not in ('dry-run', 'apply', 'finish', 'maintenance'):
         return None, 'invalid_mode'
-    if mode == 'finish' and not ssh_key_file():
+    if mode in ('finish', 'maintenance') and not ssh_key_file():
         return None, 'ssh_key_missing'
     manifest = ROOT / domain / f'{domain}.txt'
     if not manifest.is_file():
