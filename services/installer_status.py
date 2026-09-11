@@ -703,6 +703,11 @@ def generate_manifest(domain: str):
         content += f'velocity_addons_pkg={addons_pkg}\n'
     if theme_pkg:
         content += f'velocity_theme_pkg={theme_pkg}\n'
+    # Paket website dari CRM untuk laporan Telegram: situs yang sudah terpasang
+    # tidak lagi muncul di antrean, jadi paketnya dicatat di manifest.
+    paket = str((belum_diambil_domains().get(domain.lower()) or {}).get('paket') or '')
+    if re.match(r'^[\w .&()/+-]{1,60}$', paket):
+        content += f'paket={paket}\n'
     tmp = manifest.with_suffix('.txt.tmp')
     tmp.write_text(content)
     os.chmod(tmp, 0o640)

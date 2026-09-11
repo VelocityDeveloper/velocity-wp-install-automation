@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 
 CONFIG = Path('/etc/velocity/secrets/telegram.env')
+MANIFEST_ROOT = Path('/home/project')
 API = 'https://api.telegram.org/bot{token}/sendMessage'
 
 
@@ -38,24 +39,39 @@ def load_config():
     return token.strip(), chats
 
 
-def build_message(domain, status, stage):
+def manifest_paket(domain):
+    """Paket website dari manifest. Ditulis saat manifest dibuat dari data CRM,
+    karena situs yang sudah terpasang tidak lagi muncul di antrean installer."""
+    if not domain or '/' in domain or '..' in domain:
+        return ''
+    try:
+        text = (MANIFEST_ROOT / domain / f'{domain}.txt').read_text()
+    except OSError:
+        return ''
+    for line in text.splitlines():
+        key, _, value = line.partition('=')
+        if key.strip() == 'paket':
+            return value.strip()
+    return ''
+
+
+def build_message(domain, status, stage, paket=''):
     status = status.upper()
     stage = html.escape(stage or '-')
+    head = f'Domain: <code>{domain}</code>\n'
+    if paket:
+        head += f'Paket: <b>{html.escape(paket)}</b>\n'
     if status == 'SUCCESS':
-        return (f'✅ <b>Instalasi selesai</b>\n'
-                f'Domain: <code>{domain}</code>\n'
+        return (f'✅ <b>Instalasi selesai</b>\n{head}'
                 f'Situs: https://{domain}\n'
                 f'Admin: https://{domain}/wp-admin')
     if status == 'CLAIMED':
-        return (f'🤖 <b>Diambil alih autopilot</b>\n'
-                f'Domain: <code>{domain}</code>\n'
+        return (f'🤖 <b>Diambil alih autopilot</b>\n{head}'
                 f'Tahap: <code>{stage}</code>')
     if status == 'MANUAL':
-        return (f'⚠️ <b>Autopilot berhenti, perlu ditangani manual</b>\n'
-                f'Domain: <code>{domain}</code>\n'
+        return (f'⚠️ <b>Autopilot berhenti, perlu ditangani manual</b>\n{head}'
                 f'Alasan: <code>{stage}</code>')
-    return (f'❌ <b>Instalasi gagal</b>\n'
-            f'Domain: <code>{domain}</code>\n'
+    return (f'❌ <b>Instalasi gagal</b>\n{head}'
             f'Tahap: <code>{stage}</code>')
 
 
@@ -80,7 +96,7 @@ def main():
     if not token or not chats:
         print('telegram: token/chat_id belum diset, notifikasi dilewati', file=sys.stderr)
         return 1
-    text = build_message(domain, status, stage)
+    text = build_message(domain, status, stage, manifest_paket(domain))
     failed = 0
     for chat in chats:
         try:

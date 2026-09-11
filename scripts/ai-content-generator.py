@@ -316,7 +316,17 @@ fi'''
         escaped_excerpt = excerpt.replace("'", "'\\''")
         
         # Artikel langsung terbit; draft dari generator versi lama ikut diterbitkan.
-        cmd = f'''post_id=$($WP_BIN post list --post_type=post --post_status=any --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+        # Status dicari satu per satu: dengan --post_status=any, WP_Query untuk satu
+        # slug menyembunyikan draft dari WP-CLI (tanpa user login), sehingga artikel
+        # dibuat ulang dengan slug "-2" dan draft lamanya tertinggal.
+        cmd = f'''post_id=$($WP_BIN post list --post_type=post --post_status=publish --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+[[ -n "$post_id" ]] || post_id=$($WP_BIN post list --post_type=post --post_status=draft --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -n "$post_id" ]]; then
+  # Duplikat "-2" yang sempat terbit akibat bug di atas.
+  for dup in $($WP_BIN post list --post_type=post --post_status=publish --name='{slug}-2' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null); do
+    $WP_BIN post delete "$dup" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_duplicate_deleted:{slug}-2"
+  done
+fi
 if [[ -z "$post_id" ]]; then
   post_id=$($WP_BIN post create --post_type=post --post_status=publish --post_title='{escaped_title}' --post_name='{slug}' --post_content='{escaped_content}' --post_excerpt='{escaped_excerpt}' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null || true)
   [[ -n "$post_id" ]] && echo "article_created:{slug}"
@@ -327,6 +337,8 @@ else
   echo "article_exists:{slug}"
 fi'''
         output, rc = wp_remote(cmd)
+        if 'article_duplicate_deleted' in output:
+            log(f'Duplikat dihapus: {slug}-2')
         if 'article_created' in output or 'article_published' in output:
             articles_done += 1
             log(f'Artikel terbit: {slug}')
