@@ -31,7 +31,9 @@ def fetch(url, verify=False, method='GET', timeout=25):
         with urllib.request.urlopen(req, timeout=timeout, context=None if verify else INSECURE) as resp:
             return resp.status, (resp.read() if method == 'GET' else b'')
     except urllib.error.HTTPError as e:
-        return e.code, b''
+        # Isi halaman tetap dibaca: halaman maintenance velocity-addons dibalas
+        # HTTP 503, dan tanpa isinya situs yang sedang maintenance terlapor rusak.
+        return e.code, (e.read() if method == 'GET' else b'')
 
 
 def fetch_json(url):
@@ -82,7 +84,8 @@ def main():
         except (urllib.error.URLError, OSError):
             time.sleep(3)
     info['home_http'] = status
-    if status != 200 and 'situs_tidak_bisa_dibuka' not in problems:
+    if (status != 200 and 'situs_tidak_bisa_dibuka' not in problems
+            and not (status == 503 and 'maintenance-shell' in home)):
         problems.append(f'beranda_http_{status}')
 
     # Situs dalam maintenance mode (velocity-addons) menyajikan halaman perawatan ke
