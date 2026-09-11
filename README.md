@@ -151,7 +151,8 @@ Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
 - **Pembersihan** hanya pada run yang memasang WordPress dari awal (bukan apply ulang situs lama, bukan mode finish/maintenance): tema `twenty*` dan plugin `akismet`/`hello` yang tidak aktif. Tema aktif dan induknya tidak pernah dihapus; tema/plugin non-bawaan tidak disentuh.
 
 - **Maintenance mode** (plugin velocity-addons, opsi `maintenance_mode` + `maintenance_mode_data`) dinyalakan sebagai langkah terakhir, sesudah pemeriksaan akhir (yang membaca situs sebagai pengunjung). Hanya sekali per situs (penanda opsi `velocity_installer_maintenance`) dan tidak kalau opsinya sudah pernah diatur orang, jadi apply ulang setelah PM mematikannya saat serah terima tidak menyalakannya lagi. `site-qa` mengenali halaman perawatan dan melewati pemeriksaan berbasis beranda.
-- **Akun DirectAdmin selalu dibuat manual oleh PM.** Kalau dry-run autopilot gagal karena akun/folder domain belum ada, domain masuk fase `waiting_da`: notifikasi ⏳ sekali, dry-run diulang tiap 30 menit (maks. 14 hari), lalu instalasi berlanjut otomatis begitu akun dibuat.
+- **Akun DirectAdmin selalu dibuat manual oleh PM.** Kalau dry-run autopilot gagal karena akun/folder domain belum ada, domain masuk fase `waiting_da`: dry-run diulang tiap 30 menit (maks. 14 hari) tanpa notifikasi, lalu instalasi berlanjut otomatis begitu akun dibuat.
+- **Tahap dry-run tidak dilaporkan ke Telegram** (diambil alih, dry-run gagal/macet, situs sudah berisi, menunggu akun DirectAdmin). Statusnya terlihat di jurnal `/var/lib/velocity/installer/autopilot.json` dan halaman installer. Telegram hanya untuk hasil apply: selesai, perlu dicek, atau gagal.
 
 - **Konten AI** dibersihkan `content_sanitize.py` (tanpa `<img>`/`<iframe>`/`<form>`/placeholder). Halaman tulisan installer ditandai meta `_velocity_content_md5`; apply ulang hanya menimpa halaman yang belum disunting orang. Konten tersimpan di `/var/lib/velocity/ai/generated/` dipakai ulang.
 - **Bahan AI**: isi FORM ISIAN + dokumen di folder Drive (`client_docs.py`); PDF hasil scan dibaca OCR (`tesseract`, bahasa ind+eng).
@@ -193,7 +194,7 @@ CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/instal
 
 `installer-autopilot.timer` tiap 10 menit. Satu putaran:
 
-1. Domain yang sedang dipegang autopilot dilanjutkan: dry-run OK + `site=empty` → apply. Dry-run gagal, situs sudah berisi (`site=wordpress|not_empty`), atau run macet >2 jam → fase `manual` + notifikasi Telegram.
+1. Domain yang sedang dipegang autopilot dilanjutkan: dry-run OK + `site=empty` → apply. Dry-run gagal, situs sudah berisi (`site=wordpress|not_empty`), atau run macet >2 jam → fase `manual` (tanpa notifikasi untuk tahap dry-run; apply yang gagal tetap dilaporkan).
 2. Kalau tidak ada run berjalan, ambil **satu** project `belum diambil` yang lolos saringan (deadline terdekat dulu): klaim → generate manifest → dry-run.
 
 Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), deadline belum terlewat, FORM ISIAN klien terbaca, belum pernah ditangani autopilot.

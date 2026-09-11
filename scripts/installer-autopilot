@@ -155,7 +155,8 @@ def take(domain, journal):
         return f"dry_run_tidak_mulai:{res.get('error') or code}"
     journal[domain].update(phase='dry-run', started_at=started)
     write_json(JOURNAL, journal)
-    notify(domain, 'CLAIMED', 'dry-run')
+    # Tahap dry-run tidak dilaporkan ke Telegram (keputusan user 2026-09-11);
+    # statusnya tetap terlihat di jurnal autopilot dan halaman installer.
     return None
 
 
@@ -193,7 +194,7 @@ def main():
             except ValueError:
                 next_check = since = utcnow()
             if utcnow() - since > WAIT_DA_MAX:
-                stop(domain, 'akun_directadmin_tidak_kunjung_dibuat')
+                stop(domain, 'akun_directadmin_tidak_kunjung_dibuat', send=False)
             elif utcnow() >= next_check:
                 actions.append({'domain': domain, 'aksi': 'cek_ulang_akun_directadmin'})
                 if active:
@@ -212,7 +213,7 @@ def main():
             except (KeyError, ValueError):
                 started = utcnow()
             if utcnow() - started > STUCK_AFTER:
-                stop(domain, f'{phase}_macet')
+                stop(domain, f'{phase}_macet', send=phase != 'dry-run')
             continue
         if phase == 'dry-run':
             result = last_result(domain)
@@ -224,16 +225,13 @@ def main():
                         now = utcnow()
                         entry.update(phase='waiting_da', since=entry.get('since') or now.isoformat(),
                                      next_check=(now + WAIT_DA_EVERY).isoformat(), reason=problems)
-                        if not entry.get('da_notified'):
-                            entry['da_notified'] = True
-                            notify(domain, 'WAITING', 'akun_directadmin_belum_dibuat')
                         write_json(JOURNAL, journal)
                 else:
-                    stop(domain, 'dry_run_gagal:' + problems)
+                    stop(domain, 'dry_run_gagal:' + problems, send=False)
             elif result.get('remote_check') != 'ok':
-                stop(domain, f"server_tidak_diperiksa:{result.get('remote_check')}")
+                stop(domain, f"server_tidak_diperiksa:{result.get('remote_check')}", send=False)
             elif result.get('site') != 'empty':
-                stop(domain, f"situs_sudah_berisi:{result.get('site')}")
+                stop(domain, f"situs_sudah_berisi:{result.get('site')}", send=False)
             else:
                 actions.append({'domain': domain, 'aksi': 'apply'})
                 if active:
@@ -278,7 +276,7 @@ def main():
         if active:
             err = take(domain, journal)
             if err and domain in journal:
-                stop(domain, err)
+                stop(domain, err, send=False)
             elif err:
                 actions.append({'domain': domain, 'aksi': 'gagal', 'alasan': err})
 
