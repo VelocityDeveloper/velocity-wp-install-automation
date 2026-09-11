@@ -83,9 +83,56 @@ for rk in velocity_addons_repo velocity_theme_repo; do
   fi
 done
 
-# output dry-run info (structured)
+# --- dry-run ---
+# Dulu dry-run berhenti di sini dan selalu "ok" karena hanya memvalidasi bentuk
+# manifest, tanpa menyentuh server tujuan sama sekali. Akibatnya apply tetap
+# bisa gagal karena akun DirectAdmin belum ada (kasus nyata: yayasan). Sekarang
+# sisi server ikut diperiksa supaya kegagalan ketahuan sebelum ada yang ditulis.
+if [[ "$MODE" == dry-run ]]; then
+  if [[ -z "${WP_INSTALL_SSH_KEY_FILE:-}" || ! -r "${WP_INSTALL_SSH_KEY_FILE:-}" ]]; then
+    printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"skipped_no_ssh_key"}\n' \
+      "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
+    exit 0
+  fi
+  probe=$(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    -o ConnectTimeout=15 -p "$port" "${cfg[ssh_user]}@${cfg[target_host]}" \
+    "test -d /home/${cfg[da_user]} && echo home_ok || echo home_missing;
+     test -d /home/${cfg[da_user]}/domains/${cfg[domain]} && echo domain_ok || echo domain_missing;
+     # Webserver harus bisa menembus /home/<user>. Kalau grupnya menyimpang dari
+     # konvensi DirectAdmin (user:access), situs membalas 404 untuk semua URL
+     # walau file-nya lengkap — kasus nyata di birutourtravel.com.
+     if id -u apache >/dev/null 2>&1; then
+       runuser -u apache -- test -x /home/${cfg[da_user]} && echo traverse_ok || echo traverse_denied;
+     else echo traverse_unknown; fi;
+     for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
+     df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
+    || probe="ssh_failed:$probe"
+  problems=""
+  case "$probe" in
+    ssh_failed*) problems="ssh_failed" ;;
+    *) [[ "$probe" == *home_ok* ]] || problems+="da_user_home_missing "
+       [[ "$probe" == *domain_ok* ]] || problems+="domain_dir_missing "
+       if [[ "$probe" == *traverse_denied* ]]; then
+         problems+="webserver_cannot_traverse_home "
+       fi
+       while read -r t; do
+         [[ -n "$t" ]] && problems+="$t "
+       done < <(grep -o 'missing_tool:[a-z]*' <<<"$probe" || true)
+       avail=$(grep -o 'avail_kb:[0-9]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
+       if [[ -n "$avail" && "$avail" -lt 512000 ]]; then
+         problems+="disk_low:${avail}KB "
+       fi ;;
+  esac
+  if [[ -n "$problems" ]]; then
+    printf '{"status":"error","error":"remote_not_ready","domain":"%s","target_host":"%s","problems":"%s"}\n' \
+      "${cfg[domain]}" "${cfg[target_host]}" "${problems% }"
+    exit 3
+  fi
+  printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"ok"}\n' \
+    "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
+  exit 0
+fi
 printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
-[[ "$MODE" == dry-run ]] && exit 0
 [[ "$MODE" == apply ]] || fail "invalid_INSTALL_MODE"
 
 # --- flock lock per domain to prevent parallel apply ---
@@ -230,6 +277,11 @@ else
   php -d memory_limit=512M "$WP_BIN" core install --path="$DOCROOT" --url=__URL_Q__ --title=__TITLE_Q__ --admin_user=__ADMIN_USER_Q__ --admin_password="$WP_ADMIN_PASSWORD" --admin_email=__ADMIN_EMAIL_Q__ --allow-root
 fi
 
+# Judul hanya diset saat core install, jadi situs yang sudah terpasang duluan
+# akan tetap memakai judul lama walau manifest sudah dibetulkan.
+php -d memory_limit=512M "$WP_BIN" option update blogname __TITLE_Q__ --path="$DOCROOT" --allow-root >/dev/null 2>&1 \
+  && echo "site_title_synced" >&2 || echo "site_title_sync_failed" >&2
+
 # ensure admin user matches manifest (update email/password, create if missing, rename if different username)
 php -d memory_limit=512M "$WP_BIN" user get __ADMIN_USER_Q__ --path="$DOCROOT" --allow-root 2>/dev/null && {
   php -d memory_limit=512M "$WP_BIN" user update __ADMIN_USER_Q__ --user_pass="$WP_ADMIN_PASSWORD" --user_email=__ADMIN_EMAIL_Q__ --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_user_updated:__ADMIN_USER_Q__" >&2
@@ -333,6 +385,29 @@ echo "=== 1-Click Setup ===" >&2
 
 # permalink
 php -d memory_limit=512M "$WP_BIN" option update permalink_structure '/%category%/%postname%/' --path="$DOCROOT" --allow-root 2>/dev/null && echo "permalink_set" >&2 || true
+# `wp rewrite flush` dari CLI tidak pernah membuat .htaccess: tanpa konteks
+# webserver, WordPress mengira mod_rewrite tidak ada. Akibatnya permalink cantik
+# 404 di semua URL selain beranda. Jadi file-nya ditulis sendiri.
+if [[ ! -f "$DOCROOT/.htaccess" ]]; then
+  cat > "$DOCROOT/.htaccess" <<'HTACCESS'
+# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+# END WordPress
+HTACCESS
+  chown __DA_USER_Q__:__DA_USER_Q__ "$DOCROOT/.htaccess" 2>/dev/null || true
+  chmod 644 "$DOCROOT/.htaccess" 2>/dev/null || true
+  echo "htaccess_created" >&2
+else
+  echo "htaccess_exists" >&2
+fi
 
 # timezone
 php -d memory_limit=512M "$WP_BIN" option update timezone_string 'Asia/Jakarta' --path="$DOCROOT" --allow-root 2>/dev/null && echo "timezone_set" >&2 || true
@@ -460,7 +535,7 @@ for pkg_key in velocity_addons_pkg velocity_theme_pkg; do
   local_zip="/var/lib/velocity/packages/${pkg_slug}.zip"
   [[ -f "$local_zip" ]] || continue
   echo "Transferring package $pkg_slug to remote..." >&2
-  scp -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=15 -P "${cfg[ssh_port]:-22}" "$local_zip" "${cfg[ssh_user]}@${cfg[target_host]}:/tmp/pkg-${pkg_slug}.zip" >&2 || { echo "scp_failed:$pkg_slug" >&2; exit 16; }
+  scp -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -P "${cfg[ssh_port]:-22}" "$local_zip" "${cfg[ssh_user]}@${cfg[target_host]}:/tmp/pkg-${pkg_slug}.zip" >&2 || { echo "scp_failed:$pkg_slug" >&2; exit 16; }
   echo "Package $pkg_slug transferred." >&2
 done
 

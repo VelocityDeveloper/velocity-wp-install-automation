@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +49,72 @@ def payload():
     }
 
 
+_DRIVE_CACHE = {'ts': 0.0, 'about': None}
+_DRIVE_CACHE_TTL = 300.0
+
+
+def drive_status():
+    """Check rclone gdrive connectivity + On Progress sync progress.
+
+    Returns dict: connected(bool), remote_used/free/total, sync{running,...}.
+    The `rclone about` call is cached 5 min: while a big sync is listing,
+    Drive API is saturated and a fresh call can time out — serve the last
+    known-good result with cached:true instead of blocking the dashboard.
+    """
+    now = time.time()
+    out = {'connected': False, 'error': None, 'cached': False}
+    if _DRIVE_CACHE['about'] and now - _DRIVE_CACHE['ts'] < _DRIVE_CACHE_TTL:
+        out.update(_DRIVE_CACHE['about'])
+        out['cached'] = True
+    else:
+        try:
+            proc = subprocess.run(
+                ['/usr/bin/rclone', 'about', 'gdrive:', '--json'],
+                capture_output=True, text=True, timeout=45)
+            if proc.returncode == 0:
+                about = json.loads(proc.stdout or '{}')
+                fresh = {'connected': True,
+                         'remote_used': about.get('used'),
+                         'remote_free': about.get('free'),
+                         'remote_total': about.get('total')}
+                _DRIVE_CACHE['about'] = fresh
+                _DRIVE_CACHE['ts'] = now
+                out.update(fresh)
+            else:
+                out['error'] = (proc.stderr or 'rclone about failed').strip()[:200]
+        except (subprocess.TimeoutExpired, FileNotFoundError,
+                json.JSONDecodeError) as e:
+            out['error'] = f'{type(e).__name__}: {e}'[:200]
+        if not out['connected'] and _DRIVE_CACHE['about']:
+            out.update(_DRIVE_CACHE['about'])
+            out['cached'] = True
+    sync = {'running': False, 'transferred': None, 'eta': None,
+            'elapsed': None, 'listed': None}
+    try:
+        lines = [l for l in open('/tmp/onprogress-sync.log').read().splitlines()
+                 if l.strip()]
+        tail = lines[-6:]
+        sync['log_tail'] = ' | '.join(tail)[-300:] if tail else None
+        for line in tail:
+            m = re.search(r'Transferred:\s+(\S+ \S+) / (\S+ \S+).*?ETA (\S+)', line)
+            if m:
+                sync['transferred'] = f'{m.group(1)} / {m.group(2)}'
+                sync['eta'] = m.group(3)
+            m = re.search(r'Elapsed time:\s+(\S+)', line)
+            if m:
+                sync['elapsed'] = m.group(1)
+            m = re.search(r'Listed (\d+)', line)
+            if m:
+                sync['listed'] = m.group(1)
+        ps = subprocess.run(['pgrep', '-f', 'rclone copy.*On Progress'],
+                            capture_output=True, timeout=5)
+        sync['running'] = ps.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    out['sync'] = sync
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, status, data):
         body = json.dumps(data, separators=(',', ':')).encode()
@@ -59,6 +126,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == '/api/drive':
+            self.json_response(200, drive_status())
+            return
         if self.path != '/api/stats':
             self.send_error(404)
             return

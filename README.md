@@ -105,6 +105,15 @@ git pull --ff-only origin main
 
 Loopback `127.0.0.1:9121`.
 
+Service dijalankan **langsung dari file repo ini** (lihat `config/installer-status.service`), sama seperti script di `scripts/` — tidak ada salinan di `/usr/local/bin`. Jadi menerapkan perubahan cukup `systemctl restart installer-status.service`. Pasang/perbarui unit-nya sekali dengan:
+
+```bash
+install -m 644 config/installer-status.service /etc/systemd/system/installer-status.service
+systemctl daemon-reload && systemctl restart installer-status.service
+```
+
+`deploy.sh` menolak jalan kalau unit masih menunjuk path lama, supaya deploy tidak sukses semu tanpa mengubah apa pun.
+
 Endpoints:
 - `GET /health` — no auth
 - `GET /api/servers` — daftar server dari `/var/lib/velocity/servers.json` (managed panel `/server/`) atau fallback `config/servers.json` / env `INSTALLER_SERVERS`.

@@ -1,0 +1,18 @@
+[Unit]
+Description=Website installer status API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Dijalankan langsung dari repo, sama seperti script lain di scripts/, supaya
+# perubahan cukup butuh restart tanpa langkah salin ke /usr/local/bin.
+# -u: tanpa ini stdout Python di-buffer (bukan TTY) sehingga log service tidak
+# pernah sampai ke journald, dan kegagalan jadi tak terlihat saat menelusuri.
+ExecStart=/usr/bin/python3 -u /opt/velocity-wp-install-automation/services/installer_status.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

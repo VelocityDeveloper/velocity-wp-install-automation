@@ -17,7 +17,6 @@ fi
 if [[ "$(realpath scripts/installer-runner)" != "$(realpath "$INSTALL_ROOT/scripts/installer-runner")" ]]; then
   install -m 755 scripts/installer-runner "$INSTALL_ROOT/scripts/installer-runner"
 fi
-install -m 644 services/installer_status.py /usr/local/bin/installer_status.py
 install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
 install -d -m 755 "$WEB_ROOT/installer"
 install -m 644 web/installer/index.html "$WEB_ROOT/installer/index.html"
@@ -29,6 +28,13 @@ install -d -m 755 "$WEB_ROOT/packages"
 install -m 644 web/packages/index.html "$WEB_ROOT/packages/index.html"
 install -m 644 web/index.html "$WEB_ROOT/index.html"
 
+# Tanpa langkah salin, restart hanya berarti kalau unit menunjuk file repo.
+# Kalau masih menunjuk salinan lama, deploy akan sukses tapi tidak mengubah apa pun.
+if ! systemctl cat installer-status.service 2>/dev/null | grep -q "$INSTALL_ROOT/services/installer_status.py"; then
+  echo "ERROR: installer-status.service belum menunjuk $INSTALL_ROOT/services/installer_status.py" >&2
+  echo "Perbaiki: install -m 644 config/installer-status.service /etc/systemd/system/ && systemctl daemon-reload" >&2
+  exit 1
+fi
 systemctl restart installer-status.service
 nginx -t
 systemctl reload nginx

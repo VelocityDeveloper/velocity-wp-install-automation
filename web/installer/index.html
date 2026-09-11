@@ -163,6 +163,47 @@
         font-size: 12px;
       }
       .target-cell { font-size: 12px; }
+      .deadline-cell { font-size: 12px; white-space: nowrap; }
+      /* Ikon status: warnanya menumpang kelas .ready/.missing/.failed yang sama
+         dengan pill lama, tapi tanpa border. Detail lengkapnya di atribut title. */
+      .stat {
+        display: inline-block;
+        width: 22px;
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        cursor: help;
+      }
+      /* Menu aksi dipasang fixed di <body>, bukan di dalam .panel yang
+         overflow-nya hidden — kalau di dalam, dropdown-nya terpotong. */
+      .row-menu {
+        position: fixed;
+        z-index: 120;
+        display: none;
+        min-width: 200px;
+        padding: 5px;
+        border: 1px solid var(--cyan);
+        background: var(--panel);
+        box-shadow: 0 10px 30px #000a;
+      }
+      .row-menu.open { display: block; }
+      .row-menu button {
+        display: block;
+        width: 100%;
+        padding: 8px 10px;
+        border: 0;
+        background: none;
+        color: var(--cyan);
+        font: inherit;
+        font-size: 12px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .row-menu button:hover:not(:disabled) { background: #55e87918; color: var(--green); }
+      .row-menu button:disabled { color: var(--muted); cursor: not-allowed; }
+      .row-menu button.danger { color: var(--red); }
+      .row-menu button.danger:hover:not(:disabled) { background: #ff737318; }
       .badge {
         display: inline-block;
         margin-top: 4px;
@@ -174,6 +215,7 @@
       .badge.ok { border-color: var(--green); color: var(--green); }
       .badge.warn { border-color: var(--yellow); color: var(--yellow); }
       .badge.local { border-color: var(--cyan); color: var(--cyan); }
+      .badge.calon { border-color: var(--muted); color: var(--muted); font-weight: 400; }
       select {
         min-width: 260px;
         padding: 9px 12px;
@@ -334,6 +376,11 @@
         <section class="filters" aria-label="Filter domain">
           <input id="domain-filter" type="search" placeholder="filter domain..." autocomplete="off" />
           <select id="status-filter"><option value="">semua status</option></select>
+          <select id="deadline-filter">
+            <option value="aktif">deadline belum terlewat</option>
+            <option value="lewat">deadline terlewat</option>
+            <option value="semua">semua deadline</option>
+          </select>
           <button class="action" type="button" id="clear-filter">[ clear ]</button>
         </section>
         <section class="panel">
@@ -341,15 +388,16 @@
             <thead>
               <tr>
                 <th>Domain</th>
+                <th class="hide-mobile">Paket</th>
+                <th class="hide-mobile">Deadline</th>
                 <th class="hide-mobile">Target</th>
-                <th class="hide-mobile">Manifest</th>
                 <th>Status</th>
                 <th>Tindakan</th>
               </tr>
             </thead>
             <tbody id="rows">
               <tr>
-                <td colspan="5" class="empty">Memuat...</td>
+                <td colspan="6" class="empty">Memuat...</td>
               </tr>
             </tbody>
           </table>
@@ -373,6 +421,8 @@
         </nav>
       </section>
     </main>
+    <div id="row-menu" class="row-menu" role="menu"></div>
+
     <div id="confirm-modal" class="modal" role="dialog" aria-modal="true">
       <div class="modal-box">
         <h3 id="confirm-title">Install: <span id="wizard-domain"></span></h3>
@@ -432,6 +482,7 @@
         logViewEl = document.getElementById('log-view'),
         domainFilter = document.getElementById('domain-filter'),
         statusFilter = document.getElementById('status-filter'),
+        deadlineFilter = document.getElementById('deadline-filter'),
         pageInfo = document.getElementById('page-info'),
         pagePrev = document.getElementById('page-prev'),
         pageNext = document.getElementById('page-next');
@@ -446,12 +497,21 @@
         serverList = [],
         localIps = [],
         allDomains = [],
+        defaultTarget = null,
+        rowActions = {},
         currentPage = 1;
       const pageSize = 25;
 
-      function targetBadge(x, servers, lips) {
+      function targetBadge(x, servers, lips, def) {
         const t = x.target_host;
-        if (!t) return '<span style="color:var(--muted)">-</span>';
+        if (!t) {
+          // Belum ada manifest, jadi target belum tertulis — tapi tujuannya sudah
+          // pasti (entri pertama daftar server). Tampilkan sebagai calon supaya
+          // kolomnya tidak terlihat seperti data hilang.
+          if (!def || !def.host) return '<span style="color:var(--muted)">-</span>';
+          return `<span style="color:var(--muted)"><code style="color:var(--muted)">${esc(def.host)}</code>` +
+                 `<br><span class="badge calon">calon: ${esc(def.name || def.host)}</span></span>`;
+        }
         if ((lips || []).includes(t)) return `<code>${esc(t)}</code><br><span class="badge local">SERVER INI</span>`;
         const s = (servers || []).find(y => y.host === t);
         if (s) return `<code>${esc(t)}</code><br><span class="badge ok">✓ ${(esc(s.name || s.host))}</span>`;
@@ -488,6 +548,43 @@
         detailEl.textContent = '';
       }
 
+      const rowMenu = document.getElementById('row-menu');
+
+      function closeRowMenu() { rowMenu.classList.remove('open'); }
+
+      function openRowMenu(btn, domain) {
+        const acts = rowActions[domain] || [];
+        rowMenu.innerHTML = acts.map((a, i) =>
+          `<button type="button" role="menuitem" data-act="${i}"${a.disabled ? ' disabled' : ''}` +
+          `${a.title ? ` title="${esc(a.title)}"` : ''}${a.danger ? ' class="danger"' : ''}>${esc(a.label)}</button>`
+        ).join('');
+        rowMenu.querySelectorAll('[data-act]').forEach(b =>
+          b.addEventListener('click', () => {
+            const a = acts[Number(b.dataset.act)];
+            closeRowMenu();
+            if (a && !a.disabled) a.run();
+          })
+        );
+        rowMenu.classList.add('open');
+        // Dipasang fixed, jadi posisinya dihitung dari viewport dan dibalik ke
+        // atas kalau tidak muat di bawah.
+        const r = btn.getBoundingClientRect();
+        let top = r.bottom + 4;
+        if (top + rowMenu.offsetHeight > window.innerHeight) {
+          top = Math.max(4, r.top - rowMenu.offsetHeight - 4);
+        }
+        const left = Math.min(r.left, window.innerWidth - rowMenu.offsetWidth - 8);
+        rowMenu.style.top = top + 'px';
+        rowMenu.style.left = Math.max(4, left) + 'px';
+      }
+
+      document.addEventListener('click', e => {
+        if (!rowMenu.contains(e.target) && !e.target.closest('[data-menu-domain]')) closeRowMenu();
+      });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRowMenu(); });
+      window.addEventListener('resize', closeRowMenu);
+      window.addEventListener('scroll', closeRowMenu, true);
+
       async function load() {
         const rows = document.getElementById('rows');
         try {
@@ -497,12 +594,27 @@
           });
           localIps = d.local_ips || localIps;
           if (d.servers && d.servers.length) serverList = d.servers;
+          defaultTarget = d.default_target || defaultTarget;
           const ln = document.getElementById('local-note');
           if (ln) ln.textContent = 'Server ini: ' + (localIps.length ? localIps.join(', ') : '(tidak terdeteksi)');
           allDomains = d.domains || [];
           const q = (domainFilter.value || '').trim().toLowerCase();
           const status = statusFilter.value;
-          const filtered = allDomains.filter(x => (!q || x.domain.toLowerCase().includes(q)) && (!status || x.status === status));
+          // Tanggal lokal, bukan toISOString() yang memakai UTC — di WIB itu
+          // bisa meleset sehari dan menyembunyikan deadline hari ini.
+          const now = new Date();
+          const pad = n => String(n).padStart(2, '0');
+          const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+          const dlMode = deadlineFilter.value;
+          const filtered = allDomains.filter(x => {
+            if (q && !x.domain.toLowerCase().includes(q)) return false;
+            if (status && x.status !== status) return false;
+            if (dlMode === 'semua') return true;
+            // Baris tanpa deadline (mis. domain di luar CRM) bukan "terlewat",
+            // jadi ikut tampil di tampilan default.
+            const lewat = !!x.deadline && x.deadline < today;
+            return dlMode === 'lewat' ? lewat : !lewat;
+          });
           const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
           currentPage = Math.min(currentPage, pageCount);
           const pageDomains = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -514,48 +626,67 @@
           pagePrev.disabled = currentPage <= 1;
           pageNext.disabled = currentPage >= pageCount;
           if (!allDomains.length) {
-            rows.innerHTML = '<tr><td colspan="5" class="empty">Belum ada file domain.txt</td></tr>';
+            rows.innerHTML = '<tr><td colspan="6" class="empty">Belum ada file domain.txt</td></tr>';
             return;
           }
           if (!pageDomains.length) {
-            rows.innerHTML = '<tr><td colspan="5" class="empty">Tidak ada domain cocok.</td></tr>';
+            rows.innerHTML = '<tr><td colspan="6" class="empty">Tidak ada domain cocok.</td></tr>';
             return;
           }
+          // Polling 10s menggambar ulang tabel; menu yang masih terbuka akan
+          // menunjuk baris lama, jadi tutup dulu.
+          closeRowMenu();
+          rowActions = {};
           rows.innerHTML = pageDomains.map(x => {
             const isReady = x.status === 'READY' || x.status === 'SUCCESS';
             const isRunning = x.status === 'RUNNING';
             const isFailed = x.status === 'FAILED' || x.status === 'installer_error';
             const pillClass = isFailed ? 'failed' : isReady ? 'ready' : 'missing';
-            const stage = x.stage ? ' / ' + esc(x.stage) : '';
+            const statusFull = x.status + (x.stage ? ' / ' + x.stage : '');
+            const statusIcon = isFailed ? '✗'
+              : isRunning ? '◐'
+              : isReady ? '✓'
+              : x.status === 'belum diambil' ? '○'
+              : '!';
             const logLines = (x.log || []).join('\\n');
             const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
-            const genBtn = canGenerate ? `<button class="action gen-btn" type="button" data-gen-domain="${esc(x.domain)}">[ generate ]</button>` : '';
-            const actionLabel = isFailed ? '[ retry ]' : '[ set up ]';
-            const actionClass = isFailed ? 'action danger' : 'action';
-            const btnDisabled = (isReady || isFailed) && !isRunning ? '' : 'disabled title="generate dulu"';
-            const checklistBtn = `<button class="action checklist-btn" type="button" data-checklist-domain="${esc(x.domain)}">[ checklist ]</button>`;
-            const logBtn = logLines ? `<button class="action log-btn" type="button" data-log-domain="${esc(x.domain)}">[ log ]</button>` : '';
+            const canRun = (isReady || isFailed) && !isRunning;
+            const acts = [{
+              label: isFailed ? 'Retry install' : 'Set up install',
+              danger: isFailed,
+              disabled: !canRun,
+              title: canRun ? '' : 'generate manifest dulu',
+              run: () => onInstallClick(x.domain, x.status),
+            }];
+            const noFolder = x.folder === false;
+            if (canGenerate) acts.push({
+              label: 'Generate manifest',
+              disabled: noFolder,
+              title: noFolder ? 'folder Drive belum tersinkron' : '',
+              run: () => generateManifest(x.domain),
+            });
+            acts.push({ label: 'Checklist', run: () => openChecklistModal(x.domain, allDomains) });
+            if (logLines) acts.push({ label: 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
+            rowActions[x.domain] = acts;
             const siteUrl = 'https://' + x.domain;
             const adminUrl = siteUrl + '/wp-admin';
-            const srcBadge = x.source === 'onprogress' ? ' <span class="badge local" title="Folder dari Google Drive On Progress">DRIVE</span>' : '';
+            const srcBadge = x.source === 'onprogress'
+              ? ' <span class="badge local" title="Folder dari Google Drive On Progress">DRIVE</span>'
+              : x.source === 'crm'
+              ? ' <span class="badge warn" title="Ada di CRM tapi folder Drive belum tersinkron, jadi manifest belum bisa dibuat">TANPA FOLDER</span>'
+              : '';
             const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
-            const targetCell = targetBadge(x, serverList, localIps);
-            return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile target-cell">${targetCell}</td><td class="hide-mobile"><code>${esc(x.manifest || '-')}</code></td><td><span class="pill ${pillClass}">${esc(x.status)}${stage}</span></td><td>${checklistBtn}${logBtn}${genBtn}<button class="${actionClass}" type="button" data-domain="${esc(x.domain)}" data-status="${esc(x.status)}" ${btnDisabled}>${actionLabel}</button></td></tr>`;
+            const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
+            const dash = '<span style="color:var(--muted)">—</span>';
+            const paketCell = x.paket ? esc(x.paket) : dash;
+            const deadlineCell = x.deadline ? esc(x.deadline) : dash;
+            return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile paket-cell">${paketCell}</td><td class="hide-mobile deadline-cell">${deadlineCell}</td><td class="hide-mobile target-cell">${targetCell}</td><td><span class="stat ${pillClass}" title="${esc(statusFull)}" aria-label="Status: ${esc(statusFull)}">${statusIcon}</span></td><td><button class="action" type="button" data-menu-domain="${esc(x.domain)}">[ aksi ▾ ]</button></td></tr>`;
           }).join('');
-          rows.querySelectorAll('[data-domain]').forEach(b =>
-            b.addEventListener('click', () => onInstallClick(b.dataset.domain, b.dataset.status))
-          );
-          rows.querySelectorAll('[data-log-domain]').forEach(b =>
-            b.addEventListener('click', () => openLogModal(b.dataset.logDomain, d.domains))
-          );
-          rows.querySelectorAll('[data-gen-domain]').forEach(b =>
-            b.addEventListener('click', () => generateManifest(b.dataset.genDomain))
-          );
-          rows.querySelectorAll('[data-checklist-domain]').forEach(b =>
-            b.addEventListener('click', () => openChecklistModal(b.dataset.checklistDomain, d.domains))
+          rows.querySelectorAll('[data-menu-domain]').forEach(b =>
+            b.addEventListener('click', () => openRowMenu(b, b.dataset.menuDomain))
           );
         } catch (e) {
-          rows.innerHTML = '<tr><td colspan="5" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
+          rows.innerHTML = '<tr><td colspan="6" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
         }
       }
 
@@ -770,9 +901,11 @@
 
       domainFilter.addEventListener('input', () => { currentPage = 1; load(); });
       statusFilter.addEventListener('change', () => { currentPage = 1; load(); });
+      deadlineFilter.addEventListener('change', () => { currentPage = 1; load(); });
       document.getElementById('clear-filter').addEventListener('click', () => {
         domainFilter.value = '';
         statusFilter.value = '';
+        deadlineFilter.value = 'aktif';
         currentPage = 1;
         load();
       });

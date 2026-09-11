@@ -1,8 +1,17 @@
 # Velocity WP Install Automation — Improvement Plan
 
-> Status: PLAN (belum eksekusi) — minta approval sebelum masuk Fase 1
-> Tanggal: 2026-09-02
+> Status: **SUDAH DIEKSEKUSI** — diverifikasi ulang 2026-09-10. Dokumen ini disimpan sebagai catatan audit, bukan daftar tugas aktif.
+> Tanggal audit awal: 2026-09-02
 > Scope audit: `scripts/website-install-from-manifest`, `workflows/website-install-workflow.json`, `services/installer_status.py`, `web/installer/index.html`, `README.md`
+
+## Status per 2026-09-10
+
+Temuan #1–#9 dan #12–#18 sudah diperbaiki di kode (cek `git log`). Sisa yang **belum** dikerjakan:
+
+- **Fase 2.2** — log terstruktur per-run ke `/var/log/velocity-install/<domain>-<timestamp>.json` belum ada; log masih teks biasa di `/var/lib/velocity/installer/<domain>.log`.
+- **Fase 3** — throttle apply per domain (maks 1 per 5 menit) belum ada; yang ada baru `flock` + guard `already_running`.
+- **Fase 3** — belum ada E2E test otomatis.
+- **#10/#11** — `workflows/website-install-workflow.json` sudah punya branching dry-run → IF → apply, tapi `active: false` dan tidak ada yang mereferensikan `scripts/n8n-run-install`. Jalur produksi sekarang adalah web UI (`installer_status.py` → `installer-runner`), jadi workflow n8n praktis legacy.
 
 ## Ringkasan Temuan
 

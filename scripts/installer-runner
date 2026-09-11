@@ -21,9 +21,15 @@ os.chmod(tmp,0o600); os.replace(tmp,path)
 PY
   printf '[%s] %s: %s\n' "$(date -Is)" "$1" "$2" >> "$LOG"
 }
-trap 'state FAILED "installer_error"' ERR
+notify() {
+  # Notifikasi tidak boleh menggagalkan instalasi.
+  [[ "$MODE" == "apply" ]] || return 0
+  /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/notify-telegram.py \
+    "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
+}
+trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
-[[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; exit 2; }
+[[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
 INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
 # Run AI content generation after successful install
@@ -35,4 +41,5 @@ if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
 else
   state SUCCESS COMPLETE
+  notify SUCCESS COMPLETE
 fi

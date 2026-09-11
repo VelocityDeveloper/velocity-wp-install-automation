@@ -2,12 +2,15 @@
 import base64
 import hashlib
 import io
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import secrets as pysecrets
 import subprocess
+import sys
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +30,8 @@ SERVERS_FILE_CANDIDATES = [
     Path('/etc/velocity/servers.json'),
 ]
 API_TOKEN = os.environ.get('INSTALLER_API_TOKEN', '').strip()
+# Tailscale's CGNAT range. Python 3.9's ipaddress does not report it as private.
+CGNAT_NET = ipaddress.ip_network('100.64.0.0/10')
 PACKAGES_DIR = Path('/var/lib/velocity/packages')
 PACKAGES_META = PACKAGES_DIR / 'packages.json'
 PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,6 +51,23 @@ CACHE_TTL = 30
 _running = {}  # domain -> subprocess.Popen
 _ai_running = {}  # domain -> subprocess.Popen
 
+# Ground truth for "belum diambil" (not yet claimed): vdnet CRM's project-list API,
+# filtered to status_pengerjaan=Belum dikerjakan (wm_project not assigned yet).
+PROJECT_LIST_API_URL = os.environ.get(
+    'PROJECT_LIST_API_URL', 'https://new.velocitydeveloper.net/api/api/public/project-list')
+PROJECT_LIST_API_KEY_FILE = SECRETS / 'project_list_api_key'
+# Hanya jenis project yang berarti "pasang WordPress". Tanpa saringan ini daftar
+# installer ikut memuat tiket Deposit Iklan Google, Tambah Space, dsb — 99% isi
+# daftar, padahal tidak ada hubungannya dengan instalasi.
+INSTALL_JENIS = {'Pembuatan', 'Pembuatan apk biasa', 'Pembuatan Tanpa Domain', 'Redesign'}
+BELUM_DIAMBIL_TTL = 900
+BELUM_DIAMBIL_RETRY = 30
+# Panduan API menyarankan halaman kecil, bukan satu tarikan raksasa.
+PROJECT_LIST_PER_PAGE = 2000
+PROJECT_LIST_MAX_PAGES = 25
+_belum_diambil_cache = {'at': 0, 'value': {}, 'fetching': False, 'error': ''}
+_belum_diambil_lock = threading.Lock()
+
 
 def _rate_ok(ip: str) -> bool:
     now = time.time()
@@ -59,14 +81,39 @@ def _rate_ok(ip: str) -> bool:
     return True
 
 
+def client_ip(handler: BaseHTTPRequestHandler) -> str:
+    """Caller's real IP. Every request arrives through nginx, so the socket peer
+    is always loopback and cannot tell LAN from internet. nginx overwrites
+    X-Real-IP with the true remote address, so trust that header — but only when
+    the peer is loopback, i.e. it really came from our own proxy."""
+    peer = handler.client_address[0] if handler.client_address else ''
+    try:
+        from_proxy = ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        from_proxy = False
+    if from_proxy:
+        try:
+            return str(ipaddress.ip_address((handler.headers.get('X-Real-IP') or '').strip()))
+        except ValueError:
+            pass
+    return peer
+
+
+def _is_local_net(ip: str) -> bool:
+    """Loopback, RFC1918 LAN, or Tailscale CGNAT."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private or addr in CGNAT_NET
+
+
 def _check_auth(handler: BaseHTTPRequestHandler) -> bool:
     if not API_TOKEN:
         return True
     # LAN / loopback / Tailscale bypass — tetap butuh token dari internet
-    ip = handler.client_address[0] if handler.client_address else ''
-    if ip.startswith('127.') or ip == '::1' or ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('100.'):
+    if _is_local_net(client_ip(handler)):
         return True
-    # also allow token via header
     auth = handler.headers.get('Authorization', '')
     return auth == f'Bearer {API_TOKEN}'
 
@@ -128,6 +175,68 @@ def manifest_target(manifest):
     except OSError:
         pass
     return None
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
+from client_form import read_client_form
+
+# Label form yang berisi nama orang/domain, bukan nama usaha.
+_BUKAN_NAMA_SITUS = {'nama anda', 'nama domain', 'nama lengkap', 'nama pemilik'}
+
+
+def _velocity_packages():
+    """Slug paket tema & plugin Velocity yang zip-nya benar-benar tersedia."""
+    theme = addons = ''
+    try:
+        meta = json.loads(PACKAGES_META.read_text())
+    except (OSError, ValueError):
+        return theme, addons
+    for slug, info in (meta if isinstance(meta, dict) else {}).items():
+        if not (PACKAGES_DIR / f'{slug}.zip').is_file():
+            continue
+        kind = str((info or {}).get('type') or '')
+        if kind == 'theme' and not theme:
+            theme = slug
+        elif kind == 'plugin' and not addons:
+            addons = slug
+    return theme, addons
+
+
+def _site_title_from_form(folders, fallback):
+    """Judul situs diambil dari nama usaha di form isian klien. Tanpa ini judul
+    hanya tebakan dari nama domain (mis. 'Birutourtravel' alih-alih
+    'BIRU TOUR & TRAVEL'). Form-nya ada di folder sync Drive, bukan di folder
+    manifest, jadi keduanya diperiksa."""
+    for folder in folders:
+        try:
+            if not Path(folder).is_dir():
+                continue
+            fields = read_client_form(folder)['fields']
+        except Exception:
+            continue
+        for label, value in fields.items():
+            key = ' '.join(label.strip().lower().split())
+            if key.startswith('nama ') and key not in _BUKAN_NAMA_SITUS:
+                value = value.strip()
+                if 2 < len(value) <= 80:
+                    return value
+    return fallback
+
+
+def default_target():
+    """Server tujuan yang akan dipakai generate_manifest: entri pertama daftar
+    server. Dipakai bersama halaman installer supaya 'calon target' yang
+    ditampilkan tidak bisa berbeda dari yang benar-benar ditulis ke manifest."""
+    servers = load_servers()
+    srv = servers[0] if isinstance(servers, list) and servers else {}
+    if not isinstance(srv, dict):
+        srv = {}
+    return {
+        'host': str(srv.get('host') or '103.103.175.182'),
+        'name': str(srv.get('name') or ''),
+        'port': str(srv.get('port') or '22'),
+        'user': str(srv.get('user') or 'root'),
+    }
 
 
 def validate_manifest(path: Path):
@@ -198,11 +307,120 @@ def installed_domains():
     return done
 
 
+def _project_list_api_key():
+    env_key = os.environ.get('PROJECT_LIST_API_KEY', '').strip()
+    if env_key:
+        return env_key
+    try:
+        return PROJECT_LIST_API_KEY_FILE.read_text().strip()
+    except OSError:
+        return ''
+
+
+def _fetch_belum_diambil_domains_now():
+    """Pull every 'Belum dikerjakan' row from the vdnet project-list API, as
+    {domain: paket}. Uses one large per_page instead of many small pages — the
+    shared host in front of this API resets/bans connections after a burst of
+    rapid requests.
+    """
+    key = _project_list_api_key()
+    if not key:
+        return {}
+    found = {}
+    page = 1
+    while True:
+        # Urutkan naik berdasarkan id: dataset ini hidup, dan urutan default
+        # (tgl_deadline desc) bikin baris baru menggeser halaman berikutnya
+        # sehingga ada baris terlewat di batas halaman saat paginasi.
+        url = (f'{PROJECT_LIST_API_URL}?status_pengerjaan=Belum+dikerjakan'
+               f'&per_page={PROJECT_LIST_PER_PAGE}&page={page}'
+               f'&order_by=id&order=asc')
+        # UA default urllib ('Python-urllib/x.y') kena aturan anti-bot CPGuard
+        # di depan API ini dan dibalas 403, padahal request yang sama lolos
+        # dengan UA biasa.
+        req = urllib.request.Request(url, headers={
+            'Authorization': f'Bearer {key}',
+            'User-Agent': 'velocity-installer/1.0',
+            'Accept': 'application/json',
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode('utf-8', errors='replace'))
+        for item in data.get('data', []):
+            if str(item.get('jenis') or '').strip() not in INSTALL_JENIS:
+                continue
+            wh = item.get('webhost') or {}
+            name = str(wh.get('nama_web') or '').strip().lower()
+            if not name:
+                continue
+            paket = str((wh.get('paket') or {}).get('paket') or '').strip()
+            deadline = str(item.get('tgl_deadline') or '').strip()
+            # Satu domain bisa punya beberapa project: pertahankan nilai yang
+            # terisi supaya baris kosong tidak menimpanya, dan untuk deadline
+            # ambil yang paling dekat karena itu yang paling mendesak.
+            cur = found.setdefault(name, {'paket': '', 'deadline': ''})
+            if paket and not cur['paket']:
+                cur['paket'] = paket
+            if deadline and (not cur['deadline'] or deadline < cur['deadline']):
+                cur['deadline'] = deadline
+        last_page = data.get('last_page', page)
+        if page >= last_page:
+            break
+        if page >= PROJECT_LIST_MAX_PAGES:
+            # Jangan memotong diam-diam kalau data tumbuh melewati batas.
+            print(json.dumps({'event': 'belum_diambil_truncated',
+                              'fetched_pages': page, 'last_page': last_page}), flush=True)
+            break
+        page += 1
+        time.sleep(1)  # be gentle with the shared host between pages
+    return found
+
+
+def _refresh_belum_diambil_bg():
+    error = ''
+    try:
+        fresh = _fetch_belum_diambil_domains_now()
+        if fresh or not _belum_diambil_cache['value']:
+            _belum_diambil_cache['value'] = fresh
+    except Exception as e:  # keep serving the last-known set on API hiccup
+        # Jangan gagal dalam diam: tanpa jejak ini, satu kegagalan sesaat bikin
+        # halaman cuma menampilkan segelintir domain tanpa alasan yang terlacak.
+        error = f'{type(e).__name__}: {e}'
+        print(json.dumps({'event': 'belum_diambil_refresh_failed', 'error': error}), flush=True)
+    finally:
+        _belum_diambil_cache['error'] = error
+        _belum_diambil_cache['at'] = time.time()
+        _belum_diambil_cache['fetching'] = False
+
+
+def belum_diambil_domains():
+    """Cached {domain: {paket, deadline}} for domains the CRM says are not yet claimed.
+    First call blocks so the list isn't empty on a cold start; later refreshes
+    happen in a background thread so /api/installer never blocks ~24s on them.
+    """
+    now = time.time()
+    if _belum_diambil_cache['at'] == 0:
+        # Cold start: tahan request lain sampai tarikan pertama selesai. Tanpa
+        # kunci ini, request yang datang saat tarikan berjalan dapat cache
+        # kosong dan halaman seolah cuma berisi 2 domain.
+        with _belum_diambil_lock:
+            if _belum_diambil_cache['at'] == 0:
+                _belum_diambil_cache['fetching'] = True
+                _refresh_belum_diambil_bg()
+        return _belum_diambil_cache['value']
+    # Percobaan yang gagal tidak boleh membekukan cache kosong selama TTL penuh.
+    ttl = BELUM_DIAMBIL_RETRY if _belum_diambil_cache['error'] else BELUM_DIAMBIL_TTL
+    if now - _belum_diambil_cache['at'] >= ttl and not _belum_diambil_cache['fetching']:
+        _belum_diambil_cache['fetching'] = True
+        threading.Thread(target=_refresh_belum_diambil_bg, daemon=True).start()
+    return _belum_diambil_cache['value']
+
+
 def domains():
     rows = []
     done = installed_domains()
     connected_hosts = {str(s.get('host', '')).strip() for s in load_servers()
                        if isinstance(s, dict) and str(s.get('host', '')).strip()}
+    belum_diambil = belum_diambil_domains()
     seen = set()
     # primary source: On Progress folders synced from Google Drive
     if ON_PROGRESS.is_dir():
@@ -212,8 +430,16 @@ def domains():
                 continue
             seen.add(name)
             manifest = ROOT / name / f'{name}.txt'
-            row = domain_row(name, manifest if manifest.is_file() else None)
-            if row.get('target_host') not in connected_hosts:
+            has_manifest = manifest.is_file()
+            row = domain_row(name, manifest if has_manifest else None)
+            crm = belum_diambil.get(name.lower()) or {}
+            row['paket'] = crm.get('paket') or None
+            row['deadline'] = crm.get('deadline') or None
+            if name.lower() in belum_diambil:
+                row['status'] = 'belum diambil'
+            elif not has_manifest:
+                continue
+            elif row.get('target_host') not in connected_hosts:
                 continue
             row['source'] = 'onprogress'
             rows.append(row)
@@ -224,11 +450,40 @@ def domains():
             if name in seen or not DOMAIN_RE.match(name) or name in done:
                 continue
             manifest = folder / f'{folder.name}.txt'
-            row = domain_row(folder.name, manifest if manifest.is_file() else None)
-            if row.get('target_host') not in connected_hosts:
+            has_manifest = manifest.is_file()
+            row = domain_row(folder.name, manifest if has_manifest else None)
+            crm = belum_diambil.get(name.lower()) or {}
+            row['paket'] = crm.get('paket') or None
+            row['deadline'] = crm.get('deadline') or None
+            if name.lower() in belum_diambil:
+                row['status'] = 'belum diambil'
+            elif not has_manifest:
+                continue
+            elif row.get('target_host') not in connected_hosts:
                 continue
             row['source'] = 'project'
             rows.append(row)
+    # CRM adalah sumber kebenaran soal pekerjaan yang ada. Daftar di atas
+    # digerakkan oleh folder di disk, jadi project yang foldernya belum
+    # tersinkron dari Drive tidak pernah muncul sama sekali — padahal itu justru
+    # pekerjaan yang perlu dikejar. Tampilkan, dengan tanda folder belum ada.
+    emitted = {r['domain'].lower() for r in rows}
+    done_lower = {d.lower() for d in done}
+    for name in sorted(belum_diambil):
+        if name in emitted or name in done_lower or not DOMAIN_RE.match(name):
+            continue
+        crm = belum_diambil.get(name) or {}
+        rows.append({
+            'domain': name,
+            'manifest': None,
+            'folder': False,
+            'status': 'belum diambil',
+            'target_host': None,
+            'paket': crm.get('paket') or None,
+            'deadline': crm.get('deadline') or None,
+            'log': [],
+            'source': 'crm',
+        })
     return rows
 
 
@@ -323,13 +578,12 @@ def generate_manifest(domain: str):
         da_user = re.sub(r'[^a-z0-9_-]', '', labels.lower())[:8] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
-    servers = load_servers()
-    srv = servers[0] if servers else {}
-    target = str(srv.get('host') or '103.103.175.182')
-    port = str(srv.get('port') or '22')
+    srv = default_target()
+    target = srv['host']
+    port = srv['port']
     if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
         port = '22'
-    ssh_user = str(srv.get('user') or 'root')
+    ssh_user = srv['user']
     admin_email = ''
     for notes in (src / 'notes-credentials.txt', folder / 'notes-credentials.txt'):
         if admin_email or not notes.is_file():
@@ -379,8 +633,15 @@ def generate_manifest(domain: str):
         # WP admin = DA user, biar login WP sesuai data di txt (username/password DA)
         f'da_password_file=/var/lib/velocity/secret/da_password\n'
         f'admin_email={admin_email or ("admin@" + domain)}\n'
-        f'site_title={labels.replace("-", " ").title()}\n'
+        f'site_title={_site_title_from_form((ON_PROGRESS / domain, src, folder), labels.replace("-", " ").title())}\n'
     )
+    # Tanpa baris ini installer melewati pemasangan tema/plugin dan hasilnya
+    # WordPress polos dengan tema bawaan.
+    theme_pkg, addons_pkg = _velocity_packages()
+    if addons_pkg:
+        content += f'velocity_addons_pkg={addons_pkg}\n'
+    if theme_pkg:
+        content += f'velocity_theme_pkg={theme_pkg}\n'
     tmp = manifest.with_suffix('.txt.tmp')
     tmp.write_text(content)
     os.chmod(tmp, 0o640)
@@ -406,10 +667,13 @@ def start_run(domain: str, mode: str):
         return None, 'already_running'
     STATE.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, INSTALL_MODE=mode)
+    # Dry-run kini ikut memeriksa server tujuan, jadi ia juga butuh kunci SSH —
+    # bukan hanya apply seperti sebelumnya.
+    if ssh_key_file():
+        env['WP_INSTALL_SSH_KEY_FILE'] = str(ssh_key_file())
     if mode == 'apply':
         if not ssh_key_file():
             return None, 'ssh_key_missing'
-        env['WP_INSTALL_SSH_KEY_FILE'] = str(ssh_key_file())
         env['WP_INSTALL_DB_PASSWORD_FILE'] = str(SECRETS / f'db_password_{domain}.txt')
         env['WP_INSTALL_ADMIN_PASSWORD_FILE'] = str(SECRETS / f'admin_password_{domain}.txt')
         for f in (env['WP_INSTALL_DB_PASSWORD_FILE'], env['WP_INSTALL_ADMIN_PASSWORD_FILE']):
@@ -762,7 +1026,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        ip = self.client_address[0] if self.client_address else 'unknown'
+        ip = client_ip(self) or 'unknown'
         if not _rate_ok(ip):
             self._send_json({'error': 'rate_limited'}, 429)
             return
@@ -783,7 +1047,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs(),
-                             'local_ips': local_ips(), 'servers': load_servers()})
+                             'local_ips': local_ips(), 'servers': load_servers(),
+                             'default_target': default_target()})
             return
         if path == '/api/packages':
             if not _check_auth(self):
@@ -817,7 +1082,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        ip = self.client_address[0] if self.client_address else 'unknown'
+        ip = client_ip(self) or 'unknown'
         if not _rate_ok(ip):
             self._send_json({'error': 'rate_limited'}, 429)
             return
@@ -1027,7 +1292,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({'status': 'started', **result})
 
     def do_DELETE(self):
-        ip = self.client_address[0] if self.client_address else 'unknown'
+        ip = client_ip(self) or 'unknown'
         if not _rate_ok(ip):
             self._send_json({'error': 'rate_limited'}, 429)
             return

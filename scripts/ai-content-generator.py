@@ -12,7 +12,13 @@ import sys
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from client_form import read_client_form
+
+CREDENTIAL_RE = re.compile(r'^\s*(pass(word)?|user(name)?|sandi|login)\s*[:=]', re.I | re.M)
+
 MANIFEST = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+ON_PROGRESS = Path('/home/On Progress')
 MODE = os.environ.get('INSTALL_MODE', 'dry-run')
 AI_CONFIG_DIR = Path('/var/lib/velocity/ai')
 AI_MODELS = AI_CONFIG_DIR / 'models.json'
@@ -43,14 +49,27 @@ def read_manifest(path):
     return cfg
 
 def read_client_data(folder):
-    """Read all .txt files in client folder except the manifest itself"""
+    """Read client .txt notes plus the FORM ISIAN document the client filled in"""
     data = {}
     folder = Path(folder)
     for f in sorted(folder.glob('*.txt')):
-        if f.name == f'{folder.name}.txt':
+        # Nama file kredensial tidak selalu persis '<domain>.txt' (mis. ada spasi
+        # sebelum ekstensi), jadi cocokkan longgar lalu saring lagi lewat isinya —
+        # file ini berisi username/password dan tidak boleh sampai ke API AI.
+        if f.stem.strip().lower() == folder.name.strip().lower():
             continue
-        key = f.stem
-        data[key] = f.read_text(errors='replace').strip()
+        body = f.read_text(errors='replace').strip()
+        if CREDENTIAL_RE.search(body):
+            log(f'Skip {f.name}: berisi kredensial, tidak dikirim ke AI')
+            continue
+        data[f.stem] = body
+    form = read_client_form(folder)
+    for label, value in form['fields'].items():
+        data.setdefault(label, value)
+    if form['fields']:
+        log(f'Client form fields: {len(form["fields"])}')
+    if form['unreadable']:
+        log(f'Client form unreadable (butuh penanganan manual): {form["unreadable"]}')
     return data
 
 def load_ai_models():
@@ -233,7 +252,7 @@ DOCROOT="{docroot}"
         # Escape content for bash
         escaped_content = content.replace("'", "'\\''")
         
-        cmd = f'''if $WP_BIN post list --post_type=page --post_status=any --slug='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
+        cmd = f'''if $WP_BIN post list --post_type=page --post_status=any --name='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
   echo "page_created:{slug}"
   $WP_BIN post create --post_type=page --post_status=draft --post_title='{title}' --post_name='{slug}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root 2>/dev/null
 else
@@ -244,11 +263,15 @@ fi'''
             pages_created += 1
             log(f'Page created: {slug}')
     
-    # Set homepage
-    home_cmd = f'''if $WP_BIN post list --post_type=page --post_status=draft --slug=home --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '1'; then
+    # Set homepage — hanya kalau halaman 'home' sudah terbit. Halaman AI sengaja
+    # dibuat draft untuk direview dulu, dan draft yang dipasang sebagai beranda
+    # membuat seluruh situs membalas 404 bagi pengunjung.
+    home_cmd = f'''if $WP_BIN post list --post_type=page --post_status=publish --name=home --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '1'; then
   $WP_BIN option set show_on_front 'page' --path="$DOCROOT" --allow-root 2>/dev/null
-  home_id=$($WP_BIN post list --post_type=page --post_status=draft --slug=home --path="$DOCROOT" --allow-root --field=ID 2>/dev/null | head -1)
+  home_id=$($WP_BIN post list --post_type=page --post_status=publish --name=home --path="$DOCROOT" --allow-root --field=ID 2>/dev/null | head -1)
   $WP_BIN option set page_on_front "$home_id" --path="$DOCROOT" --allow-root 2>/dev/null && echo "homepage_set:$home_id"
+else
+  echo "homepage_unchanged:home_page_masih_draft"
 fi'''
     wp_remote(home_cmd)
     
@@ -287,7 +310,7 @@ fi'''
         escaped_content = content.replace("'", "'\\''")
         escaped_excerpt = excerpt.replace("'", "'\\''")
         
-        cmd = f'''if $WP_BIN post list --post_type=post --post_status=any --slug='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
+        cmd = f'''if $WP_BIN post list --post_type=post --post_status=any --name='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
   echo "article_created:{slug}"
   post_id=$($WP_BIN post create --post_type=post --post_status=draft --post_title='{escaped_title}' --post_name='{slug}' --post_content='{escaped_content}' --post_excerpt='{escaped_excerpt}' --path="$DOCROOT" --allow-root 2>/dev/null --echo 2>/dev/null | grep -o '[0-9]*$')
   [[ -n "{cat_id}" ]] && $WP_BIN post term set "$post_id" category {cat_id} --path="$DOCROOT" --allow-root 2>/dev/null || true
@@ -320,9 +343,14 @@ def main():
     num_articles = int(cfg.get('num_articles', '5'))
     article_category = cfg.get('article_category', 'Blog')
     
-    # Read client data
-    client_folder = MANIFEST.parent
-    client_data = read_client_data(client_folder)
+    # Data klien (form isian, catatan, foto) ada di folder sync Google Drive.
+    # Folder manifest hanya berisi <domain>.txt hasil generate, jadi kalau cuma
+    # membaca itu, AI menulis konten generik tanpa data klien sama sekali.
+    client_data = {}
+    for folder in (MANIFEST.parent, ON_PROGRESS / domain):
+        if folder.is_dir():
+            for k, v in read_client_data(folder).items():
+                client_data.setdefault(k, v)
     log(f'Client data files: {list(client_data.keys())}')
     
     # Load AI model
