@@ -463,8 +463,22 @@ ensure_page() {
 # standard pages (idempotent: skip if exists)
 ensure_page 'Berita' 'Halaman arsip berita.' >/dev/null
 ensure_page 'Tentang Kami' 'Halaman tentang kami.' >/dev/null
+ensure_page 'Galeri' 'Halaman galeri.' >/dev/null
 ensure_page 'Hubungi Kami' 'Halaman hubungi kami.' >/dev/null
 echo "standard_pages_created" >&2
+
+# Konten demo bawaan WordPress ikut terbit di situs klien kalau dibiarkan. Hanya
+# dihapus selama isinya masih bawaan, supaya suntingan manusia tidak hilang.
+for demo in 'page:sample-page:This is an example page|halaman contoh' 'post:hello-world:Welcome to WordPress|Selamat datang di WordPress'; do
+  IFS=: read -r demo_type demo_slug demo_text <<<"$demo"
+  demo_id=$(php -d memory_limit=512M "$WP_BIN" post list --post_type="$demo_type" --name="$demo_slug" --post_status=any --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+  [[ -n "$demo_id" ]] || continue
+  # Ditampung dulu: dengan pipefail, `php | grep -q` bisa gagal karena SIGPIPE.
+  demo_content=$(php -d memory_limit=512M "$WP_BIN" post get "$demo_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  if grep -qE "$demo_text" <<<"$demo_content"; then
+    php -d memory_limit=512M "$WP_BIN" post delete "$demo_id" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "demo_deleted:$demo_slug" >&2
+  fi
+done
 
 # primary menu (idempotent: pakai menu yang ada, baru buat jika kosong)
 PRIMARY_ASSIGNED=$(php -d memory_limit=512M "$WP_BIN" menu list --fields=term_id,name,locations --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' 'NR>1 && $3=="primary" {print $1; exit}')
@@ -505,6 +519,23 @@ if [[ -n "$HOME_ID" ]]; then
   echo "reading_home_set" >&2
 else
   echo "reading_home_set:failed" >&2 || true
+fi
+
+# Isi Primary Menu dengan halaman utama — hanya kalau menunya masih kosong,
+# supaya susunan menu yang sudah diatur manusia tidak diacak saat apply ulang.
+MENU_ID=$(php -d memory_limit=512M "$WP_BIN" menu list --fields=term_id,name,locations --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' 'NR>1 && $3 ~ /primary/ {print $1; exit}')
+if [[ -z "$MENU_ID" ]]; then
+  echo "primary_menu_items:no_primary_menu" >&2
+elif [[ "$(php -d memory_limit=512M "$WP_BIN" menu item list "$MENU_ID" --format=count --path="$DOCROOT" --allow-root 2>/dev/null)" != 0 ]]; then
+  echo "primary_menu_items:kept_existing" >&2
+else
+  menu_ids="$HOME_ID"
+  for menu_title in 'Tentang Kami' 'Galeri' 'Berita' 'Hubungi Kami'; do
+    menu_ids+=" $(ensure_page "$menu_title" '' || true)"
+  done
+  for page_id in $menu_ids; do
+    php -d memory_limit=512M "$WP_BIN" menu item add-post "$MENU_ID" "$page_id" --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "menu_item_added:$page_id" >&2 || true
+  done
 fi
 
 # Final ownership/permissions pass: prevent root-owned files after WP-CLI, unzip, git, and backup.

@@ -239,41 +239,46 @@ DOCROOT="{docroot}"
             log(f'ERROR: SSH command failed: {e}')
             return '', 1
     
-    # Create pages
-    pages_created = 0
+    # Konten AI langsung mengisi halaman terbit buatan 1-Click Setup, tidak lagi
+    # jadi draft terpisah: dulu pengunjung melihat placeholder satu kalimat
+    # sementara konten sungguhan tertahan di draft Home/Profil/Gallery/Kontak.
+    # Halaman yang isinya sudah bukan placeholder (disunting manusia) dibiarkan.
+    # Beranda sudah dijadikan halaman depan oleh installer.
+    page_targets = {
+        'home': (('Beranda', 'Home'), 'Selamat datang di website kami.'),
+        'profile': (('Tentang Kami',), 'Halaman tentang kami.'),
+        'gallery': (('Galeri',), 'Halaman galeri.'),
+        'contact': (('Hubungi Kami',), 'Halaman hubungi kami.'),
+    }
+    pages_done = 0
     for page in pages:
-        slug = page.get('slug', '')
-        title = page.get('title', '')
-        content = page.get('content', '')
-        
-        if not slug or not title:
+        slug = re.sub(r'[^a-z0-9-]', '', str(page.get('slug', '')).lower())
+        content = str(page.get('content', ''))
+        if slug not in page_targets or not content:
             continue
-        
-        # Escape content for bash
+        titles, placeholder = page_targets[slug]
         escaped_content = content.replace("'", "'\\''")
-        
-        cmd = f'''if $WP_BIN post list --post_type=page --post_status=any --name='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
-  echo "page_created:{slug}"
-  $WP_BIN post create --post_type=page --post_status=draft --post_title='{title}' --post_name='{slug}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root 2>/dev/null
+        title_args = ' '.join(f"'{t}'" for t in titles)
+        cmd = f'''page_id=""
+for t in {title_args}; do
+  page_id=$($WP_BIN post list --post_type=page --post_status=publish --fields=ID,post_title --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\\t' -v t="$t" 'NR>1 && $2==t {{print $1; exit}}')
+  [[ -n "$page_id" ]] && break
+done
+if [[ -z "$page_id" ]]; then
+  $WP_BIN post create --post_type=page --post_status=publish --post_title='{titles[0]}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "page_created:{slug}"
+elif [[ "$($WP_BIN post get "$page_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null)" == '{placeholder}' ]]; then
+  $WP_BIN post update "$page_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "page_filled:{slug}:$page_id"
 else
-  echo "page_exists:{slug}"
-fi'''
+  echo "page_kept:{slug}:$page_id"
+fi
+# Draft buatan generator versi lama (slug home/profile/gallery/contact).
+for old in $($WP_BIN post list --post_type=page --post_status=draft --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null); do
+  $WP_BIN post delete "$old" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "old_draft_deleted:{slug}:$old"
+done'''
         output, rc = wp_remote(cmd)
-        if 'page_created' in output:
-            pages_created += 1
-            log(f'Page created: {slug}')
-    
-    # Set homepage — hanya kalau halaman 'home' sudah terbit. Halaman AI sengaja
-    # dibuat draft untuk direview dulu, dan draft yang dipasang sebagai beranda
-    # membuat seluruh situs membalas 404 bagi pengunjung.
-    home_cmd = f'''if $WP_BIN post list --post_type=page --post_status=publish --name=home --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '1'; then
-  $WP_BIN option set show_on_front 'page' --path="$DOCROOT" --allow-root 2>/dev/null
-  home_id=$($WP_BIN post list --post_type=page --post_status=publish --name=home --path="$DOCROOT" --allow-root --field=ID 2>/dev/null | head -1)
-  $WP_BIN option set page_on_front "$home_id" --path="$DOCROOT" --allow-root 2>/dev/null && echo "homepage_set:$home_id"
-else
-  echo "homepage_unchanged:home_page_masih_draft"
-fi'''
-    wp_remote(home_cmd)
+        if 'page_created' in output or 'page_filled' in output:
+            pages_done += 1
+        log(f'Halaman {slug}: {" ".join(output.split()) or "tanpa_output"}')
     
     # Create category
     category_name = articles[0].get('category', 'Blog') if articles else 'Blog'
@@ -296,7 +301,7 @@ fi'''
             cat_id = match.group(1)
     
     # Create articles
-    articles_created = 0
+    articles_done = 0
     for art in articles:
         title = art.get('title', '')
         slug = art.get('slug', '')
@@ -310,20 +315,32 @@ fi'''
         escaped_content = content.replace("'", "'\\''")
         escaped_excerpt = excerpt.replace("'", "'\\''")
         
-        cmd = f'''if $WP_BIN post list --post_type=post --post_status=any --name='{slug}' --path="$DOCROOT" --allow-root --format=count 2>/dev/null | grep -q '^0$'; then
-  echo "article_created:{slug}"
-  post_id=$($WP_BIN post create --post_type=post --post_status=draft --post_title='{escaped_title}' --post_name='{slug}' --post_content='{escaped_content}' --post_excerpt='{escaped_excerpt}' --path="$DOCROOT" --allow-root 2>/dev/null --echo 2>/dev/null | grep -o '[0-9]*$')
-  [[ -n "{cat_id}" ]] && $WP_BIN post term set "$post_id" category {cat_id} --path="$DOCROOT" --allow-root 2>/dev/null || true
+        # Artikel langsung terbit; draft dari generator versi lama ikut diterbitkan.
+        cmd = f'''post_id=$($WP_BIN post list --post_type=post --post_status=any --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -z "$post_id" ]]; then
+  post_id=$($WP_BIN post create --post_type=post --post_status=publish --post_title='{escaped_title}' --post_name='{slug}' --post_content='{escaped_content}' --post_excerpt='{escaped_excerpt}' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null || true)
+  [[ -n "$post_id" ]] && echo "article_created:{slug}"
+  [[ -n "{cat_id}" && -n "$post_id" ]] && $WP_BIN post term set "$post_id" category {cat_id} --by=id --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true
+elif [[ "$($WP_BIN post get "$post_id" --field=post_status --path="$DOCROOT" --allow-root 2>/dev/null)" == draft ]]; then
+  $WP_BIN post update "$post_id" --post_status=publish --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_published:{slug}"
 else
   echo "article_exists:{slug}"
 fi'''
         output, rc = wp_remote(cmd)
-        if 'article_created' in output:
-            articles_created += 1
-            log(f'Article created: {slug}')
+        if 'article_created' in output or 'article_published' in output:
+            articles_done += 1
+            log(f'Artikel terbit: {slug}')
     
-    log(f'Summary: {pages_created} pages, {articles_created} articles created')
+    log(f'Summary: {pages_done} pages, {articles_done} articles published')
     return True
+
+def load_saved(path):
+    """Konten hasil generate sebelumnya, atau None kalau belum ada/rusak."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, list) and data else None
 
 def main():
     if not MANIFEST or not MANIFEST.is_file():
@@ -361,8 +378,14 @@ def main():
     log(f'Using model: {model.get("name", model.get("id"))}')
     
     # Generate pages
-    log('Generating pages...')
-    pages = generate_pages(site_title, domain, client_data, model)
+    # Apply ulang memakai konten yang sudah pernah dibuat: tanpa biaya AI lagi dan
+    # tanpa artikel ganda (slug hasil AI berbeda setiap kali dibuat).
+    pages = load_saved(GENERATED_DIR / f'{domain}-pages.json')
+    if pages:
+        log('Pakai konten halaman tersimpan')
+    else:
+        log('Generating pages...')
+        pages = generate_pages(site_title, domain, client_data, model)
     if not pages:
         log('ERROR: Failed to generate pages')
         sys.exit(3)
@@ -372,8 +395,12 @@ def main():
     log(f'Pages saved: {pages_file}')
     
     # Generate articles
-    log('Generating articles...')
-    articles = generate_articles(site_title, domain, client_data, model, num_articles, article_category)
+    articles = load_saved(GENERATED_DIR / f'{domain}-articles.json')
+    if articles:
+        log('Pakai konten artikel tersimpan')
+    else:
+        log('Generating articles...')
+        articles = generate_articles(site_title, domain, client_data, model, num_articles, article_category)
     if not articles:
         log('ERROR: Failed to generate articles')
         sys.exit(3)

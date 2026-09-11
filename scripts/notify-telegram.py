@@ -33,7 +33,9 @@ def load_config():
         pass
     token = os.environ.get('TELEGRAM_BOT_TOKEN') or cfg.get('TELEGRAM_BOT_TOKEN', '')
     chat = os.environ.get('TELEGRAM_CHAT_ID') or cfg.get('TELEGRAM_CHAT_ID', '')
-    return token.strip(), chat.strip()
+    # Boleh lebih dari satu tujuan, dipisah koma (mis. chat pribadi + grup webmaster).
+    chats = [c.strip().strip('"\'') for c in chat.split(',') if c.strip().strip('"\'')]
+    return token.strip(), chats
 
 
 def build_message(domain, status, stage):
@@ -74,17 +76,22 @@ def main():
         print('usage: notify-telegram.py <domain> <status> [tahap]', file=sys.stderr)
         return 1
     domain, status, stage = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else '')
-    token, chat = load_config()
-    if not token or not chat:
+    token, chats = load_config()
+    if not token or not chats:
         print('telegram: token/chat_id belum diset, notifikasi dilewati', file=sys.stderr)
         return 1
-    try:
-        ok = send(token, chat, build_message(domain, status, stage))
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        print(f'telegram: gagal kirim ({e})', file=sys.stderr)
-        return 1
-    print('telegram: terkirim' if ok else 'telegram: ditolak API', file=sys.stderr)
-    return 0 if ok else 1
+    text = build_message(domain, status, stage)
+    failed = 0
+    for chat in chats:
+        try:
+            ok = send(token, chat, text)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            print(f'telegram: gagal kirim ke {chat} ({e})', file=sys.stderr)
+            failed += 1
+            continue
+        print(f'telegram: terkirim ke {chat}' if ok else f'telegram: ditolak API untuk {chat}', file=sys.stderr)
+        failed += 0 if ok else 1
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

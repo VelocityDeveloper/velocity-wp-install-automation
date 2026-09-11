@@ -44,14 +44,10 @@ if [[ "$MODE" == "apply" ]]; then
     notify FAILED "http_check_$code"
     exit 4
   fi
-  # Konten AI dibuat ulang tiap apply dan artikelnya tidak dicocokkan dengan yang
-  # sudah ada, jadi apply ulang (mis. memperbaiki situs) menggandakan artikel.
-  if [[ -f "/var/lib/velocity/ai/generated/$DOMAIN-articles.json" ]]; then
-    echo "[$(date -Is)] AI content dilewati: sudah pernah dibuat" >> "$LOG"
-  else
-    echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
-    INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
-  fi
+  # Generator memakai ulang konten tersimpan saat apply ulang, jadi aman
+  # dijalankan lagi tanpa biaya AI dan tanpa menggandakan artikel.
+  echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
+  INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
 fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
