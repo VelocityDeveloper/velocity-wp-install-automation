@@ -15,12 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client_form import read_client_form
 from client_docs import collect_client_docs, format_for_prompt
+from content_sanitize import clean_html
 
 CONTENT_RULES = """Aturan konten (wajib):
 - Gunakan HANYA fakta dari data klien di atas: nama usaha, produk/layanan, keunggulan, sejarah, visi-misi, area layanan, alamat, kontak. Jangan mengarang nomor telepon, alamat, harga, angka, penghargaan, atau klaim yang tidak ada di data. Kalau suatu info tidak ada, lewati tanpa menulis contoh palsu.
 - Bagian bertanda DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau WhatsApp pribadi pemilik. Kontak publik ambil dari "Kontak utk di web" atau kontak di dokumen perusahaan.
 - Abaikan teks panduan bawaan template form (mis. "Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
-- Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ."""
+- Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ.
+- Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto, galeri, peta, dan tombol WhatsApp dipasang otomatis oleh sistem dari file klien."""
 
 CREDENTIAL_RE = re.compile(r'^\s*(pass(word)?|user(name)?|sandi|login)\s*[:=]', re.I | re.M)
 
@@ -158,15 +160,16 @@ def generate_pages(site_title, domain, client_info, model):
 
 {CONTENT_RULES}
 
-Generate 4 pages. Return JSON array:
+Generate 4 pages plus a tagline. Return JSON array:
 [
-  {{"slug":"home","title":"Home","content":"<HTML content for homepage with hero section, features, CTA. 300-500 words. Professional Indonesian.>"}},
-  {{"slug":"profile","title":"Profil","content":"<HTML content about the company/organization profile. 300-500 words.>"}},
-  {{"slug":"gallery","title":"Gallery","content":"<HTML content for gallery page with image placeholders. 200-300 words.>"}},
-  {{"slug":"contact","title":"Kontak","content":"<HTML content for contact page with form, address, map placeholder. 200-300 words.>"}}
+  {{"slug":"home","title":"Home","content":"<HTML homepage: hero heading and intro, products/services, advantages, call to action. 300-500 words.>"}},
+  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile: history, vision-mission, values, team if available. 300-500 words.>"}},
+  {{"slug":"gallery","title":"Gallery","content":"<HTML short intro for the photo gallery describing the client's products or activities. 60-120 words. Photos are added automatically.>"}},
+  {{"slug":"contact","title":"Kontak","content":"<HTML contact info: public phone/WhatsApp, email, address, opening hours only if present in client data, plus an invitation to get in touch. 80-200 words. No form, no map.>"}},
+  {{"slug":"tagline","title":"Tagline","content":"<client's slogan if present, otherwise a plain-text summary of the business, max 8 words, no HTML>"}}
 ]
 
-Use Indonesian language. Content should be professional HTML. Include image placeholders where needed."""
+Use Indonesian language. Content should be professional HTML without images, forms, iframes, or placeholders."""
     
     response = ai_call(system_prompt, user_prompt, model)
     if not response:
@@ -261,26 +264,40 @@ DOCROOT="{docroot}"
         'gallery': (('Galeri',), 'Halaman galeri.'),
         'contact': (('Hubungi Kami',), 'Halaman hubungi kami.'),
     }
+    # VELOCITY_CONTENT_REFRESH=1 (mode finish): timpa halaman target walau sudah
+    # bukan placeholder — untuk situs yang kontennya ditulis sebelum ada penanda
+    # md5 dan perlu dibersihkan (gambar karangan, placeholder).
+    refresh = '1' if os.environ.get('VELOCITY_CONTENT_REFRESH') == '1' else '0'
+    helpers = '''cur_md5() { $WP_BIN post get "$1" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null | md5sum | cut -d' ' -f1; }
+save_md5() { $WP_BIN post meta update "$1" _velocity_content_md5 "$(cur_md5 "$1")" --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true; }
+'''
     pages_done = 0
     for page in pages:
         slug = re.sub(r'[^a-z0-9-]', '', str(page.get('slug', '')).lower())
-        content = str(page.get('content', ''))
+        content = clean_html(page.get('content', ''))
         if slug not in page_targets or not content:
             continue
         titles, placeholder = page_targets[slug]
         escaped_content = content.replace("'", "'\\''")
         title_args = ' '.join(f"'{t}'" for t in titles)
-        cmd = f'''page_id=""
+        cmd = helpers + f'''page_id=""
 for t in {title_args}; do
   page_id=$($WP_BIN post list --post_type=page --post_status=publish --fields=ID,post_title --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\\t' -v t="$t" 'NR>1 && $2==t {{print $1; exit}}')
   [[ -n "$page_id" ]] && break
 done
 if [[ -z "$page_id" ]]; then
-  $WP_BIN post create --post_type=page --post_status=publish --post_title='{titles[0]}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "page_created:{slug}"
-elif [[ "$($WP_BIN post get "$page_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null)" == '{placeholder}' ]]; then
-  $WP_BIN post update "$page_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "page_filled:{slug}:$page_id"
+  page_id=$($WP_BIN post create --post_type=page --post_status=publish --post_title='{titles[0]}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null || true)
+  [[ -n "$page_id" ]] && save_md5 "$page_id" && echo "page_created:{slug}:$page_id"
 else
-  echo "page_kept:{slug}:$page_id"
+  current=$($WP_BIN post get "$page_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  stored=$($WP_BIN post meta get "$page_id" _velocity_content_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  # Ditimpa hanya kalau masih placeholder, mode finish, atau isinya belum berubah
+  # sejak terakhir ditulis installer (md5 sama) — suntingan manusia tidak hilang.
+  if [[ "$current" == '{placeholder}' || "{refresh}" == 1 ]] || {{ [[ -n "$stored" ]] && [[ "$stored" == "$(cur_md5 "$page_id")" ]]; }}; then
+    $WP_BIN post update "$page_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && save_md5 "$page_id" && echo "page_filled:{slug}:$page_id"
+  else
+    echo "page_kept:{slug}:$page_id"
+  fi
 fi
 # Draft buatan generator versi lama (slug home/profile/gallery/contact).
 for old in $($WP_BIN post list --post_type=page --post_status=draft --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null); do
@@ -294,11 +311,11 @@ done'''
     # Create category
     category_name = articles[0].get('category', 'Blog') if articles else 'Blog'
     cat_escaped = category_name.replace("'", "'\\''")
-    cat_cmd = f'''cat_id=$($WP_BIN term list category --path="$DOCROOT" --allow-root --fields=term_id,name 2>/dev/null | while IFS=',' read id name; do
-  if [[ "$name" == "{cat_escaped}" ]]; then echo "$id"; break; fi
-done | head -1)
+    # Dulu keluaran `term list` (bertab) dibaca sebagai CSV, jadi kategori tidak
+    # pernah ketemu, ID-nya kosong, dan semua artikel masuk Uncategorized.
+    cat_cmd = f'''cat_id=$($WP_BIN term list category --name='{cat_escaped}' --field=term_id --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
 if [[ -z "$cat_id" ]]; then
-  cat_id=$($WP_BIN term create category '{cat_escaped}' --path="$DOCROOT" --allow-root 2>/dev/null | grep -o '[0-9]*$')
+  cat_id=$($WP_BIN term create category '{cat_escaped}' --porcelain --path="$DOCROOT" --allow-root 2>/dev/null || true)
   echo "category_created:{category_name}:$cat_id"
 else
   echo "category_exists:{category_name}:$cat_id"
@@ -316,7 +333,7 @@ fi'''
     for art in articles:
         title = art.get('title', '')
         slug = art.get('slug', '')
-        content = art.get('content', '')
+        content = clean_html(art.get('content', ''))
         excerpt = art.get('excerpt', '')
         
         if not slug or not title:
@@ -344,9 +361,13 @@ if [[ -z "$post_id" ]]; then
   [[ -n "{cat_id}" && -n "$post_id" ]] && $WP_BIN post term set "$post_id" category {cat_id} --by=id --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true
 elif [[ "$($WP_BIN post get "$post_id" --field=post_status --path="$DOCROOT" --allow-root 2>/dev/null)" == draft ]]; then
   $WP_BIN post update "$post_id" --post_status=publish --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_published:{slug}"
+elif [[ "{refresh}" == 1 ]]; then
+  $WP_BIN post update "$post_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_refreshed:{slug}"
 else
   echo "article_exists:{slug}"
-fi'''
+fi
+# Kategori diterapkan juga ke artikel lama yang terlanjur masuk Uncategorized.
+[[ -n "{cat_id}" && -n "$post_id" ]] && $WP_BIN post term set "$post_id" category {cat_id} --by=id --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true'''
         output, rc = wp_remote(cmd)
         if 'article_duplicate_deleted' in output:
             log(f'Duplikat dihapus: {slug}-2')
@@ -394,7 +415,12 @@ def main():
     log(f'Client data files: {list(client_data.keys())}')
     # Isi lengkap FORM ISIAN + dokumen lain (company profile, konsep, susunan menu).
     # Tanpa ini AI hanya menerima nama & alamat dan menulis konten generik.
-    docs = collect_client_docs(ON_PROGRESS / domain)
+    # Dokumen (termasuk OCR PDF hasil scan, yang lambat) hanya dibaca kalau memang
+    # perlu generate; apply ulang memakai konten tersimpan.
+    need_ai = not (load_saved(GENERATED_DIR / f'{domain}-pages.json')
+                   and load_saved(GENERATED_DIR / f'{domain}-articles.json'))
+    docs = (collect_client_docs(ON_PROGRESS / domain) if need_ai
+            else {'sources': [], 'unreadable': [], 'skipped': []})
     for name, text in docs['sources']:
         log(f'Dokumen klien: {name} ({len(text)} karakter)')
     if docs['unreadable']:

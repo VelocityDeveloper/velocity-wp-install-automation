@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Finishing situs dari aset & data klien: logo, favicon, foto galeri, tagline,
+warna tema, tombol WhatsApp, dan peta lokasi.
+
+Pemakaian: site-finish <manifest>   (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Dijalankan setelah ai-content-generator. Semua langkah idempoten dan tidak
+menimpa pengaturan yang sudah diubah orang: media ditandai meta
+_velocity_source, logo/ikon/WhatsApp hanya diisi kalau masih kosong, tagline &
+CSS hanya ditimpa kalau masih milik installer, galeri & peta hanya ditambahkan
+ke halaman yang isinya belum disunting sejak ditulis installer (md5).
+"""
+import json
+import os
+import re
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import quote_plus
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from client_form import read_client_form  # noqa: E402
+
+ON_PROGRESS = Path('/home/On Progress')
+GENERATED = Path('/var/lib/velocity/ai/generated')
+IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+MAX_PHOTOS = 12
+MIN_BYTES, MAX_BYTES = 20_000, 8_000_000
+# Frasa panjang didahulukan supaya "biru dongker" tidak terbaca "biru".
+COLORS = [
+    ('biru dongker', '#1f2a44'), ('dongker', '#1f2a44'), ('navy', '#1f2a44'),
+    ('biru muda', '#4fa3e0'), ('biru langit', '#4fa3e0'), ('tosca', '#1abc9c'),
+    ('merah marun', '#800000'), ('maroon', '#800000'), ('marun', '#800000'),
+    ('merah muda', '#e91e63'), ('pink', '#d81b60'), ('magenta', '#c2185b'),
+    ('biru', '#1e5aa8'), ('hijau', '#2e7d32'), ('merah', '#c62828'),
+    ('orange', '#ef6c00'), ('oranye', '#ef6c00'), ('jingga', '#ef6c00'),
+    ('kuning', '#f9a825'), ('gold', '#c9a227'), ('emas', '#c9a227'),
+    ('ungu', '#6a1b9a'), ('coklat', '#6d4c41'), ('cokelat', '#6d4c41'),
+    ('hitam', '#111111'), ('abu', '#607d8b'),
+]
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def field(fields, pattern):
+    return next((v.strip() for k, v in fields.items() if re.search(pattern, k, re.I)), '')
+
+
+def pick_colors(text):
+    low = str(text or '').lower()
+    found = []
+    for word, hexv in COLORS:
+        for m in re.finditer(r'(?<![a-z])' + re.escape(word) + r'(?![a-z])', low):
+            found.append((m.start(), -(m.end() - m.start()), m.end(), hexv))
+    found.sort()
+    picked, last_end = [], -1
+    for start, _, end, hexv in found:
+        if start < last_end:
+            continue
+        last_end = end
+        if hexv not in picked:
+            picked.append(hexv)
+    return picked[:2]
+
+
+def colors_css(colors):
+    if not colors:
+        return ''
+    primary = colors[0]
+    secondary = colors[1] if len(colors) > 1 else colors[0]
+    return (f'/* velocity-installer-colors: dari "WARNA TEMA WEB" di form klien */\n'
+            f':root{{--velocity-primary:{primary};--velocity-secondary:{secondary}}}\n'
+            'a{color:var(--velocity-primary)}\n'
+            '.btn-primary,.wp-block-button__link,input[type=submit],button[type=submit]'
+            '{background-color:var(--velocity-primary);border-color:var(--velocity-primary)}\n'
+            '.btn-primary:hover,.wp-block-button__link:hover,input[type=submit]:hover,button[type=submit]:hover'
+            '{background-color:var(--velocity-secondary);border-color:var(--velocity-secondary)}\n')
+
+
+def wa_number(value):
+    digits = re.sub(r'\D', '', value or '')
+    if digits.startswith('0'):
+        digits = '62' + digits[1:]
+    elif digits.startswith('8'):
+        digits = '62' + digits
+    return digits if re.match(r'^628\d{7,11}$', digits) else ''
+
+
+def slogan(text):
+    lines = [l.strip() for l in str(text or '').splitlines()]
+    for i, line in enumerate(lines):
+        if not re.match(r'^slogan\b', line, re.I):
+            continue
+        cands = ([line.split(':', 1)[1]] if ':' in line else []) + lines[i + 1:i + 3]
+        for cand in cands:
+            cand = re.split(r'\.{3,}', cand)[0].strip()
+            # Kandidat berbentuk label ("HP/ Telp:") berarti slogan dibiarkan kosong
+            # dan baris berikutnya sudah bagian lain dari form.
+            if ':' in cand or cand.isupper():
+                return ''
+            if (3 <= len(cand) <= 80 and re.search(r'[a-z]{3}', cand, re.I)
+                    and not re.match(r'^(logo|kontak|silahkan|silakan|misal|contoh|\*|\()', cand, re.I)):
+                return cand
+        return ''
+    return ''
+
+
+def ai_tagline(domain):
+    try:
+        pages = json.loads((GENERATED / f'{domain}-pages.json').read_text())
+    except (OSError, ValueError):
+        return ''
+    item = next((p for p in pages if isinstance(p, dict) and p.get('slug') == 'tagline'), None)
+    text = re.sub(r'<[^>]+>', '', str((item or {}).get('content') or '')).strip()
+    return text if 3 <= len(text) <= 80 else ''
+
+
+def image_size(path):
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(26)
+            if head[:8] == b'\x89PNG\r\n\x1a\n':
+                return struct.unpack('>II', head[16:24])
+            if head[:2] != b'\xff\xd8':
+                return None
+            f.seek(2)
+            while True:
+                b = f.read(1)
+                while b and b != b'\xff':
+                    b = f.read(1)
+                while b == b'\xff':
+                    b = f.read(1)
+                if not b:
+                    return None
+                if b[0] in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    f.read(3)
+                    h, w = struct.unpack('>HH', f.read(4))
+                    return w, h
+                seglen = struct.unpack('>H', f.read(2))[0]
+                f.seek(seglen - 2, 1)
+    except (OSError, struct.error):
+        return None
+
+
+def client_assets(folder):
+    if not folder.is_dir():
+        return None, []
+    files = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in IMG_EXT)
+    logos = [p for p in files if re.search(r'logo', p.name, re.I) and p.stat().st_size >= 1000]
+    logo = max(logos, key=lambda p: (p.suffix.lower() == '.png', p.stat().st_size)) if logos else None
+    photos = [p for p in files if p not in logos and MIN_BYTES <= p.stat().st_size <= MAX_BYTES]
+    return logo, photos[:MAX_PHOTOS]
+
+
+REMOTE = r'''
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+cur_md5() { wp post get "$1" --field=post_content 2>/dev/null | md5sum | cut -d' ' -f1; }
+save_md5() { wp post meta update "$1" _velocity_content_md5 "$(cur_md5 "$1")" >/dev/null 2>&1 || true; }
+managed() { local s; s=$(wp post meta get "$1" _velocity_content_md5 2>/dev/null || true); [[ -n "$s" && "$s" == "$(cur_md5 "$1")" ]]; }
+page_by_title() { wp post list --post_type=page --post_status=publish --fields=ID,post_title 2>/dev/null | awk -F'\t' -v t="$1" 'NR>1 && $2==t {print $1; exit}'; }
+import_media() {
+  local id
+  id=$(wp post list --post_type=attachment --post_status=inherit --meta_key=_velocity_source --meta_value="$2" --field=ID 2>/dev/null | head -1)
+  if [[ -z "$id" ]]; then
+    id=$(wp media import "$M/$1" --porcelain 2>/dev/null || true)
+    [[ -n "$id" ]] && wp post meta update "$id" _velocity_source "$2" >/dev/null 2>&1 && echo "media_imported:$1" >&2
+  fi
+  echo "$id"
+}
+
+if [[ -n "$LOGO_FILE" ]]; then
+  logo_id=$(import_media "$LOGO_FILE" "$LOGO_KEY")
+  if [[ -n "$logo_id" && -z "$(wp theme mod get custom_logo --field=value 2>/dev/null || true)" ]]; then
+    wp theme mod set custom_logo "$logo_id" >/dev/null && echo "logo_set:$logo_id" >&2
+  fi
+  if [[ "$ICON_OK" == 1 && -n "$logo_id" && "$(wp option get site_icon 2>/dev/null || echo 0)" =~ ^0?$ ]]; then
+    wp option update site_icon "$logo_id" >/dev/null && echo "site_icon_set:$logo_id" >&2
+  fi
+fi
+
+ids=()
+for i in "${!PHOTO_FILES[@]}"; do
+  id=$(import_media "${PHOTO_FILES[$i]}" "${PHOTO_KEYS[$i]}")
+  [[ -n "$id" ]] && ids+=("$id")
+done
+gal=$(page_by_title 'Galeri' || true)
+if [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && managed "$gal"; then
+  content=$(wp post get "$gal" --field=post_content 2>/dev/null || true)
+  if [[ "$content" != *velocity-gallery* ]]; then
+    joined=$(IFS=,; echo "${ids[*]}")
+    wp post update "$gal" --post_content="$content
+<!-- velocity-gallery -->
+[gallery ids=\"$joined\" columns=\"3\" size=\"medium\" link=\"file\"]" >/dev/null && save_md5 "$gal" && echo "gallery_added:${#ids[@]}" >&2
+  fi
+fi
+
+if [[ -n "$MAP_QUERY" ]]; then
+  kontak=$(page_by_title 'Hubungi Kami' || true)
+  if [[ -n "$kontak" ]] && managed "$kontak"; then
+    content=$(wp post get "$kontak" --field=post_content 2>/dev/null || true)
+    if [[ "$content" != *velocity-map* ]]; then
+      # --user admin: tanpa user login, filter kses WordPress membuang iframe.
+      wp post update "$kontak" --user="$ADMIN" --post_content="$content
+<!-- velocity-map -->
+<iframe src=\"https://www.google.com/maps?q=$MAP_QUERY&amp;output=embed\" width=\"100%\" height=\"380\" style=\"border:0\" loading=\"lazy\" title=\"Peta lokasi\"></iframe>" >/dev/null && save_md5 "$kontak" && echo "map_added" >&2
+    fi
+  fi
+fi
+
+if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; then
+  wp option update floating_whatsapp 1 >/dev/null
+  wp option update nomor_whatsapp "$WA" >/dev/null
+  wp option update nomor_whatsapp_contacts "$WA_CONTACTS" --format=json >/dev/null
+  wp option update whatsapp_text 'Butuh Bantuan?' >/dev/null
+  wp option update whatsapp_message "$WA_MESSAGE" >/dev/null && echo "whatsapp_set" >&2
+fi
+
+if [[ -n "$TAGLINE" ]]; then
+  cur=$(wp option get blogdescription 2>/dev/null || true)
+  mine=$(wp option get velocity_installer_tagline 2>/dev/null || true)
+  if [[ -z "$cur" || "$cur" == "$mine" || "$cur" == "Just another WordPress site" ]]; then
+    wp option update blogdescription "$TAGLINE" >/dev/null && wp option update velocity_installer_tagline "$TAGLINE" >/dev/null && echo "tagline_set" >&2
+  fi
+fi
+
+if [[ -n "$CSS" ]]; then
+  VCSS="$CSS" wp eval '$c = wp_get_custom_css(); if ($c === "" || strpos($c, "velocity-installer-colors") !== false) { $r = wp_update_custom_css_post(getenv("VCSS")); echo is_wp_error($r) ? "colors_failed" : "colors_set"; } else { echo "colors_kept"; }' >&2 || true
+  echo >&2
+fi
+
+rm -rf "$M"
+echo "finish_done" >&2
+'''
+
+
+def main():
+    if len(sys.argv) < 2:
+        print('usage: site-finish <manifest>', file=sys.stderr)
+        return 2
+    cfg = read_manifest(sys.argv[1])
+    domain = cfg.get('domain', '').lower()
+    da_user = cfg.get('da_user', '')
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain) or not re.match(r'^[a-z][a-z0-9]*$', da_user):
+        print('finish: manifest tidak valid')
+        return 2
+    if not key or not Path(key).is_file():
+        print('finish: kunci SSH tidak ada')
+        return 2
+    folder = ON_PROGRESS / domain
+    form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
+    fields = form['fields']
+    title = cfg.get('site_title') or domain
+    wa = wa_number(field(fields, r'kontak utk di web|kontak untuk di web'))
+    address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
+    tagline = slogan(form['text']) or ai_tagline(domain)
+    css = colors_css(pick_colors(field(fields, r'warna tema')))
+    logo, photos = client_assets(folder)
+    size = image_size(logo) if logo else None
+    icon_ok = bool(size and min(size) >= 256 and 0.8 <= size[0] / max(size[1], 1) <= 1.25)
+
+    stage = Path(tempfile.mkdtemp(prefix='velocity-finish-'))
+    try:
+        logo_file = ''
+        if logo:
+            logo_file = 'logo' + logo.suffix.lower()
+            shutil.copy2(logo, stage / logo_file)
+        photo_files, photo_keys = [], []
+        for i, photo in enumerate(photos, 1):
+            name = f'photo-{i:02d}{photo.suffix.lower()}'
+            shutil.copy2(photo, stage / name)
+            photo_files.append(name)
+            photo_keys.append(f'{photo.relative_to(folder)}:{photo.stat().st_size}')
+        remote_dir = f'/tmp/velocity-finish-{domain}'
+        header = '\n'.join([
+            f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+            f'M={shlex.quote(remote_dir)}',
+            f'ADMIN={shlex.quote(cfg.get("admin_user") or da_user)}',
+            f'LOGO_FILE={shlex.quote(logo_file)}',
+            f'LOGO_KEY={shlex.quote(f"{logo.relative_to(folder)}:{logo.stat().st_size}" if logo else "")}',
+            f'ICON_OK={1 if icon_ok else 0}',
+            'PHOTO_FILES=(' + ' '.join(shlex.quote(n) for n in photo_files) + ')',
+            'PHOTO_KEYS=(' + ' '.join(shlex.quote(k) for k in photo_keys) + ')',
+            f'MAP_QUERY={shlex.quote(quote_plus(address) if address else "")}',
+            f'WA={shlex.quote(wa)}',
+            f'WA_CONTACTS={shlex.quote(json.dumps([{"name": title, "number": wa}]) if wa else "")}',
+            f'WA_MESSAGE={shlex.quote(f"Halo {title}, saya ingin bertanya.")}',
+            f'TAGLINE={shlex.quote(tagline)}',
+            f'CSS={shlex.quote(css)}',
+        ])
+        ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+               '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+               f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+        print(f'finish: logo={logo.name if logo else "-"} foto={len(photos)} wa={"ya" if wa else "-"} '
+              f'alamat={"ya" if address else "-"} tagline={"ya" if tagline else "-"} warna={"ya" if css else "-"}')
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+        up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote_dir)} && mkdir -p {shlex.quote(remote_dir)} '
+                                   f'&& tar -xzf - -C {shlex.quote(remote_dir)}'],
+                            stdin=tar.stdout, capture_output=True, text=True, timeout=300)
+        tar.wait()
+        if up.returncode != 0:
+            print(f'finish: gagal kirim aset ({up.stderr.strip()[:200]})')
+            return 1
+        run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE,
+                             capture_output=True, text=True, timeout=600)
+        for line in (run.stdout + '\n' + run.stderr).splitlines():
+            if line.strip() and not line.startswith('Warning:'):
+                print(f'finish: {line.strip()[:200]}')
+        return 0 if run.returncode == 0 else 1
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

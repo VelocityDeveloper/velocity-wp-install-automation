@@ -8,10 +8,14 @@ Teks ini dikirim ke API AI eksternal, jadi baris kredensial selalu dibuang dan
 bagian data pribadi pemilik di form ditandai supaya tidak ditampilkan di situs.
 """
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from client_form import extract_text
+
+OCR_PAGES = 6
 
 DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt'}
 # Dokumen yang biasanya paling kaya isi didahulukan saat anggaran karakter habis.
@@ -30,13 +34,44 @@ PERSONAL_END = re.compile(r'apakah desain|warna tema|konsep desain|responsive', 
 PERSONAL_LABELS = re.compile(r'^(nama anda|nama pemilik|email|e-mail|whatsapp|no hp|no\. hp)', re.I)
 
 
+def _ocr_pdf(path):
+    """PDF hasil scan (company profile berupa gambar) tidak punya lapisan teks;
+    baca beberapa halaman pertama lewat OCR tesseract (bahasa Indonesia + Inggris)."""
+    if not shutil.which('pdftoppm') or not shutil.which('tesseract'):
+        return []
+    lines = []
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            subprocess.run(['pdftoppm', '-r', '150', '-f', '1', '-l', str(OCR_PAGES), '-png', str(path), f'{tmp}/p'],
+                           capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return []
+        for img in sorted(Path(tmp).glob('p*.png')):
+            try:
+                r = subprocess.run(['tesseract', str(img), 'stdout', '-l', 'ind+eng'],
+                                   capture_output=True, text=True, timeout=90)
+            except subprocess.TimeoutExpired:
+                continue
+            # PDF penuh desain menghasilkan serpihan acak ("OY el Rea j"); simpan
+            # hanya baris yang sebagian besar berupa kata.
+            for line in r.stdout.splitlines():
+                tokens = line.split()
+                words = [t for t in tokens if re.fullmatch(r"[A-Za-z][A-Za-z'.,&-]{2,}", t)]
+                if len(tokens) >= 2 and len(words) / len(tokens) >= 0.6:
+                    lines.append(line)
+    return lines
+
+
 def _doc_lines(path):
     ext = path.suffix.lower()
     try:
         if ext == '.pdf':
             r = subprocess.run(['pdftotext', '-layout', '-l', '20', '-q', str(path), '-'],
                                capture_output=True, text=True, timeout=60)
-            return r.stdout.splitlines()
+            lines = r.stdout.splitlines()
+            if len(''.join(lines).strip()) < 200:
+                lines = _ocr_pdf(path) or lines
+            return lines
         if ext == '.txt':
             return path.read_text(errors='replace').splitlines()
         return extract_text(path)  # .docx / .doc, dideteksi lewat magic bytes
@@ -94,8 +129,10 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET):
     if not folder.is_dir():
         return result
     files = [p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in DOC_EXTS]
+    # Dokumen teks asli (docx/txt) didahulukan dari PDF: PDF sering hasil scan
+    # yang hanya terbaca lewat OCR dan menghabiskan anggaran karakter.
     files.sort(key=lambda p: (not p.name.upper().startswith('FORM ISIAN'),
-                              not PRIORITY.search(p.name), str(p).lower()))
+                              not PRIORITY.search(p.name), p.suffix.lower() == '.pdf', str(p).lower()))
     used = 0
     for path in files:
         name = str(path.relative_to(folder))

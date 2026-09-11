@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 DOMAIN=${1:?domain_required}
+# dry-run | apply | finish (rapikan ulang situs terpasang: konten, aset klien,
+# pemeriksaan — tanpa memasang ulang WordPress dan tanpa notifikasi)
 MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
+SCRIPTS=/opt/velocity-wp-install-automation/scripts
 MANIFEST="$ROOT/$DOMAIN/$DOMAIN.txt"
 STATE_DIR=/var/lib/velocity/installer
 STATE="$STATE_DIR/$DOMAIN.json"
@@ -24,15 +27,17 @@ PY
 notify() {
   # Notifikasi tidak boleh menggagalkan instalasi.
   [[ "$MODE" == "apply" ]] || return 0
-  /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/notify-telegram.py \
-    "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
+  /usr/bin/python3 "$SCRIPTS/notify-telegram.py" "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
 }
 trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
-INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" /opt/velocity-wp-install-automation/scripts/website-install-from-manifest >> "$LOG" 2>&1
-if [[ "$MODE" == "apply" ]]; then
+if [[ "$MODE" != "finish" ]]; then
+  INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" "$SCRIPTS/website-install-from-manifest" >> "$LOG" 2>&1
+fi
+problems=""
+if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # Sukses di server belum tentu situsnya bisa dibuka: 2026-09-11 dua situs lolos
   # sebagai COMPLETE padahal semua URL 404. File statis inti WordPress ini selalu
   # ada dan dilayani webserver langsung, tanpa bergantung tema/plugin.
@@ -45,13 +50,31 @@ if [[ "$MODE" == "apply" ]]; then
     exit 4
   fi
   # Generator memakai ulang konten tersimpan saat apply ulang, jadi aman
-  # dijalankan lagi tanpa biaya AI dan tanpa menggandakan artikel.
+  # dijalankan lagi tanpa biaya AI dan tanpa menggandakan artikel. Mode finish
+  # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
+  refresh=0
+  [[ "$MODE" == "finish" ]] && refresh=1
   echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
-  INSTALL_MODE="$MODE" /usr/bin/python3 /opt/velocity-wp-install-automation/scripts/ai-content-generator.py "$MANIFEST" >> "$LOG" 2>&1 || true
+  INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
+  echo "[$(date -Is)] Finishing: aset & pengaturan dari data klien" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/site-finish" "$MANIFEST" >> "$LOG" 2>&1 || true
+  qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
+  echo "qa_result: $qa" >> "$LOG"
+  problems=$(python3 -c 'import json, sys
+try:
+    print(",".join(json.loads(sys.argv[1]).get("problems", [])))
+except Exception:
+    print("qa_gagal_dijalankan")' "$qa")
 fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK
 else
+  # Stage tetap COMPLETE (situs terpasang; antrean & autopilot memakainya).
+  # Temuan pemeriksaan akhir dilaporkan terpisah sebagai "perlu dicek".
   state SUCCESS COMPLETE
-  notify SUCCESS COMPLETE
+  if [[ -n "$problems" ]]; then
+    notify CHECK "$problems"
+  else
+    notify SUCCESS COMPLETE
+  fi
 fi

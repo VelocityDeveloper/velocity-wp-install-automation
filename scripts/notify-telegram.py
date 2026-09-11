@@ -2,7 +2,7 @@
 """Kirim notifikasi hasil instalasi ke Telegram.
 
 Pemakaian: notify-telegram.py <domain> <status> [tahap]
-Status: SUCCESS | FAILED | CLAIMED | MANUAL (dua terakhir dari autopilot)
+Status: SUCCESS | CHECK (terpasang, perlu dicek) | FAILED | CLAIMED | MANUAL (dua terakhir dari autopilot)
 
 Kegagalan notifikasi tidak boleh menggagalkan instalasi, jadi semua error
 ditelan dan hanya dilaporkan lewat exit code (0 terkirim, 1 tidak).
@@ -87,12 +87,15 @@ def build_message(domain, status, stage, paket='', theme=''):
     head = f'Domain: <code>{domain}</code>\n'
     if paket:
         head += f'Paket: <b>{html.escape(paket)}</b>\n'
-    if status == 'SUCCESS':
+    if status in ('SUCCESS', 'CHECK'):
         if theme:
             head += f'Tema: <code>{html.escape(theme)}</code>\n'
-        return (f'✅ <b>Instalasi selesai</b>\n{head}'
-                f'Situs: https://{domain}\n'
-                f'Admin: https://{domain}/wp-admin')
+        links = f'Situs: https://{domain}\nAdmin: https://{domain}/wp-admin'
+        if status == 'CHECK':
+            # Terpasang, tapi pemeriksaan akhir (scripts/site-qa) menemukan masalah.
+            return (f'🟡 <b>Instalasi selesai, perlu dicek</b>\n{head}{links}\n'
+                    f'Catatan: <code>{stage}</code>')
+        return f'✅ <b>Instalasi selesai</b>\n{head}{links}'
     if status == 'CLAIMED':
         return (f'🤖 <b>Diambil alih autopilot</b>\n{head}'
                 f'Tahap: <code>{stage}</code>')
@@ -139,7 +142,7 @@ def main():
     if not token or not chats:
         print('telegram: token/chat_id belum diset, notifikasi dilewati', file=sys.stderr)
         return 1
-    theme = theme_note(domain) if status.upper() == 'SUCCESS' else ''
+    theme = theme_note(domain) if status.upper() in ('SUCCESS', 'CHECK') else ''
     text = build_message(domain, status, stage, manifest_paket(domain), theme)
     failed = 0
     for chat in chats:

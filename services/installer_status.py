@@ -730,11 +730,16 @@ def generate_manifest(domain: str):
 
 
 def start_run(domain: str, mode: str):
-    """Start installer-runner for domain. mode: dry-run | apply."""
+    """Start installer-runner for domain. mode: dry-run | apply | finish.
+
+    finish merapikan ulang situs yang sudah terpasang (konten bersih, aset klien,
+    pemeriksaan akhir) tanpa memasang ulang WordPress dan tanpa notifikasi."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
         return None, 'invalid_domain'
-    if mode not in ('dry-run', 'apply'):
+    if mode not in ('dry-run', 'apply', 'finish'):
         return None, 'invalid_mode'
+    if mode == 'finish' and not ssh_key_file():
+        return None, 'ssh_key_missing'
     manifest = ROOT / domain / f'{domain}.txt'
     if not manifest.is_file():
         return None, 'manifest_not_found'

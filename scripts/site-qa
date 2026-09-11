@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Pemeriksaan akhir situs dari luar, sebelum dilaporkan selesai.
+
+Pemakaian: site-qa <domain>
+Baris terakhir keluaran: JSON {"qa": "ok"|"issues", "problems": [...], "info": {...}}
+
+Masalah yang dicari berasal dari situs "COMPLETE" yang ternyata belum layak
+diserahkan (2026-09-11): sertifikat SSL milik domain lain, gambar 404 karangan
+AI, teks placeholder, menu kosong, artikel tanpa kategori.
+"""
+import json
+import re
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from content_sanitize import has_placeholder  # noqa: E402
+
+UA = {'User-Agent': 'velocity-installer-qa/1.0'}
+INSECURE = ssl._create_unverified_context()
+
+
+def fetch(url, verify=False, method='GET', timeout=25):
+    req = urllib.request.Request(url, headers=UA, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=None if verify else INSECURE) as resp:
+            return resp.status, (resp.read() if method == 'GET' else b'')
+    except urllib.error.HTTPError as e:
+        return e.code, b''
+
+
+def fetch_json(url):
+    try:
+        status, body = fetch(url)
+        return json.loads(body) if status == 200 else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def main():
+    domain = (sys.argv[1] if len(sys.argv) > 1 else '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print(json.dumps({'qa': 'issues', 'problems': ['domain_tidak_valid'], 'info': {}}))
+        return 0
+    base = f'https://{domain}/'
+    problems, info = [], {}
+
+    # Gangguan jaringan sesaat pernah membuat situs yang sehat terlapor tidak
+    # bisa dibuka; coba beberapa kali sebelum menyimpulkan.
+    ssl_error, reachable = '', False
+    for attempt in range(3):
+        try:
+            fetch(base, verify=True)
+            reachable = True
+            break
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, 'reason', None), ssl.SSLError):
+                ssl_error, reachable = str(e.reason)[:120], True
+                break
+        except OSError:
+            pass
+        time.sleep(3)
+    if ssl_error:
+        problems.append('ssl_tidak_valid')
+        info['ssl'] = ssl_error
+    elif reachable:
+        info['ssl'] = 'valid'
+    else:
+        problems.append('situs_tidak_bisa_dibuka')
+
+    status, home = 0, ''
+    for attempt in range(3):
+        try:
+            status, body = fetch(base)
+            home = body.decode('utf-8', 'replace')
+            break
+        except (urllib.error.URLError, OSError):
+            time.sleep(3)
+    info['home_http'] = status
+    if status != 200 and 'situs_tidak_bisa_dibuka' not in problems:
+        problems.append(f'beranda_http_{status}')
+
+    menu = {s for s in ('tentang-kami', 'hubungi-kami') if re.search(rf'href="[^"]*/{s}/?"', home)}
+    if home and len(menu) < 2:
+        problems.append('menu_tidak_lengkap')
+
+    pages = fetch_json(f'{base}wp-json/wp/v2/pages?per_page=50&_fields=slug,content') or []
+    srcs, ph_pages = set(), []
+    for page in pages:
+        content = (page.get('content') or {}).get('rendered', '')
+        srcs.update(re.findall(r'<img[^>]+src="([^"]+)"', content))
+        if has_placeholder(content):
+            ph_pages.append(page.get('slug'))
+    srcs.update(re.findall(r'<img[^>]+src="([^"]+)"', home))
+    if ph_pages:
+        problems.append('teks_placeholder:' + ','.join(sorted(set(ph_pages))))
+
+    broken = 0
+    for src in sorted(srcs)[:40]:
+        url = urljoin(base, src)
+        if urlparse(url).hostname not in (domain, f'www.{domain}'):
+            continue
+        try:
+            code, _ = fetch(url, method='HEAD', timeout=15)
+            if code == 405:
+                code, _ = fetch(url, timeout=15)
+        except (urllib.error.URLError, OSError):
+            code = 0
+        broken += code >= 400 or code == 0
+    if broken:
+        problems.append(f'gambar_rusak:{broken}')
+
+    cats = fetch_json(f'{base}wp-json/wp/v2/categories?per_page=100&_fields=id,slug') or []
+    uncat = {c['id'] for c in cats if c.get('slug') == 'uncategorized'}
+    posts = fetch_json(f'{base}wp-json/wp/v2/posts?per_page=50&_fields=id,categories') or []
+    info['artikel'] = len(posts)
+    no_cat = sum(1 for p in posts if set(p.get('categories') or []) <= uncat)
+    if no_cat:
+        problems.append(f'artikel_tanpa_kategori:{no_cat}')
+
+    root = fetch_json(f'{base}wp-json/') or {}
+    info.update(
+        tagline=bool(root.get('description')),
+        site_icon=bool(root.get('site_icon') or root.get('site_icon_url')),
+        logo='custom-logo' in home,
+        whatsapp=bool(re.search(r'wa\.me|api\.whatsapp\.com|whatsapp', home, re.I)),
+        galeri=any('gallery' in ((p.get('content') or {}).get('rendered', '')) for p in pages if p.get('slug') == 'galeri'),
+        peta=any('google.com/maps' in ((p.get('content') or {}).get('rendered', '')) for p in pages if p.get('slug') == 'hubungi-kami'),
+    )
+    print(json.dumps({'qa': 'issues' if problems else 'ok', 'problems': problems, 'info': info}))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

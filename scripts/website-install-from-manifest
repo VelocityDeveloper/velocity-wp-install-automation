@@ -109,6 +109,10 @@ if [[ "$MODE" == dry-run ]]; then
      if test -e /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html/wp-config.php; then echo site:wordpress;
      elif ls -A /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html 2>/dev/null | grep -qvxE 'index\\.html|logo\\.png|cgi-bin|\\.well-known|\\.htaccess'; then echo site:not_empty;
      else echo site:empty; fi;
+     crt=\$(echo | timeout 10 openssl s_client -servername ${cfg[domain]} -connect ${cfg[domain]}:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null);
+     case \"\$crt\" in *${cfg[domain]}*) echo ssl_cert:match;; '') echo ssl_cert:none;; *) echo ssl_cert:mismatch;; esac;
+     test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;
+     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/${cfg[domain]}.conf 2>/dev/null | tr '\n' ' ')\";
      for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
      df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
     || probe="ssh_failed:$probe"
@@ -134,8 +138,12 @@ if [[ "$MODE" == dry-run ]]; then
     exit 3
   fi
   site=$(grep -o 'site:[a-z_]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
-  printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"ok","site":"%s"}\n' \
-    "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}" "${site:-unknown}"
+  # Info SSL/DirectAdmin (hanya dibaca) untuk menilai kesiapan sertifikat domain.
+  ssl_cert=$(grep -o 'ssl_cert:[a-z]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
+  le_script=$(grep -o 'le_script:[a-z]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
+  da_ssl=$(grep -o 'da_ssl:.*' <<<"$probe" | head -1 | cut -d: -f2- | tr -cd 'A-Za-z0-9=_ ' || true)
+  printf '{"status":"dry-run","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok","remote_check":"ok","site":"%s","ssl_cert":"%s","le_script":"%s","da_ssl":"%s"}\n' \
+    "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}" "${site:-unknown}" "${ssl_cert:-unknown}" "${le_script:-unknown}" "${da_ssl% }"
   exit 0
 fi
 printf '{"status":"%s","domain":"%s","target_host":"%s","ssh_port":%s,"da_user":"%s","dry_run":"ok"}\n' "$MODE" "${cfg[domain]}" "${cfg[target_host]}" "$port" "${cfg[da_user]}"
