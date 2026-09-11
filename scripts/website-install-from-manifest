@@ -268,15 +268,29 @@ if command -v df >/dev/null 2>&1; then
   fi
 fi
 
-# backup existing public_html if not empty
+# Backup public_html hanya kalau berisi situs lain. Instalasi fresh (isi bawaan
+# DirectAdmin) dan apply ulang WordPress hasil installer ini tidak perlu backup
+# (keputusan user 2026-09-11); dulu setiap apply membuat tar baru di folder klien.
 BACKUP_DIR="/home/$DA_USER/backup"
 BACKUP_FILE="$BACKUP_DIR/pre-install-$DOMAIN-$(date +%Y%m%d-%H%M%S).tar.gz"
-mkdir -p "$BACKUP_DIR"
 if [[ -d "$DOCROOT" && -n "$(ls -A "$DOCROOT" 2>/dev/null)" ]]; then
-  if tar -czf "$BACKUP_FILE" -C "$DOCROOT" . 2>/dev/null; then
-    echo "backup_created:$BACKUP_FILE" >&2
+  # Ditampung dulu: dengan pipefail, `ls | grep -q` bisa gagal karena SIGPIPE.
+  docroot_listing=$(ls -A "$DOCROOT" 2>/dev/null || true)
+  existing_db=""
+  if [[ -f "$DOCROOT/wp-config.php" ]]; then
+    existing_db=$(grep -oE "DB_NAME'[^']*'[^']*'" "$DOCROOT/wp-config.php" 2>/dev/null | grep -oE "'[^']*'\$" | tr -d "'" || true)
+  fi
+  if ! grep -qvxE 'index\.html|logo\.png|cgi-bin|\.well-known|\.htaccess' <<<"$docroot_listing"; then
+    echo "backup_skip:isi_bawaan_directadmin" >&2
+  elif [[ -n "$existing_db" && "$existing_db" == __DB_NAME_Q__ ]]; then
+    echo "backup_skip:wordpress_hasil_installer" >&2
   else
-    echo "backup_failed" >&2; exit 12
+    mkdir -p "$BACKUP_DIR"
+    if tar -czf "$BACKUP_FILE" -C "$DOCROOT" . 2>/dev/null; then
+      echo "backup_created:$BACKUP_FILE" >&2
+    else
+      echo "backup_failed" >&2; exit 12
+    fi
   fi
 fi
 
@@ -565,7 +579,9 @@ else
 fi
 
 # Final ownership/permissions pass: prevent root-owned files after WP-CLI, unzip, git, and backup.
-chown -R "$DA_USER:$DA_USER" "$DOCROOT" "$BACKUP_DIR"
+chown -R "$DA_USER:$DA_USER" "$DOCROOT"
+# Folder backup kini hanya ada kalau benar-benar dibuat backup.
+if [[ -d "$BACKUP_DIR" ]]; then chown -R "$DA_USER:$DA_USER" "$BACKUP_DIR"; fi
 find "$DOCROOT" -type d -exec chmod 755 {} +
 find "$DOCROOT" -type f -exec chmod 644 {} +
 [[ -f "$DOCROOT/wp-config.php" ]] && chmod 640 "$DOCROOT/wp-config.php"

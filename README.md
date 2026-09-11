@@ -161,6 +161,8 @@ Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
 
 Mode `finish` (`POST /api/installer/run` `{"domain":..., "mode":"finish"}`) menjalankan ulang konten + finishing + QA untuk situs yang sudah terpasang, tanpa install ulang dan tanpa notifikasi.
 
+**Backup:** instalasi tidak membackup `public_html` yang masih kosong (isi bawaan DirectAdmin) atau WordPress hasil installer sendiri (apply ulang). Backup `/home/<user>/backup/pre-install-*.tar.gz` hanya dibuat kalau `public_html` berisi situs lain (bukan bawaan DirectAdmin, dan `wp-config.php` tidak memakai DB_NAME manifest). Backup lama dari instalasi sebelumnya tidak dihapus otomatis oleh installer.
+
 Mode `maintenance` (`{"domain":..., "mode":"maintenance"}`) hanya menyalakan maintenance mode velocity-addons untuk situs yang terpasang sebelum langkah itu ada (sekali per situs, dilewati kalau sudah diatur manual).
 
 **SSL belum otomatis.** Kalau QA melaporkan `ssl_tidak_valid` (domain baru menyajikan sertifikat domain lain), terbitkan di server DirectAdmin tujuan:
