@@ -165,8 +165,7 @@ Mode di `/etc/velocity/installer-autopilot.env`: `AUTOPILOT_MODE=observe` (defau
 
 ## Sync Google Drive (`scripts/onprogress-sync`)
 
-- `onprogress-sync-queue.timer` — tiap 10 menit, hanya folder domain yang ada di antrean installer.
-- `onprogress-sync-full.timer` — tiap malam 22:00, seluruh `gdrive:On Progress`; maksimal 30G per malam dan batal kalau sisa disk `/home` < 40G. Progres di `/tmp/onprogress-sync.log` (dibaca dashboard).
+`onprogress-sync-queue.timer` — tiap 10 menit, hanya folder domain berstatus `belum diambil` yang deadline-nya belum terlewat. Tidak ada sync penuh: Drive berisi ±10 ribu folder yang tidak dibutuhkan installer.
 
 Selalu `rclone copy` (tidak pernah menghapus file lokal).
 
@@ -174,8 +173,7 @@ Selalu `rclone copy` (tidak pernah menghapus file lokal).
 
 ```bash
 install -m 644 config/onprogress-sync@.service config/onprogress-sync-queue.timer \
-  config/onprogress-sync-full.timer config/installer-autopilot.service \
-  config/installer-autopilot.timer /etc/systemd/system/
+  config/installer-autopilot.service config/installer-autopilot.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now onprogress-sync-queue.timer onprogress-sync-full.timer installer-autopilot.timer
+systemctl enable --now onprogress-sync-queue.timer installer-autopilot.timer
 ```

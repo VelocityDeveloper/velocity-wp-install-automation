@@ -1,9 +1,0 @@
-[Unit]
-Description=Sync penuh Google Drive On Progress tiap malam
-
-[Timer]
-OnCalendar=*-*-* 22:00:00
-Unit=onprogress-sync@full.service
-
-[Install]
-WantedBy=timers.target

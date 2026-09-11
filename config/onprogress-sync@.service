@@ -5,8 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/velocity-wp-install-automation/scripts/onprogress-sync %i
+ExecStart=/opt/velocity-wp-install-automation/scripts/onprogress-sync
 Nice=10
 IOSchedulingClass=idle
-# Sync penuh bisa berjam-jam; batas ini hanya mencegah proses menggantung selamanya.
-TimeoutStartSec=20h
+# Hanya folder antrean installer, biasanya beberapa menit. Batas ini mencegah
+# proses menggantung selamanya kalau Drive macet.
+TimeoutStartSec=1h

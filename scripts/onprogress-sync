@@ -1,75 +1,47 @@
 #!/usr/bin/env bash
 # Salin folder project dari Google Drive "On Progress" ke /home/On Progress.
 #
-#   onprogress-sync queue  Hanya folder domain yang ada di antrean installer.
-#                          Hitungan detik per domain, jadi aman dijalankan tiap
-#                          beberapa menit supaya autopilot tidak menunggu.
-#   onprogress-sync full   Seluruh folder (±10 ribu folder, puluhan GiB). Sync
-#                          penuh pertama berhenti di 88% setelah 13 jam, jadi ini
-#                          dijadwalkan malam hari dengan batas volume.
+# Hanya domain yang benar-benar menunggu installer: status "belum diambil" di
+# antrean dan deadline belum terlewat. Drive berisi ±10 ribu folder (puluhan
+# GiB) yang tidak dibutuhkan installer, jadi tidak ada sync penuh.
 #
 # Selalu `rclone copy`, bukan `sync`: file lokal tidak pernah dihapus, dan remote
 # gdrive memang read-only.
 set -Eeuo pipefail
 
-MODE=${1:-queue}
 REMOTE='gdrive:On Progress'
 DEST='/home/On Progress'
 API=${INSTALLER_API:-http://127.0.0.1:9121}/api/installer
-# Dashboard server_stats.py membaca progres sync penuh dari file ini.
-FULL_LOG=/tmp/onprogress-sync.log
-FULL_MAX_TRANSFER=${FULL_MAX_TRANSFER:-30G}
-MIN_FREE_KB=${MIN_FREE_KB:-$((40 * 1024 * 1024))}
 
-case "$MODE" in
-  queue)
-    list=$(curl -fsS -m 180 "$API" | python3 -c '
-import json, re, sys
+list=$(curl -fsS -m 180 "$API" | python3 -c '
+import datetime, json, re, sys
 ok = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
+today = datetime.date.today().isoformat()
 for r in json.load(sys.stdin).get("domains", []):
+    if r.get("status") != "belum diambil":
+        continue
+    # Tanpa deadline tidak dianggap terlewat, sama seperti halaman installer.
+    if r.get("deadline") and r["deadline"] < today:
+        continue
     d = str(r.get("domain") or "").lower()
     if ok.match(d) and ".." not in d:
         print(d)') || { echo "onprogress-sync: API installer tidak bisa diakses" >&2; exit 1; }
-    synced=0 missing=0 failed=0
-    for d in $list; do
-      if out=$(rclone copy "$REMOTE/$d" "$DEST/$d" --retries 1 --log-level NOTICE 2>&1); then
-        synced=$((synced + 1))
-      else
-        rc=$?
-        # rc 3 = folder tidak ada di Drive; rclone tidak membuat folder lokal
-        # kosong, jadi installer tidak akan mengira folder klien sudah ada.
-        if [[ $rc -eq 3 ]]; then
-          missing=$((missing + 1))
-        else
-          failed=$((failed + 1))
-          printf 'onprogress-sync: %s gagal (rc=%s): %s\n' "$d" "$rc" "$(tail -1 <<<"$out")" >&2
-        fi
-      fi
-    done
-    printf 'onprogress-sync queue: tersinkron=%s tidak_ada_di_drive=%s gagal=%s\n' "$synced" "$missing" "$failed"
-    [[ $failed -eq 0 ]]
-    ;;
-  full)
-    # Jangan sampai sync memenuhi disk /home: cek sisa ruang sebelum mulai dan
-    # batasi volume per malam. Sisanya dilanjutkan malam berikutnya.
-    free_kb=$(df -Pk "$DEST" | awk 'NR==2{print $4}')
-    if (( free_kb < MIN_FREE_KB )); then
-      printf 'onprogress-sync full: dibatalkan, sisa disk %s GiB di bawah batas %s GiB\n' \
-        "$((free_kb / 1024 / 1024))" "$((MIN_FREE_KB / 1024 / 1024))" >&2
-      exit 1
+
+synced=0 missing=0 failed=0
+for d in $list; do
+  if out=$(rclone copy "$REMOTE/$d" "$DEST/$d" --retries 1 --log-level NOTICE 2>&1); then
+    synced=$((synced + 1))
+  else
+    rc=$?
+    # rc 3 = folder tidak ada di Drive; rclone tidak membuat folder lokal
+    # kosong, jadi installer tidak akan mengira folder klien sudah ada.
+    if [[ $rc -eq 3 ]]; then
+      missing=$((missing + 1))
+    else
+      failed=$((failed + 1))
+      printf 'onprogress-sync: %s gagal (rc=%s): %s\n' "$d" "$rc" "$(tail -1 <<<"$out")" >&2
     fi
-    : > "$FULL_LOG"
-    rc=0
-    rclone copy "$REMOTE" "$DEST" -v --stats 1m --log-file "$FULL_LOG" \
-      --max-transfer "$FULL_MAX_TRANSFER" --cutoff-mode soft || rc=$?
-    if [[ $rc -eq 8 ]]; then
-      echo "onprogress-sync full: batas $FULL_MAX_TRANSFER per malam tercapai, dilanjutkan besok"
-      exit 0
-    fi
-    exit $rc
-    ;;
-  *)
-    echo "usage: onprogress-sync queue|full" >&2
-    exit 2
-    ;;
-esac
+  fi
+done
+printf 'onprogress-sync: tersinkron=%s tidak_ada_di_drive=%s gagal=%s\n' "$synced" "$missing" "$failed"
+[[ $failed -eq 0 ]]
