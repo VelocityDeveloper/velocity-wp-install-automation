@@ -111,8 +111,7 @@ if [[ "$MODE" == dry-run ]]; then
      else echo site:empty; fi;
      crt=\$(echo | timeout 10 openssl s_client -servername ${cfg[domain]} -connect ${cfg[domain]}:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null);
      case \"\$crt\" in *${cfg[domain]}*) echo ssl_cert:match;; '') echo ssl_cert:none;; *) echo ssl_cert:mismatch;; esac;
-     test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;
-     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/${cfg[domain]}.conf 2>/dev/null | tr '\n' ' ')\";
+     test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/${cfg[domain]}.conf 2>/dev/null | tr '\n' ' ')\";
      for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
      df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
     || probe="ssh_failed:$probe"

@@ -291,6 +291,7 @@ def main():
         header = '\n'.join([
             f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
             f'M={shlex.quote(remote_dir)}',
+            f'DOMAIN={shlex.quote(domain)}',
             f'ADMIN={shlex.quote(cfg.get("admin_user") or da_user)}',
             f'LOGO_FILE={shlex.quote(logo_file)}',
             f'LOGO_KEY={shlex.quote(f"{logo.relative_to(folder)}:{logo.stat().st_size}" if logo else "")}',
