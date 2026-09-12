@@ -118,7 +118,7 @@ Endpoints:
 - `GET /health` — no auth
 - `GET /api/servers` — daftar server dari `/var/lib/velocity/servers.json` (managed panel `/server/`) atau fallback `config/servers.json` / env `INSTALLER_SERVERS`.
 - `GET /api/installer` — daftar domain + validasi manifest + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`.
-- `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"|"finish"|"maintenance"|"child-theme"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry. Saat `apply`, service menyetel `WP_INSTALL_SSH_KEY_FILE` (auto-detect `/etc/velocity/secrets/ssh_key` atau `/root/.ssh/id_ed25519`/`id_rsa`) + `WP_INSTALL_DB_PASSWORD_FILE`/`WP_INSTALL_ADMIN_PASSWORD_FILE` per-domain dari `/etc/velocity/secrets/`.
+- `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"|"finish"|"maintenance"|"child-theme"|"audit"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry. Saat `apply`, service menyetel `WP_INSTALL_SSH_KEY_FILE` (auto-detect `/etc/velocity/secrets/ssh_key` atau `/root/.ssh/id_ed25519`/`id_rsa`) + `WP_INSTALL_DB_PASSWORD_FILE`/`WP_INSTALL_ADMIN_PASSWORD_FILE` per-domain dari `/etc/velocity/secrets/`.
 - `POST /api/installer/generate` — body `{"domain":"example.com"}`. Auto-generate manifest (da_user/db dari label domain, admin_email dari `notes-credentials.txt` bila ada) + secret password random per-domain (tidak pernah menimpa yang sudah ada). Domain tanpa manifest valid bisa langsung di-generate dari tombol `[ generate ]` di halaman installer.
 
 Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy (blok location referensi: `config/nginx-installer.conf`).
@@ -252,6 +252,35 @@ Bentuknya netral: badge inisial (kata yang tidak mewakili usaha seperti "jasa", 
 **Logo contoh selalu kalah dari logo sungguhan.** Id-nya dicatat di opsi `velocity_logo_contoh` / `velocity_icon_contoh`, dan aturannya: logo dipasang hanya kalau belum ada logo sama sekali, atau kalau yang terpasang masih logo contoh buatan installer. Jadi logo asli klien (dan logo yang dipasang PM lewat Customizer) tidak pernah tertimpa, sementara logo contoh lama boleh digeser logo contoh baru saat nama atau warna situs berubah.
 
 Catatan desain: logo bertulisan gelap tidak terbaca di header berlatar gelap. Child theme yang header-nya gelap perlu memberi alas putih pada `.navigation-brand-logo img`, atau memakai varian `logo-terang`.
+
+## Audit situs (`scripts/site-audit`)
+
+`site-qa` adalah gerbang saat instalasi dan memeriksa dari luar (HTTP/REST). Begitu maintenance mode menyala, yang terbaca hanyalah halaman perawatan — logo, menu, dan galeri ikut terbaca "tidak ada" padahal terpasang. QA juga berjalan sebelum maintenance dinyalakan, jadi ia tidak bisa menjaga keadaan akhir.
+
+`site-audit` membaca dari **dalam** situs lewat WP-CLI, jadi tetap akurat meski situs tertutup:
+
+```bash
+scripts/site-audit <domain|manifest> [--json]        # butuh WP_INSTALL_SSH_KEY_FILE
+curl -X POST http://127.0.0.1:9121/api/installer/run -d '{"domain":"contoh.com","mode":"audit"}'
+```
+
+Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang, logo & favicon (termasuk **apakah masih logo contoh**), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
+
+Audit tidak mengubah apa pun — status instalasi di `<domain>.json` dan notifikasi Telegram tidak disentuh.
+
+Temuan `maintenance_mati_setelah_dinyalakan_installer` sengaja ada: pernah terjadi maintenance mode mati sendiri sehingga situs yang belum diserahkan sempat terbuka untuk umum, dan `site-finish --maintenance` tidak akan menyalakannya lagi (penanda `velocity_installer_maintenance` sudah ada). Pemulihannya manual: `wp option update maintenance_mode 1`.
+
+Pelajaran lain dari pembangunan alur ini dicatat di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md) — baca sebelum menambah langkah otomatis baru.
+
+## Halaman & menu Paket G (`scripts/paket-g-setup`)
+
+Child theme Paket G membawa blok desain berupa shortcode; halaman pemakainya dibuat otomatis sesudah `site-finish` (urutannya penting — finishing menulis ulang halaman Galeri & Hubungi Kami):
+
+- **Layanan, Produk, Pemesanan** → halaman baru berisi teks pembuka + shortcode. Halaman yang sudah disunting orang tidak ditimpa.
+- **Galeri, Hubungi Kami** → blok desain ditambahkan di bawah teks yang sudah ada.
+- **Menu utama** disusun sekali (penanda `velocity_paket_g_menu`): Beranda · Profil · Layanan · Produk · Pemesanan · Galeri Foto · Berita.
+
+**"Kontak Kami" sengaja tidak masuk menu**: header sudah punya tombol "Hubungi Kami" beserta nomor telepon, dan footer memuat kontak lengkap — item menu itu hanya menggandakan jalan yang sama. Halamannya tetap ada dan tetap bisa dibuka.
 
 ## Ambil alih (klaim)
 

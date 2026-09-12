@@ -323,7 +323,7 @@ def main():
     ap.add_argument('--override', default='')
     ap.add_argument('--no-download', action='store_true')
     args = ap.parse_args()
-    out = {'status': '', 'ref': '', 'slug': '', 'version': '', 'zip': '', 'error': ''}
+    out = {'status': '', 'ref': '', 'slug': '', 'prefix': '', 'version': '', 'zip': '', 'error': ''}
 
     def emit():
         print('\n'.join(f'{k}={v}' for k, v in out.items()))
@@ -338,6 +338,9 @@ def main():
     def generate():
         """Jalan keluar Paket G: child theme sendiri, tidak lewat API tema."""
         try:
+            # Awalan fungsi & kelas CSS ikut dilaporkan: langkah lain (halaman,
+            # menu, audit) perlu tahu nama shortcode yang dipakai tema ini.
+            out['prefix'] = prefix_dari(domain, args.prefix)
             if args.no_download:
                 # Hanya menjawab "slug-nya apa": jangan tulis zip apa pun ke disk.
                 slug = scaffold_slug(domain)

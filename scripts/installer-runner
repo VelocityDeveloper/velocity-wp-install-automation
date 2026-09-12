@@ -4,7 +4,8 @@ DOMAIN=${1:?domain_required}
 # dry-run | apply | finish (rapikan ulang situs terpasang: konten, aset klien,
 # pemeriksaan — tanpa memasang ulang WordPress dan tanpa notifikasi) |
 # maintenance (hanya nyalakan maintenance mode untuk situs terpasang) |
-# child-theme (hanya pasang/aktifkan child theme di situs terpasang)
+# child-theme (hanya pasang/aktifkan child theme di situs terpasang) |
+# audit (periksa situs terpasang dari dalam; tidak mengubah apa pun)
 MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
 SCRIPTS=/opt/velocity-wp-install-automation/scripts
@@ -42,12 +43,22 @@ paket_desain_custom() {
   [[ "$paket" == "paketg" ]]
 }
 
+# Audit hanya membaca: status instalasi & notifikasi tidak disentuh.
+if [[ "$MODE" == "audit" ]]; then
+  [[ -f "$MANIFEST" ]] || { printf '[%s] audit: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
+  printf '[%s] Audit situs\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/site-audit" "$MANIFEST" >> "$LOG" 2>&1
+  exit $?
+fi
+
 if [[ "$MODE" == "child-theme" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] child_theme: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
   printf '[%s] Child theme\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
   rc=$?
   if (( rc == 0 )) && paket_desain_custom; then
+    printf '[%s] Halaman & menu Paket G\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
     printf '[%s] Bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
@@ -92,8 +103,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
     echo "[$(date -Is)] Bersihkan tema & plugin bawaan" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/site-finish" --cleanup "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
-  # Hanya paket berdesain custom: paket lain masih memakai area widget temanya.
+  # Paket berdesain custom: halaman blok desain, menu, lalu bersihkan widget.
+  # Harus SESUDAH site-finish — finishing menulis ulang halaman Galeri & Hubungi
+  # Kami (galeri + peta), yang akan menghapus shortcode kalau urutannya dibalik.
   if paket_desain_custom; then
+    echo "[$(date -Is)] Halaman & menu Paket G" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
     echo "[$(date -Is)] Bersihkan widget bawaan" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
   fi

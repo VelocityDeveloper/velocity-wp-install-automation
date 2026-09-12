@@ -790,12 +790,14 @@ def start_run(domain: str, mode: str):
     maintenance hanya menyalakan maintenance mode velocity-addons (langkah terakhir
     apply) untuk situs yang terpasang sebelum langkah itu ada.
     child-theme hanya memasang & mengaktifkan child theme (dicocokkan dari API atau
-    digenerate bernama project untuk Paket G) di situs yang sudah terpasang."""
+    digenerate bernama project untuk Paket G) di situs yang sudah terpasang.
+    audit hanya membaca keadaan situs terpasang (scripts/site-audit) dan tidak
+    mengubah apa pun, termasuk status instalasi."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
         return None, 'invalid_domain'
-    if mode not in ('dry-run', 'apply', 'finish', 'maintenance', 'child-theme'):
+    if mode not in ('dry-run', 'apply', 'finish', 'maintenance', 'child-theme', 'audit'):
         return None, 'invalid_mode'
-    if mode in ('finish', 'maintenance', 'child-theme') and not ssh_key_file():
+    if mode in ('finish', 'maintenance', 'child-theme', 'audit') and not ssh_key_file():
         return None, 'ssh_key_missing'
     manifest = ROOT / domain / f'{domain}.txt'
     if not manifest.is_file():
