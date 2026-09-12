@@ -225,6 +225,8 @@ Child theme Paket G lahir sudah berbentuk situs perusahaan, bukan folder kosong.
 | `css/custom.css` | Desain mobile-first; seluruh warna dari token di `:root` |
 | `js/custom.js` | Menu HP, header mengecil saat digulir, gulir halus ke `#pemesanan` |
 
+Yang **tidak** dibuat di tema karena plugin velocity-addons sudah menyediakannya: tombol WhatsApp mengambang, tombol kembali ke atas, maintenance mode, galeri, captcha, statistik. Daftar lengkapnya beserta cara pakainya ada di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md).
+
 Placeholder yang diisi generator: awalan fungsi & kelas CSS (`--prefix`, bawaannya 4 huruf pertama label domain), nama tema, domain, data klien, dan palet warna (`--primary` / `--accent`; turunan gelap-terang serta varian RGB dihitung sendiri). Tanpa argumen warna, palet bawaannya navy `#14213d` + amber `#fca311`.
 
 **Widget bawaan WordPress dihapus untuk paket ini.** Desainnya tidak memakai area widget sama sekali: `functions.php` melepas seluruh sidebar tema induk, dan `installer-runner` menjalankan `site-finish --widget` (hanya kalau `paket=Paket G`) untuk membuang instance widget yang tertinggal di basis data. Pembersihan itu sekali per situs (penanda opsi `velocity_widget_bersih`) dan **hanya menyentuh widget di sidebar yang tidak lagi terdaftar** — situs paket lain yang temanya memang memakai widget tidak terpengaruh.
@@ -264,7 +266,7 @@ scripts/site-audit <domain|manifest> [--json]        # butuh WP_INSTALL_SSH_KEY_
 curl -X POST http://127.0.0.1:9121/api/installer/run -d '{"domain":"contoh.com","mode":"audit"}'
 ```
 
-Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang, logo & favicon (termasuk **apakah masih logo contoh**), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
+Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang, logo & favicon (termasuk **apakah masih logo contoh**), tombol WhatsApp velocity-addons (aktif & nomornya terisi, sekaligus menandai kalau tema membuat tombol tandingan), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
 
 Audit tidak mengubah apa pun — status instalasi di `<domain>.json` dan notifikasi Telegram tidak disentuh.
 

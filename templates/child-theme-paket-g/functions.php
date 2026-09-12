@@ -101,19 +101,14 @@ if (!function_exists('{{PREFIX}}_buang_widget')) {
     add_action('widgets_init', '{{PREFIX}}_buang_widget', 99);
 }
 
-if (!function_exists('{{PREFIX}}_tombol_wa')) {
-    /** Tombol WhatsApp mengambang — kontak utama yang diminta klien di form. */
-    function {{PREFIX}}_tombol_wa()
-    {
-        if (is_admin()) {
-            return;
-        }
-        printf(
-            '<a class="{{PREFIX}}-wa-float" href="%s" target="_blank" rel="noopener nofollow" aria-label="Hubungi via WhatsApp">'
-                . '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2c-1.6 0-3.1-.4-4.4-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.1-.2 0-.4.1-.5l.4-.5c.1-.2.2-.3.3-.5v-.4l-.7-1.7c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.5.1-.7.3-.3.3-.9.9-.9 2.1s.9 2.5 1 2.6c.1.2 1.8 2.8 4.4 3.9 1.6.7 2.2.7 3 .6.5-.1 1.4-.6 1.6-1.2.2-.6.2-1.1.1-1.2 0-.1-.2-.2-.4-.3Z"/></svg>'
-                . '<span>Konsultasi</span></a>',
-            esc_url({{PREFIX}}_wa_link())
-        );
-    }
-    add_action('wp_footer', '{{PREFIX}}_tombol_wa');
-}
+/**
+ * Tombol WhatsApp mengambang TIDAK dibuat di sini.
+ *
+ * Plugin velocity-addons sudah menyediakannya (Velocity_Addons_Floating_Whatsapp,
+ * hook wp_footer) lengkap dengan halaman pengaturannya di wp-admin: nomor,
+ * daftar kontak, teks tombol, pesan awal, dan posisi kiri/kanan. Nomornya diisi
+ * installer lewat site-finish dari "Kontak utk di web" di form klien.
+ *
+ * Membuat tombol sendiri di tema hanya menghasilkan dua tombol menumpuk dan
+ * satu di antaranya tidak bisa diatur PM lewat wp-admin.
+ */

@@ -61,6 +61,22 @@ $tema_dir = get_stylesheet_directory();
 foreach (array('theme-data.php') as $f) {
     if (is_readable($tema_dir . '/inc/' . $f)) { $teks .= file_get_contents($tema_dir . '/inc/' . $f); }
 }
+function velocity_audit_wa_tema($dir)
+{
+    $berkas = array_merge(array($dir . '/functions.php'), (array) glob($dir . '/inc/*.php'));
+    foreach ($berkas as $f) {
+        if (!is_readable($f)) {
+            continue;
+        }
+        $kode = @php_strip_whitespace($f);
+        if ($kode && preg_match('/add_action\s*\(\s*[\'"]wp_footer/', $kode)
+            && preg_match('/wa\.me|api\.whatsapp/i', $kode)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 global $wp_registered_sidebars;
 $widget_nyasar = 0;
 foreach ((array) get_option('sidebars_widgets', array()) as $sb => $isi) {
@@ -84,6 +100,13 @@ echo wp_json_encode(array(
     'favicon_contoh'  => (int) get_option('velocity_icon_contoh'),
     'maintenance'     => (int) get_option('maintenance_mode'),
     'maintenance_installer' => (string) get_option('velocity_installer_maintenance'),
+    'wa_float'        => (string) get_option('floating_whatsapp', '1'),
+    'wa_nomor'        => (string) get_option('nomor_whatsapp'),
+    // Tema tidak boleh membuat tombol WA sendiri: plugin sudah punya, dan
+    // hasilnya dua tombol menumpuk yang salah satunya tak bisa diatur PM.
+    // Komentar dibuang dulu (php_strip_whitespace) — kalau tidak, penjelasan
+    // "plugin yang menyediakannya" ikut terbaca sebagai kode.
+    'wa_tema'         => (int) velocity_audit_wa_tema($tema_dir),
     'widget_nyasar'   => $widget_nyasar,
     'widget_bersih'   => (string) get_option('velocity_widget_bersih'),
     'sidebar_aktif'   => count((array) $wp_registered_sidebars),
@@ -235,6 +258,14 @@ def main():
         temuan.append('favicon_belum_terpasang')
     if not situs['tagline']:
         temuan.append('tagline_kosong')
+
+    # --- tombol WhatsApp (milik velocity-addons, bukan tema) ---
+    info['wa'] = (('aktif:' + situs['wa_nomor']) if situs['wa_float'] == '1' and situs['wa_nomor']
+                  else ('mati' if situs['wa_float'] != '1' else 'nomor kosong'))
+    if situs['wa_float'] == '1' and not situs['wa_nomor']:
+        temuan.append('whatsapp_plugin_belum_diisi')
+    if situs.get('wa_tema'):
+        temuan.append('tombol_whatsapp_ganda:tema_membuat_sendiri')
 
     # --- widget ---
     info['widget_nyasar'] = situs['widget_nyasar']

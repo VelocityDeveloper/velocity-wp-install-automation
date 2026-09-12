@@ -549,28 +549,6 @@ body.{{PREFIX}} .{{PREFIX}}-judul-seksi--terang h2 { color: var(--{{PREFIX}}-di-
 }
 .{{PREFIX}}-footer__bawah p { margin: 0; }
 
-/* ---------- tombol WhatsApp mengambang ---------- */
-
-.{{PREFIX}}-wa-float {
-  position: fixed;
-  right: 14px;
-  bottom: 14px;
-  z-index: 950;
-  display: inline-flex;
-  align-items: center;
-  gap: .45rem;
-  padding: .7rem .95rem;
-  border-radius: 999px;
-  background: var(--{{PREFIX}}-aksen);
-  color: var(--{{PREFIX}}-di-aksen) !important;
-  font-weight: 800;
-  font-size: .9rem;
-  text-decoration: none !important;
-  box-shadow: var(--{{PREFIX}}-bayang-kuat);
-}
-.{{PREFIX}}-wa-float:hover { background: var(--{{PREFIX}}-aksen-2); }
-.{{PREFIX}}-wa-float svg { width: 22px; height: 22px; fill: currentColor; }
-
 /* ---------- halaman dalam (template tema induk) ---------- */
 
 body.{{PREFIX}} .page-article__hero,
@@ -654,7 +632,6 @@ body.{{PREFIX}}.home #wrapper-content { padding: 0; }
   .{{PREFIX}}-header__aksi { display: flex; align-items: center; gap: .8rem; }
   .{{PREFIX}}-header__merek img, .{{PREFIX}}-header__merek .custom-logo { max-height: 58px; }
   .{{PREFIX}}-footer__grid { grid-template-columns: 2fr 1fr 1fr 1.2fr; }
-  .{{PREFIX}}-wa-float { right: 24px; bottom: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

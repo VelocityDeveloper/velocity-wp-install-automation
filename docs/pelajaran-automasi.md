@@ -52,6 +52,32 @@ ulang keadaan, dan angkanya dibandingkan dengan yang diharapkan.
 - `install_from_zip` menghapus folder tujuan sebelum menyalin. Tema yang isinya
   hasil kerja desainer wajib dilindungi pemeriksaan "folder sudah ada".
 
+## Pakai yang sudah ada di velocity-addons, jangan bikin ulang
+
+Child theme sempat membuat tombol WhatsApp mengambang sendiri, padahal plugin
+velocity-addons sudah punya. Hasilnya dua tombol menumpuk di sudut layar, dan
+yang buatan tema tidak muncul di wp-admin sehingga PM tidak bisa mengubah nomor,
+teks, atau posisinya.
+
+Aturan: **sebelum menulis fitur di tema, periksa dulu apakah plugin sudah
+menyediakannya.** Yang sudah ada di velocity-addons:
+
+| Fitur | Cara pakai | Diisi installer |
+|---|---|---|
+| Tombol WhatsApp mengambang | Opsi `floating_whatsapp`, `nomor_whatsapp`, `nomor_whatsapp_contacts`, `whatsapp_text`, `whatsapp_message`, `whatsapp_position` | ya, `site-finish` dari "Kontak utk di web" |
+| Tombol kembali ke atas | Opsi `scrolltotop_position` | — |
+| Maintenance mode | Opsi `maintenance_mode` + `maintenance_mode_data` | ya, `site-finish --maintenance` |
+| Galeri | Shortcode `[vdgallery]`, `[vdgalleryslide]` | — |
+| Captcha | Shortcode `[velocity_captcha]`, `[velocity_recaptcha]` | — |
+| Statistik & hits | `[velocity-statistics]`, `[velocity-hits]` | — |
+| Bagikan tulisan | `[velocity-sharepost]` | — |
+| Breadcrumb | `[vd-breadcrumbs]` (tema induk juga mencetaknya lewat hook) | — |
+
+`site-audit` menegakkan aturan ini: ia menandai `tombol_whatsapp_ganda` kalau
+berkas tema mendaftarkan `wp_footer` yang memuat tautan `wa.me`. Komentar
+dibuang dulu dengan `php_strip_whitespace` — versi pertama pemeriksaan ini
+justru menuduh template sendiri gara-gara membaca komentar penjelasnya.
+
 ## CSS: spesifisitas mengalahkan urutan
 
 Aturan judul global `body.<prefix> h1..h4 { color: ink }` bernilai (0,1,2),
