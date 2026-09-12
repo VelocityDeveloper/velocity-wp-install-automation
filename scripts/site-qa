@@ -113,6 +113,12 @@ def main():
         url = urljoin(base, src)
         if urlparse(url).hostname not in (domain, f'www.{domain}'):
             continue
+        # Gambar dinamis yang dilayani WordPress (captcha velocity-addons,
+        # thumbnail on-the-fly) bukan berkas statis: isinya berubah tiap muat
+        # dan saat maintenance mode menyala semuanya dibalas 503. Memeriksanya
+        # di sini hanya menghasilkan tuduhan "gambar rusak" yang keliru.
+        if urlparse(url).query:
+            continue
         try:
             code, _ = fetch(url, method='HEAD', timeout=15)
             if code == 405:

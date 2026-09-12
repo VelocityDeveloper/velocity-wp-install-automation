@@ -70,6 +70,15 @@ tebakan dari sisi installer.
 menumpuk di satu kategori umum, dan `kategori_layanan_tanpa_artikel` kalau ada
 layanan yang kategorinya kosong.
 
+### Jangan menilai gambar dinamis seperti berkas statis
+
+Captcha plugin dicetak sebagai `<img src="?vd_captcha_image&token=…">` — gambar
+yang dilayani WordPress, bukan berkas di folder uploads. Saat maintenance mode
+menyala, URL seperti itu dibalas 503, dan `site-qa` melaporkannya sebagai
+"gambar rusak" padahal situsnya sehat. Pemeriksaan gambar kini melewati URL yang
+punya query string; isinya memang berubah tiap muat dan tidak bisa dinilai
+dengan cara yang sama seperti foto unggahan.
+
 ## Peta: alamat klien sering tidak dikenali
 
 Iframe `google.com/maps?q=<alamat>` hanya berguna kalau alamatnya dikenali peta.
