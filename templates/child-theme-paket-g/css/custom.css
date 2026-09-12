@@ -271,7 +271,8 @@ body.{{PREFIX}} .{{PREFIX}}-hero,
 body.{{PREFIX}} .{{PREFIX}}-seksi--gelap,
 body.{{PREFIX}} .{{PREFIX}}-header,
 body.{{PREFIX}} .{{PREFIX}}-footer,
-body.{{PREFIX}} .page-article__hero {
+body.{{PREFIX}} .page-article__hero,
+body.{{PREFIX}} .single .entry-header {
   color: var(--{{PREFIX}}-di-primary);
 }
 
@@ -279,22 +280,43 @@ body.{{PREFIX}} .{{PREFIX}}-hero :is(h1, h2, h3, h4, h5, h6),
 body.{{PREFIX}} .{{PREFIX}}-seksi--gelap :is(h1, h2, h3, h4, h5, h6),
 body.{{PREFIX}} .{{PREFIX}}-header :is(h1, h2, h3, h4, h5, h6),
 body.{{PREFIX}} .{{PREFIX}}-footer :is(h1, h2, h3, h4, h5, h6),
-body.{{PREFIX}} .page-article__hero :is(h1, h2, h3, h4, h5, h6) {
+body.{{PREFIX}} .page-article__hero :is(h1, h2, h3, h4, h5, h6),
+body.{{PREFIX}} .single .entry-header :is(h1, h2, h3, h4, h5, h6) {
   color: var(--{{PREFIX}}-di-primary);
 }
 
 /* Tautan di latar gelap juga: warna tautan bawaan memakai warna utama, yang
-   justru sewarna dengan latarnya sendiri. */
+   justru sewarna dengan latarnya sendiri. Breadcrumb tema induk ikut di sini —
+   ia dicetak di dalam header halaman yang latarnya gelap. */
 body.{{PREFIX}} .{{PREFIX}}-hero a:not(.{{PREFIX}}-btn),
 body.{{PREFIX}} .{{PREFIX}}-seksi--gelap a:not(.{{PREFIX}}-btn),
-body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn) {
+body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn),
+body.{{PREFIX}} .page-article__hero a:not(.{{PREFIX}}-btn),
+body.{{PREFIX}} .single .entry-header a:not(.{{PREFIX}}-btn) {
   color: var(--{{PREFIX}}-di-primary);
 }
 body.{{PREFIX}} .{{PREFIX}}-hero a:not(.{{PREFIX}}-btn):hover,
 body.{{PREFIX}} .{{PREFIX}}-seksi--gelap a:not(.{{PREFIX}}-btn):hover,
-body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn):hover {
+body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn):hover,
+body.{{PREFIX}} .page-article__hero a:not(.{{PREFIX}}-btn):hover,
+body.{{PREFIX}} .single .entry-header a:not(.{{PREFIX}}-btn):hover {
   color: var(--{{PREFIX}}-aksen);
 }
+
+/* Breadcrumb: tautan dibedakan halus dari teks halaman saat ini, pemisahnya
+   dibuat lebih redup supaya tidak ikut menarik perhatian. */
+body.{{PREFIX}} .justg-breadcrumbs {
+  font-size: .85rem;
+  margin-bottom: .6rem;
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .75);
+}
+body.{{PREFIX}} .justg-breadcrumbs a {
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .9);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+body.{{PREFIX}} .justg-breadcrumbs a:hover { color: var(--{{PREFIX}}-aksen); }
+body.{{PREFIX}} .justg-breadcrumbs .separator { color: rgba(var(--{{PREFIX}}-di-primary-rgb), .45); }
 
 /* ---------- seksi & judul ---------- */
 

@@ -39,6 +39,14 @@ UJI_KASKADE = [
     ('judul footer', ['{P}', '{P}-footer'], 'h4', [], 'di-primary'),
     ('judul halaman dalam', ['{P}', 'page-article__hero'], 'h1', ['page-article__title'], 'di-primary'),
     ('judul kartu putih', ['{P}', '{P}-kartu'], 'h3', ['{P}-kartu__judul'], 'ink'),
+    # Tautan gampang terlewat: warna tautan bawaan memakai warna utama, yang di
+    # atas latar utama berarti teks sewarna latarnya sendiri. Breadcrumb tema
+    # induk dicetak di dalam header halaman yang gelap, jadi ikut diuji.
+    ('tautan breadcrumb di header halaman', ['{P}', 'page-article__hero', 'justg-breadcrumbs'], 'a', [], 'di-primary'),
+    ('tautan di header artikel', ['{P}', 'single', 'entry-header'], 'a', [], 'di-primary'),
+    ('tautan di seksi gelap', ['{P}', '{P}-seksi--gelap'], 'a', [], 'di-primary'),
+    ('tautan di footer', ['{P}', '{P}-footer'], 'a', [], 'di-primary'),
+    ('tautan di isi halaman terang', ['{P}', 'entry-content'], 'a', [], 'primary'),
 ]
 
 

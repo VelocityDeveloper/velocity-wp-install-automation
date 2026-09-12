@@ -49,6 +49,14 @@ body.<prefix> .<prefix>-seksi--gelap :is(h1, h2, h3, h4, h5, h6) {
 }
 ```
 
+**Tautan lebih gampang terlewat daripada judul.** Warna tautan bawaan
+(`body.<prefix> a { color: var(--primary) }`) berarti teks sewarna latarnya
+sendiri begitu tautan itu berada di atas warna utama. Yang pertama kena justru
+yang tidak kita tulis sendiri: **breadcrumb tema induk**, yang dicetak di dalam
+header halaman dalam lewat hook `justg_before_title`. Karena itu daftar uji
+`cek-warna-tema` memuat tautan, bukan hanya judul — termasuk breadcrumb dan
+header artikel tunggal.
+
 **Logo bertulisan gelap hilang di header gelap.** Logo contoh dibuat dengan
 tulisan tinta agar terbaca di latar terang, sehingga di header berwarna ia perlu
 alas putih (`.<prefix>-header__merek img`) — atau pakai berkas `logo-terang`
