@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Tentukan titik peta yang layak dipasang di halaman kontak.
+
+Pemakaian: velocity-map <domain> [--alamat "..."] [--segar]
+
+Alamat klien sering tidak dikenali peta (nama gedung, singkatan, kode pos ikut
+tertulis). Kalau iframe dipasang mentah dengan alamat seperti itu, yang tampil
+peta kosong. Karena itu titiknya dicari bertahap:
+
+  1. alamat lengkap klien
+  2. kota/kabupaten dari alamat itu
+  3. provinsi
+  4. titik tengah Indonesia
+
+Hasilnya selalu koordinat, jadi iframe-nya dijamin menampilkan peta. Keluaran
+baris key=value: status (alamat|kota|provinsi|negara), lat, lon, zoom, label, q.
+
+Geocoder: Nominatim (OpenStreetMap). Hasilnya disimpan per domain supaya
+pemasangan ulang tidak menembak layanan itu berkali-kali.
+"""
+import argparse
+import json
+import re
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+CACHE = Path('/var/lib/velocity/geocode')
+NOMINATIM = 'https://nominatim.openstreetmap.org/search'
+UA = {'User-Agent': 'velocity-installer/1.0 (+https://velocitydeveloper.com)'}
+# Titik tengah Indonesia — jaring pengaman terakhir.
+INDONESIA = {'lat': '-2.5489', 'lon': '118.0149', 'zoom': 5, 'label': 'Indonesia'}
+ZOOM = {'alamat': 17, 'kota': 12, 'provinsi': 8, 'negara': 5}
+DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
+
+
+def bersihkan_alamat(alamat):
+    """Buang bagian yang membingungkan geocoder: kode pos, koma ganda, spasi."""
+    alamat = re.sub(r'\bkode\s*pos\s*:?\s*\d{4,6}', '', alamat, flags=re.I)
+    alamat = re.sub(r'\s*,\s*(,\s*)+', ', ', alamat)
+    return re.sub(r'\s+', ' ', alamat).strip(' ,.')
+
+
+def bagian_wilayah(alamat):
+    """(kota, provinsi) dari alamat gaya Indonesia."""
+    kota = re.search(r'(?:Kota(?:\s+Adm(?:inistrasi)?\.?)?|Kab(?:upaten)?\.?)\s+([A-Za-z .]+?)\s*(?:,|$)',
+                     alamat, re.I)
+    provinsi = re.search(r'(?:Provinsi|Prop\.?)\s+([A-Za-z .]+?)\s*(?:,|$)', alamat, re.I)
+    return (kota.group(1).strip() if kota else '',
+            provinsi.group(1).strip() if provinsi else '')
+
+
+def cari(query):
+    """Satu pencarian ke Nominatim; None kalau tidak ketemu atau layanan bermasalah."""
+    url = NOMINATIM + '?' + urllib.parse.urlencode({
+        'q': query, 'format': 'json', 'limit': 1, 'countrycodes': 'id',
+    })
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25) as resp:
+            data = json.load(resp)
+    except Exception:
+        return None
+    if not data:
+        return None
+    titik = data[0]
+    return {'lat': str(titik['lat']), 'lon': str(titik['lon']),
+            'label': str(titik.get('display_name', ''))[:120]}
+
+
+def kandidat(alamat):
+    """Daftar pencarian dari yang paling teliti ke yang paling luas.
+
+    Kata kunci "Kota"/"Provinsi" tidak selalu ada — alamat yang sudah dirapikan
+    manusia biasanya cuma "…, Jakarta Selatan, DKI Jakarta". Maka selain kata
+    kunci, alamat juga dipersempit bertahap dengan membuang bagian terdepan
+    (nama gedung, lalu nama jalan), sampai tersisa wilayah yang dikenali peta.
+    """
+    daftar = []
+    if alamat:
+        daftar.append(('alamat', alamat))
+    kota, provinsi = bagian_wilayah(alamat)
+    if kota:
+        daftar.append(('kota', f'{kota}, Indonesia'))
+    bagian = [b.strip() for b in alamat.split(',') if b.strip()]
+    for i in range(1, len(bagian)):
+        sisa = bagian[i:]
+        daftar.append(('kota' if len(sisa) > 1 else 'provinsi', ', '.join(sisa)))
+    if provinsi:
+        daftar.append(('provinsi', f'{provinsi}, Indonesia'))
+    # Buang duplikat, pertahankan urutan.
+    hasil, pernah = [], set()
+    for status, query in daftar:
+        kunci = query.lower()
+        if kunci not in pernah:
+            pernah.add(kunci)
+            hasil.append((status, query))
+    return hasil[:6]
+
+
+def resolusi(alamat):
+    """Titik terbaik yang bisa didapat, beserta tingkat ketelitiannya."""
+    alamat = bersihkan_alamat(alamat or '')
+    percobaan = kandidat(alamat)
+    for i, (status, query) in enumerate(percobaan):
+        if i:
+            time.sleep(1.1)  # Nominatim minta maksimal 1 permintaan per detik
+        titik = cari(query)
+        if titik:
+            titik.update(status=status, zoom=ZOOM[status])
+            return titik
+    return dict(INDONESIA, status='negara')
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('domain')
+    ap.add_argument('--alamat', default='')
+    ap.add_argument('--segar', action='store_true', help='abaikan hasil tersimpan')
+    args = ap.parse_args()
+    domain = args.domain.lower()
+    out = {'status': '', 'lat': '', 'lon': '', 'zoom': '', 'label': '', 'q': ''}
+
+    def emit(titik):
+        out.update(status=titik['status'], lat=titik['lat'], lon=titik['lon'],
+                   zoom=str(titik['zoom']), label=titik.get('label', ''),
+                   q=f"{titik['lat']},{titik['lon']}")
+        print('\n'.join(f'{k}={v}' for k, v in out.items()))
+        return 0
+
+    if not DOMAIN_RE.match(domain):
+        return emit(dict(INDONESIA, status='negara'))
+
+    simpanan = CACHE / f'{domain}.json'
+    kunci = bersihkan_alamat(args.alamat)
+    if not args.segar and simpanan.is_file():
+        try:
+            lama = json.loads(simpanan.read_text())
+            # Hasil lama hanya dipakai kalau alamatnya memang belum berubah.
+            if lama.get('alamat') == kunci and lama.get('lat'):
+                return emit(lama)
+        except (OSError, ValueError):
+            pass
+
+    titik = resolusi(args.alamat)
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        simpanan.write_text(json.dumps(dict(titik, alamat=kunci), ensure_ascii=False))
+    except OSError:
+        pass
+    return emit(titik)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

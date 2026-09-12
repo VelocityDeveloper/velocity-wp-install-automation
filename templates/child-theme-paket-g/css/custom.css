@@ -368,7 +368,16 @@ body.{{PREFIX}} .{{PREFIX}}-judul-seksi--terang h2 { color: var(--{{PREFIX}}-di-
   overflow: hidden;
   background: var(--{{PREFIX}}-surface);
 }
-.{{PREFIX}}-figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Awalan `body.{{PREFIX}}` wajib: aturan global `body.{{PREFIX}} img { height: auto }`
+   bernilai (0,1,2) dan akan mengalahkan `.{{PREFIX}}-figure img` yang hanya (0,1,1),
+   sehingga gambar tidak pernah mengisi kotaknya dan menyisakan ruang kosong. */
+body.{{PREFIX}} .{{PREFIX}}-figure img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
 .{{PREFIX}}-figure--tinggi { aspect-ratio: 3 / 4; border-radius: var(--{{PREFIX}}-radius); }
 .{{PREFIX}}-kartu__media--tinggi { aspect-ratio: 1 / 1; }
 .{{PREFIX}}-figure--kosong {

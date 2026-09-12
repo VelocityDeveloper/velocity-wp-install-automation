@@ -24,7 +24,6 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import quote_plus
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -261,14 +260,21 @@ if [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && managed "$gal"; then
 fi
 
 if [[ -n "$MAP_QUERY" ]]; then
+  # Titiknya koordinat hasil scripts/velocity-map, bukan alamat mentah: alamat
+  # klien sering tidak dikenali peta sehingga iframe-nya tampil kosong.
+  wp option update velocity_map "$MAP_DATA" --format=json >/dev/null
   kontak=$(page_by_title 'Hubungi Kami' || true)
   if [[ -n "$kontak" ]] && managed "$kontak"; then
     content=$(wp post get "$kontak" --field=post_content 2>/dev/null || true)
-    if [[ "$content" != *velocity-map* ]]; then
+    # Child theme Paket G merender petanya sendiri lewat shortcode *_kontak;
+    # menambah iframe di sini akan membuat dua peta di halaman yang sama.
+    if [[ "$content" == *_kontak]* ]]; then
+      echo "map_skip:peta_dari_shortcode_tema" >&2
+    elif [[ "$content" != *velocity-map* ]]; then
       # --user admin: tanpa user login, filter kses WordPress membuang iframe.
       wp post update "$kontak" --user="$ADMIN" --post_content="$content
 <!-- velocity-map -->
-<iframe src=\"https://www.google.com/maps?q=$MAP_QUERY&amp;output=embed\" width=\"100%\" height=\"380\" style=\"border:0\" loading=\"lazy\" title=\"Peta lokasi\"></iframe>" >/dev/null && save_md5 "$kontak" && echo "map_added" >&2
+<iframe src=\"https://www.google.com/maps?q=$MAP_QUERY&amp;z=$MAP_ZOOM&amp;output=embed\" width=\"100%\" height=\"380\" style=\"border:0\" loading=\"lazy\" title=\"Peta lokasi\"></iframe>" >/dev/null && save_md5 "$kontak" && echo "map_added:$MAP_STATUS" >&2
     fi
   fi
 fi
@@ -435,6 +441,24 @@ def cleanup_defaults(domain, da_user, ssh):
     return 0 if run.returncode == 0 else 1
 
 
+def titik_peta(domain, alamat):
+    """Koordinat untuk iframe peta; kegagalan tidak boleh menghentikan finishing."""
+    kosong = {'status': 'negara', 'lat': '-2.5489', 'lon': '118.0149',
+              'zoom': '5', 'label': 'Indonesia', 'q': '-2.5489,118.0149'}
+    try:
+        hasil = subprocess.run([sys.executable, str(HERE / 'velocity-map'), domain,
+                                '--alamat', alamat or ''],
+                               capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return kosong
+    nilai = {}
+    for baris in hasil.stdout.splitlines():
+        kunci, pisah, isi = baris.partition('=')
+        if pisah:
+            nilai[kunci.strip()] = isi.strip()
+    return nilai if nilai.get('q') else kosong
+
+
 def logo_media_key(logo, folder, contoh):
     """Kunci penanda media di WordPress supaya berkas yang sama tidak diunggah dua kali."""
     if not logo:
@@ -551,6 +575,10 @@ def main():
     size = image_size(logo) if logo else None
     icon_ok = bool(size and min(size) >= 256 and 0.8 <= size[0] / max(size[1], 1) <= 1.25)
 
+    # Titik peta dicari sekali di sini (alamat -> kota -> provinsi -> Indonesia).
+    peta = titik_peta(domain, address)
+    print(f'finish: peta={peta["status"]} ({peta["label"] or peta["q"]})')
+
     stage = Path(tempfile.mkdtemp(prefix='velocity-finish-'))
     try:
         logo_file = icon_file = icon_key = ''
@@ -581,7 +609,10 @@ def main():
             f'ICON_OK={1 if icon_ok else 0}',
             'PHOTO_FILES=(' + ' '.join(shlex.quote(n) for n in photo_files) + ')',
             'PHOTO_KEYS=(' + ' '.join(shlex.quote(k) for k in photo_keys) + ')',
-            f'MAP_QUERY={shlex.quote(quote_plus(address) if address else "")}',
+            f'MAP_QUERY={shlex.quote(peta["q"])}',
+            f'MAP_ZOOM={shlex.quote(peta["zoom"])}',
+            f'MAP_STATUS={shlex.quote(peta["status"])}',
+            f'MAP_DATA={shlex.quote(json.dumps(peta))}',
             f'WA={shlex.quote(wa)}',
             # Nama kontak = LABEL AJAKAN, bukan nama situs. Untuk satu kontak,
             # plugin mencetak nama kontak itu sebagai tulisan tombol mengambang

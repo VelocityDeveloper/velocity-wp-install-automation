@@ -160,6 +160,7 @@ echo wp_json_encode(array(
     'wa_tema'         => (int) velocity_audit_wa_tema($tema_dir),
     'shortcode_hilang' => array_values(array_unique($sc_hilang)),
     'captcha'         => (array) get_option('captcha_velocity', array()),
+    'peta'            => (array) get_option('velocity_map', array()),
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
     'widget_nyasar'   => $widget_nyasar,
@@ -318,6 +319,16 @@ def main():
     if hilang:
         # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
         temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
+
+    # --- peta lokasi ---
+    peta = situs.get('peta') or {}
+    info['peta'] = f"{peta.get('status', '-')}: {peta.get('label') or peta.get('q') or '-'}"[:70]
+    if not peta:
+        temuan.append('peta_belum_ditentukan')
+    elif peta.get('status') == 'negara':
+        # Peta selebar Indonesia tidak berguna untuk pengunjung; alamat klien
+        # perlu diperbaiki atau titiknya diisi manual.
+        temuan.append('peta_tidak_spesifik:alamat_tidak_dikenali')
 
     # --- captcha (milik velocity-addons) ---
     captcha = situs.get('captcha') or {}

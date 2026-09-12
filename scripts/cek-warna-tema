@@ -48,6 +48,14 @@ UJI_KASKADE = [
     ('tautan di footer', ['{P}', '{P}-footer'], 'a', [], 'di-primary'),
     ('tautan di isi halaman terang', ['{P}', 'entry-content'], 'a', [], 'primary'),
 ]
+# Gambar kartu harus mengisi penuh kotaknya. Aturan global `body img { height:
+# auto }` bernilai lebih tinggi daripada aturan komponen, dan kalau ia yang
+# menang, kartu menyisakan ruang kosong di atas/bawah foto.
+UJI_GAMBAR = [
+    ('tinggi gambar kartu', ['{P}', '{P}-kartu', '{P}-figure'], 'img', [], 'height', '100%'),
+    ('object-fit gambar kartu', ['{P}', '{P}-kartu', '{P}-figure'], 'img', [], 'object-fit', 'cover'),
+    ('tinggi gambar galeri', ['{P}', '{P}-galeri__item', '{P}-figure'], 'img', [], 'height', '100%'),
+]
 
 
 def bersihkan(css):
@@ -87,10 +95,12 @@ def cocok(sel, leluhur, tag, kelas):
             len(re.findall(r'(?<![\w.-])(?:body|html|h[1-6]|a|p|li|ul|ol)(?![\w-])', ukur)))
 
 
-def warna_menang(css, leluhur, tag, kelas):
+def warna_menang(css, leluhur, tag, kelas, properti='color'):
+    """Nilai properti yang benar-benar berlaku untuk elemen uji."""
     pemenang, terbaik = None, (-1, -1, -1)
+    pola = re.compile(r'(?<![-\w])' + re.escape(properti) + r'\s*:\s*([^;!]+)(!important)?')
     for sel_blok, isi in re.findall(r'([^{}]+)\{([^{}]*)\}', css):
-        warna = re.findall(r'(?<![-\w])color\s*:\s*([^;!]+)(!important)?', isi)
+        warna = pola.findall(isi)
         if not warna:
             continue
         nilai, penting = warna[-1][0].strip(), bool(warna[-1][1])
@@ -146,6 +156,12 @@ def main():
             print(f'  BURUK   : ada rasio di bawah {KONTRAS_MINIMAL}')
             gagal += 1
         bersih = bersihkan(css)
+        for nama, leluhur, tag, kelas, properti, harapan in UJI_GAMBAR:
+            nilai = warna_menang(bersih, {k.format(P=prefix) for k in leluhur}, tag,
+                                 {k.format(P=prefix) for k in kelas}, properti)
+            ok = harapan in (nilai or '')
+            print(f'  {"ok " if ok else "SALAH"} {nama:28} -> {properti}: {nilai or "(tidak ada aturan)"}')
+            gagal += 0 if ok else 1
         for nama, leluhur, tag, kelas, harapan in UJI_KASKADE:
             nilai = warna_menang(bersih,
                                  {k.format(P=prefix) for k in leluhur}, tag,

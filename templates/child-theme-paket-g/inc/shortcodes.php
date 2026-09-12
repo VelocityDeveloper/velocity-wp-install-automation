@@ -132,7 +132,16 @@ if (!function_exists('{{PREFIX}}_render_kontak')) {
                 <li><span>Area Layanan</span><?php echo esc_html({{PREFIX}}_data('area')); ?></li>
             </ul>
             <div class="{{PREFIX}}-kontak__peta">
-                <iframe src="https://www.google.com/maps?q=<?php echo rawurlencode($alamat); ?>&amp;output=embed"
+                <?php
+                // Titik peta hasil scripts/velocity-map (alamat -> kota ->
+                // provinsi -> Indonesia), disimpan installer di opsi
+                // `velocity_map`. Memakai alamat mentah sebagai query bikin
+                // peta tampil kosong kalau alamatnya tidak dikenali.
+                $peta = get_option('velocity_map');
+                $titik = is_array($peta) && !empty($peta['q']) ? $peta['q'] : $alamat;
+                $zoom = is_array($peta) && !empty($peta['zoom']) ? (int) $peta['zoom'] : 15;
+                ?>
+                <iframe src="https://www.google.com/maps?q=<?php echo rawurlencode($titik); ?>&amp;z=<?php echo esc_attr($zoom); ?>&amp;output=embed"
                     width="100%" height="320" style="border:0" loading="lazy" referrerpolicy="no-referrer-when-downgrade"
                     title="Peta lokasi <?php echo esc_attr({{PREFIX}}_data('nama')); ?>"></iframe>
             </div>

@@ -54,6 +54,33 @@ cadangan.
 `paket-g-setup` membuang blok desain berawalan salah sebelum memasang yang
 benar — jadi menjalankan ulang langkahnya sekaligus memperbaiki kerusakannya.
 
+## Peta: alamat klien sering tidak dikenali
+
+Iframe `google.com/maps?q=<alamat>` hanya berguna kalau alamatnya dikenali peta.
+Alamat klien biasanya memuat nama gedung, lantai, singkatan jalan, dan kode pos
+— dan gabungan itu sering tidak ketemu, sehingga yang tampil peta kosong.
+
+`scripts/velocity-map` mencari titiknya bertahap dan **selalu mengembalikan
+koordinat**, jadi iframe-nya dijamin menampilkan sesuatu:
+
+1. alamat lengkap → 2. kota/kabupaten → 3. provinsi → 4. titik tengah Indonesia
+
+Selain kata kunci "Kota"/"Provinsi" (yang tidak selalu ada di alamat yang sudah
+dirapikan manusia), pencarian juga dipersempit bertahap dengan membuang bagian
+terdepan alamat — nama gedung dulu, lalu nama jalan — sampai tersisa wilayah
+yang dikenali. Contoh nyata: "Sequis Center 9th Floor No. 902, Jl. Jend.
+Sudirman No. 71, Jakarta Selatan, DKI Jakarta" tidak ketemu sebagai alamat, tapi
+"Jakarta Selatan, DKI Jakarta" ketemu.
+
+Hasilnya disimpan di opsi `velocity_map` dan dipakai tema. `site-audit`
+menandai `peta_tidak_spesifik` kalau yang ketemu cuma titik Indonesia — peta
+selebar negara tidak berguna untuk pengunjung, dan itu tanda alamat klien perlu
+diperbaiki atau titiknya diisi manual.
+
+Geocodernya Nominatim (OpenStreetMap): wajib User-Agent yang jelas, maksimal
+satu permintaan per detik, dan hasilnya disimpan per domain agar pemasangan
+ulang tidak menembak layanan itu berkali-kali.
+
 ## Urutan langkah itu bagian dari kebenaran
 
 - `site-finish` menulis ulang halaman **Galeri** dan **Hubungi Kami** (galeri +
@@ -147,6 +174,11 @@ Aturan judul global `body.<prefix> h1..h4 { color: ink }` bernilai (0,1,2),
 sedangkan aturan komponen `.<prefix>-hero__judul { color: putih }` hanya (0,1,0).
 Yang global menang, jadi **semua judul di latar gelap tampil hitam** — termasuk
 judul hero — dan menaruh aturan lebih akhir di berkas tidak menolong sama sekali.
+
+Jebakan yang sama menggigit dua kali lagi: aturan global `body.<prefix> img
+{ height: auto }` mengalahkan `.<prefix>-figure img { height: 100% }`, sehingga
+foto tidak pernah mengisi kartunya dan menyisakan ruang kosong — `object-fit:
+cover` tidak menolong karena tidak ada tinggi yang harus diisi.
 
 Pelajarannya: "ada aturan warnanya di CSS" bukan bukti warnanya berlaku. Hitung
 aturan mana yang benar-benar menang. `scripts/cek-warna-tema` melakukan itu

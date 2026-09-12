@@ -8,7 +8,7 @@ WEB_ROOT=${WEB_ROOT:-/usr/share/nginx/html}
 cd "$REPO_DIR"
 git pull --ff-only origin main
 bash -n scripts/website-install-from-manifest scripts/installer-runner
-python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit services/installer_status.py
+python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map services/installer_status.py
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga kontras: template tidak boleh lolos deploy kalau teks di latar gelap
 # kembali jatuh ke warna tinta (lihat docs/warna-dan-kontras.md).
