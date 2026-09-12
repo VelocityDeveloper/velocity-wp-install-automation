@@ -492,6 +492,8 @@ body.{{PREFIX}} .{{PREFIX}}-judul-seksi--terang h2 { color: var(--{{PREFIX}}-di-
 }
 .{{PREFIX}}-form textarea { resize: vertical; min-height: 96px; }
 .{{PREFIX}}-form__jebakan { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.{{PREFIX}}-form__captcha { margin: 0; }
+.{{PREFIX}}-form__captcha img { border-radius: 8px; }
 .{{PREFIX}}-form__kirim { display: flex; flex-wrap: wrap; gap: .6rem; margin: .2rem 0 0; }
 .{{PREFIX}}-form__catatan { margin: 0; font-size: .8rem; color: #7a818d; }
 

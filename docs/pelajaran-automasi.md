@@ -87,7 +87,7 @@ menyediakannya.** Yang sudah ada di velocity-addons:
 | Tombol kembali ke atas | Opsi `scrolltotop_position` | — |
 | Maintenance mode | Opsi `maintenance_mode` + `maintenance_mode_data` | ya, `site-finish --maintenance` |
 | Galeri | Shortcode `[vdgallery]`, `[vdgalleryslide]` | — |
-| Captcha | Shortcode `[velocity_captcha]`, `[velocity_recaptcha]` | — |
+| Captcha | Shortcode `[velocity_captcha]` + `Velocity_Addons_Captcha::verify()`, opsi `captcha_velocity` | ya, `site-finish` menyalakan penyedia `image` |
 | Statistik & hits | `[velocity-statistics]`, `[velocity-hits]` | — |
 | Bagikan tulisan | `[velocity-sharepost]` | — |
 | Breadcrumb | `[vd-breadcrumbs]` (tema induk juga mencetaknya lewat hook) | — |
@@ -96,6 +96,32 @@ menyediakannya.** Yang sudah ada di velocity-addons:
 berkas tema mendaftarkan `wp_footer` yang memuat tautan `wa.me`. Komentar
 dibuang dulu dengan `php_strip_whitespace` — versi pertama pemeriksaan ini
 justru menuduh template sendiri gara-gara membaca komentar penjelasnya.
+
+### Semua form pakai captcha velocity-addons
+
+Form kiriman pengunjung (pemesanan, kontak) wajib memakai captcha plugin —
+`[velocity_captcha]` untuk tampilannya dan `Velocity_Addons_Captcha::verify()`
+untuk memeriksanya — bukan penyaring buatan sendiri. Plugin sudah menyediakan
+dua penyedia (gambar dan Google reCAPTCHA), halaman pengaturannya di wp-admin,
+dan verifikasinya. Honeypot, nonce, dan batas satu kiriman per menit tetap
+dipasang sebagai lapisan tambahan, bukan pengganti.
+
+Dua jebakan yang ditemukan saat menyambungkannya:
+
+1. **Plugin memuat kelas captcha lewat `require_once` di dalam sebuah method**,
+   sehingga `$captcha_handler` miliknya tidak pernah menjadi global. Memanggil
+   `global $captcha_handler` hanya menghasilkan null — dan karena `verify()`
+   tidak pernah terpanggil, form lolos tanpa captcha padahal tampak terlindungi.
+   Jalan yang dipakai: `new Velocity_Addons_Captcha()` di dalam pemroses form.
+2. **Opsi `captcha_velocity` tidak ada di situs baru**, dan tanpa opsi itu
+   captcha mati diam-diam. `site-finish` kini menyalakannya sekali dengan
+   penyedia `image` (jalan tanpa kunci); untuk Google reCAPTCHA, PM tinggal
+   mengisi sitekey/secretkey lalu mengganti provider — opsinya tidak ditimpa lagi.
+
+`site-audit` menandai `captcha_tidak_aktif`, `recaptcha_google_tanpa_kunci`
+(plugin mematikan sendiri captcha Google tanpa kunci, jadi pengaturannya tampak
+menyala padahal form tanpa penyaring), dan `form_tanpa_captcha` kalau berkas
+tema memproses `$_POST` tanpa memanggil captcha plugin.
 
 ### Tulisan tombol WhatsApp = ajakan, bukan nama web
 

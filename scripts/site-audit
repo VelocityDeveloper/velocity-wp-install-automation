@@ -76,6 +76,21 @@ $tema_dir = get_stylesheet_directory();
 foreach (array('theme-data.php') as $f) {
     if (is_readable($tema_dir . '/inc/' . $f)) { $teks .= file_get_contents($tema_dir . '/inc/' . $f); }
 }
+function velocity_audit_captcha_form($dir)
+{
+    foreach (array_merge(array($dir . '/functions.php'), (array) glob($dir . '/inc/*.php')) as $f) {
+        if (!is_readable($f)) {
+            continue;
+        }
+        $kode = @php_strip_whitespace($f);
+        // Form dikenali dari pemroses POST-nya; captcha dari pemanggilan plugin.
+        if ($kode && preg_match('/\$_POST/', $kode)) {
+            return (int) (bool) preg_match('/velocity_captcha|Velocity_Addons_Captcha/', $kode);
+        }
+    }
+    return 1; // tidak ada form di tema: tidak ada yang perlu dilindungi
+}
+
 function velocity_audit_wa_label()
 {
     $kontak = (array) get_option('nomor_whatsapp_contacts', array());
@@ -144,6 +159,9 @@ echo wp_json_encode(array(
     // "plugin yang menyediakannya" ikut terbaca sebagai kode.
     'wa_tema'         => (int) velocity_audit_wa_tema($tema_dir),
     'shortcode_hilang' => array_values(array_unique($sc_hilang)),
+    'captcha'         => (array) get_option('captcha_velocity', array()),
+    // Form kiriman pengunjung wajib memanggil captcha milik plugin.
+    'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
     'widget_nyasar'   => $widget_nyasar,
     'widget_bersih'   => (string) get_option('velocity_widget_bersih'),
     'sidebar_aktif'   => count((array) $wp_registered_sidebars),
@@ -300,6 +318,21 @@ def main():
     if hilang:
         # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
         temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
+
+    # --- captcha (milik velocity-addons) ---
+    captcha = situs.get('captcha') or {}
+    penyedia = str(captcha.get('provider') or 'image')
+    aktif = str(captcha.get('aktif') or '') not in ('', '0')
+    punya_kunci = bool(captcha.get('sitekey')) and bool(captcha.get('secretkey'))
+    info['captcha'] = (f'{penyedia}:aktif' if aktif else f'{penyedia}:mati') if captcha else 'belum diatur'
+    if not captcha or not aktif:
+        temuan.append('captcha_tidak_aktif')
+    elif penyedia == 'google' and not punya_kunci:
+        # Plugin mematikan sendiri captcha Google tanpa kunci, jadi form jadi
+        # tanpa penyaring sama sekali padahal pengaturannya tampak menyala.
+        temuan.append('recaptcha_google_tanpa_kunci')
+    if not situs.get('captcha_form', 1):
+        temuan.append('form_tanpa_captcha')
 
     # --- tombol WhatsApp (milik velocity-addons, bukan tema) ---
     info['wa'] = (('aktif:' + situs['wa_nomor']) if situs['wa_float'] == '1' and situs['wa_nomor']

@@ -273,6 +273,16 @@ if [[ -n "$MAP_QUERY" ]]; then
   fi
 fi
 
+# Captcha velocity-addons: dinyalakan sekali kalau PM belum pernah mengaturnya.
+# Penyedia "image" dipilih karena jalan tanpa kunci; untuk memakai Google
+# reCAPTCHA, PM tinggal mengisi sitekey/secretkey di halaman pengaturan plugin
+# dan mengganti provider — opsi ini tidak akan ditimpa lagi.
+if [[ -z "$(wp option get captcha_velocity 2>/dev/null || true)" ]]; then
+  wp option update captcha_velocity     '{"provider":"image","aktif":1,"difficulty":"medium","sitekey":"","secretkey":""}'     --format=json >/dev/null && echo "captcha_set:image" >&2
+else
+  echo "captcha_skip:sudah_diatur" >&2
+fi
+
 if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; then
   wp option update floating_whatsapp 1 >/dev/null
   wp option update nomor_whatsapp "$WA" >/dev/null

@@ -7,6 +7,10 @@
  * datanya akan masuk ke email". Selain dikirim ke email, setiap pemesanan juga
  * disimpan sebagai post privat `{{PREFIX}}_pemesanan` — kalau pengiriman email gagal
  * (antrean mail server penuh, alamat ditolak), datanya tidak ikut hilang.
+ *
+ * Penyaring spam: captcha velocity-addons (`[velocity_captcha]` +
+ * `$captcha_handler->verify()`), honeypot, nonce, dan batas satu kiriman per
+ * menit per IP.
  */
 
 defined('ABSPATH') || exit;
@@ -97,6 +101,25 @@ if (!function_exists('{{PREFIX}}_form_proses')) {
             wp_safe_redirect(add_query_arg('pesan', 'kedaluwarsa', $kembali) . '#pemesanan');
             exit;
         }
+        // Captcha velocity-addons: logikanya tetap milik plugin, hanya
+        // dipanggil dari sini. Plugin memuat kelasnya lewat require_once di
+        // dalam sebuah method, sehingga $captcha_handler miliknya TIDAK pernah
+        // jadi global — karena itu objeknya dibuat sendiri di sini. Aman: pada
+        // request pengiriman form, hook yang didaftarkan konstruktornya (login,
+        // komentar, registrasi) tidak ada yang berjalan.
+        //
+        // verify() sendiri sudah mengembalikan sukses kalau captcha tidak aktif
+        // atau pengunjungnya sedang login, jadi form tetap jalan saat captcha
+        // dimatikan PM.
+        if (class_exists('Velocity_Addons_Captcha')) {
+            $captcha = new Velocity_Addons_Captcha();
+            $hasil = $captcha->verify();
+            if (empty($hasil['success'])) {
+                wp_safe_redirect(add_query_arg('pesan', 'captcha', $kembali) . '#pemesanan');
+                exit;
+            }
+        }
+
         // Satu IP maksimal 1 kirim per menit — menahan banjir kiriman otomatis.
         $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
         $kunci = '{{PREFIX}}_kirim_' . md5($ip);
@@ -167,6 +190,7 @@ if (!function_exists('{{PREFIX}}_form_notifikasi')) {
             'kurang'        => array('gagal', 'Mohon lengkapi nama, nomor WhatsApp, jenis pekerjaan, dan lokasi proyek.'),
             'email'         => array('gagal', 'Alamat email belum benar. Periksa kembali atau kosongkan saja.'),
             'kedaluwarsa'   => array('gagal', 'Halaman terlalu lama dibuka. Silakan kirim ulang formulirnya.'),
+            'captcha'       => array('gagal', 'Verifikasi captcha belum benar. Silakan ulangi.'),
             'terlalu_cepat' => array('gagal', 'Pemesanan Anda barusan sudah terkirim. Tunggu sebentar sebelum mengirim lagi.'),
         );
         if (!isset($teks[$pesan])) {
@@ -211,6 +235,17 @@ if (!function_exists('{{PREFIX}}_form_render')) {
                     <?php endif; ?>
                 </p>
             <?php endforeach; ?>
+            <?php
+            // Captcha dipakai dari velocity-addons, bukan bikin sendiri: plugin
+            // sudah punya penyedia (gambar atau Google reCAPTCHA), halaman
+            // pengaturannya di wp-admin, dan fungsi verifikasinya. Kalau captcha
+            // dimatikan, shortcode ini menghasilkan string kosong dan form tetap
+            // jalan — honeypot + nonce + batas kirim tetap berlaku.
+            $captcha = do_shortcode('[velocity_captcha]');
+            if (trim($captcha) !== '') :
+                ?>
+                <div class="{{PREFIX}}-form__captcha {{PREFIX}}-form__baris--penuh"><?php echo $captcha; ?></div>
+            <?php endif; ?>
             <p class="{{PREFIX}}-form__jebakan" aria-hidden="true">
                 <label for="{{PREFIX}}-website">Website</label>
                 <input type="text" id="{{PREFIX}}-website" name="{{PREFIX}}_website" tabindex="-1" autocomplete="off" />
