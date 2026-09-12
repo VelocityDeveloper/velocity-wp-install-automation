@@ -240,9 +240,11 @@ Artikel dulu menumpuk di satu kategori (`Blog`), sehingga pengunjung tidak bisa 
 - Jumlah artikel per layanan: `articles_per_category` di manifest (bawaan **2**).
 - Tema tanpa daftar layanan (paket selain G) kembali ke perilaku lama: satu kategori dari `article_category`.
 - Kategori dibuat/dicari per artikel saat publikasi, jadi satu situs bisa punya beberapa kategori sekaligus. Kategori yang gagal dibuat membuat artikelnya dibiarkan tanpa kategori — bukan dimasukkan ke kategori yang salah.
+- Topik artikel **dibatasi ke layanannya**: judul + keterangan layanan dikirim ke AI sebagai syarat, karena tanpa itu AI menulis artikel umum dan kategorinya jadi tidak nyambung (artikel interior masuk kategori "Bangun Baru").
+- Halaman **Berita** ditunjuk sebagai arsip artikel (`page_for_posts`) oleh `site-finish`. Tanpa itu halaman tersebut hanya halaman biasa berisi satu kalimat, sehingga `/berita/` tampak kosong padahal artikelnya ada — masing-masing hanya bisa ditemukan lewat arsip kategorinya.
 - Konten tersimpan di `/var/lib/velocity/ai/generated/<domain>-articles.json` tetap dipakai ulang saat apply ulang (tanpa biaya AI lagi); hapus berkas itu kalau ingin membuat ulang.
 
-`site-audit` melaporkan `artikel_per_layanan` (mis. `4/4 layanan punya kategori`) dan menandai `artikel_tanpa_kategori_layanan` atau `kategori_layanan_tanpa_artikel`.
+`site-audit` melaporkan `artikel_per_layanan` (mis. `4/4 layanan punya kategori`) dan `arsip_artikel`, serta menandai `artikel_tanpa_kategori_layanan`, `kategori_layanan_tanpa_artikel`, atau `arsip_artikel_belum_ditentukan`.
 
 ## Titik peta (`scripts/velocity-map`)
 

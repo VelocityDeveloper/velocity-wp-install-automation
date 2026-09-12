@@ -66,9 +66,23 @@ kategori — bawaannya 2 artikel per layanan, diatur lewat `articles_per_categor
 di manifest. Sama seperti pelajaran sebelumnya: sumber kebenarannya situs, bukan
 tebakan dari sisi installer.
 
+Dua hal yang membuat artikel "ada tapi tidak terlihat":
+
+1. **Halaman Berita bukan arsip artikel.** Installer membuatnya sebagai halaman
+   biasa berisi satu kalimat pembuka, sehingga `/berita/` tampak kosong padahal
+   artikelnya terbit — masing-masing hanya bisa ditemukan lewat arsip
+   kategorinya. WordPress punya mekanismenya: halaman itu ditunjuk sebagai
+   Posts page (`page_for_posts`), dan `site-finish` kini mengisinya sekali.
+2. **Kategori tanpa batasan topik hanya label.** Versi pertama mengirim nama
+   kategori ke AI sebagai field JSON belaka, hasilnya artikel umum yang
+   kategorinya tidak nyambung — artikel interior masuk kategori "Bangun Baru".
+   Sekarang judul + keterangan layanan dikirim sebagai syarat topik, dan tiap
+   artikel diminta mengambil sudut pandang berbeda dari layanan yang sama.
+
 `site-audit` menandai `artikel_tanpa_kategori_layanan` kalau artikel kembali
-menumpuk di satu kategori umum, dan `kategori_layanan_tanpa_artikel` kalau ada
-layanan yang kategorinya kosong.
+menumpuk di satu kategori umum, `kategori_layanan_tanpa_artikel` kalau ada
+layanan yang kategorinya kosong, dan `arsip_artikel_belum_ditentukan` kalau
+halaman arsipnya tidak pernah ditunjuk.
 
 ### Jangan menilai gambar dinamis seperti berkas statis
 

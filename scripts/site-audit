@@ -190,6 +190,8 @@ echo wp_json_encode(array(
     'captcha'         => (array) get_option('captcha_velocity', array()),
     'peta'            => (array) get_option('velocity_map', array()),
     'kategori'        => velocity_audit_kategori(),
+    'halaman_artikel' => (int) get_option('page_for_posts'),
+    'halaman_berita'  => (int) (($b = get_page_by_path('berita')) ? $b->ID : 0),
     'layanan'         => velocity_audit_layanan(),
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
@@ -372,6 +374,16 @@ def main():
             kosong = [l for l in cocok if not jumlah.get(ringkas(l))]
             if kosong:
                 temuan.append('kategori_layanan_tanpa_artikel:' + ','.join(kosong[:3]))
+
+    # --- arsip artikel ---
+    arsip, berita = situs.get('halaman_artikel', 0), situs.get('halaman_berita', 0)
+    info['arsip_artikel'] = f'halaman {arsip}' if arsip else 'belum ditentukan'
+    if situs['artikel'] and not arsip:
+        # Tanpa page_for_posts, halaman "Berita" hanya halaman biasa berisi satu
+        # kalimat: artikelnya ada tapi tidak pernah tampil di sana.
+        temuan.append('arsip_artikel_belum_ditentukan')
+    elif berita and arsip and arsip != berita:
+        temuan.append(f'arsip_artikel_bukan_halaman_berita:{arsip}')
 
     # --- peta lokasi ---
     peta = situs.get('peta') or {}

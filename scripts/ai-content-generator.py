@@ -187,18 +187,31 @@ Use Indonesian language. Content should be professional HTML without images, for
         log(f'Response: {response[:500]}')
         return None
 
-def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog'):
-    """Generate blog articles"""
+def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog',
+                      rincian_topik=''):
+    """Artikel untuk satu kategori.
+
+    `category` bukan sekadar label yang ditempel: semua artikel dalam satu
+    panggilan harus benar-benar membahas layanan itu. Tanpa batasan ini, AI
+    menulis artikel umum lalu kategorinya jadi tidak nyambung — mis. artikel
+    interior masuk kategori "Bangun Baru".
+    """
     system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
     
     client_info = client_info.strip() or '(tidak ada data klien)'
+    topik = f'{category}. {rincian_topik}'.strip() if rincian_topik else category
     
     user_prompt = f"""Generate {num_articles} blog articles for a website with these details:
 - Site title: {site_title}
 - Domain: {domain}
-- Category: {category}
 - Client data:
 {client_info}
+
+TOPIC REQUIREMENT (most important):
+Every article MUST be about this one service: {topik}
+- Do not write about the client's other services.
+- Each article must cover a different angle of this service (persiapan, proses, pemilihan material, biaya, perawatan, kesalahan umum, dsb).
+- The article title must make the service recognisable to a reader.
 
 {CONTENT_RULES}
 
@@ -207,7 +220,7 @@ Return JSON array:
   {{"title":"<article title>","slug":"<url-slug>","category":"{category}","content":"<article content in HTML, 400-600 words, professional Indonesian>","excerpt":"<short excerpt 20-30 words>"}}
 ]
 
-Use Indonesian language. Topics must come from the client's actual products, services, and field of business in the client data."""
+Use Indonesian language. Ground the content in the client's actual field of business from the client data."""
     
     response = ai_call(system_prompt, user_prompt, model)
     if not response:
@@ -233,12 +246,17 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
     ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     if not ssh_key or not Path(ssh_key).is_file():
         return []
+    # Judul + keterangan layanan: keterangannya dipakai sebagai batasan topik
+    # artikel, supaya isinya benar-benar tentang layanan itu.
     skrip = (
         "global $shortcode_tags;"
         "foreach (array_keys($shortcode_tags) as $t) {"
         "  if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {"
         "    foreach ((array) call_user_func($m[1] . '_data', 'layanan') as $l) {"
-        "      if (!empty($l['judul'])) { echo $l['judul'] . \"\\n\"; }"
+        "      if (!empty($l['judul'])) {"
+        "        $r = !empty($l['rincian']) ? implode(', ', (array) $l['rincian']) : '';"
+        "        echo $l['judul'] . \"\\t\" . trim(($l['teks'] ?? '') . ' ' . $r) . \"\\n\";"
+        "      }"
         "    } break;"
         "  }"
         "}"
@@ -252,9 +270,14 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return []
-    judul = [b.strip() for b in hasil.stdout.splitlines() if b.strip()]
-    # Judul kategori dipakai apa adanya; batasi panjang & jumlah agar wajar.
-    return [j[:60] for j in judul][:6]
+    layanan = []
+    for baris in hasil.stdout.splitlines():
+        if not baris.strip():
+            continue
+        judul, _, keterangan = baris.partition('\t')
+        # Judul kategori dipakai apa adanya; batasi panjang agar wajar.
+        layanan.append({'judul': judul.strip()[:60], 'keterangan': keterangan.strip()[:400]})
+    return layanan[:6]
 
 
 def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles):
@@ -507,12 +530,13 @@ def main():
         # satu kategori seperti sebelumnya.
         kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
         if kategori:
-            log(f'Kategori dari layanan situs: {", ".join(kategori)}')
+            log(f'Kategori dari layanan situs: {", ".join(k["judul"] for k in kategori)}')
             articles = []
-            for nama in kategori:
+            for layanan in kategori:
+                nama = layanan['judul']
                 log(f'Generating {per_kategori} artikel untuk kategori "{nama}"...')
                 bagian = generate_articles(site_title, domain, client_info, model,
-                                           per_kategori, nama) or []
+                                           per_kategori, nama, layanan.get('keterangan', '')) or []
                 for art in bagian:
                     # Kategori dari AI kadang meleset; yang dipakai yang diminta.
                     art['category'] = nama

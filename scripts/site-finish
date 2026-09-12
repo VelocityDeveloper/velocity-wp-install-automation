@@ -279,6 +279,23 @@ if [[ -n "$MAP_QUERY" ]]; then
   fi
 fi
 
+# Halaman "Berita" dibuat installer sebagai halaman biasa, jadi isinya hanya
+# satu kalimat pembuka dan artikel tidak pernah tampil di sana — pengunjung yang
+# membuka /berita/ melihat halaman kosong. WordPress punya mekanismenya sendiri:
+# halaman itu ditunjuk sebagai "Posts page" (page_for_posts) supaya menjadi
+# arsip seluruh artikel. Hanya diisi kalau PM belum menentukannya.
+if [[ "$(wp option get page_for_posts 2>/dev/null || echo 0)" =~ ^0?$ ]]; then
+  berita=$(wp post list --post_type=page --name=berita --field=ID --format=ids 2>/dev/null | tr -d ' ')
+  [[ -z "$berita" ]] && berita=$(page_by_title 'Berita' || true)
+  if [[ -n "$berita" ]]; then
+    wp option update page_for_posts "$berita" >/dev/null
+    wp option update show_on_front page >/dev/null
+    echo "posts_page_set:$berita" >&2
+  else
+    echo "posts_page_skip:halaman_berita_tidak_ada" >&2
+  fi
+fi
+
 # Captcha velocity-addons: dinyalakan sekali kalau PM belum pernah mengaturnya.
 # Penyedia "image" dipilih karena jalan tanpa kunci; untuk memakai Google
 # reCAPTCHA, PM tinggal mengisi sitekey/secretkey di halaman pengaturan plugin
