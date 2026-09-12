@@ -34,6 +34,8 @@ ON_PROGRESS = Path('/home/On Progress')
 GENERATED = Path('/var/lib/velocity/ai/generated')
 IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 MAX_PHOTOS = 12
+# Tulisan tombol WhatsApp mengambang: ajakan, bukan nama situs.
+WA_LABEL = 'Hubungi Kami'
 MIN_BYTES, MAX_BYTES = 20_000, 8_000_000
 # Frasa panjang didahulukan supaya "biru dongker" tidak terbaca "biru".
 COLORS = [
@@ -275,7 +277,7 @@ if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; t
   wp option update floating_whatsapp 1 >/dev/null
   wp option update nomor_whatsapp "$WA" >/dev/null
   wp option update nomor_whatsapp_contacts "$WA_CONTACTS" --format=json >/dev/null
-  wp option update whatsapp_text 'Butuh Bantuan?' >/dev/null
+  wp option update whatsapp_text "$WA_LABEL" >/dev/null
   wp option update whatsapp_message "$WA_MESSAGE" >/dev/null && echo "whatsapp_set" >&2
 fi
 
@@ -571,7 +573,13 @@ def main():
             'PHOTO_KEYS=(' + ' '.join(shlex.quote(k) for k in photo_keys) + ')',
             f'MAP_QUERY={shlex.quote(quote_plus(address) if address else "")}',
             f'WA={shlex.quote(wa)}',
-            f'WA_CONTACTS={shlex.quote(json.dumps([{"name": title, "number": wa}]) if wa else "")}',
+            # Nama kontak = LABEL AJAKAN, bukan nama situs. Untuk satu kontak,
+            # plugin mencetak nama kontak itu sebagai tulisan tombol mengambang
+            # ($contact['name'] ?: $whatsapp_text), jadi mengisinya dengan nama
+            # perusahaan membuat tombolnya berbunyi nama web — bukan ajakan.
+            # Pengunjung sudah tahu sedang membuka situs siapa.
+            f'WA_LABEL={shlex.quote(WA_LABEL)}',
+            f'WA_CONTACTS={shlex.quote(json.dumps([{"name": WA_LABEL, "number": wa}]) if wa else "")}',
             f'WA_MESSAGE={shlex.quote(f"Halo {title}, saya ingin bertanya.")}',
             f'TAGLINE={shlex.quote(tagline)}',
             f'CSS={shlex.quote(css)}',

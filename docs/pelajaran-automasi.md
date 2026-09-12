@@ -97,6 +97,24 @@ berkas tema mendaftarkan `wp_footer` yang memuat tautan `wa.me`. Komentar
 dibuang dulu dengan `php_strip_whitespace` — versi pertama pemeriksaan ini
 justru menuduh template sendiri gara-gara membaca komentar penjelasnya.
 
+### Tulisan tombol WhatsApp = ajakan, bukan nama web
+
+Untuk satu kontak, plugin mencetak **nama kontak** sebagai tulisan tombol
+(`$contact['name'] ?: $whatsapp_text`). `site-finish` dulu mengisinya dengan
+`site_title`, sehingga tombol mengambangnya berbunyi nama perusahaan — padahal
+pengunjung sudah tahu sedang membuka situs siapa, dan tombol itu gunanya
+mengajak menghubungi.
+
+Sekarang nama kontak dan `whatsapp_text` sama-sama diisi label ajakan
+(`WA_LABEL = 'Hubungi Kami'`; "Kontak Kami" atau "Konsultasi" sama baiknya).
+Nama perusahaan tetap dipakai di `whatsapp_message` — itu kalimat yang dikirim
+pengunjung, jadi memang perlu menyebut tujuannya.
+
+`site-audit` menandai `tombol_whatsapp_bernama_situs` kalau labelnya kembali
+menjadi nama situs atau nama domain. Perbandingannya men-decode entitas HTML
+lebih dulu: `blogname` tersimpan sebagai "Jasa Kontraktor &amp; Interior ...",
+dan tanpa decode pemeriksaannya diam-diam tidak pernah menyala.
+
 ## CSS: spesifisitas mengalahkan urutan
 
 Aturan judul global `body.<prefix> h1..h4 { color: ink }` bernilai (0,1,2),

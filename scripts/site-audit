@@ -12,6 +12,7 @@ Yang diaudit: tema aktif, halaman wajib, menu, form pemesanan, logo & favicon
 (termasuk apakah masih logo contoh), widget, foto, sisa teks contoh dari
 template, maintenance mode, serta SSL & HTTP dari luar.
 """
+import html
 import json
 import os
 import re
@@ -75,6 +76,13 @@ $tema_dir = get_stylesheet_directory();
 foreach (array('theme-data.php') as $f) {
     if (is_readable($tema_dir . '/inc/' . $f)) { $teks .= file_get_contents($tema_dir . '/inc/' . $f); }
 }
+function velocity_audit_wa_label()
+{
+    $kontak = (array) get_option('nomor_whatsapp_contacts', array());
+    $pertama = reset($kontak);
+    return is_array($pertama) && !empty($pertama['name']) ? (string) $pertama['name'] : '';
+}
+
 function velocity_audit_pemesanan()
 {
     // Tipe post arsip pemesanan ikut awalan tema, jadi dicari di situs — bukan
@@ -128,6 +136,8 @@ echo wp_json_encode(array(
     'maintenance_installer' => (string) get_option('velocity_installer_maintenance'),
     'wa_float'        => (string) get_option('floating_whatsapp', '1'),
     'wa_nomor'        => (string) get_option('nomor_whatsapp'),
+    // Untuk satu kontak, plugin mencetak nama kontak sebagai tulisan tombol.
+    'wa_label'        => (string) (velocity_audit_wa_label() ?: get_option('whatsapp_text')),
     // Tema tidak boleh membuat tombol WA sendiri: plugin sudah punya, dan
     // hasilnya dua tombol menumpuk yang salah satunya tak bisa diatur PM.
     // Komentar dibuang dulu (php_strip_whitespace) — kalau tidak, penjelasan
@@ -298,6 +308,26 @@ def main():
         temuan.append('whatsapp_plugin_belum_diisi')
     if situs.get('wa_tema'):
         temuan.append('tombol_whatsapp_ganda:tema_membuat_sendiri')
+    # Tulisan tombol harus ajakan ("Hubungi Kami", "Konsultasi"), bukan nama
+    # situs — pengunjung sudah tahu sedang membuka situs siapa.
+    def sederhana(teks):
+        # WordPress menyimpan blogname dengan entitas ("&amp;"), jadi harus
+        # di-decode dulu — tanpa ini perbandingannya selalu meleset.
+        return re.sub(r'[^a-z0-9]', '', html.unescape(str(teks or '')).lower())
+
+    label = sederhana(situs.get('wa_label'))
+    nama_situs = sederhana(situs.get('blogname'))
+    label_domain = re.sub(r'[^a-z0-9]', '', domain.split('.')[0])
+    bernama_situs = bool(label) and (
+        label == nama_situs
+        or label == label_domain
+        # Label panjang yang memuat/termuat nama situs juga berarti nama web,
+        # mis. "Jasa Kontraktor Indo" di situs "Jasa Kontraktor & Interior ...".
+        or (len(label) >= 12 and nama_situs and (label in nama_situs or nama_situs in label))
+    )
+    if bernama_situs:
+        temuan.append(f'tombol_whatsapp_bernama_situs:{situs.get("wa_label", "")[:40]}')
+    info['wa_label'] = label or '-'
 
     # --- widget ---
     info['widget_nyasar'] = situs['widget_nyasar']
