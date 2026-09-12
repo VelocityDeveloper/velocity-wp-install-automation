@@ -190,9 +190,9 @@ Saat apply, installer membaca referensi desain pilihan klien di FORM ISIAN (labe
 
 Paket G tidak memilih template — desainnya custom per project, jadi form klien tidak pernah memuat referensi dan dulu situsnya berhenti di tema induk. Sekarang installer membuat child theme kosong sendiri (`paket=Paket G` di manifest memicunya; dibaca dari CRM saat manifest dibuat).
 
-- Slug & folder: `velocity-<label domain>` (jasakontraktorindo.com → `velocity-jasakontraktorindo`), Theme Name "Velocity Jasakontraktorindo", `Template: velocity`, versi 1.0.0.
-- Isinya scaffold minimal: `style.css` (header + catatan), `functions.php` (enqueue `parent-style` tema induk + `css/custom.css`), `css/custom.css` kosong, `screenshot.png`. Desain PHP/CSS-nya dikerjakan desainer — template yang perlu diubah disalin sendiri dari tema induk.
-- Zip disimpan di `/var/lib/velocity/packages/child-themes/<slug>-1.0.0.zip` (isinya deterministik, jadi generate ulang tidak mengubah apa pun).
+- Slug & folder: `velocity-<label domain>` (jasakontraktorindo.com → `velocity-jasakontraktorindo`), Theme Name "Velocity Jasakontraktorindo", `Template: velocity`.
+- Isinya **kerangka desain lengkap**, bukan child theme kosong — dirender dari `templates/child-theme-paket-g/` (lihat bagian berikutnya).
+- Zip disimpan di `/var/lib/velocity/packages/child-themes/<slug>-<versi>.zip` (isinya deterministik, jadi generate ulang tidak mengubah apa pun).
 - **Tidak pernah ditimpa.** Apply ulang hanya mengaktifkannya (`child_theme_kept:<slug>`) kalau folder temanya sudah ada di server — `install_from_zip` menghapus folder tujuan sebelum menyalin, jadi tanpa pengaman ini hasil kerja desainer hilang.
 - Status `generated` di log; laporan Telegram menulis `Tema: <slug> (child theme baru, desain custom)`.
 - Kalau form Paket G ternyata memuat referensi desain yang ada di API, yang dari API tetap dipakai; scaffold hanya dibuat saat tidak ada yang cocok (termasuk saat API tema mati).
@@ -208,6 +208,28 @@ INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
 ```
 
 Mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`) — tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
+
+## Kerangka desain Paket G (`templates/child-theme-paket-g/`)
+
+Child theme Paket G lahir sudah berbentuk situs perusahaan, bukan folder kosong. Isi template dirender dengan mengganti placeholder `{{KUNCI}}`:
+
+| Berkas | Isi |
+|---|---|
+| `header.php` | Header sendiri: logo, menu utama, tombol "Hubungi Kami", nomor telepon. Di HP jadi panel geser dengan tombol sendiri — **tanpa Bootstrap tema induk** |
+| `footer.php` | Footer 4 kolom (identitas, layanan, halaman, kontak) + baris hak cipta |
+| `front-page.php` | Beranda 8 seksi: hero, layanan, keunggulan, tentang, galeri, produk, alur kerja, pemesanan, kontak |
+| `inc/theme-data.php` | **Satu-satunya tempat menyunting isi.** Nama, WhatsApp, telepon, email, alamat, dan area diisi otomatis dari FORM ISIAN klien |
+| `inc/shortcodes.php` | `[<prefix>_layanan] [<prefix>_produk] [<prefix>_galeri] [<prefix>_alur] [<prefix>_pemesanan] [<prefix>_kontak]` untuk dipakai di halaman dalam |
+| `inc/order-form.php` | Form pemesanan → email + arsip post privat `<prefix>_pemesanan` (nonce, honeypot, batas 1 kiriman/menit per IP) |
+| `inc/images.php` | Peta foto → Media Library lewat opsi `<prefix>_images`; slot yang fotonya belum ada tampil sebagai blok bertekstur, bukan gambar rusak |
+| `css/custom.css` | Desain mobile-first; seluruh warna dari token di `:root` |
+| `js/custom.js` | Menu HP, header mengecil saat digulir, gulir halus ke `#pemesanan` |
+
+Placeholder yang diisi generator: awalan fungsi & kelas CSS (`--prefix`, bawaannya 4 huruf pertama label domain), nama tema, domain, data klien, dan palet warna (`--primary` / `--accent`; turunan gelap-terang serta varian RGB dihitung sendiri). Tanpa argumen warna, palet bawaannya navy `#14213d` + amber `#fca311`.
+
+**Widget bawaan WordPress dihapus untuk paket ini.** Desainnya tidak memakai area widget sama sekali: `functions.php` melepas seluruh sidebar tema induk, dan `installer-runner` menjalankan `site-finish --widget` (hanya kalau `paket=Paket G`) untuk membuang instance widget yang tertinggal di basis data. Pembersihan itu sekali per situs (penanda opsi `velocity_widget_bersih`) dan **hanya menyentuh widget di sidebar yang tidak lagi terdaftar** — situs paket lain yang temanya memang memakai widget tidak terpengaruh.
+
+Menyempurnakan desain untuk semua situs Paket G berikutnya = menyunting `templates/child-theme-paket-g/`, bukan menyalin-nempel per situs.
 
 ## Logo contoh (`scripts/velocity-logo`)
 

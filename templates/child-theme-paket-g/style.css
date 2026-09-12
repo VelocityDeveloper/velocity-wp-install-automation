@@ -1,0 +1,13 @@
+/*
+Theme Name: {{THEME_NAME}}
+Theme URI: https://velocitydeveloper.com
+Description: Child theme desain custom untuk {{DOMAIN}} (Paket G). Palet navy + amber, disusun mobile-first mengikuti permintaan klien di FORM ISIAN.
+Author: Velocity Developer
+Author URI: https://velocitydeveloper.com/kontak-kami/
+Template: velocity
+Version: 1.1.0
+Text Domain: {{SLUG}}
+*/
+
+/* Style induk dimuat dari functions.php, bukan @import.
+   Seluruh CSS desain ada di css/custom.css. */

@@ -41,13 +41,18 @@ CACHE = Path('/var/lib/velocity/packages/child-themes')
 WIB = datetime.timezone(datetime.timedelta(hours=7))
 DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
 SLUG_RE = re.compile(r'^[a-z0-9-]+$')
+HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
 LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
 # Paket yang desainnya custom per project: child theme-nya digenerate, bukan
 # dicocokkan ke API. norm() dipakai supaya "Paket G" / "paket g" sama saja.
 SCAFFOLD_PAKET = {'paketg'}
-SCAFFOLD_VERSION = '1.0.0'
+SCAFFOLD_VERSION = '1.1.0'
+# Kerangka desain Paket G: berkas tema lengkap dengan placeholder {{KUNCI}}.
+TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
+PREFIX_RE = re.compile(r'^[a-z][a-z0-9]{1,11}$')
+WARNA_DEFAULT = {'primary': '#14213d', 'aksen': '#fca311', 'ink': '#1b1b1f'}
 
 
 def norm(value):
@@ -170,72 +175,119 @@ def scaffold_png(width=1200, height=900, rgb=(31, 42, 68)):
             + chunk(b'IEND', b''))
 
 
-def scaffold_files(slug, domain):
-    """Child theme kosong: header tema, enqueue style induk, css/custom.css.
-
-    Mengikuti pola child theme Velocity yang sudah ada (handle `parent-style` dari
-    tema induk + `css/custom.css` milik child) supaya desainer menemukan struktur
-    yang sama seperti di child theme berita/sekolah."""
-    name = ' '.join(w.capitalize() for w in slug.split('-'))
-    prefix = slug.replace('-', '_')
-    style = (
-        '/*\n'
-        f'Theme Name: {name}\n'
-        'Theme URI: https://velocitydeveloper.com\n'
-        f'Description: Child theme desain custom untuk {domain} (Paket G). Dibuat '
-        'otomatis oleh installer; isi desainnya dikerjakan manual.\n'
-        'Author: Velocity Developer\n'
-        'Author URI: https://velocitydeveloper.com/kontak-kami/\n'
-        'Template: velocity\n'
-        f'Version: {SCAFFOLD_VERSION}\n'
-        f'Text Domain: {slug}\n'
-        '*/\n\n'
-        '/* Style induk dimuat dari functions.php, bukan @import.\n'
-        '   Tulis CSS desain di css/custom.css. */\n'
-    )
-    functions = (
-        '<?php\n\n'
-        '/**\n'
-        f' * {name} — child theme desain custom.\n'
-        ' *\n'
-        f' * Dibuat otomatis oleh installer Velocity untuk {domain}. Aman diisi/diubah:\n'
-        ' * installer tidak menimpa folder ini lagi setelah terpasang.\n'
-        ' */\n'
-        "if (!defined('ABSPATH')) {\n"
-        '    exit;\n'
-        '}\n\n'
-        f"if (!function_exists('{prefix}_enqueue')) {{\n"
-        f'    function {prefix}_enqueue()\n'
-        '    {\n'
-        '        $theme = wp_get_theme();\n'
-        '        wp_enqueue_style(\n'
-        "            'parent-style',\n"
-        "            get_template_directory_uri() . '/style.css',\n"
-        '            array(),\n'
-        "            $theme->parent() ? $theme->parent()->get('Version') : null\n"
-        '        );\n'
-        "        $custom = get_stylesheet_directory() . '/css/custom.css';\n"
-        '        wp_enqueue_style(\n'
-        "            'custom-style',\n"
-        "            get_stylesheet_directory_uri() . '/css/custom.css',\n"
-        "            array('parent-style'),\n"
-        "            file_exists($custom) ? filemtime($custom) : $theme->get('Version')\n"
-        '        );\n'
-        '    }\n'
-        f"    add_action('wp_enqueue_scripts', '{prefix}_enqueue');\n"
-        '}\n'
-    )
-    custom_css = (
-        f'/* CSS desain {domain} — tulis di sini.\n'
-        '   Template PHP yang perlu diubah cukup disalin dari tema induk\n'
-        '   (wp-content/themes/velocity/) ke folder ini. */\n'
-    )
-    return {'style.css': style, 'functions.php': functions, 'css/custom.css': custom_css,
-            'screenshot.png': scaffold_png()}
+def hex_ke_rgb(nilai):
+    nilai = nilai.lstrip('#')
+    return tuple(int(nilai[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def scaffold(domain):
-    """Bikin (atau pakai ulang) zip child theme kosong bernama project."""
+def geser_terang(nilai, faktor):
+    """Versi lebih terang (faktor>0) atau lebih gelap (faktor<0) dari satu warna."""
+    r, g, b = hex_ke_rgb(nilai)
+    if faktor >= 0:
+        r, g, b = (round(c + (255 - c) * faktor) for c in (r, g, b))
+    else:
+        r, g, b = (round(c * (1 + faktor)) for c in (r, g, b))
+    return '#%02x%02x%02x' % (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+
+
+def data_klien(domain, nama=''):
+    """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php."""
+    try:
+        form = read_client_form(ON_PROGRESS / domain)
+    except Exception:
+        form = {'fields': {}, 'text': ''}
+    fields, teks = form.get('fields') or {}, form.get('text') or ''
+
+    def field(pola):
+        return next((str(v).strip() for k, v in fields.items() if re.search(pola, k, re.I)), '')
+
+    nama = nama.strip() or field(r'nama perusahaan') or domain.split('.')[0].replace('-', ' ').title()
+    telp = field(r'kontak utk di web|kontak untuk di web') or field(r'^whatsapp')
+    digit = re.sub(r'\D', '', telp)
+    if digit.startswith('0'):
+        wa = '62' + digit[1:]
+    elif digit.startswith('8'):
+        wa = '62' + digit
+    else:
+        wa = digit
+    if not re.match(r'^628\d{7,11}$', wa):
+        wa = ''
+    email = ''
+    for calon in re.findall(r'[\w.+-]+@[\w-]+\.[\w.-]+', teks):
+        # Alamat email milik Velocity ada di templat form, bukan milik klien.
+        if not re.search(r'velocity|example', calon, re.I):
+            email = calon
+            break
+    alamat = re.sub(r'\s*,\s*,\s*', ', ', field(r'^alamat'))
+    kota = re.search(r'(?:Kota(?:\s+Adm\.?)?|Kab(?:upaten)?\.?)\s+([A-Za-z .]+?)(?:,|$)', alamat)
+    area = kota.group(1).strip() if kota else ''
+    return {
+        'NAMA': nama[:80],
+        'WA': wa,
+        'TELP': telp[:25] or '-',
+        'EMAIL': email or f'admin@{domain}',
+        'ALAMAT': alamat[:200] or '-',
+        'AREA': area or 'sekitarnya',
+    }
+
+
+def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
+    data = data_klien(domain, nama)
+    data.update({
+        'PREFIX': prefix,
+        'PREFIX_UPPER': prefix.upper(),
+        'SLUG': slug,
+        'THEME_NAME': ' '.join(w.capitalize() for w in slug.split('-')),
+        'DOMAIN': domain,
+        'PRIMARY': primary,
+        'PRIMARY_2': geser_terang(primary, 0.12),
+        'PRIMARY_3': geser_terang(primary, -0.28),
+        'AKSEN': aksen,
+        'AKSEN_2': geser_terang(aksen, -0.14),
+        'INK': ink,
+        'PRIMARY_RGB': ', '.join(str(c) for c in hex_ke_rgb(primary)),
+        'PRIMARY_3_RGB': ', '.join(str(c) for c in hex_ke_rgb(geser_terang(primary, -0.28))),
+        'AKSEN_RGB': ', '.join(str(c) for c in hex_ke_rgb(aksen)),
+    })
+    return data
+
+
+def isi_template(teks, nilai):
+    """Ganti {{KUNCI}} dengan nilainya; yang tidak dikenal dibiarkan agar ketahuan."""
+    def ganti(m):
+        kunci = m.group(1)
+        if kunci not in nilai:
+            raise KeyError(f'placeholder tidak dikenal: {kunci}')
+        return str(nilai[kunci])
+    return re.sub(r'\{\{([A-Z0-9_]+)\}\}', ganti, teks)
+
+
+def berkas_template(nilai):
+    """Semua berkas child theme hasil render, siap dibungkus jadi zip."""
+    if not TEMPLATE_DIR.is_dir():
+        raise FileNotFoundError(f'template hilang: {TEMPLATE_DIR}')
+    hasil = {}
+    for sumber in sorted(TEMPLATE_DIR.rglob('*')):
+        if not sumber.is_file():
+            continue
+        nama = str(sumber.relative_to(TEMPLATE_DIR))
+        hasil[nama] = isi_template(sumber.read_text(), nilai)
+    if not hasil:
+        raise FileNotFoundError('template kosong')
+    hasil['screenshot.png'] = scaffold_png(rgb=hex_ke_rgb(nilai['PRIMARY']))
+    return hasil
+
+
+def prefix_dari(domain, diminta=''):
+    """Awalan fungsi & kelas CSS child theme; cukup unik dalam satu situs."""
+    if diminta and PREFIX_RE.match(diminta):
+        return diminta
+    label = re.sub(r'[^a-z0-9]', '', domain.split('.')[0])[:4] or 'site'
+    return label if label[0].isalpha() else 'v' + label
+
+
+def scaffold(domain, nama='', prefix='', primary='', aksen=''):
+    """Bikin (atau pakai ulang) zip child theme Paket G bernama project."""
     slug = scaffold_slug(domain)
     if not SLUG_RE.match(slug):
         raise ValueError(f'slug tidak valid: {slug}')
@@ -243,9 +295,15 @@ def scaffold(domain):
     dest = CACHE / f'{slug}-{SCAFFOLD_VERSION}.zip'
     if dest.is_file():
         return slug, dest
+    nilai = nilai_template(
+        slug, domain, nama, prefix_dari(domain, prefix),
+        primary if HEX_RE.match(primary or '') else WARNA_DEFAULT['primary'],
+        aksen if HEX_RE.match(aksen or '') else WARNA_DEFAULT['aksen'],
+        WARNA_DEFAULT['ink'],
+    )
     tmp = dest.with_suffix('.tmp')
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
-        for name, data in scaffold_files(slug, domain).items():
+        for name, data in berkas_template(nilai).items():
             # Tanggal dipatok supaya zip yang digenerate ulang isinya identik.
             info = zipfile.ZipInfo(f'{slug}/{name}', date_time=(2026, 1, 1, 0, 0, 0))
             info.external_attr = 0o644 << 16
@@ -258,6 +316,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('domain')
     ap.add_argument('--paket', default='')
+    ap.add_argument('--nama', default='', help='nama situs (site_title di manifest)')
+    ap.add_argument('--prefix', default='', help='awalan fungsi & kelas CSS child theme')
+    ap.add_argument('--primary', default='', help='warna utama, mis. #14213d')
+    ap.add_argument('--accent', default='', help='warna aksen, mis. #fca311')
     ap.add_argument('--override', default='')
     ap.add_argument('--no-download', action='store_true')
     args = ap.parse_args()
@@ -283,7 +345,8 @@ def main():
                     raise ValueError(f'slug tidak valid: {slug}')
                 out.update(status='generated', slug=slug, version=SCAFFOLD_VERSION)
             else:
-                out['slug'], zip_path = scaffold(domain)
+                out['slug'], zip_path = scaffold(domain, args.nama, args.prefix,
+                                                  args.primary, args.accent)
                 out.update(status='generated', version=SCAFFOLD_VERSION, zip=str(zip_path))
         except Exception as e:
             out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])

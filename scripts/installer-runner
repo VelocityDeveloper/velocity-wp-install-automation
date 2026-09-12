@@ -33,11 +33,25 @@ notify() {
 }
 # Mode child-theme hanya menambah child theme ke situs yang sudah jadi: status
 # instalasi (COMPLETE) tidak boleh ikut berubah karenanya.
+# Paket G memakai desain penuh di child theme: header, footer, dan sidebar
+# semuanya template sendiri, jadi widget bawaan WordPress ikut dibersihkan.
+paket_desain_custom() {
+  [[ -f "$MANIFEST" ]] || return 1
+  local paket
+  paket=$(sed -n 's/^paket=//p' "$MANIFEST" | head -1 | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+  [[ "$paket" == "paketg" ]]
+}
+
 if [[ "$MODE" == "child-theme" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] child_theme: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
   printf '[%s] Child theme\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
-  exit $?
+  rc=$?
+  if (( rc == 0 )) && paket_desain_custom; then
+    printf '[%s] Bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
+  exit $rc
 fi
 
 trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
@@ -77,6 +91,11 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   if [[ "$MODE" == "apply" ]] && grep -q 'Success: WordPress installed successfully' <(tail -n +"$run_start" "$LOG"); then
     echo "[$(date -Is)] Bersihkan tema & plugin bawaan" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/site-finish" --cleanup "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
+  # Hanya paket berdesain custom: paket lain masih memakai area widget temanya.
+  if paket_desain_custom; then
+    echo "[$(date -Is)] Bersihkan widget bawaan" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"

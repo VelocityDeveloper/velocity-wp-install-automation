@@ -615,7 +615,10 @@ REMOTE_EOF
 # menggagalkan instalasi: situs tetap memakai tema induk.
 CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
-  --paket "${cfg[paket]:-}" --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
+  --paket "${cfg[paket]:-}" --nama "${cfg[site_title]:-}" \
+  --prefix "${cfg[velocity_child_prefix]:-}" \
+  --primary "${cfg[velocity_warna_utama]:-}" --accent "${cfg[velocity_warna_aksen]:-}" \
+  --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
 child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
 child_status=$(child_val status)
 echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2

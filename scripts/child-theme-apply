@@ -55,11 +55,16 @@ def read_manifest(path):
     return cfg
 
 
-def resolve(domain, paket, override):
+def resolve(domain, cfg):
     """Keluaran scripts/velocity-child-theme sebagai dict."""
-    run = subprocess.run([sys.executable, str(CHILD_THEME), domain,
-                          '--paket', paket, '--override', override],
-                         capture_output=True, text=True, timeout=300)
+    perintah = [sys.executable, str(CHILD_THEME), domain,
+                '--paket', cfg.get('paket', ''),
+                '--nama', cfg.get('site_title', ''),
+                '--prefix', cfg.get('velocity_child_prefix', ''),
+                '--primary', cfg.get('velocity_warna_utama', ''),
+                '--accent', cfg.get('velocity_warna_aksen', ''),
+                '--override', cfg.get('velocity_child_theme', '')]
+    run = subprocess.run(perintah, capture_output=True, text=True, timeout=300)
     out = {}
     for line in run.stdout.splitlines():
         key, sep, value = line.partition('=')
@@ -84,7 +89,7 @@ def main():
         print('child_theme: kunci SSH tidak ada')
         return 2
 
-    info = resolve(domain, cfg.get('paket', ''), cfg.get('velocity_child_theme', ''))
+    info = resolve(domain, cfg)
     status, slug = info.get('status', 'error'), info.get('slug', '')
     print(f'child_theme:{status}:{info.get("ref", "")}:{slug}')
     if status not in ('matched', 'generated'):

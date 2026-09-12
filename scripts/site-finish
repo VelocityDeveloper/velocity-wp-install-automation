@@ -2,7 +2,8 @@
 """Finishing situs dari aset & data klien: logo, favicon, foto galeri, tagline,
 warna tema, tombol WhatsApp, dan peta lokasi.
 
-Pemakaian: site-finish <manifest>   (butuh WP_INSTALL_SSH_KEY_FILE)
+Pemakaian: site-finish [--maintenance|--cleanup|--widget] <manifest>
+           (butuh WP_INSTALL_SSH_KEY_FILE)
 
 Dijalankan setelah ai-content-generator. Semua langkah idempoten dan tidak
 menimpa pengaturan yang sudah diubah orang: media ditandai meta
@@ -344,6 +345,73 @@ echo "cleanup_done"
 '''
 
 
+REMOTE_WIDGET = r'''
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+# Sekali per situs: kalau PM sudah menata widget sendiri sesudah ini, jangan diulang.
+if [[ -n "$(wp option get velocity_widget_bersih 2>/dev/null || true)" ]]; then
+  echo "widget_skip:sudah_pernah_dibersihkan"
+else
+  cat > /tmp/velocity-widget.php <<'PHP'
+<?php
+/**
+ * Hapus widget yang tidak tertampil di mana pun: isi sidebar yang tidak lagi
+ * terdaftar tema aktif, plus widget nonaktif. Widget di sidebar yang MASIH
+ * terdaftar tidak disentuh, jadi tema yang memang memakai widget tetap aman.
+ */
+global $wp_registered_sidebars;
+$aktif = array_keys((array) $wp_registered_sidebars);
+$peta  = (array) get_option('sidebars_widgets', array());
+$buang = array();
+foreach ($peta as $sidebar => $isi) {
+    if ($sidebar === 'array_version' || !is_array($isi)) {
+        continue;
+    }
+    if ($sidebar !== 'wp_inactive_widgets' && in_array($sidebar, $aktif, true)) {
+        continue;
+    }
+    foreach ($isi as $widget_id) {
+        $buang[] = $widget_id;
+    }
+    $peta[$sidebar] = array();
+}
+$hapus = 0;
+foreach ($buang as $widget_id) {
+    if (!preg_match('/^(.+)-(\d+)$/', $widget_id, $m)) {
+        continue;
+    }
+    $opsi = get_option('widget_' . $m[1]);
+    if (is_array($opsi) && isset($opsi[(int) $m[2]])) {
+        unset($opsi[(int) $m[2]]);
+        update_option('widget_' . $m[1], $opsi);
+        $hapus++;
+    }
+}
+update_option('sidebars_widgets', $peta);
+update_option('velocity_widget_bersih', date('c'));
+echo 'widget_dihapus:' . $hapus . ':' . implode(',', array_slice($buang, 0, 12));
+PHP
+  wp eval-file /tmp/velocity-widget.php
+  echo
+  rm -f /tmp/velocity-widget.php
+fi
+'''
+
+
+def bersihkan_widget(domain, da_user, ssh):
+    """Buang widget bawaan WordPress yang tidak dipakai desain custom."""
+    header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_WIDGET,
+                         capture_output=True, text=True, timeout=180)
+    for line in (run.stdout + '\n' + run.stderr).splitlines():
+        if line.strip() and not line.startswith('Warning:'):
+            print(f'widget: {line.strip()[:200]}')
+    return 0 if run.returncode == 0 else 1
+
+
 def cleanup_defaults(domain, da_user, ssh):
     """Hapus tema & plugin bawaan WordPress yang tidak dipakai (instalasi baru saja)."""
     header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
@@ -430,10 +498,11 @@ def main():
     args = sys.argv[1:]
     maintenance = bool(args) and args[0] == '--maintenance'
     cleanup = bool(args) and args[0] == '--cleanup'
-    if maintenance or cleanup:
+    widget = bool(args) and args[0] == '--widget'
+    if maintenance or cleanup or widget:
         args = args[1:]
     if not args:
-        print('usage: site-finish [--maintenance|--cleanup] <manifest>', file=sys.stderr)
+        print('usage: site-finish [--maintenance|--cleanup|--widget] <manifest>', file=sys.stderr)
         return 2
     cfg = read_manifest(args[0])
     domain = cfg.get('domain', '').lower()
@@ -450,6 +519,8 @@ def main():
         return enable_maintenance(cfg, domain, da_user, ssh)
     if cleanup:
         return cleanup_defaults(domain, da_user, ssh)
+    if widget:
+        return bersihkan_widget(domain, da_user, ssh)
     folder = ON_PROGRESS / domain
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
     fields = form['fields']
