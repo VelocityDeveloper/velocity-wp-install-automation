@@ -327,7 +327,8 @@ def main():
     )
     if bernama_situs:
         temuan.append(f'tombol_whatsapp_bernama_situs:{situs.get("wa_label", "")[:40]}')
-    info['wa_label'] = label or '-'
+    # Tampilkan label apa adanya, bukan hasil normalisasi untuk perbandingan.
+    info['wa_label'] = html.unescape(situs.get('wa_label') or '') or '-'
 
     # --- widget ---
     info['widget_nyasar'] = situs['widget_nyasar']
