@@ -209,6 +209,28 @@ INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
 
 Mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`) — tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
 
+## Logo contoh (`scripts/velocity-logo`)
+
+Klien sering menulis "logo menyusul", dan situsnya jadi tampil tanpa identitas sama sekali. Kalau folder klien tidak berisi logo, `site-finish` membuatkan logo contoh dari nama perusahaan + warna tema situs (diambil dari "WARNA TEMA WEB" di form; bawaannya navy `#14213d` + amber `#fca311`).
+
+```bash
+scripts/velocity-logo <domain> [--nama NAMA] [--primary #hex] [--accent #hex] [--out DIR] [--no-png]
+```
+
+Hasilnya di `/var/lib/velocity/logos/<domain>/`:
+
+| Berkas | Untuk |
+|---|---|
+| `logo.svg` / `logo.png` | Logo mendatar, tulisan gelap — header berlatar terang |
+| `logo-terang.svg` / `logo-terang.png` | Varian tulisan putih — header berlatar gelap |
+| `icon.svg` / `icon.png` | Badge persegi 512px untuk favicon |
+
+Bentuknya netral: badge inisial (kata yang tidak mewakili usaha seperti "jasa", "pt", "cv" dilewati) + nama perusahaan + domain. SVG-nya disediakan supaya desainer bisa langsung menyuntingnya; PNG dibuat karena WordPress menolak SVG tanpa plugin tambahan dan favicon wajib raster ≥512px. Rasterisasi memakai `rsvg-convert` di server installer — kalau alat itu tidak ada, SVG tetap dibuat dan langkah PNG-nya saja yang dilewati.
+
+**Logo contoh selalu kalah dari logo sungguhan.** Id-nya dicatat di opsi `velocity_logo_contoh` / `velocity_icon_contoh`, dan aturannya: logo dipasang hanya kalau belum ada logo sama sekali, atau kalau yang terpasang masih logo contoh buatan installer. Jadi logo asli klien (dan logo yang dipasang PM lewat Customizer) tidak pernah tertimpa, sementara logo contoh lama boleh digeser logo contoh baru saat nama atau warna situs berubah.
+
+Catatan desain: logo bertulisan gelap tidak terbaca di header berlatar gelap. Child theme yang header-nya gelap perlu memberi alas putih pada `.navigation-brand-logo img`, atau memakai varian `logo-terang`.
+
 ## Ambil alih (klaim)
 
 CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/installer/claims.json` — status di CRM tetap "Belum dikerjakan". Domain yang diklaim tidak lagi tampil sebagai `belum diambil`.

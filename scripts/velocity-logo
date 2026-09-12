@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Logo contoh untuk situs yang kliennya belum mengirim logo.
+
+Pemakaian: velocity-logo <domain> [--nama NAMA] [--primary #hex] [--accent #hex]
+                        [--out DIR] [--no-png]
+
+Menghasilkan logo mendatar + ikon persegi dalam SVG (bisa disunting desainer)
+sekaligus PNG hasil rasterisasi (WordPress menolak SVG tanpa plugin tambahan,
+dan favicon wajib raster minimal 512px).
+
+Bentuknya sengaja netral: badge inisial + nama perusahaan, memakai warna tema
+situs. Ini penanda sementara yang enak dilihat, bukan pengganti logo asli.
+
+Keluaran baris key=value: status, nama, inisial, svg, png, icon_svg, icon_png.
+"""
+import argparse
+import html
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+OUT_ROOT = Path('/var/lib/velocity/logos')
+DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
+HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+# Kata yang tidak mewakili nama usaha, jadi tidak dipakai untuk inisial.
+LEWATI = {'dan', 'and', 'the', 'di', 'untuk', 'jasa', 'pt', 'cv', 'ud', 'toko'}
+# Perkiraan lebar rata-rata glif DejaVu Sans Bold, dipakai untuk menakar
+# ukuran huruf supaya nama panjang tidak keluar dari kanvas.
+LEBAR_GLIF = 0.62
+FONT = 'DejaVu Sans, Verdana, Arial, sans-serif'
+
+
+def inisial(nama):
+    kata = [k for k in re.findall(r'[A-Za-z0-9]+', nama) if k.lower() not in LEWATI]
+    if not kata:
+        kata = re.findall(r'[A-Za-z0-9]+', nama) or ['V']
+    return ''.join(k[0] for k in kata[:2]).upper()
+
+
+def ukuran_font(teks, lebar_maks, dasar):
+    """Perkecil huruf secukupnya agar teks muat di lebar yang tersedia."""
+    if not teks:
+        return dasar
+    muat = lebar_maks / (len(teks) * LEBAR_GLIF)
+    return round(min(dasar, muat), 1)
+
+
+def badge(x, y, sisi, primary, accent, teks, radius_rasio=0.22):
+    """Kotak sudut tumpul berisi inisial, dengan potongan aksen di pojok."""
+    r = round(sisi * radius_rasio, 1)
+    ukuran = ukuran_font(teks, sisi * 0.62, sisi * 0.46)
+    idp = f'p{abs(hash((x, y, sisi))) % 100000}'
+    # rsvg 2.50 (server installer) mengabaikan dominant-baseline, jadi garis
+    # dasar teks dihitung sendiri: tinggi huruf kapital DejaVu ~0.72em.
+    dasar = round(y + sisi / 2 + ukuran * 0.36, 1)
+    return f'''
+  <defs>
+    <clipPath id="{idp}"><rect x="{x}" y="{y}" width="{sisi}" height="{sisi}" rx="{r}" ry="{r}"/></clipPath>
+  </defs>
+  <g clip-path="url(#{idp})">
+    <rect x="{x}" y="{y}" width="{sisi}" height="{sisi}" fill="{primary}"/>
+    <path d="M{x + sisi * 0.52} {y + sisi} L{x + sisi} {y + sisi * 0.46} L{x + sisi} {y + sisi} Z" fill="{accent}"/>
+    <path d="M{x} {y + sisi * 0.16} L{x + sisi * 0.42} {y} L{x + sisi * 0.62} {y} L{x} {y + sisi * 0.36} Z"
+          fill="#ffffff" opacity="0.10"/>
+  </g>
+  <text x="{round(x + sisi / 2, 1)}" y="{dasar}" font-family="{FONT}" font-weight="bold"
+        font-size="{ukuran}" fill="#ffffff" text-anchor="middle">{html.escape(teks)}</text>'''
+
+
+def svg_logo(nama, domain, primary, accent, ink):
+    lebar, tinggi = 1000, 260
+    sisi = 168
+    pad = 40
+    teks_x = pad + sisi + 34
+    lebar_teks = lebar - teks_x - pad
+    kata = nama.split()
+    baris1 = ' '.join(kata[:2]) if len(kata) > 2 else nama
+    baris2 = ' '.join(kata[2:]) if len(kata) > 2 else ''
+    f1 = ukuran_font(baris1, lebar_teks, 62)
+    f2 = ukuran_font(baris2, lebar_teks, 40)
+    y1 = 118 if baris2 else 140
+    bagian = [f'<rect width="{lebar}" height="{tinggi}" fill="none"/>',
+              badge(pad, (tinggi - sisi) / 2, sisi, primary, accent, inisial(nama)),
+              f'<text x="{teks_x}" y="{y1}" font-family="{FONT}" font-weight="bold" font-size="{f1}"'
+              f' fill="{ink}">{html.escape(baris1)}</text>']
+    if baris2:
+        bagian.append(f'<text x="{teks_x}" y="{y1 + f1 * 0.92:.0f}" font-family="{FONT}" font-size="{f2}"'
+                      f' fill="{ink}" opacity="0.78">{html.escape(baris2)}</text>')
+    sub = domain.upper()
+    bagian.append(f'<text x="{teks_x}" y="{tinggi - 46}" font-family="{FONT}" font-weight="bold"'
+                  f' font-size="{ukuran_font(sub, lebar_teks, 24)}" letter-spacing="3"'
+                  f' fill="{accent}">{html.escape(sub)}</text>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {lebar} {tinggi}" width="{lebar}"'
+            f' height="{tinggi}" role="img" aria-label="{html.escape(nama)}">\n'
+            f'  <title>{html.escape(nama)}</title>' + ''.join(bagian) + '\n</svg>\n')
+
+
+def svg_ikon(nama, primary, accent):
+    sisi = 512
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {sisi} {sisi}" width="{sisi}"'
+            f' height="{sisi}" role="img" aria-label="{html.escape(nama)}">\n'
+            f'  <title>{html.escape(nama)}</title>'
+            + badge(0, 0, sisi, primary, accent, inisial(nama), radius_rasio=0.20) + '\n</svg>\n')
+
+
+def ke_png(svg_path, png_path, lebar):
+    alat = shutil.which('rsvg-convert')
+    if not alat:
+        return False, 'rsvg-convert tidak ada'
+    hasil = subprocess.run([alat, '-w', str(lebar), '-f', 'png', '-o', str(png_path), str(svg_path)],
+                           capture_output=True, text=True, timeout=60)
+    if hasil.returncode != 0 or not png_path.is_file():
+        return False, (hasil.stderr or 'gagal').strip()[:120]
+    return True, ''
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('domain')
+    ap.add_argument('--nama', default='')
+    ap.add_argument('--primary', default='#14213d')
+    ap.add_argument('--accent', default='#fca311')
+    ap.add_argument('--ink', default='#1b1b1f')
+    ap.add_argument('--out', default='')
+    ap.add_argument('--no-png', action='store_true')
+    args = ap.parse_args()
+    out = {'status': '', 'nama': '', 'inisial': '', 'svg': '', 'png': '',
+           'svg_terang': '', 'png_terang': '', 'icon_svg': '', 'icon_png': '', 'error': ''}
+
+    def emit():
+        print('\n'.join(f'{k}={v}' for k, v in out.items()))
+        return 0
+
+    domain = args.domain.lower()
+    if not DOMAIN_RE.match(domain):
+        out.update(status='gagal', error='domain_tidak_valid')
+        return emit()
+    warna = {}
+    for key in ('primary', 'accent', 'ink'):
+        nilai = getattr(args, key)
+        if not HEX_RE.match(nilai):
+            out.update(status='gagal', error=f'warna_{key}_tidak_valid')
+            return emit()
+        warna[key] = nilai
+    nama = re.sub(r'\s+', ' ', args.nama).strip() or domain.split('.')[0].replace('-', ' ').title()
+    nama = nama[:60]
+    out.update(nama=nama, inisial=inisial(nama))
+
+    folder = Path(args.out) if args.out else OUT_ROOT / domain
+    folder.mkdir(parents=True, exist_ok=True)
+    logo_svg = folder / 'logo.svg'
+    terang_svg = folder / 'logo-terang.svg'
+    ikon_svg = folder / 'icon.svg'
+    logo_svg.write_text(svg_logo(nama, domain, warna['primary'], warna['accent'], warna['ink']))
+    # Varian terang untuk header berlatar gelap; tulisan gelap hilang di sana.
+    terang_svg.write_text(svg_logo(nama, domain, warna['primary'], warna['accent'], '#ffffff'))
+    ikon_svg.write_text(svg_ikon(nama, warna['primary'], warna['accent']))
+    out.update(status='dibuat', svg=str(logo_svg), svg_terang=str(terang_svg), icon_svg=str(ikon_svg))
+    if args.no_png:
+        return emit()
+    gagal = []
+    for sumber, tujuan, lebar, kunci in (
+        (logo_svg, folder / 'logo.png', 1000, 'png'),
+        (terang_svg, folder / 'logo-terang.png', 1000, 'png_terang'),
+        (ikon_svg, folder / 'icon.png', 512, 'icon_png'),
+    ):
+        ok, err = ke_png(sumber, tujuan, lebar)
+        if ok:
+            out[kunci] = str(tujuan)
+        else:
+            gagal.append(err)
+    if gagal:
+        # SVG-nya tetap terpakai; yang gagal hanya versi rasternya.
+        out['error'] = gagal[0][:120]
+    return emit()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

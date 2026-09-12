@@ -198,13 +198,46 @@ if [[ -n "${WP_ADMIN_PASSWORD:-}" ]]; then
   unset WP_ADMIN_PASSWORD
 fi
 
+# Logo & favicon. Logo contoh (hasil scripts/velocity-logo) hanya penanda
+# sementara: begitu klien mengirim logo asli, logo contoh itu HARUS tergeser.
+# Karena itu id logo contoh dicatat di opsi `velocity_logo_contoh` —
+# logo/favicon yang dipasang orang tidak pernah ditimpa, yang contoh boleh.
 if [[ -n "$LOGO_FILE" ]]; then
   logo_id=$(import_media "$LOGO_FILE" "$LOGO_KEY")
-  if [[ -n "$logo_id" && -z "$(wp theme mod get custom_logo --field=value 2>/dev/null || true)" ]]; then
-    wp theme mod set custom_logo "$logo_id" >/dev/null && echo "logo_set:$logo_id" >&2
+  logo_kini=$(wp theme mod get custom_logo --field=value 2>/dev/null || true)
+  logo_contoh_lama=$(wp option get velocity_logo_contoh 2>/dev/null || true)
+  # Boleh dipasang kalau belum ada logo, atau kalau yang terpasang masih logo
+  # contoh buatan installer (logo contoh lama boleh digeser logo contoh baru
+  # maupun logo asli klien). Logo yang dipasang orang tidak pernah disentuh.
+  if [[ -n "$logo_id" ]] && [[ -z "$logo_kini" || ( -n "$logo_contoh_lama" && "$logo_kini" == "$logo_contoh_lama" ) ]]; then
+    wp theme mod set custom_logo "$logo_id" >/dev/null && echo "logo_set:$logo_id${LOGO_CONTOH:+:contoh}" >&2
+    if [[ "$LOGO_CONTOH" == 1 ]]; then
+      wp option update velocity_logo_contoh "$logo_id" >/dev/null
+    elif [[ -n "$logo_contoh_lama" ]]; then
+      wp option delete velocity_logo_contoh >/dev/null 2>&1
+      echo "logo_contoh_diganti_logo_klien" >&2
+    fi
   fi
-  if [[ "$ICON_OK" == 1 && -n "$logo_id" && "$(wp option get site_icon 2>/dev/null || echo 0)" =~ ^0?$ ]]; then
+
+  ikon_kini=$(wp option get site_icon 2>/dev/null || echo 0)
+  ikon_contoh_lama=$(wp option get velocity_icon_contoh 2>/dev/null || true)
+  ikon_boleh=0
+  [[ "$ikon_kini" =~ ^0?$ ]] && ikon_boleh=1
+  [[ -n "$ikon_contoh_lama" && "$ikon_kini" == "$ikon_contoh_lama" ]] && ikon_boleh=1
+
+  # Logo contoh punya berkas persegi sendiri untuk favicon; logo klien dipakai
+  # sebagai favicon hanya kalau bentuknya memang mendekati persegi.
+  if [[ "$ikon_boleh" == 1 && -n "$ICON_FILE" ]]; then
+    icon_id=$(import_media "$ICON_FILE" "$ICON_KEY")
+    if [[ -n "$icon_id" ]]; then
+      wp option update site_icon "$icon_id" >/dev/null && echo "site_icon_set:$icon_id:contoh" >&2
+      wp option update velocity_icon_contoh "$icon_id" >/dev/null
+      ikon_boleh=0
+    fi
+  fi
+  if [[ "$ikon_boleh" == 1 && "$ICON_OK" == 1 && -n "$logo_id" ]]; then
     wp option update site_icon "$logo_id" >/dev/null && echo "site_icon_set:$logo_id" >&2
+    [[ -n "$ikon_contoh_lama" ]] && wp option delete velocity_icon_contoh >/dev/null 2>&1
   fi
 fi
 
@@ -322,6 +355,41 @@ def cleanup_defaults(domain, da_user, ssh):
     return 0 if run.returncode == 0 else 1
 
 
+def logo_media_key(logo, folder, contoh):
+    """Kunci penanda media di WordPress supaya berkas yang sama tidak diunggah dua kali."""
+    if not logo:
+        return ''
+    if contoh:
+        return 'logo-contoh:' + str(logo.stat().st_size)
+    return f'{logo.relative_to(folder)}:{logo.stat().st_size}'
+
+
+def buat_logo_contoh(domain, nama, warna):
+    """Panggil scripts/velocity-logo; kegagalan tidak boleh menghentikan finishing."""
+    perintah = [sys.executable, str(HERE / 'velocity-logo'), domain, '--nama', nama]
+    if warna:
+        perintah += ['--primary', warna[0]]
+        if len(warna) > 1:
+            perintah += ['--accent', warna[1]]
+    try:
+        hasil = subprocess.run(perintah, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f'finish: logo_contoh_gagal:{type(e).__name__}')
+        return None
+    nilai = {}
+    for baris in hasil.stdout.splitlines():
+        kunci, pisah, isi = baris.partition('=')
+        if pisah:
+            nilai[kunci.strip()] = isi.strip()
+    logo = Path(nilai.get('png', '')) if nilai.get('png') else None
+    if not logo or not logo.is_file():
+        print(f'finish: logo_contoh_gagal:{nilai.get("error") or "png_tidak_ada"}')
+        return None
+    icon = Path(nilai['icon_png']) if nilai.get('icon_png') and Path(nilai['icon_png']).is_file() else None
+    print(f'finish: logo_contoh_dibuat:{nilai.get("inisial", "")}')
+    return {'logo': logo, 'icon': icon, 'svg': nilai.get('svg', '')}
+
+
 def ssh_command(cfg, key):
     return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
@@ -391,15 +459,25 @@ def main():
     tagline = slogan(form['text']) or ai_tagline(domain)
     css = colors_css(pick_colors(field(fields, r'warna tema')))
     logo, photos = client_assets(folder)
+    # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa
+    # identitas sama sekali, dibuatkan logo contoh dari nama + warna tema —
+    # penanda sementara yang gampang diganti PM/desainer, bukan logo final.
+    logo_contoh = None if logo else buat_logo_contoh(domain, title, pick_colors(field(fields, r'warna tema')))
+    if logo_contoh:
+        logo = logo_contoh.get('logo')
     size = image_size(logo) if logo else None
     icon_ok = bool(size and min(size) >= 256 and 0.8 <= size[0] / max(size[1], 1) <= 1.25)
 
     stage = Path(tempfile.mkdtemp(prefix='velocity-finish-'))
     try:
-        logo_file = ''
+        logo_file = icon_file = icon_key = ''
         if logo:
             logo_file = 'logo' + logo.suffix.lower()
             shutil.copy2(logo, stage / logo_file)
+        if logo_contoh and logo_contoh.get('icon'):
+            icon_file = 'icon' + logo_contoh['icon'].suffix.lower()
+            shutil.copy2(logo_contoh['icon'], stage / icon_file)
+            icon_key = 'logo-contoh-icon:' + str(logo_contoh['icon'].stat().st_size)
         photo_files, photo_keys = [], []
         for i, photo in enumerate(photos, 1):
             name = f'photo-{i:02d}{photo.suffix.lower()}'
@@ -413,7 +491,10 @@ def main():
             f'DOMAIN={shlex.quote(domain)}',
             f'ADMIN={shlex.quote(cfg.get("admin_user") or da_user)}',
             f'LOGO_FILE={shlex.quote(logo_file)}',
-            f'LOGO_KEY={shlex.quote(f"{logo.relative_to(folder)}:{logo.stat().st_size}" if logo else "")}',
+            f'LOGO_KEY={shlex.quote(logo_media_key(logo, folder, bool(logo_contoh)))}',
+            f'LOGO_CONTOH={1 if logo_contoh else 0}',
+            f'ICON_FILE={shlex.quote(icon_file)}',
+            f'ICON_KEY={shlex.quote(icon_key)}',
             f'ICON_OK={1 if icon_ok else 0}',
             'PHOTO_FILES=(' + ' '.join(shlex.quote(n) for n in photo_files) + ')',
             'PHOTO_KEYS=(' + ' '.join(shlex.quote(k) for k in photo_keys) + ')',
@@ -431,7 +512,7 @@ def main():
             password = Path(pw_file).read_text(errors='replace').strip()
             if password:
                 header += f'\nexport WP_ADMIN_PASSWORD={shlex.quote(password)}'
-        print(f'finish: logo={logo.name if logo else "-"} foto={len(photos)} wa={"ya" if wa else "-"} '
+        print(f'finish: logo={("contoh:" + logo.name) if logo_contoh else (logo.name if logo else "-")} foto={len(photos)} wa={"ya" if wa else "-"} '
               f'alamat={"ya" if address else "-"} tagline={"ya" if tagline else "-"} warna={"ya" if css else "-"}')
         tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
         up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote_dir)} && mkdir -p {shlex.quote(remote_dir)} '
