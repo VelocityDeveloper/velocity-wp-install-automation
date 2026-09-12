@@ -52,6 +52,18 @@ ulang keadaan, dan angkanya dibandingkan dengan yang diharapkan.
 - `install_from_zip` menghapus folder tujuan sebelum menyalin. Tema yang isinya
   hasil kerja desainer wajib dilindungi pemeriksaan "folder sudah ada".
 
+## CSS: spesifisitas mengalahkan urutan
+
+Aturan judul global `body.<prefix> h1..h4 { color: ink }` bernilai (0,1,2),
+sedangkan aturan komponen `.<prefix>-hero__judul { color: putih }` hanya (0,1,0).
+Yang global menang, jadi **semua judul di latar gelap tampil hitam** — termasuk
+judul hero — dan menaruh aturan lebih akhir di berkas tidak menolong sama sekali.
+
+Pelajarannya: "ada aturan warnanya di CSS" bukan bukti warnanya berlaku. Hitung
+aturan mana yang benar-benar menang. `scripts/cek-warna-tema` melakukan itu
+otomatis dan dipasang sebagai penjaga di `deploy.sh`. Rinciannya di
+[warna-dan-kontras.md](warna-dan-kontras.md).
+
 ## Menguji tanpa merusak milik orang
 
 - **Jangan pernah mengirim email uji ke alamat klien.** Cegat di `pre_wp_mail`,

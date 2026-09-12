@@ -15,6 +15,11 @@
   --{{PREFIX}}-aksen-rgb: {{AKSEN_RGB}};
   --{{PREFIX}}-aksen-2: {{AKSEN_2}};
   --{{PREFIX}}-ink: {{INK}};
+  /* Warna teks di atas latar berwarna — dihitung generator dari rasio
+     kontras WCAG, jadi tidak pernah asal putih atau asal hitam. */
+  --{{PREFIX}}-di-primary: {{ON_PRIMARY}};
+  --{{PREFIX}}-di-primary-rgb: {{ON_PRIMARY_RGB}};
+  --{{PREFIX}}-di-aksen: {{ON_AKSEN}};
   --{{PREFIX}}-teks: #454b57;
   --{{PREFIX}}-surface: #f7f8fa;
   --{{PREFIX}}-garis: #e3e6ec;
@@ -58,7 +63,7 @@ body.{{PREFIX}} img { max-width: 100%; height: auto; }
   left: -9999px;
   top: 0;
   background: var(--{{PREFIX}}-aksen);
-  color: var(--{{PREFIX}}-primary);
+  color: var(--{{PREFIX}}-di-aksen);
   padding: .6rem 1rem;
   font-weight: 700;
   z-index: 1000;
@@ -94,7 +99,7 @@ body.{{PREFIX}} img { max-width: 100%; height: auto; }
   display: block;
 }
 .{{PREFIX}}-header__nama {
-  color: var(--{{PREFIX}}-putih) !important;
+  color: var(--{{PREFIX}}-di-primary) !important;
   font-weight: 800;
   font-size: 1rem;
   line-height: 1.25;
@@ -110,7 +115,7 @@ body.{{PREFIX}} img { max-width: 100%; height: auto; }
   width: 44px;
   height: 44px;
   padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, .3);
+  border: 1px solid rgba(var(--{{PREFIX}}-di-primary-rgb), .3);
   border-radius: 10px;
   background: transparent;
   cursor: pointer;
@@ -118,7 +123,7 @@ body.{{PREFIX}} img { max-width: 100%; height: auto; }
 .{{PREFIX}}-header__tombol span {
   display: block;
   height: 2px;
-  background: var(--{{PREFIX}}-putih);
+  background: var(--{{PREFIX}}-di-primary);
   border-radius: 2px;
   transition: transform .18s ease, opacity .18s ease;
 }
@@ -152,11 +157,11 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
 .{{PREFIX}}-nav__daftar li a {
   display: block;
   padding: .8rem 0;
-  color: rgba(255, 255, 255, .88) !important;
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .88) !important;
   font-weight: 600;
   font-size: .98rem;
   text-decoration: none;
-  border-bottom: 1px solid rgba(255, 255, 255, .1);
+  border-bottom: 1px solid rgba(var(--{{PREFIX}}-di-primary-rgb), .1);
 }
 .{{PREFIX}}-nav__daftar li a:hover,
 .{{PREFIX}}-nav__daftar .current-menu-item > a {
@@ -187,10 +192,10 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   transition: transform .15s ease, background-color .15s ease, color .15s ease;
 }
 .{{PREFIX}}-btn:active { transform: translateY(1px); }
-.{{PREFIX}}-btn--utama { background: var(--{{PREFIX}}-aksen); color: var(--{{PREFIX}}-primary) !important; }
-.{{PREFIX}}-btn--utama:hover { background: var(--{{PREFIX}}-aksen-2); color: var(--{{PREFIX}}-primary) !important; }
-.{{PREFIX}}-btn--terang { background: transparent; color: var(--{{PREFIX}}-putih) !important; border-color: rgba(255, 255, 255, .5); }
-.{{PREFIX}}-btn--terang:hover { background: rgba(255, 255, 255, .12); color: var(--{{PREFIX}}-putih) !important; }
+.{{PREFIX}}-btn--utama { background: var(--{{PREFIX}}-aksen); color: var(--{{PREFIX}}-di-aksen) !important; }
+.{{PREFIX}}-btn--utama:hover { background: var(--{{PREFIX}}-aksen-2); color: var(--{{PREFIX}}-di-aksen) !important; }
+.{{PREFIX}}-btn--terang { background: transparent; color: var(--{{PREFIX}}-di-primary) !important; border-color: rgba(var(--{{PREFIX}}-di-primary-rgb), .5); }
+.{{PREFIX}}-btn--terang:hover { background: rgba(var(--{{PREFIX}}-di-primary-rgb), .12); color: var(--{{PREFIX}}-di-primary) !important; }
 .{{PREFIX}}-btn--kecil { padding: .55rem 1rem; font-size: .85rem; }
 .{{PREFIX}}-btn--garis { background: transparent; color: var(--{{PREFIX}}-primary) !important; border-color: var(--{{PREFIX}}-garis); }
 .{{PREFIX}}-btn--garis:hover { border-color: var(--{{PREFIX}}-primary); }
@@ -201,7 +206,7 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   background: var(--{{PREFIX}}-primary);
   background-size: cover;
   background-position: center;
-  color: var(--{{PREFIX}}-putih);
+  color: var(--{{PREFIX}}-di-primary);
   padding-block: 4rem 3.5rem;
 }
 .{{PREFIX}}-hero--polos {
@@ -217,12 +222,12 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   margin-bottom: .9rem;
 }
 .{{PREFIX}}-hero__judul {
-  color: var(--{{PREFIX}}-putih);
+  color: var(--{{PREFIX}}-di-primary);
   font-size: clamp(1.85rem, 7vw, 3.4rem);
   margin-bottom: 1rem;
 }
 .{{PREFIX}}-hero__teks {
-  color: rgba(255, 255, 255, .84);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .84);
   font-size: 1.02rem;
   margin-bottom: 1.35rem;
 }
@@ -237,7 +242,7 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   display: flex;
   align-items: center;
   gap: .55rem;
-  color: rgba(255, 255, 255, .92);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .92);
   font-weight: 600;
   font-size: .95rem;
 }
@@ -249,16 +254,59 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   margin: 0;
 }
 
+/* ---------- teks di atas latar berwarna ----------
+
+   JEBAKAN SPESIFISITAS — jangan hapus awalan `body.{{PREFIX}}` di bawah ini.
+   Aturan judul global `body.{{PREFIX}} h1..h4 { color: ink }` bernilai (0,1,2),
+   sementara aturan komponen seperti `.{{PREFIX}}-hero__judul` hanya (0,1,0). Yang
+   menang adalah yang global, jadi SEMUA judul di latar gelap — termasuk judul
+   hero — jatuh ke warna tinta dan nyaris tak terbaca, berapa pun urutannya di
+   berkas. Selector di bawah memakai `body.{{PREFIX}}` supaya nilainya (0,2,2) dan
+   benar-benar menang.
+
+   Warnanya sendiri bukan putih asal putih, melainkan `--{{PREFIX}}-di-primary`
+   yang dihitung generator dari rasio kontras WCAG. */
+
+body.{{PREFIX}} .{{PREFIX}}-hero,
+body.{{PREFIX}} .{{PREFIX}}-seksi--gelap,
+body.{{PREFIX}} .{{PREFIX}}-header,
+body.{{PREFIX}} .{{PREFIX}}-footer,
+body.{{PREFIX}} .page-article__hero {
+  color: var(--{{PREFIX}}-di-primary);
+}
+
+body.{{PREFIX}} .{{PREFIX}}-hero :is(h1, h2, h3, h4, h5, h6),
+body.{{PREFIX}} .{{PREFIX}}-seksi--gelap :is(h1, h2, h3, h4, h5, h6),
+body.{{PREFIX}} .{{PREFIX}}-header :is(h1, h2, h3, h4, h5, h6),
+body.{{PREFIX}} .{{PREFIX}}-footer :is(h1, h2, h3, h4, h5, h6),
+body.{{PREFIX}} .page-article__hero :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--{{PREFIX}}-di-primary);
+}
+
+/* Tautan di latar gelap juga: warna tautan bawaan memakai warna utama, yang
+   justru sewarna dengan latarnya sendiri. */
+body.{{PREFIX}} .{{PREFIX}}-hero a:not(.{{PREFIX}}-btn),
+body.{{PREFIX}} .{{PREFIX}}-seksi--gelap a:not(.{{PREFIX}}-btn),
+body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn) {
+  color: var(--{{PREFIX}}-di-primary);
+}
+body.{{PREFIX}} .{{PREFIX}}-hero a:not(.{{PREFIX}}-btn):hover,
+body.{{PREFIX}} .{{PREFIX}}-seksi--gelap a:not(.{{PREFIX}}-btn):hover,
+body.{{PREFIX}} .{{PREFIX}}-footer a:not(.{{PREFIX}}-btn):hover {
+  color: var(--{{PREFIX}}-aksen);
+}
+
 /* ---------- seksi & judul ---------- */
 
 .{{PREFIX}}-seksi { padding-block: 3.25rem; }
 .{{PREFIX}}-seksi--abu { background: var(--{{PREFIX}}-surface); }
 .{{PREFIX}}-seksi--gelap {
   background: linear-gradient(160deg, var(--{{PREFIX}}-primary) 0%, var(--{{PREFIX}}-primary-3) 100%);
-  color: rgba(255, 255, 255, .82);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .82);
 }
-.{{PREFIX}}-terang, .{{PREFIX}}-seksi--gelap h2, .{{PREFIX}}-judul-seksi--terang h2 { color: var(--{{PREFIX}}-putih); }
-.{{PREFIX}}-terang-teks { color: rgba(255, 255, 255, .8); }
+body.{{PREFIX}} .{{PREFIX}}-terang,
+body.{{PREFIX}} .{{PREFIX}}-judul-seksi--terang h2 { color: var(--{{PREFIX}}-di-primary); }
+.{{PREFIX}}-terang-teks { color: rgba(var(--{{PREFIX}}-di-primary-rgb), .8); }
 
 .{{PREFIX}}-judul-seksi { margin-bottom: 2rem; max-width: 46rem; }
 .{{PREFIX}}-judul-seksi__label {
@@ -308,9 +356,9 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   text-align: center;
   font-size: .8rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, .85);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .85);
   background-image:
-    linear-gradient(135deg, rgba(255, 255, 255, .09) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .09) 50%, rgba(255, 255, 255, .09) 75%, transparent 75%),
+    linear-gradient(135deg, rgba(var(--{{PREFIX}}-di-primary-rgb), .09) 25%, transparent 25%, transparent 50%, rgba(var(--{{PREFIX}}-di-primary-rgb), .09) 50%, rgba(var(--{{PREFIX}}-di-primary-rgb), .09) 75%, transparent 75%),
     linear-gradient(160deg, var(--{{PREFIX}}-primary-2), var(--{{PREFIX}}-primary-3));
   background-size: 18px 18px, cover;
 }
@@ -318,7 +366,7 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
 .{{PREFIX}}-daftar-cek { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
 .{{PREFIX}}-daftar-cek li { display: flex; align-items: flex-start; gap: .5rem; font-size: .9rem; }
 .{{PREFIX}}-daftar-cek .{{PREFIX}}-ikon { color: var(--{{PREFIX}}-aksen-2); flex: none; margin-top: .15rem; }
-.{{PREFIX}}-daftar-cek--terang li { color: rgba(255, 255, 255, .88); }
+.{{PREFIX}}-daftar-cek--terang li { color: rgba(var(--{{PREFIX}}-di-primary-rgb), .88); }
 .{{PREFIX}}-daftar-cek--terang .{{PREFIX}}-ikon { color: var(--{{PREFIX}}-aksen); }
 
 .{{PREFIX}}-ikon { width: 20px; height: 20px; }
@@ -334,14 +382,14 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
 
 /* poin keunggulan (di atas latar gelap) */
 .{{PREFIX}}-poin {
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(var(--{{PREFIX}}-di-primary-rgb), .06);
+  border: 1px solid rgba(var(--{{PREFIX}}-di-primary-rgb), .12);
   border-radius: var(--{{PREFIX}}-radius);
   padding: 1.25rem 1.15rem;
 }
 .{{PREFIX}}-poin .{{PREFIX}}-ikon { width: 30px; height: 30px; color: var(--{{PREFIX}}-aksen); margin-bottom: .6rem; }
-.{{PREFIX}}-poin__judul { color: var(--{{PREFIX}}-putih); font-size: 1.04rem; margin: 0 0 .4rem; }
-.{{PREFIX}}-poin__teks { margin: 0; font-size: .92rem; color: rgba(255, 255, 255, .76); }
+.{{PREFIX}}-poin__judul { color: var(--{{PREFIX}}-di-primary); font-size: 1.04rem; margin: 0 0 .4rem; }
+.{{PREFIX}}-poin__teks { margin: 0; font-size: .92rem; color: rgba(var(--{{PREFIX}}-di-primary-rgb), .76); }
 
 /* ---------- dua kolom ---------- */
 
@@ -363,7 +411,7 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   padding: 1.6rem .8rem .6rem;
   font-size: .82rem;
   font-weight: 700;
-  color: var(--{{PREFIX}}-putih);
+  color: var(--{{PREFIX}}-di-primary);
   background: linear-gradient(180deg, transparent, rgba(var(--{{PREFIX}}-primary-3-rgb), .85));
 }
 
@@ -453,11 +501,11 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
 
 .{{PREFIX}}-footer {
   background: var(--{{PREFIX}}-primary-3);
-  color: rgba(255, 255, 255, .72);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .72);
   padding-top: 2.5rem;
 }
 .{{PREFIX}}-footer__grid { display: grid; gap: 1.6rem; padding-bottom: 2.2rem; }
-.{{PREFIX}}-footer__nama { color: var(--{{PREFIX}}-putih); font-weight: 800; font-size: 1.05rem; margin: 0 0 .4rem; }
+.{{PREFIX}}-footer__nama { color: var(--{{PREFIX}}-di-primary); font-weight: 800; font-size: 1.05rem; margin: 0 0 .4rem; }
 .{{PREFIX}}-footer__judul {
   color: var(--{{PREFIX}}-aksen);
   font-weight: 800;
@@ -467,15 +515,15 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   margin: 0 0 .5rem;
 }
 .{{PREFIX}}-footer__teks { margin: 0 0 .5rem; font-size: .92rem; }
-.{{PREFIX}}-footer a { color: rgba(255, 255, 255, .82) !important; text-decoration: none; }
+.{{PREFIX}}-footer a { color: rgba(var(--{{PREFIX}}-di-primary-rgb), .82) !important; text-decoration: none; }
 .{{PREFIX}}-footer a:hover { color: var(--{{PREFIX}}-aksen) !important; }
 .{{PREFIX}}-footer__daftar { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; font-size: .92rem; }
 .{{PREFIX}}-footer__daftar .sub-menu { display: none; }
 .{{PREFIX}}-footer__bawah {
-  border-top: 1px solid rgba(255, 255, 255, .1);
+  border-top: 1px solid rgba(var(--{{PREFIX}}-di-primary-rgb), .1);
   padding-block: 1rem;
   font-size: .82rem;
-  color: rgba(255, 255, 255, .55);
+  color: rgba(var(--{{PREFIX}}-di-primary-rgb), .55);
 }
 .{{PREFIX}}-footer__bawah p { margin: 0; }
 
@@ -492,7 +540,7 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
   padding: .7rem .95rem;
   border-radius: 999px;
   background: var(--{{PREFIX}}-aksen);
-  color: var(--{{PREFIX}}-primary) !important;
+  color: var(--{{PREFIX}}-di-aksen) !important;
   font-weight: 800;
   font-size: .9rem;
   text-decoration: none !important;
@@ -511,7 +559,7 @@ body.{{PREFIX}} .single .entry-header {
   margin-bottom: 1.6rem;
 }
 body.{{PREFIX}} .page-article__title,
-body.{{PREFIX}} .page-article__hero h1 { color: var(--{{PREFIX}}-putih); font-size: clamp(1.5rem, 5.5vw, 2.3rem); }
+body.{{PREFIX}} .page-article__hero h1 { color: var(--{{PREFIX}}-di-primary); font-size: clamp(1.5rem, 5.5vw, 2.3rem); }
 body.{{PREFIX}} .page-article__content h2 { font-size: 1.35rem; margin-top: 1.8rem; }
 body.{{PREFIX}} .page-article__content h3 { font-size: 1.1rem; margin-top: 1.4rem; }
 body.{{PREFIX}} .entry-content img { border-radius: var(--{{PREFIX}}-radius); }

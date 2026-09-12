@@ -53,6 +53,9 @@ SCAFFOLD_VERSION = '1.1.0'
 TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
 PREFIX_RE = re.compile(r'^[a-z][a-z0-9]{1,11}$')
 WARNA_DEFAULT = {'primary': '#14213d', 'aksen': '#fca311', 'ink': '#1b1b1f'}
+# Ambang kontras teks badan menurut WCAG AA. Latar yang tidak mencapainya
+# digeser sampai lolos — situs klien tidak boleh terbit dengan teks samar.
+KONTRAS_MINIMAL = 4.5
 
 
 def norm(value):
@@ -190,6 +193,47 @@ def geser_terang(nilai, faktor):
     return '#%02x%02x%02x' % (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
 
 
+def kanal_linear(nilai):
+    nilai = nilai / 255
+    return nilai / 12.92 if nilai <= 0.03928 else ((nilai + 0.055) / 1.055) ** 2.4
+
+
+def luminansi(warna):
+    """Luminansi relatif WCAG; dipakai untuk menghitung rasio kontras."""
+    r, g, b = (kanal_linear(c) for c in hex_ke_rgb(warna))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def kontras(a, b):
+    terang, gelap = sorted((luminansi(a), luminansi(b)), reverse=True)
+    return (terang + 0.05) / (gelap + 0.05)
+
+
+def teks_di_atas(latar, gelap=None):
+    """Putih atau tinta — mana yang lebih terbaca di atas warna latar ini."""
+    gelap = gelap or WARNA_DEFAULT['ink']
+    return '#ffffff' if kontras(latar, '#ffffff') >= kontras(latar, gelap) else gelap
+
+
+def perbaiki_kontras(latar, minimal=KONTRAS_MINIMAL, gelap=None):
+    """Geser latar sampai teks di atasnya terbaca.
+
+    Warna pilihan klien kadang berada di tengah rentang terang-gelap, sehingga
+    teks putih maupun hitam sama-sama tipis di atasnya. Daripada menerbitkan
+    situs yang sulit dibaca, warnanya digelapkan/diterangkan secukupnya — dan
+    penyesuaiannya dilaporkan supaya bisa dilihat manusia.
+    """
+    gelap = gelap or WARNA_DEFAULT['ink']
+    warna = latar
+    for _ in range(14):
+        depan = teks_di_atas(warna, gelap)
+        if kontras(warna, depan) >= minimal:
+            return warna, depan
+        # Arah penyesuaian mengikuti sisi terdekat: yang sudah gelap digelapkan.
+        warna = geser_terang(warna, -0.08 if depan == '#ffffff' else 0.08)
+    return warna, teks_di_atas(warna, gelap)
+
+
 def data_klien(domain, nama=''):
     """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php."""
     try:
@@ -233,20 +277,26 @@ def data_klien(domain, nama=''):
 
 def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
     data = data_klien(domain, nama)
+    # Latar berwarna dipastikan cukup kontras dulu, baru warna teksnya dipilih.
+    primary, di_primary = perbaiki_kontras(primary, gelap=ink)
+    aksen, di_aksen = perbaiki_kontras(aksen, gelap=ink)
     data.update({
+        'ON_PRIMARY': di_primary,
+        'ON_PRIMARY_RGB': ', '.join(str(c) for c in hex_ke_rgb(di_primary)),
+        'ON_AKSEN': di_aksen,
         'PREFIX': prefix,
         'PREFIX_UPPER': prefix.upper(),
         'SLUG': slug,
         'THEME_NAME': ' '.join(w.capitalize() for w in slug.split('-')),
         'DOMAIN': domain,
         'PRIMARY': primary,
-        'PRIMARY_2': geser_terang(primary, 0.12),
-        'PRIMARY_3': geser_terang(primary, -0.28),
+        'PRIMARY_2': selaraskan(geser_terang(primary, 0.12), di_primary),
+        'PRIMARY_3': selaraskan(geser_terang(primary, -0.28), di_primary),
         'AKSEN': aksen,
-        'AKSEN_2': geser_terang(aksen, -0.14),
+        'AKSEN_2': selaraskan(geser_terang(aksen, -0.14), di_aksen),
         'INK': ink,
         'PRIMARY_RGB': ', '.join(str(c) for c in hex_ke_rgb(primary)),
-        'PRIMARY_3_RGB': ', '.join(str(c) for c in hex_ke_rgb(geser_terang(primary, -0.28))),
+        'PRIMARY_3_RGB': ', '.join(str(c) for c in hex_ke_rgb(selaraskan(geser_terang(primary, -0.28), di_primary))),
         'AKSEN_RGB': ', '.join(str(c) for c in hex_ke_rgb(aksen)),
     })
     return data
@@ -276,6 +326,36 @@ def berkas_template(nilai):
         raise FileNotFoundError('template kosong')
     hasil['screenshot.png'] = scaffold_png(rgb=hex_ke_rgb(nilai['PRIMARY']))
     return hasil
+
+
+def laporan_kontras(primary, aksen):
+    """Ringkasan "warna -> warna teks (rasio)" untuk dibaca operator."""
+    bagian = []
+    for nama, minta in (('utama', primary), ('aksen', aksen)):
+        awal = minta if HEX_RE.match(minta or '') else WARNA_DEFAULT['primary' if nama == 'utama' else 'aksen']
+        akhir, depan = perbaiki_kontras(awal)
+        turunan = (selaraskan(geser_terang(akhir, 0.12), depan),
+                   selaraskan(geser_terang(akhir, -0.28), depan))
+        paling_tipis = min(kontras(akhir, depan), *(kontras(t, depan) for t in turunan))
+        catatan = f'{nama}:{akhir}/{depan}:{paling_tipis:.1f}'
+        if akhir.lower() != awal.lower():
+            catatan += f'(disesuaikan dari {awal})'
+        bagian.append(catatan)
+    return ' '.join(bagian)
+
+
+def selaraskan(latar, depan, minimal=KONTRAS_MINIMAL):
+    """Geser turunan warna sampai kontras dengan warna teks yang sudah dipilih.
+
+    Turunan gelap/terang dipakai sebagai latar juga (footer, panel menu, gradasi
+    hero). Warna teksnya mengikuti warna utama, jadi turunannya yang harus
+    menyesuaikan diri — bukan sebaliknya."""
+    arah = -0.08 if depan == '#ffffff' else 0.08
+    for _ in range(14):
+        if kontras(latar, depan) >= minimal:
+            return latar
+        latar = geser_terang(latar, arah)
+    return latar
 
 
 def prefix_dari(domain, diminta=''):
@@ -323,7 +403,8 @@ def main():
     ap.add_argument('--override', default='')
     ap.add_argument('--no-download', action='store_true')
     args = ap.parse_args()
-    out = {'status': '', 'ref': '', 'slug': '', 'prefix': '', 'version': '', 'zip': '', 'error': ''}
+    out = {'status': '', 'ref': '', 'slug': '', 'prefix': '', 'version': '', 'zip': '',
+           'kontras': '', 'error': ''}
 
     def emit():
         print('\n'.join(f'{k}={v}' for k, v in out.items()))
@@ -351,6 +432,7 @@ def main():
                 out['slug'], zip_path = scaffold(domain, args.nama, args.prefix,
                                                   args.primary, args.accent)
                 out.update(status='generated', version=SCAFFOLD_VERSION, zip=str(zip_path))
+                out['kontras'] = laporan_kontras(args.primary, args.accent)
         except Exception as e:
             out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
         return emit()

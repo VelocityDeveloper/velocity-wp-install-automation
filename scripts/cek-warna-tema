@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Penjaga kontras untuk template child theme Paket G.
+
+Pemakaian: cek-warna-tema [--palet "#latar,#aksen" ...]
+
+Dua hal yang diperiksa untuk tiap palet:
+
+1. **Rasio kontras.** Warna latar berwarna (utama, aksen, beserta turunan
+   gelap/terangnya) harus mencapai 4.5:1 terhadap warna teks yang dipilih
+   generator — ambang teks badan WCAG AA.
+2. **Siapa yang menang di kaskade.** Ini yang pernah menipu: aturan judul global
+   `body.<prefix> h1..h4 { color: ink }` bernilai (0,1,2), sedangkan aturan
+   komponen seperti `.<prefix>-hero__judul` hanya (0,1,0). Yang global menang,
+   jadi SEMUA judul di latar gelap jatuh ke tinta hitam betapapun urutannya di
+   berkas. Jadi tidak cukup melihat "ada aturan warnanya" — harus dihitung
+   aturan mana yang benar-benar berlaku.
+
+Keluar dengan kode 1 kalau ada yang gagal, supaya bisa dipakai di deploy.
+"""
+import argparse
+import re
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CHILD_THEME = HERE / 'velocity-child-theme'
+KONTRAS_MINIMAL = 4.5
+PALET_BAWAAN = ['#14213d,#fca311', '#ffd166,#2d6a4f', '#7a7a7a,#8a8a8a', '#c62828,#f5c518']
+# (nama, kelas leluhur, tag, kelas elemen, warna yang harus menang). {P} diganti
+# awalan tema yang dipakai generator.
+UJI_KASKADE = [
+    ('judul hero', ['{P}', '{P}-hero'], 'h1', ['{P}-hero__judul'], 'di-primary'),
+    ('judul seksi gelap', ['{P}', '{P}-seksi--gelap'], 'h2', ['{P}-judul-seksi'], 'di-primary'),
+    ('judul kartu di seksi gelap', ['{P}', '{P}-seksi--gelap', '{P}-poin'], 'h3', ['{P}-poin__judul'], 'di-primary'),
+    ('judul bebas di seksi gelap', ['{P}', '{P}-seksi--gelap'], 'h3', [], 'di-primary'),
+    ('judul footer', ['{P}', '{P}-footer'], 'h4', [], 'di-primary'),
+    ('judul halaman dalam', ['{P}', 'page-article__hero'], 'h1', ['page-article__title'], 'di-primary'),
+    ('judul kartu putih', ['{P}', '{P}-kartu'], 'h3', ['{P}-kartu__judul'], 'ink'),
+]
+
+
+def bersihkan(css):
+    css = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
+    # Spasi di dalam :is()/:not() bukan pemisah leluhur; kalau dibiarkan,
+    # selector ikut terpotong dan hasil pengukurannya salah.
+    return re.sub(r':(is|not|where)\(([^)]*)\)',
+                  lambda m: f':{m.group(1)}(' + re.sub(r'\s*,\s*', ',', m.group(2).strip()) + ')', css)
+
+
+def cocok(sel, leluhur, tag, kelas):
+    """Skor spesifisitas kalau selector ini mengenai elemen uji, atau None."""
+    sel = sel.strip()
+    if ':hover' in sel or ':focus' in sel or '::' in sel:
+        return None
+    bagian = re.split(r'\s+', sel)
+    m = re.match(r'^(?::is\(([^)]*)\)|([a-z0-9]+))?((?:\.[A-Za-z0-9_-]+)*)(:not\([^)]*\))?$', bagian[-1])
+    if not m:
+        return None
+    daftar_tag, tag_biasa, kelas_str, _ = m.groups()
+    if daftar_tag is not None:
+        if tag not in daftar_tag.split(','):
+            return None
+    elif tag_biasa and tag_biasa != tag:
+        return None
+    if not {k[1:] for k in re.findall(r'\.[A-Za-z0-9_-]+', kelas_str or '')} <= kelas:
+        return None
+    for leluhur_sel in bagian[:-1]:
+        if not {x[1:] for x in re.findall(r'\.[A-Za-z0-9_-]+', leluhur_sel)} <= (leluhur | kelas):
+            return None
+        t = re.match(r'^[a-z0-9]+', leluhur_sel)
+        if t and t.group(0) not in ('body', 'html'):
+            return None
+    # :is(h1,h2,...) bernilai satu elemen (yang paling spesifik), bukan enam.
+    ukur = re.sub(r':is\(([^)]*)\)', 'h1', sel)
+    return (len(re.findall(r'\.[A-Za-z0-9_-]+|:not\(', ukur)),
+            len(re.findall(r'(?<![\w.-])(?:body|html|h[1-6]|a|p|li|ul|ol)(?![\w-])', ukur)))
+
+
+def warna_menang(css, leluhur, tag, kelas):
+    pemenang, terbaik = None, (-1, -1, -1)
+    for sel_blok, isi in re.findall(r'([^{}]+)\{([^{}]*)\}', css):
+        warna = re.findall(r'(?<![-\w])color\s*:\s*([^;!]+)(!important)?', isi)
+        if not warna:
+            continue
+        nilai, penting = warna[-1][0].strip(), bool(warna[-1][1])
+        # Jangan memecah di koma dalam :is()/:not() — itu satu selector.
+        for sel in re.split(r',(?![^(]*\))', sel_blok):
+            skor = cocok(sel, leluhur, tag, kelas)
+            if skor is None:
+                continue
+            penuh = (1 if penting else 0,) + skor
+            if penuh >= terbaik:
+                terbaik, pemenang = penuh, nilai
+    return pemenang or ''
+
+
+def css_untuk(primary, aksen, prefix='cek'):
+    """Render template untuk satu palet, lalu ambil CSS + awalan kelasnya."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run = subprocess.run([sys.executable, str(CHILD_THEME), 'cekwarna.test', '--paket', 'Paket G',
+                              '--nama', 'Cek Warna', '--prefix', prefix,
+                              '--primary', primary, '--accent', aksen],
+                             capture_output=True, text=True, timeout=120,
+                             env={'PATH': '/usr/bin:/bin', 'HOME': tmp})
+        nilai = dict(l.split('=', 1) for l in run.stdout.splitlines() if '=' in l)
+        zip_path = nilai.get('zip', '')
+        if not zip_path or not Path(zip_path).is_file():
+            raise RuntimeError(nilai.get('error') or 'zip tidak dibuat')
+        with zipfile.ZipFile(zip_path) as z:
+            nama = next(n for n in z.namelist() if n.endswith('css/custom.css'))
+            css = z.read(nama).decode()
+        Path(zip_path).unlink(missing_ok=True)
+        return css, nilai.get('kontras', ''), nilai.get('prefix', prefix)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--palet', action='append', default=[],
+                    help='pasangan "#utama,#aksen"; boleh diulang')
+    args = ap.parse_args()
+    palet = args.palet or PALET_BAWAAN
+    gagal = 0
+    for pasangan in palet:
+        primary, _, aksen = pasangan.partition(',')
+        try:
+            css, kontras, prefix = css_untuk(primary.strip(), aksen.strip())
+        except Exception as e:
+            print(f'{pasangan}: GAGAL dirender — {e}')
+            gagal += 1
+            continue
+        print(f'\nPalet {primary.strip()} + {aksen.strip()}')
+        print(f'  kontras : {kontras}')
+        tipis = [float(m) for m in re.findall(r':(\d+\.\d+)', kontras)]
+        if any(t < KONTRAS_MINIMAL for t in tipis):
+            print(f'  BURUK   : ada rasio di bawah {KONTRAS_MINIMAL}')
+            gagal += 1
+        bersih = bersihkan(css)
+        for nama, leluhur, tag, kelas, harapan in UJI_KASKADE:
+            nilai = warna_menang(bersih,
+                                 {k.format(P=prefix) for k in leluhur}, tag,
+                                 {k.format(P=prefix) for k in kelas})
+            ok = harapan in nilai
+            print(f'  {"ok " if ok else "SALAH"} {nama:28} -> {nilai or "(tidak ada aturan)"}')
+            gagal += 0 if ok else 1
+    print('\n' + ('SEMUA LOLOS' if not gagal else f'{gagal} pemeriksaan gagal'))
+    return 0 if not gagal else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
