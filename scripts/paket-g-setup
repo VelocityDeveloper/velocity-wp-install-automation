@@ -10,9 +10,7 @@ memakainya dibuat di sini supaya PM tidak perlu menyusunnya manual:
   Galeri, Hubungi Kami        -> blok desain ditambahkan di bawah teks yang ada
 
 Menu utama disusun ulang sekali (penanda opsi `velocity_paket_g_menu`) supaya
-susunan yang kemudian diatur PM tidak pernah diacak lagi. "Kontak Kami" sengaja
-TIDAK masuk menu: header sudah punya tombol "Hubungi Kami" dan nomor telepon,
-jadi item menu itu hanya menggandakan jalan yang sama.
+susunan yang kemudian diatur PM tidak pernah diacak lagi.
 """
 import json
 import os
@@ -42,7 +40,7 @@ TAMBAHAN = (
     ('galeri', '[{P}_galeri]'),
     ('hubungi-kami', '[{P}_kontak]<h2>Ajukan Pemesanan</h2>[{P}_pemesanan]'),
 )
-# Urutan menu. Kontak sengaja tidak ada di sini.
+# Urutan menu, mengikuti susunan yang ditulis klien di FORM ISIAN.
 MENU = (
     ('beranda', 'Beranda'),
     ('tentang-kami', 'Profil'),
@@ -51,6 +49,7 @@ MENU = (
     ('pemesanan', 'Pemesanan'),
     ('galeri', 'Galeri Foto'),
     ('berita', 'Berita'),
+    ('hubungi-kami', 'Kontak Kami'),
 )
 
 REMOTE = r'''

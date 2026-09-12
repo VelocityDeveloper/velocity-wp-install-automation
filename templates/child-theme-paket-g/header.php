@@ -60,11 +60,10 @@ defined('ABSPATH') || exit;
 					));
 					?>
 					<div class="{{PREFIX}}-header__aksi">
+						<?php // Tombol ini sudah membuka WhatsApp ke nomor yang sama, jadi
+						      // nomornya tidak perlu ditulis lagi di sebelahnya. ?>
 						<a class="{{PREFIX}}-btn {{PREFIX}}-btn--utama" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>"
 							target="_blank" rel="noopener nofollow">Hubungi Kami</a>
-						<a class="{{PREFIX}}-header__telp" href="tel:<?php echo esc_attr(preg_replace('/\D/', '', {{PREFIX}}_data('telp'))); ?>">
-							<?php echo esc_html({{PREFIX}}_data('telp')); ?>
-						</a>
 					</div>
 				</div>
 

@@ -169,13 +169,6 @@ body.{{PREFIX}}-menu-terbuka { overflow: hidden; }
 }
 
 .{{PREFIX}}-header__aksi { display: grid; gap: .6rem; }
-.{{PREFIX}}-header__telp {
-  color: var(--{{PREFIX}}-putih) !important;
-  font-weight: 700;
-  font-size: .95rem;
-  text-decoration: none;
-  text-align: center;
-}
 
 /* ---------- tombol ---------- */
 

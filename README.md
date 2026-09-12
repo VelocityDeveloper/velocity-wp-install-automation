@@ -215,7 +215,7 @@ Child theme Paket G lahir sudah berbentuk situs perusahaan, bukan folder kosong.
 
 | Berkas | Isi |
 |---|---|
-| `header.php` | Header sendiri: logo, menu utama, tombol "Hubungi Kami", nomor telepon. Di HP jadi panel geser dengan tombol sendiri — **tanpa Bootstrap tema induk** |
+| `header.php` | Header sendiri: logo, menu utama, tombol "Hubungi Kami" (langsung membuka WhatsApp, jadi nomornya tidak ditulis lagi di sebelahnya). Di HP jadi panel geser dengan tombol sendiri — **tanpa Bootstrap tema induk** |
 | `footer.php` | Footer 4 kolom (identitas, layanan, halaman, kontak) + baris hak cipta |
 | `front-page.php` | Beranda 8 seksi: hero, layanan, keunggulan, tentang, galeri, produk, alur kerja, pemesanan, kontak |
 | `inc/theme-data.php` | **Satu-satunya tempat menyunting isi.** Nama, WhatsApp, telepon, email, alamat, dan area diisi otomatis dari FORM ISIAN klien |
@@ -278,9 +278,7 @@ Child theme Paket G membawa blok desain berupa shortcode; halaman pemakainya dib
 
 - **Layanan, Produk, Pemesanan** → halaman baru berisi teks pembuka + shortcode. Halaman yang sudah disunting orang tidak ditimpa.
 - **Galeri, Hubungi Kami** → blok desain ditambahkan di bawah teks yang sudah ada.
-- **Menu utama** disusun sekali (penanda `velocity_paket_g_menu`): Beranda · Profil · Layanan · Produk · Pemesanan · Galeri Foto · Berita.
-
-**"Kontak Kami" sengaja tidak masuk menu**: header sudah punya tombol "Hubungi Kami" beserta nomor telepon, dan footer memuat kontak lengkap — item menu itu hanya menggandakan jalan yang sama. Halamannya tetap ada dan tetap bisa dibuka.
+- **Menu utama** disusun sekali (penanda `velocity_paket_g_menu`), mengikuti susunan yang ditulis klien di FORM ISIAN: Beranda · Profil · Layanan · Produk · Pemesanan · Galeri Foto · Berita · Kontak Kami.
 
 ## Ambil alih (klaim)
 
