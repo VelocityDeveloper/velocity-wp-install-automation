@@ -78,6 +78,9 @@ def theme_note(domain):
         return f'{active} (child theme gagal: {status})'
     if status == 'matched' and ref:
         return f'{active} (referensi {ref})'
+    if status == 'generated':
+        # Paket G: child theme kosong bernama project, desainnya dikerjakan manual.
+        return f'{active} (child theme baru, desain custom)'
     return active
 
 

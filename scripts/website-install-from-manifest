@@ -409,10 +409,16 @@ elif [[ -n "__THEME_REPO__" ]]; then
   install_from_git "__THEME_REPO__" theme "velocity-theme" || exit 15
 fi
 
-# child theme sesuai referensi desain klien (scripts/velocity-child-theme).
+# child theme sesuai referensi desain klien, atau scaffold bernama project untuk
+# paket desain custom (scripts/velocity-child-theme).
 # Harus aktif SEBELUM 1-Click Setup: lokasi menu disimpan per tema aktif.
 if [[ -n "__CHILD_THEME_PKG__" ]]; then
-  if install_from_zip "__CHILD_THEME_PKG__" theme; then
+  if [[ "__CHILD_THEME_GENERATED__" == 1 && -d "$DOCROOT/wp-content/themes/__CHILD_THEME_PKG__" ]]; then
+    # Scaffold hanya dibuat sekali: isinya hasil kerja desainer, dan
+    # install_from_zip menghapus folder tujuan sebelum menyalin.
+    php -d memory_limit=512M "$WP_BIN" theme activate "__CHILD_THEME_PKG__" --path="$DOCROOT" --allow-root >/dev/null 2>&1 \
+      && echo "child_theme_kept:__CHILD_THEME_PKG__" >&2 || echo "theme_activate_failed:__CHILD_THEME_PKG__" >&2
+  elif install_from_zip "__CHILD_THEME_PKG__" theme; then
     echo "child_theme_installed:__CHILD_THEME_PKG__" >&2
   else
     echo "child_theme_install_failed:__CHILD_THEME_PKG__" >&2
@@ -607,16 +613,20 @@ REMOTE_EOF
 # Diselesaikan di sisi installer (butuh API tema + folder Drive), lalu zip-nya
 # dikirim ke server tujuan bersama paket lain. Kegagalan di sini tidak
 # menggagalkan instalasi: situs tetap memakai tema induk.
-CHILD_SLUG="" CHILD_ZIP=""
+CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
-  --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
+  --paket "${cfg[paket]:-}" --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
 child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
 child_status=$(child_val status)
 echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2
-if [[ "$child_status" == matched ]]; then
+# generated = scaffold desain custom (Paket G), dipasang seperti child theme API
+# tapi tidak pernah ditimpa apply ulang.
+if [[ "$child_status" == matched || "$child_status" == generated ]]; then
   CHILD_SLUG=$(child_val slug)
   CHILD_ZIP=$(child_val zip)
-  [[ "$CHILD_SLUG" =~ ^[a-z0-9-]+$ && -f "$CHILD_ZIP" ]] || { CHILD_SLUG=""; CHILD_ZIP=""; }
+  # Bukan `[[ ]] && ...`: di bawah `set -e` tes yang gagal menghentikan instalasi.
+  if [[ "$child_status" == generated ]]; then CHILD_GENERATED=1; fi
+  [[ "$CHILD_SLUG" =~ ^[a-z0-9-]+$ && -f "$CHILD_ZIP" ]] || { CHILD_SLUG=""; CHILD_ZIP=""; CHILD_GENERATED=0; }
 fi
 
 # substitute placeholders safely
@@ -638,6 +648,7 @@ remote_script=${remote_script//__THEME_REPO__/$(printf '%s' "${cfg[velocity_them
 remote_script=${remote_script//__ADDONS_PKG__/$(printf '%s' "${cfg[velocity_addons_pkg]:-}")}
 remote_script=${remote_script//__THEME_PKG__/$(printf '%s' "${cfg[velocity_theme_pkg]:-}")}
 remote_script=${remote_script//__CHILD_THEME_PKG__/$(printf '%s' "$CHILD_SLUG")}
+remote_script=${remote_script//__CHILD_THEME_GENERATED__/$(printf '%s' "$CHILD_GENERATED")}
 
 # pre-transfer package zips from local to remote
 for pkg_key in velocity_addons_pkg velocity_theme_pkg; do

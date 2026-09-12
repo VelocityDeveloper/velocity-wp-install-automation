@@ -118,7 +118,7 @@ Endpoints:
 - `GET /health` — no auth
 - `GET /api/servers` — daftar server dari `/var/lib/velocity/servers.json` (managed panel `/server/`) atau fallback `config/servers.json` / env `INSTALLER_SERVERS`.
 - `GET /api/installer` — daftar domain + validasi manifest + cronjobs summary (cache 30s, tidak bocor raw crontab) + state/log per-domain dari `/var/lib/velocity/installer`.
-- `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry. Saat `apply`, service menyetel `WP_INSTALL_SSH_KEY_FILE` (auto-detect `/etc/velocity/secrets/ssh_key` atau `/root/.ssh/id_ed25519`/`id_rsa`) + `WP_INSTALL_DB_PASSWORD_FILE`/`WP_INSTALL_ADMIN_PASSWORD_FILE` per-domain dari `/etc/velocity/secrets/`.
+- `POST /api/installer/run` — body `{"domain":"example.com","mode":"dry-run"|"apply"|"finish"|"maintenance"|"child-theme"}`. Validasi domain + manifest, tolak `already_running`, spawn `scripts/installer-runner` detached (log ke `/var/lib/velocity/installer/<domain>.log`). Browser pakai endpoint ini untuk tombol install/retry. Saat `apply`, service menyetel `WP_INSTALL_SSH_KEY_FILE` (auto-detect `/etc/velocity/secrets/ssh_key` atau `/root/.ssh/id_ed25519`/`id_rsa`) + `WP_INSTALL_DB_PASSWORD_FILE`/`WP_INSTALL_ADMIN_PASSWORD_FILE` per-domain dari `/etc/velocity/secrets/`.
 - `POST /api/installer/generate` — body `{"domain":"example.com"}`. Auto-generate manifest (da_user/db dari label domain, admin_email dari `notes-credentials.txt` bila ada) + secret password random per-domain (tidak pernah menimpa yang sudah ada). Domain tanpa manifest valid bisa langsung di-generate dari tombol `[ generate ]` di halaman installer.
 
 Auth: jika `INSTALLER_API_TOKEN` di-set, semua `/api/*` butuh `Authorization: Bearer <token>`. Rate-limit 30 req/60s per IP. Jangan expose port 9121 langsung — via reverse proxy (blok location referensi: `config/nginx-installer.conf`).
@@ -165,6 +165,8 @@ Mode `finish` (`POST /api/installer/run` `{"domain":..., "mode":"finish"}`) menj
 
 Mode `maintenance` (`{"domain":..., "mode":"maintenance"}`) hanya menyalakan maintenance mode velocity-addons untuk situs yang terpasang sebelum langkah itu ada (sekali per situs, dilewati kalau sudah diatur manual).
 
+Mode `child-theme` (`{"domain":..., "mode":"child-theme"}`) hanya memasang & mengaktifkan child theme untuk situs yang sudah terpasang — lihat [Paket G](#paket-g-child-theme-dibuat-otomatis-bernama-project).
+
 **SSL belum otomatis.** Kalau QA melaporkan `ssl_tidak_valid` (domain baru menyajikan sertifikat domain lain), terbitkan di server DirectAdmin tujuan:
 
 ```bash
@@ -181,8 +183,31 @@ Saat apply, installer membaca referensi desain pilihan klien di FORM ISIAN (labe
 
 - Cocok → zip diunduh ke `/var/lib/velocity/packages/child-themes/<slug>-<versi>.zip`, dikirim ke server, dipasang, dan diaktifkan sebelum 1-Click Setup (lokasi menu disimpan per tema aktif).
 - Tidak cocok / API gagal → tema induk tetap dipakai; child theme yang sudah aktif di situs tidak dimatikan saat apply ulang.
-- Override manual: tambahkan `velocity_child_theme=<slug>` di manifest.
+- Override manual: tambahkan `velocity_child_theme=<slug>` di manifest. Override selalu menang, termasuk atas pembuatan otomatis di bawah.
 - Log: `child_theme:<status>:<referensi>:<slug>` dan `active_theme:<tema>`; laporan Telegram "Instalasi selesai" memuat baris Tema.
+
+### Paket G: child theme dibuat otomatis bernama project
+
+Paket G tidak memilih template — desainnya custom per project, jadi form klien tidak pernah memuat referensi dan dulu situsnya berhenti di tema induk. Sekarang installer membuat child theme kosong sendiri (`paket=Paket G` di manifest memicunya; dibaca dari CRM saat manifest dibuat).
+
+- Slug & folder: `velocity-<label domain>` (jasakontraktorindo.com → `velocity-jasakontraktorindo`), Theme Name "Velocity Jasakontraktorindo", `Template: velocity`, versi 1.0.0.
+- Isinya scaffold minimal: `style.css` (header + catatan), `functions.php` (enqueue `parent-style` tema induk + `css/custom.css`), `css/custom.css` kosong, `screenshot.png`. Desain PHP/CSS-nya dikerjakan desainer — template yang perlu diubah disalin sendiri dari tema induk.
+- Zip disimpan di `/var/lib/velocity/packages/child-themes/<slug>-1.0.0.zip` (isinya deterministik, jadi generate ulang tidak mengubah apa pun).
+- **Tidak pernah ditimpa.** Apply ulang hanya mengaktifkannya (`child_theme_kept:<slug>`) kalau folder temanya sudah ada di server — `install_from_zip` menghapus folder tujuan sebelum menyalin, jadi tanpa pengaman ini hasil kerja desainer hilang.
+- Status `generated` di log; laporan Telegram menulis `Tema: <slug> (child theme baru, desain custom)`.
+- Kalau form Paket G ternyata memuat referensi desain yang ada di API, yang dari API tetap dipakai; scaffold hanya dibuat saat tidak ada yang cocok (termasuk saat API tema mati).
+- Penopang kalau manifest tidak punya `paket=` (CRM tidak terbaca saat manifest dibuat): paket dibaca dari nama file form di folder klien (`FORM ISIAN WEBSITE - paket g.doc`). Hanya dipakai saat `paket=` kosong. Diperiksa 2026-09-12 atas 22 folder antrean — 5 file bernama "paket g" (4 memang Paket G di CRM, 1 paketnya kosong), tidak ada paket E/F/Portal/Toko yang filenya bernama begitu, dan penopang ini hanya menambah 1 domain (5 → 6).
+
+Situs Paket G yang sudah terpasang sebelum aturan ini ada tidak perlu install ulang: mode `child-theme` memasangnya saja.
+
+```bash
+curl -X POST http://127.0.0.1:9121/api/installer/run -d '{"domain":"jasakontraktorindo.com","mode":"child-theme"}'
+# atau langsung di server installer:
+INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
+  scripts/installer-runner jasakontraktorindo.com
+```
+
+Mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`) — tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
 
 ## Ambil alih (klaim)
 

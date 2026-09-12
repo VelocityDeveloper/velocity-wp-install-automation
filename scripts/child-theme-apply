@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Pasang & aktifkan child theme di situs yang sudah terpasang, tanpa install ulang.
+
+Pemakaian: child-theme-apply <manifest>   (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Dipakai installer-runner mode `child-theme`. Slug-nya ditentukan
+scripts/velocity-child-theme: dicocokkan ke API tema kalau klien memilih
+template, atau digenerate bernama project untuk paket desain custom (Paket G).
+
+Scaffold yang digenerate TIDAK pernah ditimpa: sesudah terpasang isinya hasil
+kerja desainer, jadi run berikutnya hanya mengaktifkannya.
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CHILD_THEME = HERE / 'velocity-child-theme'
+
+REMOTE = r'''
+set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+DEST="$DOCROOT/wp-content/themes/$SLUG"
+if [[ "$GENERATED" == 1 && -d "$DEST" ]]; then
+  # Scaffold hanya dibuat sekali; menimpanya menghapus desain yang sudah dikerjakan.
+  echo "child_theme_kept:$SLUG"
+else
+  [[ -f "/tmp/pkg-$SLUG.zip" ]] || { echo "package_zip_missing:$SLUG"; exit 1; }
+  rm -rf "$DEST"
+  unzip -q "/tmp/pkg-$SLUG.zip" -d "$DOCROOT/wp-content/themes" || { echo "unzip_failed:$SLUG"; exit 1; }
+  rm -f "/tmp/pkg-$SLUG.zip"
+  [[ -f "$DEST/style.css" ]] || { echo "child_theme_install_failed:$SLUG"; exit 1; }
+  chown -R "$DA_USER:$DA_USER" "$DEST"
+  find "$DEST" -type d -exec chmod 755 {} +
+  find "$DEST" -type f -exec chmod 644 {} +
+  echo "child_theme_installed:$SLUG"
+fi
+wp theme activate "$SLUG" >/dev/null 2>&1 || { echo "theme_activate_failed:$SLUG"; exit 1; }
+echo "active_theme:$(wp theme list --status=active --field=name 2>/dev/null | head -1)"
+'''
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def resolve(domain, paket, override):
+    """Keluaran scripts/velocity-child-theme sebagai dict."""
+    run = subprocess.run([sys.executable, str(CHILD_THEME), domain,
+                          '--paket', paket, '--override', override],
+                         capture_output=True, text=True, timeout=300)
+    out = {}
+    for line in run.stdout.splitlines():
+        key, sep, value = line.partition('=')
+        if sep:
+            out[key.strip()] = value.strip()
+    return out
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('-')]
+    if len(args) != 1:
+        print('usage: child-theme-apply <manifest>', file=sys.stderr)
+        return 2
+    cfg = read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    da_user = cfg.get('da_user', '')
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain) or not re.match(r'^[a-z][a-z0-9]*$', da_user):
+        print('child_theme: manifest tidak valid')
+        return 2
+    if not key or not Path(key).is_file():
+        print('child_theme: kunci SSH tidak ada')
+        return 2
+
+    info = resolve(domain, cfg.get('paket', ''), cfg.get('velocity_child_theme', ''))
+    status, slug = info.get('status', 'error'), info.get('slug', '')
+    print(f'child_theme:{status}:{info.get("ref", "")}:{slug}')
+    if status not in ('matched', 'generated'):
+        # Tidak ada child theme untuk situs ini: tema induk tetap dipakai.
+        print(f'child_theme: dilewati ({status}{":" + info["error"] if info.get("error") else ""})')
+        return 0
+    zip_path = Path(info.get('zip', ''))
+    if not re.match(r'^[a-z0-9-]+$', slug) or not zip_path.is_file():
+        print(f'child_theme: zip tidak tersedia untuk {slug}')
+        return 1
+
+    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    up = subprocess.run(['scp', '-i', key, '-o', 'BatchMode=yes',
+                         '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',
+                         '-P', str(cfg.get('ssh_port') or 22), str(zip_path),
+                         f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}:/tmp/pkg-{slug}.zip"],
+                        capture_output=True, text=True, timeout=300)
+    if up.returncode != 0:
+        print(f'child_theme: gagal kirim zip ({up.stderr.strip()[:200]})')
+        return 1
+    header = '\n'.join([
+        f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+        f'DA_USER={shlex.quote(da_user)}',
+        f'SLUG={shlex.quote(slug)}',
+        f'GENERATED={1 if status == "generated" else 0}',
+    ])
+    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE,
+                         capture_output=True, text=True, timeout=300)
+    # Baris remote dicetak apa adanya: notify-telegram & site-qa membaca
+    # `active_theme:` / `child_theme_*` dari log seperti pada mode apply.
+    for line in (run.stdout + '\n' + run.stderr).splitlines():
+        if line.strip() and not line.startswith('Warning:'):
+            print(line.strip()[:200])
+    return 0 if run.returncode == 0 else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -3,7 +3,8 @@ set -Eeuo pipefail
 DOMAIN=${1:?domain_required}
 # dry-run | apply | finish (rapikan ulang situs terpasang: konten, aset klien,
 # pemeriksaan — tanpa memasang ulang WordPress dan tanpa notifikasi) |
-# maintenance (hanya nyalakan maintenance mode untuk situs terpasang)
+# maintenance (hanya nyalakan maintenance mode untuk situs terpasang) |
+# child-theme (hanya pasang/aktifkan child theme di situs terpasang)
 MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
 SCRIPTS=/opt/velocity-wp-install-automation/scripts
@@ -30,6 +31,15 @@ notify() {
   [[ "$MODE" == "apply" ]] || return 0
   /usr/bin/python3 "$SCRIPTS/notify-telegram.py" "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
 }
+# Mode child-theme hanya menambah child theme ke situs yang sudah jadi: status
+# instalasi (COMPLETE) tidak boleh ikut berubah karenanya.
+if [[ "$MODE" == "child-theme" ]]; then
+  [[ -f "$MANIFEST" ]] || { printf '[%s] child_theme: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
+  printf '[%s] Child theme\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
+  exit $?
+fi
+
 trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }

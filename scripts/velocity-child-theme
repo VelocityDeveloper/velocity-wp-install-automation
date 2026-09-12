@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tentukan child theme Velocity dari referensi desain di FORM ISIAN klien.
 
-Pemakaian: velocity-child-theme <domain> [--override SLUG] [--no-download]
+Pemakaian: velocity-child-theme <domain> [--paket NAMA] [--override SLUG] [--no-download]
 
 Klien menulis pilihannya di form, mis. "Template yang dipilih:
 https://beritab2.velocitydeveloper.com/" atau "DESIGN YANG DIPILIH: ...".
@@ -9,8 +9,13 @@ Referensi itu dicocokkan dengan daftar tema di api.velocitydeveloper.co; kalau
 ada, zip-nya diunduh (disimpan per slug + versi) untuk dipasang installer.
 `--override` (dari manifest `velocity_child_theme=`) memilih slug secara langsung.
 
-Keluaran baris key=value: status (matched | not_found | no_ref | api_error |
-download_failed), ref, slug, version, zip, error.
+Paket G tidak memilih template: desainnya dibuat khusus per project, jadi
+form-nya tidak pernah memuat referensi. Untuk paket itu child theme kosong
+bernama project dibuat di sini (`velocity-<label domain>`) supaya desainer
+langsung punya tempat kerja dan situs tidak berhenti di tema induk.
+
+Keluaran baris key=value: status (matched | generated | not_found | no_ref |
+api_error | download_failed), ref, slug, version, zip, error.
 """
 import argparse
 import datetime
@@ -18,9 +23,11 @@ import hashlib
 import json
 import re
 import shutil
+import struct
 import sys
 import urllib.request
 import zipfile
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -37,6 +44,10 @@ SLUG_RE = re.compile(r'^[a-z0-9-]+$')
 SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
 LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
+# Paket yang desainnya custom per project: child theme-nya digenerate, bukan
+# dicocokkan ke API. norm() dipakai supaya "Paket G" / "paket g" sama saja.
+SCAFFOLD_PAKET = {'paketg'}
+SCAFFOLD_VERSION = '1.0.0'
 
 
 def norm(value):
@@ -121,9 +132,132 @@ def download(theme):
     return dest
 
 
+def paket_from_folder(domain):
+    """Paket dari nama file form di folder klien, mis. "FORM ISIAN WEBSITE - paket g.doc".
+
+    Penopang kalau manifest tidak punya `paket=` (CRM tak terbaca saat manifest
+    dibuat). Diperiksa 2026-09-12 atas 22 folder antrean: 5 file bernama "paket g",
+    4 di antaranya memang Paket G di CRM dan sisanya paketnya kosong — tidak ada
+    paket lain (E/F/Portal/Toko) yang filenya bernama begitu."""
+    folder = ON_PROGRESS / domain
+    if not folder.is_dir():
+        return ''
+    for item in folder.iterdir():
+        m = item.is_file() and re.search(r'paket[ _-]*([a-z])\b', item.name, re.I)
+        if m:
+            return f'paket {m.group(1).lower()}'
+    return ''
+
+
+def scaffold_slug(domain):
+    """`velocity-<label domain>`: nama folder child theme sesuai nama project."""
+    label = re.sub(r'-{2,}', '-', re.sub(r'[^a-z0-9-]+', '-', domain.split('.')[0])).strip('-')
+    return f'velocity-{label}'[:62].rstrip('-')
+
+
+def scaffold_png(width=1200, height=900, rgb=(31, 42, 68)):
+    """Screenshot polos supaya child theme tidak tampil tanpa gambar di
+    Appearance > Themes. PIL tidak ada di server ini, jadi PNG-nya ditulis langsung."""
+    raw = b''.join(b'\x00' + bytes(rgb) * width for _ in range(height))
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack('>I', len(data)) + body + struct.pack('>I', zlib.crc32(body) & 0xffffffff)
+
+    return (b'\x89PNG\r\n\x1a\n'
+            + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw, 9))
+            + chunk(b'IEND', b''))
+
+
+def scaffold_files(slug, domain):
+    """Child theme kosong: header tema, enqueue style induk, css/custom.css.
+
+    Mengikuti pola child theme Velocity yang sudah ada (handle `parent-style` dari
+    tema induk + `css/custom.css` milik child) supaya desainer menemukan struktur
+    yang sama seperti di child theme berita/sekolah."""
+    name = ' '.join(w.capitalize() for w in slug.split('-'))
+    prefix = slug.replace('-', '_')
+    style = (
+        '/*\n'
+        f'Theme Name: {name}\n'
+        'Theme URI: https://velocitydeveloper.com\n'
+        f'Description: Child theme desain custom untuk {domain} (Paket G). Dibuat '
+        'otomatis oleh installer; isi desainnya dikerjakan manual.\n'
+        'Author: Velocity Developer\n'
+        'Author URI: https://velocitydeveloper.com/kontak-kami/\n'
+        'Template: velocity\n'
+        f'Version: {SCAFFOLD_VERSION}\n'
+        f'Text Domain: {slug}\n'
+        '*/\n\n'
+        '/* Style induk dimuat dari functions.php, bukan @import.\n'
+        '   Tulis CSS desain di css/custom.css. */\n'
+    )
+    functions = (
+        '<?php\n\n'
+        '/**\n'
+        f' * {name} — child theme desain custom.\n'
+        ' *\n'
+        f' * Dibuat otomatis oleh installer Velocity untuk {domain}. Aman diisi/diubah:\n'
+        ' * installer tidak menimpa folder ini lagi setelah terpasang.\n'
+        ' */\n'
+        "if (!defined('ABSPATH')) {\n"
+        '    exit;\n'
+        '}\n\n'
+        f"if (!function_exists('{prefix}_enqueue')) {{\n"
+        f'    function {prefix}_enqueue()\n'
+        '    {\n'
+        '        $theme = wp_get_theme();\n'
+        '        wp_enqueue_style(\n'
+        "            'parent-style',\n"
+        "            get_template_directory_uri() . '/style.css',\n"
+        '            array(),\n'
+        "            $theme->parent() ? $theme->parent()->get('Version') : null\n"
+        '        );\n'
+        "        $custom = get_stylesheet_directory() . '/css/custom.css';\n"
+        '        wp_enqueue_style(\n'
+        "            'custom-style',\n"
+        "            get_stylesheet_directory_uri() . '/css/custom.css',\n"
+        "            array('parent-style'),\n"
+        "            file_exists($custom) ? filemtime($custom) : $theme->get('Version')\n"
+        '        );\n'
+        '    }\n'
+        f"    add_action('wp_enqueue_scripts', '{prefix}_enqueue');\n"
+        '}\n'
+    )
+    custom_css = (
+        f'/* CSS desain {domain} — tulis di sini.\n'
+        '   Template PHP yang perlu diubah cukup disalin dari tema induk\n'
+        '   (wp-content/themes/velocity/) ke folder ini. */\n'
+    )
+    return {'style.css': style, 'functions.php': functions, 'css/custom.css': custom_css,
+            'screenshot.png': scaffold_png()}
+
+
+def scaffold(domain):
+    """Bikin (atau pakai ulang) zip child theme kosong bernama project."""
+    slug = scaffold_slug(domain)
+    if not SLUG_RE.match(slug):
+        raise ValueError(f'slug tidak valid: {slug}')
+    CACHE.mkdir(parents=True, exist_ok=True)
+    dest = CACHE / f'{slug}-{SCAFFOLD_VERSION}.zip'
+    if dest.is_file():
+        return slug, dest
+    tmp = dest.with_suffix('.tmp')
+    with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
+        for name, data in scaffold_files(slug, domain).items():
+            # Tanggal dipatok supaya zip yang digenerate ulang isinya identik.
+            info = zipfile.ZipInfo(f'{slug}/{name}', date_time=(2026, 1, 1, 0, 0, 0))
+            info.external_attr = 0o644 << 16
+            z.writestr(info, data)
+    tmp.replace(dest)
+    return slug, dest
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('domain')
+    ap.add_argument('--paket', default='')
     ap.add_argument('--override', default='')
     ap.add_argument('--no-download', action='store_true')
     args = ap.parse_args()
@@ -138,14 +272,39 @@ def main():
     if not DOMAIN_RE.match(domain) or (override and not SLUG_RE.match(override)):
         out.update(status='no_ref', error='argumen_tidak_valid')
         return emit()
+
+    def generate():
+        """Jalan keluar Paket G: child theme sendiri, tidak lewat API tema."""
+        try:
+            if args.no_download:
+                # Hanya menjawab "slug-nya apa": jangan tulis zip apa pun ke disk.
+                slug = scaffold_slug(domain)
+                if not SLUG_RE.match(slug):
+                    raise ValueError(f'slug tidak valid: {slug}')
+                out.update(status='generated', slug=slug, version=SCAFFOLD_VERSION)
+            else:
+                out['slug'], zip_path = scaffold(domain)
+                out.update(status='generated', version=SCAFFOLD_VERSION, zip=str(zip_path))
+        except Exception as e:
+            out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
+        return emit()
+
+    # Override manual selalu menang: kalau PM menyebut slug, itu yang dipakai.
+    paket = args.paket.strip() or paket_from_folder(domain)
+    custom_paket = norm(paket) in SCAFFOLD_PAKET and not override
     if not override:
         out['ref'] = design_ref(read_client_form(ON_PROGRESS / domain)['text'])
         if not out['ref']:
+            # Paket G memang tidak pernah memuat referensi — bukan kegagalan.
+            if custom_paket:
+                return generate()
             out['status'] = 'no_ref'
             return emit()
     try:
         themes = fetch_themes()
     except Exception as e:  # API mati tidak boleh menggagalkan instalasi
+        if custom_paket:
+            return generate()
         out.update(status='api_error', error=type(e).__name__)
         return emit()
     children = [t for t in themes if t.get('type') == 'wp_theme_child'
@@ -155,6 +314,10 @@ def main():
     else:
         match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
     if not match:
+        # Referensi ada tapi belum ada di API: Paket G tetap dapat child theme
+        # sendiri, paket lain jatuh ke tema induk seperti sebelumnya.
+        if custom_paket:
+            return generate()
         out['status'] = 'not_found'
         return emit()
     out.update(slug=match['slug'], version=str(match.get('version') or ''))
