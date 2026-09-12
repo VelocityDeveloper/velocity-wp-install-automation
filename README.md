@@ -266,7 +266,7 @@ scripts/site-audit <domain|manifest> [--json]        # butuh WP_INSTALL_SSH_KEY_
 curl -X POST http://127.0.0.1:9121/api/installer/run -d '{"domain":"contoh.com","mode":"audit"}'
 ```
 
-Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang, logo & favicon (termasuk **apakah masih logo contoh**), tombol WhatsApp velocity-addons (aktif & nomornya terisi, sekaligus menandai kalau tema membuat tombol tandingan), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
+Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang, **shortcode yang dipakai halaman tapi tidak ada fungsinya** (tercetak apa adanya ke pengunjung), logo & favicon (termasuk **apakah masih logo contoh**), tombol WhatsApp velocity-addons (aktif & nomornya terisi, sekaligus menandai kalau tema membuat tombol tandingan), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
 
 Audit tidak mengubah apa pun — status instalasi di `<domain>.json` dan notifikasi Telegram tidak disentuh.
 
@@ -280,6 +280,7 @@ Child theme Paket G membawa blok desain berupa shortcode; halaman pemakainya dib
 
 - **Layanan, Produk, Pemesanan** → halaman baru berisi teks pembuka + shortcode. Halaman yang sudah disunting orang tidak ditimpa.
 - **Galeri, Hubungi Kami** → blok desain ditambahkan di bawah teks yang sudah ada.
+- **Shortcode berawalan salah dibuang** lebih dulu. Awalan tema (`jki_`, `jasa_`, …) dibaca dari situs — shortcode `*_pemesanan` yang benar-benar terdaftar — bukan ditebak ulang dari nama domain, karena tebakan yang berbeda pernah mengisi halaman dengan `[jasa_kontak]` yang tidak ada fungsinya.
 - **Menu utama** disusun sekali (penanda `velocity_paket_g_menu`), mengikuti susunan yang ditulis klien di FORM ISIAN: Beranda · Profil · Layanan · Produk · Pemesanan · Galeri Foto · Berita · Kontak Kami.
 
 ## Ambil alih (klaim)

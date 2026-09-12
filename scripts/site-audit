@@ -56,11 +56,37 @@ foreach (get_nav_menu_locations() as $lokasi => $term_id) {
     }
 }
 $teks = '';
-foreach (get_pages(array('post_status' => 'publish')) as $p) { $teks .= $p->post_content; }
+// Shortcode yang dipakai halaman tapi tidak ada fungsinya akan tercetak apa
+// adanya ke pengunjung, mis. "[jasa_kontak]". Penyebab tersering: awalan tema
+// berubah, atau blok desain disalin dari situs lain.
+global $shortcode_tags;
+$sc_hilang = array();
+foreach (get_pages(array('post_status' => 'publish')) as $p) {
+    $teks .= $p->post_content;
+    if (preg_match_all('/\[([a-zA-Z0-9_-]+)[^\]]*\]/', (string) $p->post_content, $m)) {
+        foreach (array_unique($m[1]) as $tag) {
+            if (!isset($shortcode_tags[$tag]) && !in_array($tag, array('caption', 'embed'), true)) {
+                $sc_hilang[] = $tag . '@' . $p->post_name;
+            }
+        }
+    }
+}
 $tema_dir = get_stylesheet_directory();
 foreach (array('theme-data.php') as $f) {
     if (is_readable($tema_dir . '/inc/' . $f)) { $teks .= file_get_contents($tema_dir . '/inc/' . $f); }
 }
+function velocity_audit_pemesanan()
+{
+    // Tipe post arsip pemesanan ikut awalan tema, jadi dicari di situs — bukan
+    // ditebak dari nama domain seperti yang dulu bikin shortcode nyasar.
+    foreach (get_post_types() as $tipe) {
+        if (substr($tipe, -10) === '_pemesanan') {
+            return array_sum((array) get_object_vars(wp_count_posts($tipe)));
+        }
+    }
+    return 0;
+}
+
 function velocity_audit_wa_tema($dir)
 {
     $berkas = array_merge(array($dir . '/functions.php'), (array) glob($dir . '/inc/*.php'));
@@ -107,11 +133,12 @@ echo wp_json_encode(array(
     // Komentar dibuang dulu (php_strip_whitespace) — kalau tidak, penjelasan
     // "plugin yang menyediakannya" ikut terbaca sebagai kode.
     'wa_tema'         => (int) velocity_audit_wa_tema($tema_dir),
+    'shortcode_hilang' => array_values(array_unique($sc_hilang)),
     'widget_nyasar'   => $widget_nyasar,
     'widget_bersih'   => (string) get_option('velocity_widget_bersih'),
     'sidebar_aktif'   => count((array) $wp_registered_sidebars),
     'artikel'         => (int) wp_count_posts('post')->publish,
-    'pemesanan_masuk' => array_sum((array) get_object_vars(wp_count_posts('{{CPT}}'))),
+    'pemesanan_masuk' => velocity_audit_pemesanan(),
     'media'           => (int) wp_count_posts('attachment')->inherit,
     'teks'            => $teks,
 ));
@@ -197,14 +224,12 @@ def main():
     harapan = info_tema(domain, cfg)
     paket = cfg.get('paket', '')
     paket_custom = re.sub(r'[^a-z]', '', paket.lower()) == 'paketg'
-    prefix = harapan.get('prefix', '') or 'velocity'
 
     ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
     header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
-    skrip = REMOTE.replace('{{CPT}}', f'{prefix}_pemesanan')
-    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + skrip,
+    run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE,
                          capture_output=True, text=True, timeout=300)
     baris = [l for l in run.stdout.splitlines() if l.strip().startswith('{')]
     if not baris:
@@ -258,6 +283,13 @@ def main():
         temuan.append('favicon_belum_terpasang')
     if not situs['tagline']:
         temuan.append('tagline_kosong')
+
+    # --- shortcode tanpa fungsi ---
+    hilang = situs.get('shortcode_hilang') or []
+    info['shortcode_hilang'] = len(hilang)
+    if hilang:
+        # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
+        temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
 
     # --- tombol WhatsApp (milik velocity-addons, bukan tema) ---
     info['wa'] = (('aktif:' + situs['wa_nomor']) if situs['wa_float'] == '1' and situs['wa_nomor']

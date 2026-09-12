@@ -80,6 +80,31 @@ for baris in "${HALAMAN[@]}"; do
   fi
 done
 
+# --- buang blok desain berawalan salah ---
+# Pernah terjadi: awalan ditebak dari nama domain (jasa_) padahal tema memakai
+# awalan lain (jki_), sehingga halaman berisi shortcode tanpa fungsi yang
+# tercetak apa adanya ke pengunjung.
+cat > /tmp/velocity-sc.php <<'PHP'
+<?php
+global $shortcode_tags;
+$blok = 'layanan|produk|galeri|alur|pemesanan|kontak';
+$bersih = 0;
+foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
+    $isi = (string) $p->post_content;
+    $baru = preg_replace_callback('/\[([a-z0-9]+)_(' . $blok . ')\]/', function ($m) use ($shortcode_tags) {
+        return isset($shortcode_tags[$m[0 + 1] . '_' . $m[2]]) ? $m[0] : '';
+    }, $isi);
+    if ($baru !== $isi) {
+        wp_update_post(array('ID' => $p->ID, 'post_content' => $baru));
+        echo 'shortcode_nyasar_dibuang:' . $p->post_name . PHP_EOL;
+        $bersih++;
+    }
+}
+if (!$bersih) { echo 'shortcode_nyasar:tidak ada' . PHP_EOL; }
+PHP
+wp eval-file /tmp/velocity-sc.php
+rm -f /tmp/velocity-sc.php
+
 # --- blok desain di halaman yang sudah ada ---
 for baris in "${TAMBAHAN[@]}"; do
   slug=${baris%%|*}; blok=${baris#*|}
@@ -141,7 +166,7 @@ def read_manifest(path):
 
 
 def prefix_tema(domain, cfg):
-    """Awalan shortcode child theme, ditanyakan langsung ke generatornya."""
+    """Awalan shortcode menurut generator — cadangan kalau situs belum menjawab."""
     run = subprocess.run([sys.executable, str(CHILD_THEME), domain, '--no-download',
                           '--paket', cfg.get('paket', ''),
                           '--prefix', cfg.get('velocity_child_prefix', '')],
@@ -168,7 +193,22 @@ def main():
     if not key or not Path(key).is_file():
         print('paket_g: kunci SSH tidak ada')
         return 2
-    prefix = prefix_tema(domain, cfg)
+    docroot = f'/home/{da_user}/domains/{domain}/public_html'
+    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    # Utamakan awalan milik tema yang terpasang; tebakan generator hanya cadangan.
+    tanya = ("php -d memory_limit=512M /usr/local/bin/wp eval "
+             "'global $shortcode_tags; foreach (array_keys($shortcode_tags) as $t) "
+             "{ if (preg_match(\"/^([a-z0-9]+)_pemesanan$/\", $t, $m)) { echo $m[1]; break; } }' "
+             f"--path={shlex.quote(docroot)} --allow-root 2>/dev/null")
+    jawab = subprocess.run(ssh + [tanya], capture_output=True, text=True, timeout=120)
+    prefix = jawab.stdout.strip()
+    if not re.match(r'^[a-z][a-z0-9]{1,11}$', prefix):
+        prefix = prefix_tema(domain, cfg)
+        print(f'paket_g: awalan dari situs tidak terbaca, memakai tebakan generator: {prefix or "-"}')
+    else:
+        print(f'paket_g: awalan shortcode dari tema terpasang: {prefix}')
     if not prefix:
         print('paket_g: awalan child theme tidak diketahui, langkah dilewati')
         return 0
@@ -177,14 +217,11 @@ def main():
         return '(' + ' '.join(shlex.quote(i) for i in items) + ')'
 
     header = '\n'.join([
-        f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+        f'DOCROOT={shlex.quote(docroot)}',
         'HALAMAN=' + baris([f'{s}|{j}|{isi.format(P=prefix)}' for s, j, _, isi in HALAMAN]),
         'TAMBAHAN=' + baris([f'{s}|{b.format(P=prefix)}' for s, b in TAMBAHAN]),
         'MENU=' + baris([f'{s}|{j}' for s, j in MENU]),
     ])
-    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
-           f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
     run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE,
                          capture_output=True, text=True, timeout=300)
     for line in (run.stdout + '\n' + run.stderr).splitlines():

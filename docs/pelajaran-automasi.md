@@ -35,6 +35,25 @@ tanpa error, tetapi tidak melakukan apa-apa.
 Aturan turunannya: setiap langkah yang mengubah sesuatu harus diikuti pembacaan
 ulang keadaan, dan angkanya dibandingkan dengan yang diharapkan.
 
+## Nilai turunan jangan ditebak dua kali — baca dari sumbernya
+
+Awalan fungsi & kelas child theme (`jki_`, `jasa_`, ...) dihitung generator dari
+nama domain kalau tidak disebut. Tema jasakontraktorindo.com dibuat dengan
+`--prefix jki`, tetapi `paket-g-setup` menghitung ulang sendiri dan mendapat
+`jasa` — sehingga halaman Galeri dan Hubungi Kami terisi `[jasa_kontak]`,
+`[jasa_galeri]`, `[jasa_pemesanan]`: shortcode tanpa fungsi, yang **tercetak apa
+adanya ke pengunjung**.
+
+Pelajarannya: kalau sebuah nilai bisa dihitung di dua tempat, dua tempat itu
+cepat atau lambat akan berbeda. Sekarang `paket-g-setup` dan `site-audit`
+menanyakannya ke situs (shortcode `*_pemesanan` yang benar-benar terdaftar,
+tipe post `*_pemesanan` yang benar-benar ada), dan tebakan generator hanya jadi
+cadangan.
+
+`site-audit` menandai `shortcode_tanpa_fungsi:<tag>@<halaman>`, dan
+`paket-g-setup` membuang blok desain berawalan salah sebelum memasang yang
+benar — jadi menjalankan ulang langkahnya sekaligus memperbaiki kerusakannya.
+
 ## Urutan langkah itu bagian dari kebenaran
 
 - `site-finish` menulis ulang halaman **Galeri** dan **Hubungi Kami** (galeri +

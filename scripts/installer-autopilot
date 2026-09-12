@@ -42,6 +42,11 @@ STUCK_AFTER = datetime.timedelta(hours=2)
 DA_MISSING = ('da_user_home_missing', 'domain_dir_missing')
 WAIT_DA_EVERY = datetime.timedelta(minutes=30)
 WAIT_DA_MAX = datetime.timedelta(days=14)
+# Project biasanya selesai sebelum deadline, jadi deadline yang baru lewat
+# berarti pekerjaan telat -- tetap dikerjakan sampai batas ini. Yang lewat jauh
+# ditinggalkan: statusnya di CRM belum tentu masih berlaku.
+DEADLINE_GRACE = datetime.timedelta(
+    days=int(os.environ.get('AUTOPILOT_DEADLINE_GRACE_DAYS', '10')))
 
 
 def utcnow():
@@ -132,8 +137,13 @@ def skip_reason(row, journal, today):
     jenis = set(row.get('jenis') or [])
     if 'Redesign' in jenis or not jenis & AUTO_JENIS:
         return 'jenis_redesign_atau_lain'
-    if row.get('deadline') and row['deadline'] < today:
-        return 'deadline_terlewat'
+    if row.get('deadline'):
+        try:
+            telat = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(row['deadline'])
+        except ValueError:
+            telat = datetime.timedelta(0)
+        if telat > DEADLINE_GRACE:
+            return 'deadline_terlewat'
     if not read_client_form(ON_PROGRESS / domain)['fields']:
         return 'form_isian_klien_tidak_terbaca'
     return None

@@ -2,7 +2,8 @@
 # Salin folder project dari Google Drive "On Progress" ke /home/On Progress.
 #
 # Hanya domain yang benar-benar menunggu installer: status "belum diambil" di
-# antrean dan deadline belum terlewat. Drive berisi ±10 ribu folder (puluhan
+# antrean dan deadline belum lewat jauh (toleransi sama dengan autopilot, lihat
+# DEADLINE_GRACE di installer-autopilot). Drive berisi ±10 ribu folder (puluhan
 # GiB) yang tidak dibutuhkan installer, jadi tidak ada sync penuh.
 #
 # Selalu `rclone copy`, bukan `sync`: file lokal tidak pernah dihapus, dan remote
@@ -14,15 +15,21 @@ DEST='/home/On Progress'
 API=${INSTALLER_API:-http://127.0.0.1:9121}/api/installer
 
 list=$(curl -fsS -m 180 "$API" | python3 -c '
-import datetime, json, re, sys
+import datetime, json, os, re, sys
 ok = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
-today = datetime.date.today().isoformat()
+today = datetime.date.today()
+grace = datetime.timedelta(days=int(os.environ.get("AUTOPILOT_DEADLINE_GRACE_DAYS", "10")))
 for r in json.load(sys.stdin).get("domains", []):
     if r.get("status") != "belum diambil":
         continue
     # Tanpa deadline tidak dianggap terlewat, sama seperti halaman installer.
-    if r.get("deadline") and r["deadline"] < today:
-        continue
+    if r.get("deadline"):
+        try:
+            telat = today - datetime.date.fromisoformat(r["deadline"])
+        except ValueError:
+            telat = datetime.timedelta(0)
+        if telat > grace:
+            continue
     d = str(r.get("domain") or "").lower()
     if ok.match(d) and ".." not in d:
         print(d)') || { echo "onprogress-sync: API installer tidak bisa diakses" >&2; exit 1; }
