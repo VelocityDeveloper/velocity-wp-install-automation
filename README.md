@@ -233,6 +233,17 @@ Placeholder yang diisi generator: awalan fungsi & kelas CSS (`--prefix`, bawaann
 
 Menyempurnakan desain untuk semua situs Paket G berikutnya = menyunting `templates/child-theme-paket-g/`, bukan menyalin-nempel per situs.
 
+## Artikel per kategori layanan
+
+Artikel dulu menumpuk di satu kategori (`Blog`), sehingga pengunjung tidak bisa menelusuri tulisan per layanan. Sekarang `ai-content-generator.py` membuat kategori mengikuti **layanan yang benar-benar ada di child theme situs** — judulnya dibaca lewat WP-CLI dari `<prefix>_data('layanan')`, bukan ditebak dari template di installer.
+
+- Jumlah artikel per layanan: `articles_per_category` di manifest (bawaan **2**).
+- Tema tanpa daftar layanan (paket selain G) kembali ke perilaku lama: satu kategori dari `article_category`.
+- Kategori dibuat/dicari per artikel saat publikasi, jadi satu situs bisa punya beberapa kategori sekaligus. Kategori yang gagal dibuat membuat artikelnya dibiarkan tanpa kategori — bukan dimasukkan ke kategori yang salah.
+- Konten tersimpan di `/var/lib/velocity/ai/generated/<domain>-articles.json` tetap dipakai ulang saat apply ulang (tanpa biaya AI lagi); hapus berkas itu kalau ingin membuat ulang.
+
+`site-audit` melaporkan `artikel_per_layanan` (mis. `4/4 layanan punya kategori`) dan menandai `artikel_tanpa_kategori_layanan` atau `kategori_layanan_tanpa_artikel`.
+
 ## Titik peta (`scripts/velocity-map`)
 
 Alamat klien sering tidak dikenali peta (nama gedung, lantai, kode pos), dan iframe `maps?q=<alamat>` yang tidak ketemu tampil sebagai peta kosong. Titiknya karena itu dicari bertahap dan **selalu berakhir sebagai koordinat**:
@@ -280,7 +291,7 @@ scripts/site-audit <domain|manifest> [--json]        # butuh WP_INSTALL_SSH_KEY_
 curl -X POST http://127.0.0.1:9121/api/installer/run -d '{"domain":"contoh.com","mode":"audit"}'
 ```
 
-Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang beserta captcha velocity-addons-nya (aktif, penyedianya, dan kunci Google kalau dipakai), **shortcode yang dipakai halaman tapi tidak ada fungsinya** (tercetak apa adanya ke pengunjung), logo & favicon (termasuk **apakah masih logo contoh**), titik peta (alamat / kota / provinsi / Indonesia), tombol WhatsApp velocity-addons (aktif, nomornya terisi, tulisannya berupa ajakan dan bukan nama situs, sekaligus menandai kalau tema membuat tombol tandingan), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
+Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Paket G ikut Layanan/Produk/Pemesanan), jumlah item menu, form pemesanan benar-benar terpasang beserta captcha velocity-addons-nya (aktif, penyedianya, dan kunci Google kalau dipakai), **shortcode yang dipakai halaman tapi tidak ada fungsinya** (tercetak apa adanya ke pengunjung), logo & favicon (termasuk **apakah masih logo contoh**), artikel per kategori layanan, titik peta (alamat / kota / provinsi / Indonesia), tombol WhatsApp velocity-addons (aktif, nomornya terisi, tulisannya berupa ajakan dan bukan nama situs, sekaligus menandai kalau tema membuat tombol tandingan), widget nyasar, jumlah foto, sisa teks contoh template, maintenance mode, SSL, dan HTTP aset inti. Keluarannya ringkasan untuk dibaca manusia + satu baris JSON `{"audit": "ok"|"temuan", ...}`.
 
 Audit tidak mengubah apa pun — status instalasi di `<domain>.json` dan notifikasi Telegram tidak disentuh.
 

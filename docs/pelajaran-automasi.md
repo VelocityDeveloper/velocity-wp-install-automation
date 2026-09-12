@@ -54,6 +54,22 @@ cadangan.
 `paket-g-setup` membuang blok desain berawalan salah sebelum memasang yang
 benar — jadi menjalankan ulang langkahnya sekaligus memperbaiki kerusakannya.
 
+## Isi situs mengikuti layanan klien, bukan daftar bawaan
+
+Artikel AI dulu semuanya masuk satu kategori `Blog`. Isinya tidak salah, tapi
+situsnya jadi tidak punya struktur: pengunjung yang mencari "renovasi" tidak
+bisa menelusuri tulisan tentang renovasi saja.
+
+Kategori kini diambil dari layanan yang benar-benar terpasang di child theme
+situs (`<prefix>_data('layanan')` dibaca lewat WP-CLI), dan artikel dibuat per
+kategori — bawaannya 2 artikel per layanan, diatur lewat `articles_per_category`
+di manifest. Sama seperti pelajaran sebelumnya: sumber kebenarannya situs, bukan
+tebakan dari sisi installer.
+
+`site-audit` menandai `artikel_tanpa_kategori_layanan` kalau artikel kembali
+menumpuk di satu kategori umum, dan `kategori_layanan_tanpa_artikel` kalau ada
+layanan yang kategorinya kosong.
+
 ## Peta: alamat klien sering tidak dikenali
 
 Iframe `google.com/maps?q=<alamat>` hanya berguna kalau alamatnya dikenali peta.

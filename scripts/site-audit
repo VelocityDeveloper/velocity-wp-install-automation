@@ -91,6 +91,34 @@ function velocity_audit_captcha_form($dir)
     return 1; // tidak ada form di tema: tidak ada yang perlu dilindungi
 }
 
+function velocity_audit_kategori()
+{
+    $hasil = array();
+    foreach ((array) get_categories(array('hide_empty' => false)) as $k) {
+        $hasil[$k->name] = (int) $k->count;
+    }
+    return $hasil;
+}
+
+function velocity_audit_layanan()
+{
+    // Judul layanan dari child theme yang terpasang — sumber kebenaran untuk
+    // kategori artikel. Awalannya dicari lewat shortcode yang terdaftar.
+    global $shortcode_tags;
+    foreach (array_keys($shortcode_tags) as $t) {
+        if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {
+            $judul = array();
+            foreach ((array) call_user_func($m[1] . '_data', 'layanan') as $l) {
+                if (!empty($l['judul'])) {
+                    $judul[] = (string) $l['judul'];
+                }
+            }
+            return $judul;
+        }
+    }
+    return array();
+}
+
 function velocity_audit_wa_label()
 {
     $kontak = (array) get_option('nomor_whatsapp_contacts', array());
@@ -161,6 +189,8 @@ echo wp_json_encode(array(
     'shortcode_hilang' => array_values(array_unique($sc_hilang)),
     'captcha'         => (array) get_option('captcha_velocity', array()),
     'peta'            => (array) get_option('velocity_map', array()),
+    'kategori'        => velocity_audit_kategori(),
+    'layanan'         => velocity_audit_layanan(),
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
     'widget_nyasar'   => $widget_nyasar,
@@ -319,6 +349,29 @@ def main():
     if hilang:
         # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
         temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
+
+    # --- artikel & kategori layanan ---
+    kategori = situs.get('kategori') or {}
+    layanan = situs.get('layanan') or []
+    def ringkas(teks):
+        return re.sub(r'[^a-z0-9]', '', html.unescape(str(teks or '')).lower())
+
+    # WordPress menyimpan nama kategori dengan entitas ("Renovasi &amp; Kantor"),
+    # jadi pencocokan dengan judul layanan harus lewat bentuk yang sudah didecode.
+    jumlah = {ringkas(k): v for k, v in kategori.items()}
+    cocok = [l for l in layanan if ringkas(l) in jumlah]
+    info['kategori'] = ', '.join(f'{html.unescape(k)} ({v})' for k, v in sorted(kategori.items())
+                                 if v or ringkas(k) in {ringkas(l) for l in layanan})[:110] or '-'
+    if layanan:
+        info['artikel_per_layanan'] = f'{len(cocok)}/{len(layanan)} layanan punya kategori'
+        if not cocok:
+            # Artikel semua menumpuk di satu kategori umum: pengunjung tidak
+            # bisa menelusuri tulisan per layanan.
+            temuan.append('artikel_tanpa_kategori_layanan')
+        else:
+            kosong = [l for l in cocok if not jumlah.get(ringkas(l))]
+            if kosong:
+                temuan.append('kategori_layanan_tanpa_artikel:' + ','.join(kosong[:3]))
 
     # --- peta lokasi ---
     peta = situs.get('peta') or {}

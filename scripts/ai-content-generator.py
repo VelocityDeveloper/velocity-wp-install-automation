@@ -7,6 +7,7 @@ generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -223,6 +224,39 @@ Use Indonesian language. Topics must come from the client's actual products, ser
         log(f'Response: {response[:500]}')
         return None
 
+def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
+    """Judul layanan dari child theme yang terpasang, untuk dipakai jadi kategori.
+
+    Dibaca dari situs, bukan dari berkas template di installer: awalan fungsi
+    tema berbeda per situs, dan menebaknya pernah membuat isi tidak cocok.
+    """
+    ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not ssh_key or not Path(ssh_key).is_file():
+        return []
+    skrip = (
+        "global $shortcode_tags;"
+        "foreach (array_keys($shortcode_tags) as $t) {"
+        "  if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {"
+        "    foreach ((array) call_user_func($m[1] . '_data', 'layanan') as $l) {"
+        "      if (!empty($l['judul'])) { echo $l['judul'] . \"\\n\"; }"
+        "    } break;"
+        "  }"
+        "}"
+    )
+    perintah = (f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(skrip)} '
+                f'--path=/home/{da_user}/domains/{domain}/public_html --allow-root 2>/dev/null')
+    try:
+        hasil = subprocess.run(
+            ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}', perintah],
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    judul = [b.strip() for b in hasil.stdout.splitlines() if b.strip()]
+    # Judul kategori dipakai apa adanya; batasi panjang & jumlah agar wajar.
+    return [j[:60] for j in judul][:6]
+
+
 def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles):
     """Publish generated content to WordPress via SSH + WP-CLI"""
     ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
@@ -308,25 +342,29 @@ done'''
             pages_done += 1
         log(f'Halaman {slug}: {" ".join(output.split()) or "tanpa_output"}')
     
-    # Create category
-    category_name = articles[0].get('category', 'Blog') if articles else 'Blog'
-    cat_escaped = category_name.replace("'", "'\\''")
-    # Dulu keluaran `term list` (bertab) dibaca sebagai CSV, jadi kategori tidak
-    # pernah ketemu, ID-nya kosong, dan semua artikel masuk Uncategorized.
-    cat_cmd = f'''cat_id=$($WP_BIN term list category --name='{cat_escaped}' --field=term_id --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+    # Kategori disiapkan per artikel: artikel dikelompokkan mengikuti layanan
+    # klien, jadi satu situs bisa punya beberapa kategori sekaligus.
+    def id_kategori(nama):
+        aman = nama.replace("'", "'\\''")
+        keluaran, _ = wp_remote(f'''cat_id=$($WP_BIN term list category --name='{aman}' --field=term_id --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
 if [[ -z "$cat_id" ]]; then
-  cat_id=$($WP_BIN term create category '{cat_escaped}' --porcelain --path="$DOCROOT" --allow-root 2>/dev/null || true)
-  echo "category_created:{category_name}:$cat_id"
+  cat_id=$($WP_BIN term create category '{aman}' --porcelain --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  echo "category_created:$cat_id"
 else
-  echo "category_exists:{category_name}:$cat_id"
-fi'''
-    cat_output, _ = wp_remote(cat_cmd)
-    
-    cat_id = ''
-    if 'category_created' in cat_output or 'category_exists' in cat_output:
-        match = re.search(r':(\d+)$', cat_output.strip())
-        if match:
-            cat_id = match.group(1)
+  echo "category_exists:$cat_id"
+fi''')
+        cocok = re.search(r'category_(?:created|exists):(\d+)', keluaran)
+        if cocok:
+            log(f'Kategori {nama}: {cocok.group(1)}')
+            return cocok.group(1)
+        log(f'Kategori {nama}: gagal dibuat')
+        return ''
+
+    peta_kategori = {}
+    for art in articles:
+        nama = str(art.get('category') or 'Blog')[:60]
+        if nama not in peta_kategori:
+            peta_kategori[nama] = id_kategori(nama)
     
     # Create articles
     articles_done = 0
@@ -335,6 +373,9 @@ fi'''
         slug = art.get('slug', '')
         content = clean_html(art.get('content', ''))
         excerpt = art.get('excerpt', '')
+        # Kategori artikel ini; kosong berarti pembuatannya gagal dan artikel
+        # dibiarkan tanpa kategori daripada masuk ke kategori yang salah.
+        cat_id = peta_kategori.get(str(art.get('category') or 'Blog')[:60], '')
         
         if not slug or not title:
             continue
@@ -403,6 +444,9 @@ def main():
     target_host = cfg.get('target_host', '')
     num_articles = int(cfg.get('num_articles', '5'))
     article_category = cfg.get('article_category', 'Blog')
+    # Artikel dikelompokkan mengikuti layanan klien; berapa artikel per layanan
+    # bisa diatur lewat manifest.
+    per_kategori = max(1, int(cfg.get('articles_per_category', '2')))
     
     # Data klien (form isian, catatan, foto) ada di folder sync Google Drive.
     # Folder manifest hanya berisi <domain>.txt hasil generate, jadi kalau cuma
@@ -458,8 +502,25 @@ def main():
     if articles:
         log('Pakai konten artikel tersimpan')
     else:
-        log('Generating articles...')
-        articles = generate_articles(site_title, domain, client_info, model, num_articles, article_category)
+        # Kategori mengikuti layanan yang benar-benar ada di child theme situs.
+        # Kalau temanya tidak punya daftar layanan (paket lain), kembali ke
+        # satu kategori seperti sebelumnya.
+        kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
+        if kategori:
+            log(f'Kategori dari layanan situs: {", ".join(kategori)}')
+            articles = []
+            for nama in kategori:
+                log(f'Generating {per_kategori} artikel untuk kategori "{nama}"...')
+                bagian = generate_articles(site_title, domain, client_info, model,
+                                           per_kategori, nama) or []
+                for art in bagian:
+                    # Kategori dari AI kadang meleset; yang dipakai yang diminta.
+                    art['category'] = nama
+                articles.extend(bagian)
+        else:
+            log('Tema tanpa daftar layanan, memakai satu kategori')
+            articles = generate_articles(site_title, domain, client_info, model,
+                                         num_articles, article_category)
     if not articles:
         log('ERROR: Failed to generate articles')
         sys.exit(3)
