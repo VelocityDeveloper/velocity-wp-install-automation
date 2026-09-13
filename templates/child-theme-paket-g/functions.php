@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
 
 define('{{PREFIX_UPPER}}_VERSION', '1.1.0');
 
-foreach (array('theme-data.php', 'images.php', 'order-form.php', 'shortcodes.php') as ${{PREFIX}}_file) {
+foreach (array('theme-data.php', 'images.php', 'order-form.php', 'shortcodes.php', 'compro.php') as ${{PREFIX}}_file) {
     require_once get_stylesheet_directory() . '/inc/' . ${{PREFIX}}_file;
 }
 unset(${{PREFIX}}_file);
@@ -75,6 +75,10 @@ if (!function_exists('{{PREFIX}}_body_class')) {
     function {{PREFIX}}_body_class($classes)
     {
         $classes[] = '{{PREFIX}}';
+        if ({{PREFIX}}_gaya_compro()) {
+            // Tampilan mengikuti company profile klien (lihat inc/compro.php).
+            $classes[] = '{{PREFIX}}--compro';
+        }
         return $classes;
     }
     add_filter('body_class', '{{PREFIX}}_body_class');

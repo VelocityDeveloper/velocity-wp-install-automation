@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Ambil identitas visual dari company profile (compro) PDF kiriman klien.
+"""Ambil identitas visual & susunan dari company profile (compro) PDF kiriman klien.
 
 Pemakaian: compro-klien <domain> [--segar]
 
 Keputusan user 2026-09-13: permintaan "desain disesuaikan dengan compro" berarti
-tampilan situs mengikuti PDF itu — bukan hanya teksnya — dan semua yang dikirim
-klien boleh tampil kecuali ada tulisan untuk tidak ditampilkan.
+tampilan situs mengikuti PDF itu — warna, logo, foto, DAN urutan/tata letak
+bagiannya — dan semua yang dikirim klien boleh tampil kecuali ada tulisan untuk
+tidak ditampilkan.
 
 Hasil di /var/lib/velocity/compro/<domain>/:
-  compro.json   warna (utama, aksen), slogan, logo, daftar foto + judul halamannya
-  logo.png      logo dengan latar transparan, dipotong dari gambar kepala halaman
-  foto-*.jpg|png foto tertanam (≥400x300), tanpa duplikat
+  compro.json    warna (utama, aksen, sorot), warna latar halaman, slogan,
+                 subjudul, alamat, email, prakata, daftar seksi berurutan
+                 (jenis + judul + foto), logo, daftar foto
+  logo.png       logo dengan latar transparan, dipotong dari gambar kepala halaman
+  foto-*.jpg|png foto tertanam (≥300x250), tanpa duplikat & tanpa hiasan; foto
+                 bermask (potongan produk) disimpan PNG transparan
 
 Semua bagian bersifat "sebisanya": PDF tanpa foto/logo tetap menghasilkan JSON
 dengan kolom kosong, dan kegagalan tidak boleh menghentikan instalasi.
@@ -31,6 +35,7 @@ from pathlib import Path
 ON_PROGRESS = Path('/home/On Progress')
 OUT_ROOT = Path('/var/lib/velocity/compro')
 PROFIL_RE = re.compile(r'profil|profile|compro|company', re.I)
+EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
 
 
 # ---------- PNG minimal (tanpa PIL: tidak terpasang di server installer) ----------
@@ -56,20 +61,21 @@ def baca_png(path):
     for y in range(tinggi):
         f = mentah[y * (stride + 1)]
         cur = bytearray(mentah[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
-        for x in range(stride):
-            a = cur[x - kanal] if x >= kanal else 0
-            b = sebelum[x]
-            c = sebelum[x - kanal] if x >= kanal else 0
-            if f == 1:
-                cur[x] = (cur[x] + a) & 255
-            elif f == 2:
-                cur[x] = (cur[x] + b) & 255
-            elif f == 3:
-                cur[x] = (cur[x] + (a + b) // 2) & 255
-            elif f == 4:
-                p = a + b - c
-                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-                cur[x] = (cur[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        if f == 2:
+            cur = bytearray((c + s) & 255 for c, s in zip(cur, sebelum))
+        elif f:
+            for x in range(stride):
+                a = cur[x - kanal] if x >= kanal else 0
+                b = sebelum[x]
+                c = sebelum[x - kanal] if x >= kanal else 0
+                if f == 1:
+                    cur[x] = (cur[x] + a) & 255
+                elif f == 3:
+                    cur[x] = (cur[x] + (a + b) // 2) & 255
+                elif f == 4:
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    cur[x] = (cur[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
         baris.append(bytes(cur))
         sebelum = cur
     return lebar, tinggi, kanal, baris
@@ -83,7 +89,16 @@ def tulis_png_rgba(path, lebar, tinggi, baris_rgba):
                            + potongan(b'IDAT', zlib.compress(mentah, 9)) + potongan(b'IEND', b''))
 
 
-# ---------- bagian-bagian compro ----------
+def heks(rgb):
+    return '#%02x%02x%02x' % tuple(rgb)
+
+
+def hls(nilai):
+    nilai = nilai.lstrip('#')
+    return colorsys.rgb_to_hls(*(int(nilai[i:i + 2], 16) / 255 for i in (0, 2, 4)))
+
+
+# ---------- teks halaman ----------
 
 def jalankan(perintah, **kw):
     return subprocess.run(perintah, capture_output=True, text=True, timeout=kw.pop('timeout', 180), **kw)
@@ -105,36 +120,65 @@ def teks_per_halaman(pdf, jumlah):
     return halaman
 
 
+def rapi(baris):
+    return re.sub(r'\s+', ' ', baris).strip()
+
+
 def baris_berulang(halaman):
     """Baris yang muncul di banyak halaman: kepala/kaki halaman (nama, tagline)."""
     hitung = Counter()
     for t in halaman:
-        hitung.update({re.sub(r'\s+', ' ', b).strip() for b in t.splitlines() if b.strip()})
+        hitung.update({rapi(b) for b in t.splitlines() if b.strip()})
     batas = max(3, len(halaman) * 0.4)
     return {b for b, n in hitung.items() if n >= batas}
 
 
+def segmen(baris):
+    """Potongan teks satu baris layout beserta kolom tengahnya.
+
+    pdftotext -layout menggabungkan kolom yang sejajar dalam satu baris
+    ("PACKAGING JUMBO BAG CUSTOM   JASA LAYANAN   06"); jarak ≥2 spasi = pemisah."""
+    return [(m.group(0).strip(), m.start() + len(m.group(0).strip()) / 2)
+            for m in re.finditer(r'\S+(?: \S+)*', baris)]
+
+
+def bukan_isi(teks, berulang):
+    """Kepala/kaki halaman, nomor halaman, alamat, atau email — bukan isi bagian."""
+    return (teks in berulang or any(len(r) >= 8 and r in teks for r in berulang)
+            or re.fullmatch(r'\d{1,3}', teks) or EMAIL_RE.search(teks))
+
+
 def judul_halaman(teks, berulang):
-    """Judul bagian: baris huruf besar pertama setelah kepala/kaki halaman dan
-    nomor halaman dibuang — tata letak dua kolom menggabungkannya dalam satu baris
-    ("PACKAGING JUMBO BAG CUSTOM JASA LAYANAN 06")."""
-    buang = sorted((r for r in berulang if len(r) >= 4), key=len, reverse=True)
-    for b in teks.splitlines():
-        b = re.sub(r'\s+', ' ', b).strip()
-        for r in buang:
-            b = b.replace(r, ' ')
-        b = re.sub(r'\s+', ' ', re.sub(r'\b\d{1,3}\b', ' ', b)).strip(' :.-')
-        if 4 <= len(b) <= 45 and b.upper() == b and re.search('[A-Z]{3}', b):
-            return b
+    """Judul bagian halaman beserta baris lanjutannya.
+
+    Judul panjang di compro dipatah dua baris rata tengah ("TARGET PENCAPAIAN" /
+    "PERUSAHAAN"); versi pertama hanya mengambil baris pertama sehingga dua
+    halaman "MARKING AREA & FINISH" dan "MARKING AREA AND" tampak beda bagian.
+    Baris berikutnya dianggap lanjutan hanya bila titik tengahnya sejajar (±6
+    kolom; "GOOD" di bawah "MARKING AREA & FINISH" meleset 4,5 kolom) —
+    "JASA LAYANAN" tidak boleh menelan subjudul kolom "KARUNG SAK" di sebelahnya."""
+    baris = teks.splitlines()
+    for i, b in enumerate(baris):
+        for isi, tengah in segmen(b):
+            if bukan_isi(isi, berulang):
+                continue
+            if 4 <= len(isi) <= 45 and isi.upper() == isi and re.search('[A-Z]{3}', isi):
+                judul = isi
+                for lanjut in baris[i + 1:i + 3]:
+                    cocok = [s for s, t in segmen(lanjut) if abs(t - tengah) <= 6 and s.upper() == s
+                             and len(s.split()) <= 3 and re.search('[A-Z]{3}', s) and not bukan_isi(s, berulang)]
+                    if not cocok:
+                        break
+                    judul += ' ' + cocok[0]
+                return judul
+            # Baris isi pertama bukan judul huruf besar: halaman tanpa judul.
+            if len(isi) > 45:
+                return ''
     return ''
 
 
 ALAMAT_RE = re.compile(r'\b(jl|jalan|kabupaten|kab|kecamatan|kec|desa|kelurahan|kota|provinsi|rt|rw|'
                        r'blok|perumahan|komplek|kompleks|kode ?pos|gedung|lantai)\b', re.I)
-
-
-def rapi(baris):
-    return re.sub(r'\s+', ' ', baris).strip()
 
 
 def cari_slogan(halaman, nama):
@@ -156,6 +200,62 @@ def cari_slogan(halaman, nama):
         return calon[0]
     return ''
 
+
+def identitas_kaki(halaman, berulang, nama):
+    """(subjudul, alamat, email) dari kepala & kaki halaman yang berulang.
+
+    Alamat di compro adalah alamat usaha yang memang untuk publik; alamat di
+    biodata FORM ISIAN adalah data administrasi pemilik."""
+    urut = []
+    for t in halaman:
+        for b in t.splitlines():
+            for isi, _ in segmen(b):
+                if isi in berulang and isi not in urut:
+                    urut.append(isi)
+    subjudul = next((b for b in urut if b != nama and b.upper() == b and len(b.split()) >= 2
+                     and not ALAMAT_RE.search(b) and not re.search(r'\d|@', b)), '')
+    alamat = [b for b in urut if ALAMAT_RE.search(b) and not EMAIL_RE.search(b)]
+    email = next((m for b in urut for m in EMAIL_RE.findall(b)), '')
+    if not email:
+        email = next((m for t in halaman for m in EMAIL_RE.findall(t)), '')
+    return subjudul, ', '.join(alamat), email
+
+
+def isi_prakata(teks, berulang, judul, slogan):
+    """Paragraf sambutan + penanda tangan, disalin apa adanya dari halaman prakata."""
+    baris = teks.splitlines()
+    mulai = next((i for i, b in enumerate(baris) if judul.split()[0] in b), -1)
+    akhir = next((i for i, b in enumerate(baris) if re.search(r'hormat kami|salam', b, re.I)), len(baris))
+    if mulai < 0 or akhir <= mulai:
+        return {}
+    buang = lambda s: bukan_isi(s, berulang) or s == slogan or ALAMAT_RE.search(s) and s in berulang
+    isi = [' '.join(s for s, _ in segmen(b) if not buang(s)) for b in baris[mulai + 1:akhir]]
+    isi = [rapi(b) for b in isi if rapi(b)]
+    if not isi:
+        return {}
+    panjang = max(len(b) for b in isi)
+    paragraf, kini = [], []
+    for b in isi:
+        kini.append(b)
+        # Baris yang berakhir titik dan lebih pendek dari lebar kolom = akhir paragraf.
+        if b.endswith('.') and len(b) < panjang * 0.85:
+            paragraf.append(' '.join(kini))
+            kini = []
+    if kini:
+        paragraf.append(' '.join(kini))
+    tanda = []
+    for b in baris[akhir + 1:]:
+        potong = [s for s, _ in segmen(b) if not buang(s)]
+        if potong:
+            tanda.append(potong[-1])
+    perusahaan = next((t for t in tanda if re.match(r'^(PT|CV|UD)\b', t, re.I)), '')
+    orang = [t for t in tanda if t != perusahaan and len(t) <= 40]
+    return {'paragraf': paragraf, 'salam': rapi(baris[akhir]) if akhir < len(baris) else '',
+            'perusahaan': perusahaan, 'nama': orang[0] if orang else '',
+            'jabatan': orang[1] if len(orang) > 1 else ''}
+
+
+# ---------- warna ----------
 
 def warna_logo(path):
     """(utama, aksen) dari piksel logo: sinyal warna merek paling tepercaya.
@@ -194,7 +294,6 @@ def warna_logo(path):
         return colorsys.rgb_to_hls(*(c / 255 for c in rgb))[1]
 
     warna = [rata(h) for h in utama_dua]
-    heks = lambda c: f'#{c[0]:02x}{c[1]:02x}{c[2]:02x}'
     if len(warna) == 1:
         return heks(warna[0]), ''
     jarak = lambda a, b: min(abs(a - b), 24 - abs(a - b))
@@ -214,7 +313,7 @@ def warna_compro(pdf, jumlah, tmp):
     -svg) hanya berisi teks, garis, dan bidang warna buatan desainer — foto
     menjadi elemen <image> yang tidak ikut dihitung.
     """
-    hitung, rincian = Counter(), {}
+    hitung = Counter()
     for i in range(1, min(jumlah, 20) + 1):
         tujuan = tmp / f'v-{i}.svg'
         jalankan(['pdftocairo', '-svg', '-f', str(i), '-l', str(i), str(pdf), str(tujuan)], timeout=120)
@@ -236,30 +335,112 @@ def warna_compro(pdf, jumlah, tmp):
         return min(abs(a - b), 24 - abs(a - b))
 
     jenuh = [(rgb, n) for rgb, n in hitung.most_common() if ciri(rgb)[2] >= 0.35 and 0.08 <= ciri(rgb)[1] <= 0.75]
-    rincian = {f'#{r:02x}{g:02x}{b:02x}': n for (r, g, b), n in jenuh[:6]}
+    rincian = {heks(rgb): n for rgb, n in jenuh[:6]}
     # Utama: warna jenuh gelap (cocok untuk latar bertulisan putih) yang paling sering dipakai.
     utama = next(((rgb, n) for rgb, n in jenuh if ciri(rgb)[1] <= 0.42), None)
     aksen = None
     if utama:
         aksen = next(((rgb, n) for rgb, n in jenuh
                       if rgb != utama[0] and jarak(ciri(rgb)[0], ciri(utama[0])[0]) >= 3), None)
-    heks = lambda x: f'#{x[0][0]:02x}{x[0][1]:02x}{x[0][2]:02x}' if x else ''
-    return heks(utama), heks(aksen), rincian
+    return heks(utama[0]) if utama else '', heks(aksen[0]) if aksen else '', rincian
 
+
+def warna_sorot(rincian, utama, aksen):
+    """Warna ketiga & keempat desainer compro (mis. biru muda subjudul, kuning slogan).
+
+    Biru muda berona dekat dengan navy utama, jadi pembedanya boleh berupa
+    kecerahan, bukan hanya rona."""
+    def rona(h):
+        return round(hls(h)[0] * 24) % 24
+
+    def beda(a, b):
+        jarak = min(abs(rona(a) - rona(b)), 24 - abs(rona(a) - rona(b)))
+        return jarak >= 3 or abs(hls(a)[1] - hls(b)[1]) >= 0.2
+
+    dipilih = []
+    for warna in rincian:
+        if hls(warna)[1] < 0.45 or hls(warna)[2] < 0.5:
+            continue
+        if all(beda(warna, x) for x in [w for w in (utama, aksen) if w] + dipilih):
+            dipilih.append(warna)
+    return (dipilih + ['', ''])[:2]
+
+
+def warna_latar(pdf, jumlah, tmp):
+    """Warna dasar halaman compro (krem, abu, dsb.) dari render beresolusi rendah."""
+    jalankan(['pdftoppm', '-r', '12', '-png', '-l', str(min(jumlah, 20)), str(pdf), str(tmp / 'latar')], timeout=180)
+    ember, contoh = Counter(), {}
+    for berkas in sorted(tmp.glob('latar-*.png')):
+        try:
+            lebar, tinggi, kanal, baris = baca_png(berkas)
+        except (ValueError, OSError, zlib.error):
+            continue
+        for y in range(tinggi):
+            for x in range(lebar):
+                rgb = tuple(baris[y][x * kanal:x * kanal + 3])
+                if colorsys.rgb_to_hls(*(c / 255 for c in rgb))[1] < 0.8:
+                    continue
+                kunci = tuple(c // 8 for c in rgb)
+                ember[kunci] += 1
+                contoh.setdefault(kunci, rgb)
+    if not ember:
+        return ''
+    return heks(contoh[ember.most_common(1)[0][0]])
+
+
+# ---------- gambar ----------
 
 def ekstrak_gambar(pdf, jumlah, tmp):
-    """Daftar gambar tertanam: halaman, ukuran, berkas, dan smask-nya."""
+    """Daftar gambar tertanam: halaman, urutan di halaman, ukuran, berkas."""
     daftar = []
     keluaran = jalankan(['pdfimages', '-list', str(pdf)]).stdout.splitlines()[2:]
     jalankan(['pdfimages', '-all', str(pdf), str(tmp / 'img')], timeout=300)
     berkas = sorted(tmp.glob('img-*'))
+    per_halaman = Counter()
     for baris, path in zip(keluaran, berkas):
         kolom = baris.split()
         if len(kolom) < 5:
             continue
-        daftar.append({'halaman': int(kolom[0]), 'jenis': kolom[2], 'lebar': int(kolom[3]),
-                       'tinggi': int(kolom[4]), 'path': path})
+        halaman = int(kolom[0])
+        daftar.append({'halaman': halaman, 'urut': per_halaman[halaman], 'jenis': kolom[2],
+                       'lebar': int(kolom[3]), 'tinggi': int(kolom[4]), 'path': path})
+        per_halaman[halaman] += 1
     return daftar
+
+
+def rgb_terurai(pdf, g, tmp):
+    """Piksel RGB gambar ke-`urut` di halamannya (JPEG diurai poppler ke PNG)."""
+    if g['path'].suffix.lower() == '.png':
+        return baca_png(g['path'])
+    folder = tmp / f"png-{g['halaman']}"
+    if not folder.is_dir():
+        folder.mkdir()
+        jalankan(['pdfimages', '-png', '-f', str(g['halaman']), '-l', str(g['halaman']), str(pdf),
+                  str(folder / 'p')], timeout=180)
+    berkas = sorted(folder.glob('p-*.png'))
+    return baca_png(berkas[g['urut']])
+
+
+def hiasan(baris, kanal, alpha, lebar, tinggi):
+    """Grafis hiasan (panah, bentuk polos) — bukan foto.
+
+    Compro MAS memuat panah merah bermask di halaman layanan; tanpa saringan ini
+    panah itu dipasang sebagai foto kartu "Karung Sak"."""
+    tampak, rona = 0, Counter()
+    for y in range(0, tinggi, 3):
+        for x in range(0, lebar, 3):
+            if alpha[y][x] < 128:
+                continue
+            tampak += 1
+            o = x * kanal
+            h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in baris[y][o:o + 3]))
+            if s >= 0.45 and 0.15 <= l <= 0.85:
+                rona[round(h * 24) % 24] += 1
+    total = len(range(0, tinggi, 3)) * len(range(0, lebar, 3))
+    if not tampak:
+        return True
+    satu_warna = rona.most_common(1)[0][1] / tampak if rona else 0
+    return tampak / total < 0.6 and satu_warna >= 0.6
 
 
 def potong_logo(gambar, tujuan):
@@ -273,7 +454,7 @@ def potong_logo(gambar, tujuan):
             _, _, _, alpha = baca_png(gambar[i + 1]['path'])
         except (ValueError, OSError, zlib.error):
             continue
-        # Kolom berisi (alpha > 40) dari kiri; berhenti di celah kosong ≥ 6% lebar.
+        # Kolom berisi (alpha > 40) dari kiri; berhenti di celah kosong.
         berisi = [any(alpha[y][x] > 40 for y in range(tinggi)) for x in range(lebar)]
         mulai = next((x for x, v in enumerate(berisi) if v), None)
         if mulai is None:
@@ -309,6 +490,125 @@ def potong_logo(gambar, tujuan):
     return None
 
 
+def ambil_foto(pdf, gambar, keluar, tmp):
+    """Foto tertanam ≥300x250 tanpa duplikat. Yang bermask dijadikan PNG transparan.
+
+    Batas lama 400x300 membuang foto karung sak (364x360) di halaman layanan,
+    dan foto bermask disalin tanpa mask sehingga latar transparannya jadi hitam."""
+    foto, sidik = [], set()
+    for i, g in enumerate(gambar):
+        if g['jenis'] != 'image' or g['lebar'] < 300 or g['tinggi'] < 250:
+            continue
+        mentah = g['path'].read_bytes()
+        kunci = hashlib.md5(mentah).hexdigest()
+        if kunci in sidik:
+            continue
+        sidik.add(kunci)
+        mask = gambar[i + 1] if (i + 1 < len(gambar) and gambar[i + 1]['jenis'] == 'smask'
+                                 and gambar[i + 1]['lebar'] == g['lebar']
+                                 and gambar[i + 1]['tinggi'] == g['tinggi']) else None
+        data = {'halaman': g['halaman'], 'lebar': g['lebar'], 'tinggi': g['tinggi'],
+                'transparan': False, 'banner': g['lebar'] >= g['tinggi'] * 4}
+        nomor = len(foto) + 1
+        try:
+            alpha = baca_png(mask['path'])[3] if mask else None
+        except (ValueError, OSError, zlib.error):
+            alpha = None
+        tembus = 0
+        puncak = max(max(r) for r in alpha[::8]) if alpha else 0
+        if alpha and (puncak - min(min(r) for r in alpha[::8]) < 40 or puncak < 160):
+            # Mask seragam atau serba redup = opasitas (foto sampul MAS ditaruh
+            # tembus pandang di bawah kotak lavender), bukan bentuk potongan:
+            # fotonya dipakai utuh.
+            alpha = None
+        if alpha:
+            langkah = range(0, g['tinggi'], 4), range(0, g['lebar'], 4)
+            tembus = sum(1 for y in langkah[0] for x in langkah[1] if alpha[y][x] < 200) / (
+                len(langkah[0]) * len(langkah[1]))
+        if alpha and tembus > 0.03:
+            try:
+                lebar, tinggi, kanal, rgb = rgb_terurai(pdf, g, tmp)
+            except (ValueError, OSError, IndexError, zlib.error):
+                continue
+            if (lebar, tinggi) != (g['lebar'], g['tinggi']) or hiasan(rgb, kanal, alpha, lebar, tinggi):
+                continue
+            baris = []
+            for y in range(tinggi):
+                b = bytearray()
+                for x in range(lebar):
+                    o = x * kanal
+                    # Alpha tipis di tepi potongan tampak sebagai bintik di atas kartu putih.
+                    a = alpha[y][x]
+                    b += bytes(rgb[y][o:o + 3] if kanal >= 3 else [rgb[y][o]] * 3) + bytes([a if a >= 64 else 0])
+                baris.append(bytes(b))
+            nama = f'foto-{nomor:02d}.png'
+            tulis_png_rgba(keluar / nama, lebar, tinggi, baris)
+            data['transparan'] = True
+        else:
+            ekstensi = g['path'].suffix.lower()
+            if ekstensi not in ('.jpg', '.jpeg', '.png'):
+                continue
+            nama = f'foto-{nomor:02d}{ekstensi}'
+            (keluar / nama).write_bytes(mentah)
+        data['berkas'] = str(keluar / nama)
+        foto.append(data)
+    return foto
+
+
+# ---------- susunan bagian ----------
+
+JENIS_SEKSI = (
+    ('prakata', r'PRAKATA|SAMBUTAN|KATA PENGANTAR'),
+    ('struktur', r'STRUKTUR'),
+    ('visimisi', r'\bVISI\b|\bMISI\b'),
+    ('profil', r'INFORMASI PERUSAHAAN|TENTANG|PROFIL PERUSAHAAN|SEJARAH'),
+    ('layanan', r'LAYANAN|\bJASA\b'),
+    ('customer', r'CUSTOMER|KLIEN|PELANGGAN'),
+    ('legalitas', r'LEGALITAS|PERIZINAN|SERTIFIKAT'),
+    ('target', r'TARGET|PENCAPAIAN'),
+    ('penutup', r'PENUTUP|TERIMA KASIH'),
+)
+
+
+def judul_rapi(judul):
+    kecil = {'DAN': 'dan', 'AND': 'dan', '&': '&', 'DI': 'di', 'KE': 'ke'}
+    kata = judul.strip(' :.-').split()
+    return ' '.join(kecil.get(k, k.capitalize()) if i else k.capitalize() for i, k in enumerate(kata))
+
+
+def susun_seksi(halaman, berulang, foto):
+    """Urutan bagian compro: [{jenis, judul, kunci, halaman, foto}].
+
+    Beranda situs disusun mengikuti urutan ini. Halaman berjudul sama yang
+    berurutan ("GAMBAR & REFERENSI" lima halaman; "MARKING AREA & FINISH GOOD" /
+    "MARKING AREA AND FINISH GOOD") digabung jadi satu bagian."""
+    seksi = []
+    for nomor, teks in enumerate(halaman, 1):
+        judul = judul_halaman(teks, berulang)
+        milik = [Path(f['berkas']).name for f in foto if f['halaman'] == nomor]
+        if nomor == 1:
+            jenis = 'sampul'
+        else:
+            jenis = next((j for j, pola in JENIS_SEKSI if judul and re.search(pola, judul)), '')
+            if not jenis and re.search(r'\bpenutup\b|terima kasih', teks, re.I) and not milik:
+                jenis = 'penutup'
+            if not jenis:
+                jenis = 'foto' if milik and judul else ''
+        if not jenis:
+            continue
+        normal = re.sub(r'[^A-Z0-9]', '', re.sub(r'\bAND\b', '&', judul.upper()))
+        if seksi and seksi[-1]['jenis'] == jenis and seksi[-1]['_normal'] == normal:
+            seksi[-1]['halaman'].append(nomor)
+            seksi[-1]['foto'] += milik
+            continue
+        kunci = jenis if jenis != 'foto' else re.sub(r'[^a-z0-9]+', '-', judul.lower()).strip('-')[:40]
+        seksi.append({'jenis': jenis, 'judul': judul_rapi(judul) if judul else '', 'kunci': kunci,
+                      'halaman': [nomor], 'foto': milik, '_normal': normal})
+    for s in seksi:
+        s.pop('_normal')
+    return seksi
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     if len(args) != 1:
@@ -324,7 +624,7 @@ def main():
     if not pdf:
         print('compro: tidak ada company profile PDF di folder klien')
         return 0
-    for alat in ('pdftoppm', 'pdfimages', 'pdftotext', 'pdfinfo'):
+    for alat in ('pdftoppm', 'pdfimages', 'pdftotext', 'pdfinfo', 'pdftocairo'):
         if not shutil.which(alat):
             print(f'compro: {alat} tidak ada (paket poppler-utils)')
             return 1
@@ -347,32 +647,30 @@ def main():
             if utama_logo:
                 utama, aksen = utama_logo, aksen_logo or aksen
                 sumber_warna = 'logo'
+        sorot, sorot_2 = warna_sorot(rincian_warna, utama, aksen)
+        latar = warna_latar(pdf, jumlah, tmp)
+        foto = ambil_foto(pdf, gambar, keluar, tmp)
 
-        foto, sidik = [], set()
-        for g in gambar:
-            if g['jenis'] != 'image' or g['lebar'] < 400 or g['tinggi'] < 300:
-                continue
-            isi = g['path'].read_bytes()
-            kunci = hashlib.md5(isi).hexdigest()
-            if kunci in sidik:
-                continue
-            sidik.add(kunci)
-            ekstensi = g['path'].suffix.lower()
-            if ekstensi not in ('.jpg', '.jpeg', '.png'):
-                continue
-            nama_berkas = f"foto-{len(foto) + 1:02d}{ekstensi}"
-            (keluar / nama_berkas).write_bytes(isi)
-            foto.append({'berkas': str(keluar / nama_berkas), 'halaman': g['halaman'],
-                         'judul_halaman': judul_halaman(halaman[g['halaman'] - 1], berulang),
-                         'lebar': g['lebar'], 'tinggi': g['tinggi']})
-
-    data = {'pdf': str(pdf), 'halaman': jumlah, 'nama': nama,
-            'slogan': cari_slogan(halaman, nama),
-            'warna': {'utama': utama, 'aksen': aksen, 'sumber': sumber_warna, 'rincian': rincian_warna},
-            'logo': logo, 'foto': foto}
+    slogan = cari_slogan(halaman, nama)
+    subjudul, alamat, email = identitas_kaki(halaman, berulang, nama)
+    for f in foto:
+        f['judul_halaman'] = judul_halaman(halaman[f['halaman'] - 1], berulang)
+    seksi = susun_seksi(halaman, berulang, foto)
+    prakata = {}
+    for s in seksi:
+        if s['jenis'] == 'prakata':
+            prakata = isi_prakata(halaman[s['halaman'][0] - 1], berulang,
+                                  judul_halaman(halaman[s['halaman'][0] - 1], berulang), slogan)
+            break
+    data = {'pdf': str(pdf), 'halaman': jumlah, 'nama': nama, 'slogan': slogan,
+            'subjudul': subjudul, 'alamat': alamat, 'email': email, 'latar': latar,
+            'warna': {'utama': utama, 'aksen': aksen, 'sorot': sorot, 'sorot_2': sorot_2,
+                      'sumber': sumber_warna, 'rincian': rincian_warna},
+            'logo': logo, 'prakata': prakata, 'seksi': seksi, 'foto': foto}
     hasil_json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    print(f"compro: {pdf.name} — {len(foto)} foto, logo {'ada' if logo else 'tidak ada'}, "
-          f"warna {utama or '-'} / {aksen or '-'}, slogan \"{data['slogan'] or '-'}\"")
+    print(f"compro: {pdf.name} — {len(foto)} foto, {len(seksi)} bagian, logo {'ada' if logo else 'tidak ada'}, "
+          f"warna {utama or '-'} / {aksen or '-'} / {sorot or '-'}, latar {latar or '-'}, "
+          f"slogan \"{slogan or '-'}\"")
     return 0
 
 

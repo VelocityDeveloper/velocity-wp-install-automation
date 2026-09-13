@@ -12,6 +12,13 @@ defined('ABSPATH') || exit;
 
 get_header();
 
+if ({{PREFIX}}_gaya_compro()) {
+    // Klien mengirim company profile: susunan beranda mengikuti urutan halamannya.
+    {{PREFIX}}_beranda_compro();
+    get_footer();
+    return;
+}
+
 $hero = {{PREFIX}}_image_url('hero', 'full');
 $nama = {{PREFIX}}_data('nama');
 ?>
@@ -34,7 +41,9 @@ $nama = {{PREFIX}}_data('nama');
             </ul>
             <p class="{{PREFIX}}-hero__aksi">
                 <a class="{{PREFIX}}-btn {{PREFIX}}-btn--utama" href="#pemesanan">Ajukan Pemesanan</a>
-                <a class="{{PREFIX}}-btn {{PREFIX}}-btn--terang" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">Konsultasi via WhatsApp</a>
+                <?php if ({{PREFIX}}_ada_wa()) : ?>
+                    <a class="{{PREFIX}}-btn {{PREFIX}}-btn--terang" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">Konsultasi via WhatsApp</a>
+                <?php endif; ?>
             </p>
         </div>
     </section>

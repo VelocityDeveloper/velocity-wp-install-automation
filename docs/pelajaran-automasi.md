@@ -345,3 +345,46 @@ helper tersebut. `php -l` hanya memeriksa sintaks per berkas, jadi lolos.
   yang 500 (front-page.php), halaman lain tetap 200.
 - Salah satu upaya perbaikan hampir mengirim berkas rusak; yang menahannya
   adalah `php -l` di server + `set -e` sebelum menyalin. Pertahankan urutan itu.
+
+## Layout mengikuti company profile, bukan hanya warnanya
+
+Pertanyaan user 2026-09-13 "untuk layout apa sudah sesuai desain refrensi?" —
+jawabannya belum: tema hanya diganti warna/isi, kerangkanya tetap landing page
+umum. Perbandingan 19 halaman compro dengan screenshot situs menunjukkan pola
+tetap compro (kepala halaman nama merah + subjudul, judul tengah bergaris bawah,
+tab nomor, latar krem, pita kaki hitam bersudut merah) dan urutan bagiannya.
+
+- `compro-klien` kini membaca **susunan** PDF: `seksi` berurutan (jenis, judul,
+  foto per halaman), `prakata` + penanda tangan, `subjudul`, `alamat`, `email`,
+  warna `latar` halaman, dan warna `sorot` desainer (biru muda, kuning).
+- Tema: bila `seksi` ada, `inc/compro.php` menyusun beranda sesuai urutan itu
+  (body class `<prefix>--compro`); situs tanpa compro tetap susunan bawaan.
+- **Selalu cek hasil dengan screenshot** (Chromium Playwright headless +
+  pemotong PNG murni Python di `compro-klien`) — tidak ada yang ketahuan dari
+  HTML: foto sampul gelap, menu terlipat, gambar teknik di kartu layanan.
+
+Jebakan yang ditemukan:
+- **Judul halaman dua baris** ("TARGET PENCAPAIAN" / "PERUSAHAAN") digabung
+  hanya bila titik tengahnya sejajar (±6 kolom); tanpa itu dua halaman "MARKING
+  AREA & FINISH" / "MARKING AREA AND" tampak dua bagian berbeda.
+- **Smask PDF punya tiga arti**: bentuk potongan produk (terapkan → PNG
+  transparan; tanpa itu sudutnya hitam), opasitas (foto sampul semi-transparan —
+  mask serba redup/seragam diabaikan), dan hiasan (panah merah: sedikit piksel
+  tampak + satu rona dominan → dibuang).
+- **Batas ukuran foto 400x300 terlalu besar**: foto karung sak (364x360) di
+  halaman layanan terbuang dan panah hiasan dipasang di kartunya.
+- **"produk" cocok dengan "Produksi"** — slot produk sempat terisi foto area
+  produksi. Cocokkan kata utuh.
+- **Layanan karangan AI** ("Packaging Industri") lolos pemeriksaan per kata;
+  kini judul layanan harus tertulis sebagai frasa berurutan di compro.
+- **Aksen sebagai teks**: merah di atas navy (menu aktif, label hero) lolos
+  karena penjaga hanya menguji teks di atas latar berwarna. Kini ada token
+  `--aksen-teks` / `--aksen-di-primary` / `--sorot-teks` yang dihitung generator
+  dan diuji `cek-warna-tema`. Penguji kaskade tidak mengenal leluhur tag (`li`)
+  — tulis selector dengan kelas.
+- **Tombol WhatsApp tanpa nomor** jatuh ke `mailto:`; kini disembunyikan dan
+  "Hubungi Kami" menuju halaman kontak.
+- **Helper jangan di theme-data.php** (lihat bagian 500 di atas): semua fungsi
+  gaya compro tinggal di `inc/compro.php` milik template.
+- Slot foto bekas run lama (asal contoh/compro) yang tidak ada di rencana baru
+  harus dikosongkan, bukan dibiarkan.

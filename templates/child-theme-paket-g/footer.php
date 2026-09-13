@@ -16,6 +16,57 @@ defined('ABSPATH') || exit;
 
 </div><!-- #wrapper-content -->
 
+<?php if ({{PREFIX}}_gaya_compro()) : ?>
+<?php // Kaki halaman compro: identitas di latar halaman, lalu pita hitam berisi slogan dengan sudut aksen berikon kontak. ?>
+<footer class="{{PREFIX}}-footer {{PREFIX}}-footer--compro">
+	<div class="{{PREFIX}}-wrap {{PREFIX}}-footer__grid">
+		<div class="{{PREFIX}}-footer__kolom">
+			<p class="{{PREFIX}}-footer__nama"><?php echo esc_html({{PREFIX}}_data('nama')); ?></p>
+			<?php if ({{PREFIX}}_data('subjudul')) : ?>
+				<p class="{{PREFIX}}-footer__sub"><?php echo esc_html({{PREFIX}}_data('subjudul')); ?></p>
+			<?php endif; ?>
+			<p class="{{PREFIX}}-footer__teks"><?php echo esc_html({{PREFIX}}_data('alamat')); ?></p>
+		</div>
+		<div class="{{PREFIX}}-footer__kolom">
+			<p class="{{PREFIX}}-footer__judul">Layanan</p>
+			<ul class="{{PREFIX}}-footer__daftar">
+				<?php foreach ((array) {{PREFIX}}_data('layanan') as $layanan) : ?>
+					<li><?php echo esc_html($layanan['judul']); ?></li>
+				<?php endforeach; ?>
+			</ul>
+		</div>
+		<div class="{{PREFIX}}-footer__kolom">
+			<p class="{{PREFIX}}-footer__judul">Halaman</p>
+			<?php
+			wp_nav_menu(array(
+				'theme_location' => 'primary',
+				'container'      => false,
+				'menu_class'     => '{{PREFIX}}-footer__daftar',
+				'depth'          => 1,
+				'fallback_cb'    => false,
+			));
+			?>
+		</div>
+	</div>
+	<div class="{{PREFIX}}-pita">
+		<div class="{{PREFIX}}-wrap {{PREFIX}}-pita__isi">
+			<div>
+				<p class="{{PREFIX}}-pita__slogan"><?php echo esc_html({{PREFIX}}_data('slogan') ?: {{PREFIX}}_data('nama')); ?></p>
+				<p class="{{PREFIX}}-pita__hak">&copy; <?php echo esc_html(date_i18n('Y')); ?> <?php echo esc_html({{PREFIX}}_data('nama')); ?></p>
+			</div>
+			<div class="{{PREFIX}}-pita__kontak">
+				<?php if ({{PREFIX}}_ada_wa()) : ?>
+					<a href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow"><?php echo {{PREFIX}}_ikon('telepon'); ?><?php echo esc_html({{PREFIX}}_data('telp')); ?></a>
+				<?php endif; ?>
+				<?php $email_publik = trim((string) {{PREFIX}}_data('email_publik')); ?>
+				<?php if ($email_publik !== '') : ?>
+					<a href="mailto:<?php echo esc_attr($email_publik); ?>"><?php echo {{PREFIX}}_ikon('surel'); ?><?php echo esc_html($email_publik); ?></a>
+				<?php endif; ?>
+			</div>
+		</div>
+	</div>
+</footer>
+<?php else : ?>
 <footer class="{{PREFIX}}-footer">
 	<div class="{{PREFIX}}-wrap {{PREFIX}}-footer__grid">
 
@@ -84,6 +135,7 @@ defined('ABSPATH') || exit;
 		</div>
 	</div>
 </footer>
+<?php endif; ?>
 
 </div><!-- #page -->
 

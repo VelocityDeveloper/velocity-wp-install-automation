@@ -43,6 +43,7 @@ ATURAN = """Aturan isi (wajib):
 - JANGAN mengarang angka, harga, persentase, tahun berdiri, jumlah proyek/klien, penghargaan, sertifikat, nama klien, atau testimoni.
 - Abaikan teks panduan template form ("Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
 - Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau nomor pribadi pemilik.
+- Kalau ada company profile, 'layanan' hanya berisi layanan/produk yang TERTULIS di dokumen dengan nama yang sama. Jumlahnya mengikuti dokumen, jangan digenapkan dengan layanan karangan.
 - DATA PERUSAHAAN (slogan, profil, visi, misi, moto, struktur, customer, legalitas, target) DISALIN dari dokumen klien apa adanya — boleh merapikan ejaan dan huruf kapital, TIDAK boleh ditambah atau dicontohkan. Kalau tidak ada di dokumen, biarkan kosong. Semua yang dikirim klien memang untuk ditampilkan di situs.
 - "judul_seksi": judul & subjudul pendek tiap bagian beranda yang sesuai bidang usaha klien (mis. pabrik kemasan: "Produk & Layanan Kemasan", bukan kalimat untuk usaha lain). Maksimal 7 kata untuk judul, 16 kata untuk subjudul.
 - Tulis isi contoh sebagai kalimat biasa. JANGAN memberi label "CONTOH:", "(contoh)", atau penanda sejenis — teks ini tampil langsung ke pengunjung.
@@ -153,7 +154,7 @@ def rapikan(data):
     for kunci in ('utama', 'aksen'):
         if HEX_RE.match(str(warna.get(kunci) or '')):
             hasil['warna'][kunci] = warna[kunci]
-    kurang = [k for k, n in (('layanan', 4), ('produk', 4), ('keunggulan', 4), ('alur', 5), ('galeri', 6))
+    kurang = [k for k, n in (('layanan', 1), ('produk', 4), ('keunggulan', 4), ('alur', 5), ('galeri', 6))
               if len(hasil[k]) < n]
     if not hasil['hero_judul'] or kurang:
         raise ValueError(f'isi AI tidak lengkap: {kurang or "hero_judul"}')
@@ -233,6 +234,62 @@ def data_compro(domain):
         return {}
 
 
+STOP_FRASA = r'\b(dan|serta|and)\b|[&\-]'
+
+
+def frasa_tertulis(judul, sumber):
+    """True kalau judul tertulis berurutan di dokumen (kata sambung diabaikan).
+
+    Pemeriksaan per kata tidak cukup: "Packaging Industri" lolos karena kedua
+    katanya ada terpisah di teks prakata, padahal compro tidak pernah menyebut
+    layanan bernama itu. "Alih Daya dan Perdagangan Umum" tetap lolos dari
+    "ALIH DAYA - PERDAGANGAN UMUM"."""
+    bersih = lambda t: normal(re.sub(STOP_FRASA, ' ', str(t or ''), flags=re.I))
+    target = bersih(judul)
+    return len(target) >= 4 and target in bersih(sumber)
+
+
+def teks_pdf(pdf):
+    if not pdf or not Path(pdf).is_file():
+        return ''
+    try:
+        return subprocess.run(['pdftotext', '-layout', str(pdf), '-'], capture_output=True, text=True,
+                              timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def sesuaikan_compro(isi, domain, log=print):
+    """Isi yang wajib mengikuti company profile; dijalankan tiap kali (idempoten).
+
+    - slogan & prakata dibaca kode dari PDF, lebih pasti daripada tulisan AI;
+    - layanan hanya yang benar-benar tertulis di compro — AI menggenapkan jadi
+      empat dengan "Packaging Industri" yang tidak ada di dokumen;
+    - moto tidak lagi dibuang meski sama dengan slogan: di compro MAS keduanya
+      memang kalimat yang sama ("MOTO Innovating for a Better Tomorrow")."""
+    compro = data_compro(domain)
+    if not compro:
+        return False
+    lama = json.dumps(isi, sort_keys=True, ensure_ascii=False)
+    if compro.get('slogan'):
+        isi['slogan'] = compro['slogan']
+    if (compro.get('prakata') or {}).get('paragraf'):
+        isi['prakata'] = compro['prakata']
+    sumber = teks_pdf(compro.get('pdf', ''))
+    moto = re.search(r'^\s*MOTT?O\b\s*[:\-]?\s+(\S.*?)\s*(?:\s{3,}|$)', sumber, re.M)
+    if moto and not isi.get('moto'):
+        # Label "MOTO" + kalimatnya di satu baris; versi lama sempat mengosongkan
+        # moto karena sama dengan slogan, padahal compro memang menulisnya begitu.
+        isi['moto'] = moto.group(1).strip()
+    if sumber and isi.get('layanan'):
+        tertulis = [l for l in isi['layanan'] if frasa_tertulis(l['judul'], sumber)]
+        dibuang = [l['judul'] for l in isi['layanan'] if l not in tertulis]
+        if tertulis and dibuang:
+            log(f'Layanan yang tidak tertulis di company profile dibuang: {dibuang}')
+            isi['layanan'] = tertulis
+    return json.dumps(isi, sort_keys=True, ensure_ascii=False) != lama
+
+
 def buat_isi(gen, cfg, domain):
     client_data = {}
     for folder in (Path(cfg['_manifest']).parent, gen.ON_PROGRESS / domain):
@@ -271,7 +328,7 @@ Kembalikan JSON dengan bentuk persis:
 "judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
 "slogan":"","profil":"","visi":"","misi":[""],"moto":"",
 "struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
-Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
+Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4, keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
         jawab = gen.ai_call(sistem, permintaan, model)
         if not jawab:
@@ -282,14 +339,7 @@ Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6. Data perusaha
             dibuang = saring_data_perusahaan(isi, info)
             if dibuang:
                 gen.log(f'Data perusahaan yang tidak tertulis di dokumen dibuang: {dibuang[:8]}')
-            compro = data_compro(domain)
-            if compro.get('slogan'):
-                # Slogan dari PDF dibaca kode secara pasti; lebih dipercaya daripada AI.
-                isi['slogan'] = compro['slogan']
-            if isi.get('moto') and normal(isi['moto']) == normal(isi.get('slogan')):
-                # Judul MOTO di compro MAS tanpa teks; AI mengisinya dengan slogan,
-                # sehingga kalimat yang sama tampil dua kali di situs.
-                isi['moto'] = ''
+            sesuaikan_compro(isi, domain, gen.log)
             if not warna_dipilih_klien(domain) and any(isi['warna'].values()):
                 gen.log(f"Warna dari AI dibuang (bukan pilihan klien): {isi['warna']}")
                 isi['warna'] = {'utama': '', 'aksen': ''}
@@ -387,7 +437,13 @@ def main():
         simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
         print(f"konten: isi contoh dibuat ({', '.join(l['judul'] for l in isi['layanan'])})")
     else:
-        print('konten: memakai isi contoh tersimpan')
+        isi = json.loads(simpanan.read_text())
+        if sesuaikan_compro(isi, domain):
+            simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
+            print(f"konten: isi tersimpan disesuaikan dengan company profile "
+                  f"({', '.join(l['judul'] for l in isi['layanan'])})")
+        else:
+            print('konten: memakai isi contoh tersimpan')
     print(f'tema_json={simpanan}')
     return pasang(cfg, domain) if mau_pasang else 0
 

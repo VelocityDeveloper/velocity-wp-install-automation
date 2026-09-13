@@ -202,8 +202,8 @@ if (!function_exists('{{PREFIX}}_form_notifikasi')) {
         $pesan = isset($_GET['pesan']) ? sanitize_key($_GET['pesan']) : '';
         $teks = array(
             'terkirim'      => array('ok', 'Terima kasih. Pemesanan Anda sudah kami terima dan akan segera dihubungi.'),
-            'tersimpan'     => array('ok', 'Terima kasih. Pemesanan Anda tersimpan. Bila ingin lebih cepat, hubungi kami langsung via WhatsApp.'),
-            'kurang'        => array('gagal', 'Mohon lengkapi nama, nomor WhatsApp, jenis pekerjaan, dan lokasi proyek.'),
+            'tersimpan'     => array('ok', 'Terima kasih. Pemesanan Anda tersimpan dan akan segera kami tindak lanjuti.'),
+            'kurang'        => array('gagal', 'Mohon lengkapi nama, nomor WhatsApp, layanan yang dibutuhkan, dan lokasi.'),
             'email'         => array('gagal', 'Alamat email belum benar. Periksa kembali atau kosongkan saja.'),
             'kedaluwarsa'   => array('gagal', 'Halaman terlalu lama dibuka. Silakan kirim ulang formulirnya.'),
             'captcha'       => array('gagal', 'Verifikasi captcha belum benar. Silakan ulangi.'),
@@ -269,7 +269,9 @@ if (!function_exists('{{PREFIX}}_form_render')) {
             <?php wp_nonce_field('{{PREFIX}}_pemesanan', '{{PREFIX}}_nonce'); ?>
             <p class="{{PREFIX}}-form__kirim">
                 <button type="submit" name="{{PREFIX}}_form_pemesanan" value="1" class="{{PREFIX}}-btn {{PREFIX}}-btn--utama">Kirim Pemesanan</button>
-                <a class="{{PREFIX}}-btn {{PREFIX}}-btn--garis" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">Atau chat WhatsApp</a>
+                <?php if (!function_exists('{{PREFIX}}_ada_wa') || {{PREFIX}}_ada_wa()) : ?>
+                    <a class="{{PREFIX}}-btn {{PREFIX}}-btn--garis" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">Atau chat WhatsApp</a>
+                <?php endif; ?>
             </p>
             <p class="{{PREFIX}}-form__catatan">Data Anda hanya dipakai untuk menindaklanjuti permintaan ini.</p>
         </form>

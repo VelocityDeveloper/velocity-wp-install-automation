@@ -20,6 +20,11 @@ if (!function_exists('{{PREFIX}}_ikon')) {
             'rab'  => '<path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
             'chat' => '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-5.2A8 8 0 1 1 21 12Z"/>',
             'cek'  => '<path d="m5 13 4 4L19 7"/>',
+            'mitra' => '<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.9-3.9a3 3 0 0 0-4.2 0l-.9.9a1 1 0 1 1-3-3l2.8-2.8a5 5 0 0 1 6.1-.8l.5.3a2 2 0 0 0 1.4.3L21 4"/><path d="m21 3 1 11h-2M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3M3 4h8"/>',
+            'bintang' => '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9Z"/>',
+            'grafik' => '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/><path d="M15 8h4v4"/>',
+            'telepon' => '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/>',
+            'surel' => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
         );
         if (empty($path[$nama])) {
             return '';
@@ -32,11 +37,19 @@ if (!function_exists('{{PREFIX}}_ikon')) {
 if (!function_exists('{{PREFIX}}_render_layanan')) {
     function {{PREFIX}}_render_layanan()
     {
+        // Gaya compro: jumlah layanan mengikuti dokumen klien (bisa 1-4) dan kartu
+        // tanpa foto tampil tanpa kotak foto, bukan pola "foto menyusul".
+        $compro = function_exists('{{PREFIX}}_gaya_compro') && {{PREFIX}}_gaya_compro();
+        $pemesanan = get_page_by_path('pemesanan');
         ob_start(); ?>
-        <div class="{{PREFIX}}-kartu-grid {{PREFIX}}-kartu-grid--4">
+        <div class="{{PREFIX}}-kartu-grid <?php echo $compro ? '{{PREFIX}}-kartu-grid--auto' : '{{PREFIX}}-kartu-grid--4'; ?>">
             <?php foreach ({{PREFIX}}_data('layanan') as $l) : ?>
                 <article class="{{PREFIX}}-kartu">
-                    <?php {{PREFIX}}_figure('layanan-' . $l['slug'], $l['judul'], '{{PREFIX}}-kartu__media', 'medium_large'); ?>
+                    <?php if ($compro) : ?>
+                        <?php echo {{PREFIX}}_figure_id({{PREFIX}}_image_id('layanan-' . $l['slug']), $l['judul'], '{{PREFIX}}-kartu__media', 'medium_large'); ?>
+                    <?php else : ?>
+                        <?php {{PREFIX}}_figure('layanan-' . $l['slug'], $l['judul'], '{{PREFIX}}-kartu__media', 'medium_large'); ?>
+                    <?php endif; ?>
                     <div class="{{PREFIX}}-kartu__isi">
                         <h3 class="{{PREFIX}}-kartu__judul"><?php echo esc_html($l['judul']); ?></h3>
                         <p class="{{PREFIX}}-kartu__teks"><?php echo esc_html($l['teks']); ?></p>
@@ -45,8 +58,12 @@ if (!function_exists('{{PREFIX}}_render_layanan')) {
                                 <li><?php echo {{PREFIX}}_ikon('cek') . esc_html($r); ?></li>
                             <?php endforeach; ?>
                         </ul>
-                        <a class="{{PREFIX}}-tautan" href="<?php echo esc_url({{PREFIX}}_wa_link('Halo, saya ingin konsultasi untuk ' . $l['judul'] . '.')); ?>"
-                            target="_blank" rel="noopener nofollow">Tanya layanan ini →</a>
+                        <?php if (!function_exists('{{PREFIX}}_ada_wa') || {{PREFIX}}_ada_wa()) : ?>
+                            <a class="{{PREFIX}}-tautan" href="<?php echo esc_url({{PREFIX}}_wa_link('Halo, saya ingin konsultasi untuk ' . $l['judul'] . '.')); ?>"
+                                target="_blank" rel="noopener nofollow">Tanya layanan ini →</a>
+                        <?php else : ?>
+                            <a class="{{PREFIX}}-tautan" href="<?php echo esc_url($pemesanan ? get_permalink($pemesanan) : home_url('/#pemesanan')); ?>">Pesan layanan ini →</a>
+                        <?php endif; ?>
                     </div>
                 </article>
             <?php endforeach; ?>
@@ -79,6 +96,23 @@ if (!function_exists('{{PREFIX}}_render_produk')) {
 if (!function_exists('{{PREFIX}}_render_galeri')) {
     function {{PREFIX}}_render_galeri()
     {
+        // Gaya compro: galeri berisi bagian-bagian foto company profile, masing-masing
+        // dengan judulnya (Area Produksi, Gambar & Referensi, ...), semua fotonya.
+        if (function_exists('{{PREFIX}}_gaya_compro') && {{PREFIX}}_gaya_compro()) {
+            $html = '';
+            foreach ((array) {{PREFIX}}_data('seksi') as $s) {
+                if (empty($s['jenis']) || $s['jenis'] !== 'foto' || empty($s['kunci'])) {
+                    continue;
+                }
+                $ids = {{PREFIX}}_seksi_foto($s['kunci']);
+                if ($ids) {
+                    $html .= '<h2 class="{{PREFIX}}-galeri__judul">' . esc_html($s['judul']) . '</h2>' . {{PREFIX}}_foto_grid($ids, $s['judul']);
+                }
+            }
+            if ($html !== '') {
+                return '<div class="{{PREFIX}}-galeri-compro">' . $html . '</div>';
+            }
+        }
         ob_start(); ?>
         <div class="{{PREFIX}}-galeri">
             <?php foreach ({{PREFIX}}_data('galeri') as $g) : ?>

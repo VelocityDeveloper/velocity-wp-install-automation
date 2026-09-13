@@ -36,6 +36,15 @@ defined('ABSPATH') || exit;
 				<div class="{{PREFIX}}-header__merek">
 					<?php if (has_custom_logo()) : ?>
 						<?php the_custom_logo(); ?>
+						<?php if ({{PREFIX}}_gaya_compro()) : ?>
+							<?php // Kepala halaman compro: nama merah + subjudul di sebelah logo. ?>
+							<a class="{{PREFIX}}-header__identitas" href="<?php echo esc_url(home_url('/')); ?>" rel="home">
+								<span class="{{PREFIX}}-header__nama-compro"><?php echo esc_html({{PREFIX}}_data('nama')); ?></span>
+								<?php if ({{PREFIX}}_data('subjudul')) : ?>
+									<span class="{{PREFIX}}-header__sub"><?php echo esc_html({{PREFIX}}_data('subjudul')); ?></span>
+								<?php endif; ?>
+							</a>
+						<?php endif; ?>
 					<?php else : ?>
 						<a class="{{PREFIX}}-header__nama" href="<?php echo esc_url(home_url('/')); ?>" rel="home">
 							<?php bloginfo('name'); ?>
@@ -62,8 +71,9 @@ defined('ABSPATH') || exit;
 					<div class="{{PREFIX}}-header__aksi">
 						<?php // Tombol ini sudah membuka WhatsApp ke nomor yang sama, jadi
 						      // nomornya tidak perlu ditulis lagi di sebelahnya. ?>
-						<a class="{{PREFIX}}-btn {{PREFIX}}-btn--utama" href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>"
-							target="_blank" rel="noopener nofollow">Hubungi Kami</a>
+						<?php // Tanpa nomor WhatsApp publik, tombol menuju halaman kontak (bukan mailto). ?>
+						<a class="{{PREFIX}}-btn {{PREFIX}}-btn--utama" href="<?php echo esc_url({{PREFIX}}_tautan_hubungi()); ?>"
+							<?php echo {{PREFIX}}_ada_wa() ? 'target="_blank" rel="noopener nofollow"' : ''; ?>>Hubungi Kami</a>
 					</div>
 				</div>
 

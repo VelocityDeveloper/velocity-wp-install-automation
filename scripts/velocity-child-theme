@@ -253,6 +253,14 @@ def nomor_wa(teks):
     return (wa, tampil) if re.match(r'^628\d{7,11}$', wa) else ('', '')
 
 
+def data_compro(domain):
+    """Hasil scripts/compro-klien, kalau folder klien punya company profile."""
+    try:
+        return json.loads((Path('/var/lib/velocity/compro') / domain / 'compro.json').read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def data_klien(domain, nama=''):
     """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php.
 
@@ -307,13 +315,16 @@ def data_klien(domain, nama=''):
     for tambahan in (kota, ' '.join(x for x in (provinsi, kodepos) if x)):
         if tambahan and tambahan.lower() not in alamat.lower():
             bagian.append(tambahan)
+    # Alamat usaha di kaki halaman company profile memang untuk publik; alamat
+    # biodata FORM ISIAN adalah data administrasi pemilik dan hanya cadangan.
+    alamat_compro = data_compro(domain).get('alamat', '')
     return {
         'NAMA': nama[:80],
         'WA': wa,
         'TELP': telp[:25],
         'EMAIL': penerima or f'admin@{domain}',
         'EMAIL_PUBLIK': email_publik,
-        'ALAMAT': ', '.join(b for b in bagian if b)[:200] or '-',
+        'ALAMAT': (alamat_compro or ', '.join(b for b in bagian if b))[:200] or '-',
         'AREA': kota or provinsi or 'sekitarnya',
     }
 
@@ -379,9 +390,20 @@ def blok_isi(domain, nama, area):
     isi = muat_isi_contoh(domain) or isi_netral(area)
     kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri',
              'slogan', 'profil', 'visi', 'misi', 'moto', 'struktur', 'customer', 'legalitas', 'target',
-             'judul_seksi', 'form_kolom_tambahan')
+             'judul_seksi', 'form_kolom_tambahan', 'prakata', 'gaya', 'subjudul', 'seksi')
     kosong = {'misi': [], 'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
-              'judul_seksi': {}, 'form_kolom_tambahan': []}
+              'judul_seksi': {}, 'form_kolom_tambahan': [], 'prakata': {}, 'seksi': []}
+    # Company profile menentukan gaya & urutan beranda: 'seksi' kosong berarti
+    # template memakai susunan bawaan (situs tanpa compro tidak berubah).
+    compro = data_compro(domain)
+    if compro.get('seksi'):
+        isi = dict(isi)
+        isi.setdefault('gaya', 'compro')
+        isi.setdefault('subjudul', compro.get('subjudul', ''))
+        isi.setdefault('seksi', [{'jenis': x['jenis'], 'judul': x['judul'], 'kunci': x['kunci']}
+                                 for x in compro['seksi'] if x.get('jenis')])
+        if not isi.get('prakata') and (compro.get('prakata') or {}).get('paragraf'):
+            isi['prakata'] = compro['prakata']
     baris = []
     for k in kunci:
         nilai = isi.get(k, kosong.get(k, ''))
@@ -392,6 +414,45 @@ def blok_isi(domain, nama, area):
             nilai = [{kk: vv for kk, vv in item.items() if kk != 'foto'} for item in nilai]
         baris.append(f"                '{k}' => {php_nilai(nilai, 4)},")
     return '\n'.join(baris)
+
+
+GELAP = '#161616'
+
+
+def depan_terbaca(warna, latar, arah):
+    """Geser warna teks/ikon (arah -1 gelap, +1 terang) sampai terbaca di semua latar."""
+    for _ in range(16):
+        if all(kontras(warna, l) >= KONTRAS_MINIMAL for l in latar):
+            return warna
+        warna = geser_terang(warna, 0.1 * arah)
+    return warna
+
+
+def gaya_warna(domain, primary, aksen, di_primary):
+    """Warna tambahan: latar halaman, sorot, dan versi terbaca aksen/sorot.
+
+    Aksen merah di atas navy (menu aktif, label hero, ikon) pernah lolos terbit
+    dengan rasio di bawah 4.5 — penjaganya hanya menguji teks putih di latar
+    berwarna. Sekarang setiap pemakaian warna sebagai TEKS punya versinya sendiri."""
+    compro = data_compro(domain)
+    warna = compro.get('warna') or {}
+    latar = compro.get('latar') if HEX_RE.match(compro.get('latar') or '') else '#f7f8fa'
+    # Sorot jadi latar tab nomor: digeser seperlunya supaya angka di atasnya terbaca.
+    sorot = perbaiki_kontras(warna['sorot'])[0] if HEX_RE.match(warna.get('sorot') or '') else aksen
+    sorot_2 = warna.get('sorot_2') if HEX_RE.match(warna.get('sorot_2') or '') else sorot
+    di_primary_aksen = depan_terbaca(aksen, [primary], +1)
+    if kontras(di_primary_aksen, primary) < KONTRAS_MINIMAL:
+        di_primary_aksen = di_primary
+    return {
+        'LATAR': latar,
+        'GELAP': GELAP,
+        'SOROT': sorot,
+        'DI_SOROT': teks_di_atas(sorot),
+        'SOROT_TEKS': depan_terbaca(sorot, ['#ffffff', latar], -1),
+        'SOROT_DI_GELAP': depan_terbaca(sorot_2, [GELAP], +1),
+        'AKSEN_TEKS': depan_terbaca(aksen, ['#ffffff', latar], -1),
+        'AKSEN_DI_PRIMARY': di_primary_aksen,
+    }
 
 
 def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
@@ -419,6 +480,7 @@ def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
         'PRIMARY_3_RGB': ', '.join(str(c) for c in hex_ke_rgb(selaraskan(geser_terang(primary, -0.28), di_primary))),
         'AKSEN_RGB': ', '.join(str(c) for c in hex_ke_rgb(aksen)),
     })
+    data.update(gaya_warna(domain, primary, aksen, di_primary))
     return data
 
 
@@ -448,7 +510,7 @@ def berkas_template(nilai):
     return hasil
 
 
-def laporan_kontras(primary, aksen):
+def laporan_kontras(primary, aksen, domain=''):
     """Ringkasan "warna -> warna teks (rasio)" untuk dibaca operator."""
     bagian = []
     for nama, minta in (('utama', primary), ('aksen', aksen)):
@@ -461,6 +523,17 @@ def laporan_kontras(primary, aksen):
         if akhir.lower() != awal.lower():
             catatan += f'(disesuaikan dari {awal})'
         bagian.append(catatan)
+    # Warna yang dipakai sebagai TEKS/ikon (bukan latar) juga diukur: aksen merah
+    # di atas navy dan subjudul biru muda di atas krem tidak tertangkap uji latar.
+    p, dp = perbaiki_kontras(primary if HEX_RE.match(primary or '') else WARNA_DEFAULT['primary'])
+    a, _ = perbaiki_kontras(aksen if HEX_RE.match(aksen or '') else WARNA_DEFAULT['aksen'])
+    g = gaya_warna(domain, p, a, dp)
+    for nama, depan, latar in (('aksen-teks', g['AKSEN_TEKS'], ('#ffffff', g['LATAR'])),
+                               ('aksen-di-utama', g['AKSEN_DI_PRIMARY'], (p,)),
+                               ('sorot-teks', g['SOROT_TEKS'], ('#ffffff', g['LATAR'])),
+                               ('di-sorot', g['DI_SOROT'], (g['SOROT'],)),
+                               ('slogan-pita', g['SOROT_DI_GELAP'], (g['GELAP'],))):
+        bagian.append(f"{nama}:{depan}:{min(kontras(depan, l) for l in latar):.1f}")
     return ' '.join(bagian)
 
 
@@ -589,7 +662,7 @@ def main():
                 out['slug'], zip_path = scaffold(domain, args.nama, args.prefix,
                                                   args.primary, args.accent)
                 out.update(status='generated', version=SCAFFOLD_VERSION, zip=str(zip_path))
-                out['kontras'] = laporan_kontras(*warna_tema(domain, args.primary, args.accent))
+                out['kontras'] = laporan_kontras(*warna_tema(domain, args.primary, args.accent), domain=domain)
         except Exception as e:
             out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
         return emit()

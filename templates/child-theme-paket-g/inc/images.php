@@ -45,6 +45,9 @@ if (!function_exists('{{PREFIX}}_figure')) {
                 esc_attr($class), esc_attr($alt ?: 'Foto menyusul'), esc_html($alt ?: 'Foto menyusul'));
             return;
         }
+        if (function_exists('{{PREFIX}}_potongan') && {{PREFIX}}_potongan($id)) {
+            $class .= ' {{PREFIX}}-figure--potongan';
+        }
         printf('<div class="%s">%s</div>', esc_attr($class), wp_get_attachment_image($id, $size, false, array(
             'alt' => $alt,
             'loading' => 'lazy',

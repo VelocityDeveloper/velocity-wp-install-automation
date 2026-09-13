@@ -47,6 +47,24 @@ UJI_KASKADE = [
     ('tautan di seksi gelap', ['{P}', '{P}-seksi--gelap'], 'a', [], 'di-primary'),
     ('tautan di footer', ['{P}', '{P}-footer'], 'a', [], 'di-primary'),
     ('tautan di isi halaman terang', ['{P}', 'entry-content'], 'a', [], 'primary'),
+    # Aksen sebagai TEKS: merah di atas navy pernah terbit (menu aktif, label hero,
+    # label seksi gelap). Di latar gelap wajib versi `aksen-di-primary`, di latar
+    # terang `aksen-teks` — keduanya dihitung generator dari rasio kontras.
+    ('label hero', ['{P}', '{P}-hero'], 'p', ['{P}-hero__label'], 'aksen-di-primary'),
+    ('menu aktif di header', ['{P}', '{P}-header', '{P}-nav__daftar', 'current-menu-item'], 'a', [], 'aksen-di-primary'),
+    ('label seksi gelap', ['{P}', '{P}-seksi--gelap'], 'p', ['{P}-judul-seksi__label'], 'aksen-di-primary'),
+    ('label seksi terang', ['{P}', '{P}-seksi'], 'p', ['{P}-judul-seksi__label'], 'aksen-teks'),
+    ('judul kolom footer', ['{P}', '{P}-footer'], 'p', ['{P}-footer__judul'], 'aksen-di-primary'),
+    # Gaya company profile: header putih, judul kop, pita kaki hitam.
+    ('menu header compro', ['{P}', '{P}--compro', '{P}-header', '{P}-nav__daftar'], 'a', [], 'ink'),
+    ('menu aktif header compro', ['{P}', '{P}--compro', '{P}-header', '{P}-nav__daftar', 'current-menu-item'], 'a', [], 'aksen-teks'),
+    ('nama di header compro', ['{P}', '{P}--compro', '{P}-header'], 'span', ['{P}-header__nama-compro'], 'aksen-teks'),
+    ('subjudul header compro', ['{P}', '{P}--compro', '{P}-header'], 'span', ['{P}-header__sub'], 'sorot-teks'),
+    ('judul kop compro', ['{P}', '{P}--compro', '{P}-seksi'], 'h2', ['{P}-kop__judul'], 'primary'),
+    ('label visi-misi compro', ['{P}', '{P}--compro', '{P}-vm'], 'h3', ['{P}-vm__label'], 'aksen-teks'),
+    ('slogan di pita kaki', ['{P}', '{P}--compro', '{P}-footer', '{P}-pita'], 'p', ['{P}-pita__slogan'], 'sorot-di-gelap'),
+    ('tautan di pita kaki', ['{P}', '{P}--compro', '{P}-footer', '{P}-pita__kontak'], 'a', [], 'di-aksen'),
+    ('tautan footer compro', ['{P}', '{P}--compro', '{P}-footer', '{P}-footer__grid'], 'a', [], 'primary'),
 ]
 # Gambar kartu harus mengisi penuh kotaknya. Aturan global `body img { height:
 # auto }` bernilai lebih tinggi daripada aturan komponen, dan kalau ia yang
