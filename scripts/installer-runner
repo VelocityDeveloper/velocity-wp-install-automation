@@ -132,8 +132,17 @@ fi
 if [[ "$MODE" == "apply" || "$MODE" == "maintenance" ]]; then
   # Langkah terakhir: tutup situs dengan maintenance mode velocity-addons sampai PM
   # menyerahkannya ke klien. Sesudah QA, karena QA membaca situs sebagai pengunjung.
-  echo "[$(date -Is)] Maintenance mode" >> "$LOG"
-  /usr/bin/python3 "$SCRIPTS/site-finish" --maintenance "$MANIFEST" >> "$LOG" 2>&1 || true
+  #
+  # Paket G sedang dalam masa pembelajaran (keputusan user 2026-09-13): situsnya
+  # dibiarkan terbuka supaya hasil otomatisasi mudah dipantau langsung. Nyalakan
+  # lagi dengan PAKET_G_MAINTENANCE=1 (mis. di /etc/velocity/installer-autopilot.env).
+  if paket_desain_custom && [[ "${PAKET_G_MAINTENANCE:-0}" != 1 ]]; then
+    echo "[$(date -Is)] maintenance: maintenance_dilewati:paket_g_masa_pembelajaran" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/site-finish" --tandai-tanpa-maintenance "$MANIFEST" >> "$LOG" 2>&1 || true
+  else
+    echo "[$(date -Is)] Maintenance mode" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/site-finish" --maintenance "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
 fi
 if [[ "$MODE" == "dry-run" ]]; then
   state SUCCESS DRY_RUN_OK

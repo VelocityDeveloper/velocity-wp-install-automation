@@ -552,10 +552,11 @@ def main():
     maintenance = bool(args) and args[0] == '--maintenance'
     cleanup = bool(args) and args[0] == '--cleanup'
     widget = bool(args) and args[0] == '--widget'
-    if maintenance or cleanup or widget:
+    tanpa_maint = bool(args) and args[0] == '--tandai-tanpa-maintenance'
+    if maintenance or cleanup or widget or tanpa_maint:
         args = args[1:]
     if not args:
-        print('usage: site-finish [--maintenance|--cleanup|--widget] <manifest>', file=sys.stderr)
+        print('usage: site-finish [--maintenance|--cleanup|--widget|--tandai-tanpa-maintenance] <manifest>', file=sys.stderr)
         return 2
     cfg = read_manifest(args[0])
     domain = cfg.get('domain', '').lower()
@@ -574,6 +575,17 @@ def main():
         return cleanup_defaults(domain, da_user, ssh)
     if widget:
         return bersihkan_widget(domain, da_user, ssh)
+    if tanpa_maint:
+        # Paket G masa pembelajaran: situs sengaja dibiarkan terbuka. Penanda ini
+        # membuat site-audit tidak mengira maintenance mati dengan sendirinya.
+        run = subprocess.run(ssh + ['php -d memory_limit=512M /usr/local/bin/wp option update '
+                                    'velocity_maintenance_paket_g '
+                                    + shlex.quote('dimatikan untuk pemantauan (masa pembelajaran Paket G)')
+                                    + f' --path={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+                                    ' --allow-root >/dev/null 2>&1 && echo ok'],
+                             capture_output=True, text=True, timeout=120)
+        print('maintenance: ' + ('ditandai_tanpa_maintenance' if 'ok' in run.stdout else 'penanda_gagal'))
+        return 0 if 'ok' in run.stdout else 1
     folder = ON_PROGRESS / domain
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
     fields = form['fields']

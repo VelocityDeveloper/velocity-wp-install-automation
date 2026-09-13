@@ -191,6 +191,7 @@ echo wp_json_encode(array(
     'favicon_contoh'  => (int) get_option('velocity_icon_contoh'),
     'maintenance'     => (int) get_option('maintenance_mode'),
     'maintenance_installer' => (string) get_option('velocity_installer_maintenance'),
+    'maintenance_paket_g' => (string) get_option('velocity_maintenance_paket_g'),
     'wa_float'        => (string) get_option('floating_whatsapp', '1'),
     'wa_nomor'        => (string) get_option('nomor_whatsapp'),
     // Untuk satu kontak, plugin mencetak nama kontak sebagai tulisan tombol.
@@ -479,7 +480,10 @@ def main():
 
     # --- maintenance ---
     info['maintenance'] = bool(situs['maintenance'])
-    if situs['maintenance_installer'] and not situs['maintenance']:
+    if situs.get('maintenance_paket_g') and not situs['maintenance']:
+        # Sengaja dibiarkan terbuka selama masa pembelajaran Paket G.
+        info['maintenance'] = 'mati (sengaja, masa pembelajaran Paket G)'
+    elif situs['maintenance_installer'] and not situs['maintenance']:
         # Installer pernah menyalakannya, sekarang mati: entah PM sudah serah
         # terima, entah mati sendiri. Wajib dikonfirmasi manusia.
         temuan.append('maintenance_mati_setelah_dinyalakan_installer')

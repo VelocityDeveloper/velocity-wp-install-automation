@@ -233,6 +233,12 @@ Placeholder yang diisi generator: awalan fungsi & kelas CSS (`--prefix`, bawaann
 
 Menyempurnakan desain untuk semua situs Paket G berikutnya = menyunting `templates/child-theme-paket-g/`, bukan menyalin-nempel per situs.
 
+## Paket G tanpa maintenance mode (masa pembelajaran)
+
+Keputusan user 2026-09-13: selama alur Paket G masih dipelajari, situsnya **tidak** ditutup maintenance mode supaya hasil otomatisasi mudah dipantau langsung. `installer-runner` melewati `site-finish --maintenance` untuk `paket=Paket G` dan menjalankan `site-finish --tandai-tanpa-maintenance`, yang menulis opsi `velocity_maintenance_paket_g` — `site-audit` membacanya sebagai "mati (sengaja)", bukan temuan `maintenance_mati_setelah_dinyalakan_installer`.
+
+Menyalakan lagi untuk Paket G: `PAKET_G_MAINTENANCE=1` di lingkungan installer (mis. `/etc/velocity/installer-autopilot.env`). Paket lain tidak terpengaruh.
+
 ## Isi & foto contoh Paket G (`scripts/paket-g-konten`, `scripts/paket-g-foto`)
 
 Keputusan user 2026-09-13: situs Paket G **selalu dibuatkan contoh dulu — konten dan gambar — tetapi tetap sesuai FORM ISIAN klien dan dokumen tambahan**. Isian netral seperti "Layanan Utama" atau slot foto kosong tidak boleh terbit.
