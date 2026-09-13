@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Screenshot situs Paket G sesudah automation, untuk dicek mata.
+
+Pemakaian: paket-g-cek-visual <manifest | domain>
+
+Pelajaran 2026-09-13 (ptmitraajegselaras.com): HTML yang "benar" tidak menjamin
+tampilan benar — foto sampul gelap, menu terlipat dua baris, gambar teknik di
+kartu layanan, dan tulisan merah di atas navy hanya ketahuan dari screenshot.
+Langkah ini memotret beranda (desktop penuh + HP) dan halaman utama, memotong
+gambar panjang jadi potongan ≤1500px supaya bisa dibuka, dan memeriksa hal yang
+bisa diperiksa mesin: HTTP 200 dan layar tidak kosong.
+
+Hasil: /var/lib/velocity/visual/<domain>/<waktu>/ (5 run terakhir disimpan),
+berisi PNG + ringkasan.json. Tanpa Chromium langkah ini dilewati, tidak gagal.
+"""
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+OUT_ROOT = Path('/var/lib/velocity/visual')
+# UA biasa: aturan bot server menolak UA pendek/skrip dengan 403.
+UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+UA_HP = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36'
+HALAMAN = (
+    # (nama, path, lebar, tinggi jendela, UA)
+    ('beranda', '/', 1366, 9000, UA),
+    ('beranda-hp', '/', 390, 2600, UA_HP),
+    ('tentang-kami', '/tentang-kami/', 1366, 4000, UA),
+    ('layanan', '/layanan/', 1366, 3000, UA),
+    ('galeri', '/galeri/', 1366, 4000, UA),
+    ('hubungi-kami', '/hubungi-kami/', 1366, 3000, UA),
+)
+
+
+def cari_chrome():
+    calon = [os.environ.get('VELOCITY_CHROME', '')]
+    calon += sorted(glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome'), reverse=True)
+    calon += [shutil.which(n) or '' for n in ('chromium', 'chromium-browser', 'google-chrome')]
+    return next((c for c in calon if c and os.access(c, os.X_OK)), '')
+
+
+def png():
+    """Pembaca/penulis PNG murni Python milik compro-klien (PIL tidak terpasang)."""
+    loader = importlib.machinery.SourceFileLoader('compro_klien', str(HERE / 'compro-klien'))
+    spec = importlib.util.spec_from_loader('compro_klien', loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def http_kode(url):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=30) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return 0
+
+
+def potong(modul, berkas, tujuan, nama):
+    """Buang bagian bawah yang kosong, lalu potong per 1500px. -> (jumlah potongan, beragam?)"""
+    lebar, tinggi, kanal, baris = modul.baca_png(berkas)
+    akhir = tinggi
+    while akhir > 0 and len(set(baris[akhir - 1][::kanal * 40])) <= 1:
+        akhir -= 1
+    ragam = {baris[y][x:x + 3] for y in range(0, akhir, 97) for x in range(0, lebar * kanal, kanal * 53)}
+    ubah = (lambda r: r) if kanal == 4 else (lambda r: b''.join(r[i:i + 3] + b'\xff' for i in range(0, len(r), 3)))
+    jumlah, y = 0, 0
+    while y < akhir:
+        y1 = min(akhir, y + 1500)
+        modul.tulis_png_rgba(tujuan / f'{nama}-{jumlah + 1}.png', lebar, y1 - y, [ubah(r) for r in baris[y:y1]])
+        jumlah, y = jumlah + 1, y1
+    berkas.unlink(missing_ok=True)
+    return jumlah, len(ragam) > 20
+
+
+def domain_dari(argumen):
+    if Path(argumen).is_file():
+        for baris in Path(argumen).read_text(errors='replace').splitlines():
+            if baris.startswith('domain='):
+                return baris.split('=', 1)[1].strip().lower()
+        return ''
+    return argumen.strip().lower()
+
+
+def main():
+    if len(sys.argv) != 2:
+        print('usage: paket-g-cek-visual <manifest|domain>', file=sys.stderr)
+        return 2
+    domain = domain_dari(sys.argv[1])
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('visual: domain tidak valid')
+        return 2
+    chrome = cari_chrome()
+    if not chrome:
+        print('visual: Chromium tidak ditemukan, langkah dilewati')
+        return 0
+    folder = OUT_ROOT / domain / time.strftime('%Y%m%d-%H%M%S')
+    folder.mkdir(parents=True, exist_ok=True)
+    modul = png()
+    ringkasan, temuan = {'domain': domain, 'folder': str(folder), 'halaman': {}}, []
+    for nama, path, lebar, tinggi, ua in HALAMAN:
+        url = f'https://{domain}{path}?cekvisual={int(time.time())}'
+        kode = http_kode(url)
+        hasil = {'http': kode, 'potongan': 0}
+        if kode != 200:
+            temuan.append(f'{nama}:http_{kode}')
+        else:
+            mentah = folder / f'{nama}-mentah.png'
+            subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
+                            f'--user-agent={ua}', f'--window-size={lebar},{tinggi}', '--virtual-time-budget=20000',
+                            f'--screenshot={mentah}', url], capture_output=True, timeout=180)
+            if not mentah.is_file():
+                temuan.append(f'{nama}:screenshot_gagal')
+            else:
+                try:
+                    hasil['potongan'], beragam = potong(modul, mentah, folder, nama)
+                    if not beragam:
+                        temuan.append(f'{nama}:layar_kosong')
+                except Exception as e:
+                    temuan.append(f'{nama}:png_{type(e).__name__}')
+        ringkasan['halaman'][nama] = hasil
+        print(f"visual: {nama:13} http={kode} potongan={hasil['potongan']}")
+    ringkasan['temuan'] = temuan
+    (folder / 'ringkasan.json').write_text(json.dumps(ringkasan, indent=2, ensure_ascii=False))
+    for lama in sorted((OUT_ROOT / domain).iterdir())[:-5]:
+        shutil.rmtree(lama, ignore_errors=True)
+    print(f'visual: folder={folder}')
+    print(f"visual: temuan={','.join(temuan) or 'tidak ada'}")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

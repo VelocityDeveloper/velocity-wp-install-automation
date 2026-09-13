@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 """Pasang & aktifkan child theme di situs yang sudah terpasang, tanpa install ulang.
 
-Pemakaian: child-theme-apply <manifest>   (butuh WP_INSTALL_SSH_KEY_FILE)
+Pemakaian: child-theme-apply [--perbarui] <manifest>   (butuh WP_INSTALL_SSH_KEY_FILE)
 
 Dipakai installer-runner mode `child-theme`. Slug-nya ditentukan
 scripts/velocity-child-theme: dicocokkan ke API tema kalau klien memilih
 template, atau digenerate bernama project untuk paket desain custom (Paket G).
 
-Scaffold yang digenerate TIDAK pernah ditimpa: sesudah terpasang isinya hasil
-kerja desainer, jadi run berikutnya hanya mengaktifkannya.
+Scaffold yang digenerate tidak pernah ditimpa utuh: sesudah terpasang isinya bisa
+jadi hasil kerja desainer. Dengan --perbarui (dipakai alur Paket G) tema diperbarui
+PER BERKAS memakai sidik `.velocity-render.json` yang ikut terpasang:
+
+  berkas sama dengan render baru         -> tidak dikirim
+  berkas belum disunting sejak dipasang  -> diganti versi baru
+  berkas sudah disunting orang           -> dipertahankan
+
+Kalau ada berkas PHP yang dipertahankan, gabungannya diuji dulu (php -l +
+scripts/cek-fungsi-tema). Pelajaran 2026-09-13: template baru + theme-data.php
+lama milik situs membuat jasakontraktorindo.com HTTP 500 karena helper hilang.
 """
+import base64
+import hashlib
+import json
+import tempfile
+import zipfile
 import os
 import re
 import shlex
@@ -73,6 +87,98 @@ def resolve(domain, cfg):
     return out
 
 
+def sidik(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def keadaan_tema(ssh, dest):
+    """Sidik berkas tema di situs + catatan render terakhir yang terpasang."""
+    php = ('<?php $d = ' + json.dumps(dest) + '; $o = array("ada" => is_dir($d));'
+           'if ($o["ada"]) { $c = @file_get_contents("$d/.velocity-render.json");'
+           ' $o["catatan"] = $c ? json_decode($c, true) : null; $o["berkas"] = array();'
+           ' $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($d, FilesystemIterator::SKIP_DOTS));'
+           ' foreach ($it as $f) { if ($f->isFile()) { $o["berkas"][substr($f->getPathname(), strlen($d) + 1)] = hash_file("sha256", $f->getPathname()); } }'
+           ' $td = @file_get_contents("$d/inc/theme-data.php");'
+           ' if ($td && preg_match("/function\\s+([a-z0-9]+)_data\\s*\\(/", $td, $m)) { $o["prefix"] = $m[1]; } }'
+           'echo json_encode($o);')
+    run = subprocess.run(ssh + ['php'], input=php, capture_output=True, text=True, timeout=120)
+    return json.loads(run.stdout.strip() or '{}')
+
+
+def perbarui(cfg, ssh, dest, slug, prefix, zip_path, situs):
+    """Perbarui tema terpasang per berkas. -> kode keluar, atau None kalau tema belum ada."""
+    if not situs.get('ada'):
+        return None
+    with zipfile.ZipFile(zip_path) as z:
+        baru = {n[len(slug) + 1:]: z.read(n) for n in z.namelist()
+                if n.startswith(slug + '/') and not n.endswith('/')}
+    catatan_baru = json.loads(baru['.velocity-render.json'])
+    rekam = ((situs.get('catatan') or {}).get('berkas')) or {}
+    live = situs.get('berkas') or {}
+    if not situs.get('catatan'):
+        # Tema terpasang sebelum catatan render ada (sebelum 2026-09-13): berkas
+        # template dianggap belum disunting, theme-data.php (tempat isi situs)
+        # dianggap milik situs. Gabungannya tetap diuji di bawah.
+        rekam = {n: h for n, h in live.items() if n != 'inc/theme-data.php'}
+        print(f'child_theme: {slug} belum punya catatan render — theme-data.php dipertahankan')
+    tulis, sama, disunting = [], [], []
+    for nama in sorted(baru):
+        if nama == '.velocity-render.json':
+            continue
+        h = sidik(baru[nama])
+        if live.get(nama) == h:
+            sama.append(nama)
+        elif nama not in live or rekam.get(nama) == live[nama]:
+            tulis.append(nama)
+        else:
+            disunting.append(nama)
+
+    if any(n.endswith('.php') for n in disunting):
+        # Uji gabungan: berkas baru + berkas PHP milik situs yang dipertahankan.
+        with tempfile.TemporaryDirectory() as tmp:
+            akar = Path(tmp) / slug
+            for nama, isi in baru.items():
+                (akar / nama).parent.mkdir(parents=True, exist_ok=True)
+                (akar / nama).write_bytes(isi)
+            for nama in disunting:
+                ambil = subprocess.run(ssh + [f'base64 -w0 {shlex.quote(dest + "/" + nama)}'],
+                                       capture_output=True, text=True, timeout=60)
+                (akar / nama).write_bytes(base64.b64decode(ambil.stdout.strip() or ''))
+            rusak = [n for n in disunting if n.endswith('.php') and subprocess.run(
+                ['php', '-l', str(akar / n)], capture_output=True).returncode != 0]
+            fungsi = subprocess.run([sys.executable, str(HERE / 'cek-fungsi-tema'), str(akar), prefix],
+                                    capture_output=True, text=True, timeout=60)
+            if rusak or fungsi.returncode != 0:
+                print(f'child_theme_update_ditahan:{slug}: gabungan dengan berkas yang disunting '
+                      f'({", ".join(disunting)}) tidak lolos uji: {" ".join((fungsi.stdout or "").split())[:200]}')
+                return 1
+
+    catatan = dict(catatan_baru)
+    # Berkas yang disunting tetap tercatat dengan sidik lamanya (atau tidak
+    # tercatat), jadi run berikutnya tetap menganggapnya milik orang.
+    catatan['berkas'] = {n: h for n, h in catatan_baru['berkas'].items() if n not in disunting}
+    catatan['berkas'].update({n: rekam[n] for n in disunting if n in rekam})
+    kirim = tulis + ['.velocity-render.json']
+    with tempfile.TemporaryDirectory() as tmp:
+        for nama in tulis:
+            (Path(tmp) / nama).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / nama).write_bytes(baru[nama])
+        (Path(tmp) / '.velocity-render.json').write_text(json.dumps(catatan, indent=1, sort_keys=True))
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', tmp] + kirim, stdout=subprocess.PIPE)
+        da = cfg['da_user']
+        run = subprocess.run(ssh + [f'set -e; D={shlex.quote(dest)}; tar -xzf - -C "$D"; '
+                                    f'chown -R {shlex.quote(da)}:{shlex.quote(da)} "$D"; '
+                                    'find "$D" -type d -exec chmod 755 {} +; find "$D" -type f -exec chmod 644 {} +; echo ok'],
+                             stdin=tar.stdout, capture_output=True, text=True, timeout=300)
+        tar.wait()
+    if 'ok' not in run.stdout:
+        print(f'child_theme_update_gagal:{slug}:{run.stderr.strip()[:200]}')
+        return 1
+    print(f'child_theme_updated:{slug}: {len(tulis)} berkas diperbarui, {len(sama)} sama'
+          + (f', disunting dipertahankan: {", ".join(disunting)}' if disunting else ''))
+    return 0
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('-')]
     if len(args) != 1:
@@ -104,6 +210,26 @@ def main():
     ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    if '--perbarui' in sys.argv and status == 'generated':
+        dest = f"/home/{da_user}/domains/{domain}/public_html/wp-content/themes/{slug}"
+        situs = keadaan_tema(ssh, dest)
+        if situs.get('prefix') and situs['prefix'] != info.get('prefix'):
+            # Awalan dibaca dari tema terpasang, bukan ditebak ulang dari domain:
+            # jasakontraktorindo.com memakai `jki`, tebakan generator `jasa`.
+            print(f"child_theme: awalan situs {situs['prefix']} (tebakan {info.get('prefix')}), dirender ulang")
+            info = resolve(domain, dict(cfg, velocity_child_prefix=situs['prefix']))
+            zip_path = Path(info.get('zip', ''))
+            if info.get('status') != 'generated' or not zip_path.is_file():
+                print(f'child_theme: render ulang gagal ({info.get("error", "")})')
+                return 1
+        hasil = perbarui(cfg, ssh, dest, slug, info.get('prefix', ''), zip_path, situs)
+        if hasil is not None:
+            aktif = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp theme activate {shlex.quote(slug)} '
+                                          f'--path={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")} '
+                                          '--allow-root >/dev/null 2>&1 && echo ok'],
+                                   capture_output=True, text=True, timeout=120)
+            print(f'active_theme:{slug}' if 'ok' in aktif.stdout else f'theme_activate_failed:{slug}')
+            return hasil if 'ok' in aktif.stdout else 1
     up = subprocess.run(['scp', '-i', key, '-o', 'BatchMode=yes',
                          '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15',
                          '-P', str(cfg.get('ssh_port') or 22), str(zip_path),

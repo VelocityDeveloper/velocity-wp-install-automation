@@ -146,7 +146,7 @@ Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
 
 ## Alur apply lengkap
 
-`installer-runner` (mode `apply`): install WordPress → cek HTTP → konten AI (`ai-content-generator.py`) → finishing (`site-finish`) → hapus tema & plugin bawaan yang tidak dipakai (`site-finish --cleanup`) → pemeriksaan akhir (`site-qa`) → maintenance mode (`site-finish --maintenance`) → laporan Telegram ✅ selesai, atau 🟡 "perlu dicek" beserta daftar masalah.
+`installer-runner` (mode `apply`): install WordPress → cek HTTP → konten AI (`ai-content-generator.py`) → finishing (`site-finish`) → hapus tema & plugin bawaan yang tidak dipakai (`site-finish --cleanup`) → [alur Paket G](#alur-paket-g-baku) bila `paket=Paket G` → pemeriksaan akhir (`site-qa`) → maintenance mode (`site-finish --maintenance`) → laporan Telegram ✅ selesai, atau 🟡 "perlu dicek" beserta daftar masalah.
 
 - **Pembersihan** hanya pada run yang memasang WordPress dari awal (bukan apply ulang situs lama, bukan mode finish/maintenance): tema `twenty*` dan plugin `akismet`/`hello` yang tidak aktif. Tema aktif dan induknya tidak pernah dihapus; tema/plugin non-bawaan tidak disentuh.
 
@@ -165,7 +165,7 @@ Mode `finish` (`POST /api/installer/run` `{"domain":..., "mode":"finish"}`) menj
 
 Mode `maintenance` (`{"domain":..., "mode":"maintenance"}`) hanya menyalakan maintenance mode velocity-addons untuk situs yang terpasang sebelum langkah itu ada (sekali per situs, dilewati kalau sudah diatur manual).
 
-Mode `child-theme` (`{"domain":..., "mode":"child-theme"}`) hanya memasang & mengaktifkan child theme untuk situs yang sudah terpasang — lihat [Paket G](#paket-g-child-theme-dibuat-otomatis-bernama-project).
+Mode `child-theme` (`{"domain":..., "mode":"child-theme"}`) memasang/memperbarui child theme situs yang sudah terpasang; untuk Paket G menjalankan seluruh [alur Paket G](#alur-paket-g-baku).
 
 **SSL belum otomatis.** Kalau QA melaporkan `ssl_tidak_valid` (domain baru menyajikan sertifikat domain lain), terbitkan di server DirectAdmin tujuan:
 
@@ -193,7 +193,8 @@ Paket G tidak memilih template — desainnya custom per project, jadi form klien
 - Slug & folder: `velocity-<label domain>` (jasakontraktorindo.com → `velocity-jasakontraktorindo`), Theme Name "Velocity Jasakontraktorindo", `Template: velocity`.
 - Isinya **kerangka desain lengkap**, bukan child theme kosong — dirender dari `templates/child-theme-paket-g/` (lihat bagian berikutnya).
 - Zip disimpan di `/var/lib/velocity/packages/child-themes/<slug>-<versi>.zip` (isinya deterministik, jadi generate ulang tidak mengubah apa pun).
-- **Tidak pernah ditimpa.** Apply ulang hanya mengaktifkannya (`child_theme_kept:<slug>`) kalau folder temanya sudah ada di server — `install_from_zip` menghapus folder tujuan sebelum menyalin, jadi tanpa pengaman ini hasil kerja desainer hilang.
+- **Tidak pernah ditimpa utuh, tapi diperbarui per berkas.** `install_from_zip` menghapus folder tujuan, jadi installer hanya mengaktifkan tema yang sudah ada (`child_theme_kept:<slug>`). Pembaruannya lewat `child-theme-apply --perbarui`: setiap tema membawa `.velocity-render.json` (sidik berkas hasil render); berkas yang masih sama dengan catatan diganti versi baru, berkas yang disunting orang dipertahankan, dan gabungan PHP-nya diuji (`php -l` + `cek-fungsi-tema`) — gagal berarti pembaruan ditahan (`child_theme_update_ditahan`). Awalan dibaca dari tema terpasang. Tema lama tanpa catatan: `inc/theme-data.php` dianggap milik situs.
+- Zip selalu dirender ulang (tidak dari cache), sehingga perbaikan template & data compro terbaru selalu ikut.
 - Status `generated` di log; laporan Telegram menulis `Tema: <slug> (child theme baru, desain custom)`.
 - Kalau form Paket G ternyata memuat referensi desain yang ada di API, yang dari API tetap dipakai; scaffold hanya dibuat saat tidak ada yang cocok (termasuk saat API tema mati).
 - Penopang kalau manifest tidak punya `paket=` (CRM tidak terbaca saat manifest dibuat): paket dibaca dari nama file form di folder klien (`FORM ISIAN WEBSITE - paket g.doc`). Hanya dipakai saat `paket=` kosong. Diperiksa 2026-09-12 atas 22 folder antrean — 5 file bernama "paket g" (4 memang Paket G di CRM, 1 paketnya kosong), tidak ada paket E/F/Portal/Toko yang filenya bernama begitu, dan penopang ini hanya menambah 1 domain (5 → 6).
@@ -207,7 +208,23 @@ INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
   scripts/installer-runner jasakontraktorindo.com
 ```
 
-Mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`) — tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
+Untuk paket lain mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`). Untuk Paket G menjalankan [alur Paket G](#alur-paket-g-baku). Keduanya tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
+
+## Alur Paket G baku
+
+Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nanti seperti itu alurnya"). Satu fungsi `paket_g_alur` di `installer-runner`, dijalankan pada mode `apply` dan `finish` (sesudah `site-finish`) serta mode `child-theme`:
+
+| # | Langkah | Hasil |
+|---|---|---|
+| 1 | `compro-klien <domain>` | Company profile PDF → susunan bagian, prakata, warna, latar, logo, foto (`/var/lib/velocity/compro/<domain>/`). Tanpa PDF: dilewati |
+| 2 | `paket-g-konten <manifest>` | Isi contoh dari form + dokumen; disesuaikan dengan compro (layanan tertulis, slogan, prakata, motto) |
+| 3 | `child-theme-apply --perbarui <manifest>` | Render tema dari data terbaru; pasang baru atau perbarui berkas yang belum disunting |
+| 4 | `paket-g-foto <manifest>` | Foto compro per halaman; tanpa compro: foto klien lalu foto contoh Openverse |
+| 5 | `paket-g-setup <manifest>` | Halaman blok desain + menu (harus sesudah `site-finish`) |
+| 6 | `site-finish --widget <manifest>` | Widget bawaan dibersihkan |
+| 7 | `paket-g-cek-visual <manifest>` | Screenshot desktop & HP ke `/var/lib/velocity/visual/<domain>/<waktu>/` + cek HTTP/layar kosong; `site-audit` membaca temuannya |
+
+Semua langkah boleh gagal tanpa menggagalkan instalasi (kecuali pemasangan tema di mode `child-theme`). Hasilnya tetap dilihat manusia/Claude lewat screenshot sebelum dilaporkan selesai — kesalahan tampilan tidak terlihat dari HTML. Audit terkait: `tema_belum_mengikuti_compro`, `tombol_whatsapp_tanpa_nomor`, `visual:<temuan>`.
 
 ## Kerangka desain Paket G (`templates/child-theme-paket-g/`)
 

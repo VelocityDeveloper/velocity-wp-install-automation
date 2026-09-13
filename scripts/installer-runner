@@ -43,6 +43,37 @@ paket_desain_custom() {
   [[ "$paket" == "paketg" ]]
 }
 
+# Alur Paket G (disepakati user 2026-09-13 lewat uji ptmitraajegselaras.com).
+# Urutan adalah bagian dari kebenaran:
+#   1. compro-klien       baca company profile PDF (susunan, warna, foto, prakata)
+#   2. paket-g-konten     isi contoh dari form + dokumen, disesuaikan dengan compro
+#   3. child-theme-apply  render tema dari data terbaru; perbarui berkas yang belum
+#                         disunting orang, pertahankan yang sudah (--perbarui)
+#   4. paket-g-foto       foto compro per halaman (atau foto contoh bila tanpa compro)
+#   5. paket-g-setup      halaman blok desain + menu (SESUDAH site-finish)
+#   6. site-finish --widget
+#   7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
+# Semua langkah boleh gagal tanpa menggagalkan instalasi, kecuali pemasangan tema
+# pada mode child-theme (kode keluarnya dilaporkan).
+paket_g_alur() {
+  local rc_tema
+  printf '[%s] Paket G: company profile & isi contoh\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
+  /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
+  printf '[%s] Paket G: tema (perbarui berkas yang belum disunting)\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/child-theme-apply" --perbarui "$MANIFEST" >> "$LOG" 2>&1
+  rc_tema=$?
+  printf '[%s] Paket G: foto\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
+  printf '[%s] Paket G: halaman & menu\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
+  printf '[%s] Paket G: bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
+  printf '[%s] Paket G: cek visual\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
+  return $rc_tema
+}
+
 # Audit hanya membaca: status instalasi & notifikasi tidak disentuh.
 if [[ "$MODE" == "audit" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] audit: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
@@ -54,19 +85,12 @@ fi
 if [[ "$MODE" == "child-theme" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] child_theme: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
   printf '[%s] Child theme\n' "$(date -Is)" >> "$LOG"
-  /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
-  rc=$?
-  if (( rc == 0 )) && paket_desain_custom; then
-    # Situs yang terpasang sebelum isi contoh ada: pasang isinya (hanya kalau
-    # theme-data.php di situs masih isian netral) lalu foto contohnya.
-    printf '[%s] Isi & foto contoh Paket G\n' "$(date -Is)" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
-    /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" --pasang >> "$LOG" 2>&1 || true
-    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
-    printf '[%s] Halaman & menu Paket G\n' "$(date -Is)" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
-    printf '[%s] Bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
+  if paket_desain_custom; then
+    paket_g_alur
+    rc=$?
+  else
+    /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
+    rc=$?
   fi
   exit $rc
 fi
@@ -115,14 +139,10 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # Harus SESUDAH site-finish — finishing menulis ulang halaman Galeri & Hubungi
   # Kami (galeri + peta), yang akan menghapus shortcode kalau urutannya dibalik.
   if paket_desain_custom; then
-    # Foto contoh sesudah site-finish: foto kiriman klien sudah diimpor dulu,
-    # sehingga slot mendahulukan foto klien sebelum mencari foto contoh.
-    echo "[$(date -Is)] Foto contoh Paket G" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
-    echo "[$(date -Is)] Halaman & menu Paket G" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
-    echo "[$(date -Is)] Bersihkan widget bawaan" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
+    # Foto sesudah site-finish (foto kiriman klien sudah diimpor), halaman &
+    # menu sesudah finishing menulis ulang Galeri/Hubungi Kami. Detail urutan
+    # di paket_g_alur.
+    paket_g_alur || true
   fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"

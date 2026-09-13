@@ -584,16 +584,26 @@ def scaffold(domain, nama='', prefix='', primary='', aksen=''):
         raise ValueError(f'slug tidak valid: {slug}')
     CACHE.mkdir(parents=True, exist_ok=True)
     dest = CACHE / f'{slug}-{SCAFFOLD_VERSION}.zip'
-    if dest.is_file():
-        return slug, dest
+    # Selalu dirender ulang: zip lama di cache dulu dipakai terus sehingga
+    # perbaikan template & isi compro terbaru tidak pernah sampai ke situs.
+    # Render murah dan hasilnya deterministik (tanggal zip dipatok).
     utama, warna_aksen = warna_tema(domain, primary, aksen)
     nilai = nilai_template(
         slug, domain, nama, prefix_dari(domain, prefix), utama, warna_aksen,
         WARNA_DEFAULT['ink'],
     )
     tmp = dest.with_suffix('.tmp')
+    berkas = berkas_template(nilai)
+    # Sidik tiap berkas hasil render ikut dipasang di tema. child-theme-apply
+    # --perbarui memakainya untuk tahu berkas mana yang belum disunting orang
+    # (aman diperbarui) dan mana yang sudah (dipertahankan).
+    berkas['.velocity-render.json'] = json.dumps({
+        'slug': slug, 'versi': SCAFFOLD_VERSION,
+        'berkas': {n: hashlib.sha256(d if isinstance(d, bytes) else d.encode()).hexdigest()
+                   for n, d in sorted(berkas.items())},
+    }, indent=1, sort_keys=True)
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
-        for name, data in berkas_template(nilai).items():
+        for name, data in berkas.items():
             # Tanggal dipatok supaya zip yang digenerate ulang isinya identik.
             info = zipfile.ZipInfo(f'{slug}/{name}', date_time=(2026, 1, 1, 0, 0, 0))
             info.external_attr = 0o644 << 16

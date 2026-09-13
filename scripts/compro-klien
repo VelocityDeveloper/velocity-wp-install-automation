@@ -36,6 +36,9 @@ ON_PROGRESS = Path('/home/On Progress')
 OUT_ROOT = Path('/var/lib/velocity/compro')
 PROFIL_RE = re.compile(r'profil|profile|compro|company', re.I)
 EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+# Naikkan bila bentuk compro.json berubah: hasil tersimpan versi lama dibaca ulang
+# otomatis (versi 2 menambah seksi, prakata, alamat, latar, sorot, foto transparan).
+VERSI = 2
 
 
 # ---------- PNG minimal (tanpa PIL: tidak terpasang di server installer) ----------
@@ -621,8 +624,14 @@ def main():
     keluar = OUT_ROOT / domain
     hasil_json = keluar / 'compro.json'
     if hasil_json.is_file() and '--segar' not in sys.argv:
-        print(f'compro: memakai hasil tersimpan {hasil_json}')
-        return 0
+        try:
+            versi = json.loads(hasil_json.read_text()).get('versi', 1)
+        except (OSError, ValueError):
+            versi = 0
+        if versi >= VERSI:
+            print(f'compro: memakai hasil tersimpan {hasil_json}')
+            return 0
+        print(f'compro: hasil tersimpan versi {versi} (sekarang {VERSI}), dibaca ulang')
     pdf = cari_compro(domain)
     if not pdf:
         print('compro: tidak ada company profile PDF di folder klien')
@@ -665,7 +674,7 @@ def main():
             prakata = isi_prakata(halaman[s['halaman'][0] - 1], berulang,
                                   judul_halaman(halaman[s['halaman'][0] - 1], berulang), slogan)
             break
-    data = {'pdf': str(pdf), 'halaman': jumlah, 'nama': nama, 'slogan': slogan,
+    data = {'versi': VERSI, 'pdf': str(pdf), 'halaman': jumlah, 'nama': nama, 'slogan': slogan,
             'subjudul': subjudul, 'alamat': alamat, 'email': email, 'latar': latar,
             'warna': {'utama': utama, 'aksen': aksen, 'sorot': sorot, 'sorot_2': sorot_2,
                       'sumber': sumber_warna, 'rincian': rincian_warna},

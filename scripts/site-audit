@@ -20,6 +20,7 @@ import shlex
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -326,6 +327,34 @@ def main():
             temuan.append(f"tema_bukan_child_theme:{situs['tema']}")
         elif not situs['tema_induk']:
             temuan.append('child_theme_tanpa_induk')
+
+    # --- tampilan mengikuti company profile & tombol WhatsApp ---
+    if paket_custom:
+        kode_beranda, beranda = http(f'https://{domain}/?audit={int(time.time())}')
+        try:
+            compro = json.loads((Path('/var/lib/velocity/compro') / domain / 'compro.json').read_text())
+        except (OSError, ValueError):
+            compro = {}
+        prefix = harapan.get('prefix', '')
+        if kode_beranda == 200:
+            info['gaya'] = 'compro' if prefix and f'{prefix}--compro'.encode() in beranda else 'bawaan'
+            if compro.get('seksi') and info['gaya'] != 'compro':
+                temuan.append('tema_belum_mengikuti_compro')
+            # Tanpa nomor publik tombol WA jatuh ke mailto/nomor kosong; tema
+            # harus menyembunyikannya (pelajaran ptmitraajegselaras.com).
+            if not situs.get('wa_nomor') and b'wa.me/' in beranda:
+                temuan.append('tombol_whatsapp_tanpa_nomor')
+        # Hasil scripts/paket-g-cek-visual terakhir (screenshot untuk dicek mata).
+        run_visual = sorted((Path('/var/lib/velocity/visual') / domain).glob('*/ringkasan.json'))
+        if run_visual:
+            try:
+                visual = json.loads(run_visual[-1].read_text())
+                info['visual'] = f"{run_visual[-1].parent} ({', '.join(visual.get('temuan') or []) or 'ok'})"
+                temuan += [f'visual:{t}' for t in visual.get('temuan') or []]
+            except (OSError, ValueError):
+                pass
+        else:
+            info['visual'] = 'belum pernah dicek'
 
     # --- halaman & menu ---
     wajib = ['beranda', 'tentang-kami', 'galeri', 'berita', 'hubungi-kami']

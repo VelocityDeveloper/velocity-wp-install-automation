@@ -388,3 +388,32 @@ Jebakan yang ditemukan:
   gaya compro tinggal di `inc/compro.php` milik template.
 - Slot foto bekas run lama (asal contoh/compro) yang tidak ada di rencana baru
   harus dikosongkan, bukan dibiarkan.
+
+## Alur Paket G dibakukan (hasil uji ptmitraajegselaras.com)
+
+User 2026-09-13: "ujicoba untuk project paket G nanti seperti itu alurnya".
+Semua langkah yang tadinya dikerjakan tangan kini satu fungsi `paket_g_alur` di
+`installer-runner`, dipakai mode `apply`, `finish`, dan `child-theme`:
+
+1. `compro-klien` → 2. `paket-g-konten` → 3. `child-theme-apply --perbarui` →
+4. `paket-g-foto` → 5. `paket-g-setup` → 6. `site-finish --widget` →
+7. `paket-g-cek-visual`.
+
+Yang harus diubah supaya langkah tangan bisa jadi otomatis:
+- **Zip tema tidak boleh dari cache.** `velocity-child-theme` dulu memakai ulang
+  zip lama selama berkasnya ada, sehingga perbaikan template tidak pernah sampai.
+  Kini selalu dirender (deterministik, md5 sama bila isinya sama).
+- **Tema terpasang diperbarui per berkas, bukan dilarang ditimpa.** Aturan lama
+  "scaffold tidak pernah ditimpa" membuat situs tak pernah menerima perbaikan.
+  Setiap tema kini membawa `.velocity-render.json` (sidik berkas render). Berkas
+  yang masih sama dengan catatan → diganti; yang disunting → dipertahankan;
+  gabungan PHP diuji `php -l` + `cek-fungsi-tema` sebelum dikirim, dan
+  pembaruan DITAHAN kalau gagal (terbukti menahan render berawalan salah di
+  jasakontraktorindo.com tanpa merusak situs). Tema lama tanpa catatan:
+  theme-data.php dianggap milik situs.
+- **Awalan dibaca dari tema terpasang** (`function <prefix>_data`), bukan ditebak
+  dari domain — jebakan `jki` vs `jasa` terulang di langkah pembaruan tema.
+- **compro.json bervers**i (`VERSI`); hasil tersimpan format lama dibaca ulang.
+- **Cek visual** menyimpan screenshot di `/var/lib/velocity/visual/<domain>/`
+  (5 run terakhir); `site-audit` membaca temuan terakhirnya, dan menandai
+  `tema_belum_mengikuti_compro` serta `tombol_whatsapp_tanpa_nomor`.
