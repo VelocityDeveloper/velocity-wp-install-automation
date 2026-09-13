@@ -6,7 +6,14 @@ Dijalankan installer-autopilot.timer. Satu putaran:
      masih kosong -> apply. Dry-run gagal, situs sudah berisi, atau run macet ->
      berhenti (fase manual) dan kabari lewat Telegram.
   2. Kalau tidak ada run berjalan, ambil SATU project "belum diambil" yang lolos
-     saringan (deadline terdekat dulu): klaim -> generate manifest -> dry-run.
+     saringan: klaim -> generate manifest -> dry-run.
+
+Urutan (AUTOPILOT_PRIORITAS):
+  terlama  (bawaan, keputusan user 2026-09-13) — hanya project yang deadline-nya
+           SUDAH lewat, yang paling lama lewat dulu. Masa uji coba: project yang
+           deadline-nya belum lewat sedang dikerjakan manual oleh webmaster dan
+           tidak boleh ditabrak autopilot.
+  terdekat — perilaku lama: deadline terdekat dulu, yang lewat >10 hari dilewati.
 
 AUTOPILOT_MODE=observe (default) hanya mencatat rencana ke autopilot-last.json
 dan journald tanpa klaim/instalasi apa pun. AUTOPILOT_MODE=active menjalankannya.
@@ -47,6 +54,9 @@ WAIT_DA_MAX = datetime.timedelta(days=14)
 # ditinggalkan: statusnya di CRM belum tentu masih berlaku.
 DEADLINE_GRACE = datetime.timedelta(
     days=int(os.environ.get('AUTOPILOT_DEADLINE_GRACE_DAYS', '10')))
+PRIORITAS = os.environ.get('AUTOPILOT_PRIORITAS', 'terlama').strip().lower()
+# Mode terlama: deadline harus sudah lewat minimal sekian hari.
+MIN_TELAT = datetime.timedelta(days=int(os.environ.get('AUTOPILOT_MIN_TELAT_DAYS', '1')))
 
 
 def utcnow():
@@ -137,13 +147,16 @@ def skip_reason(row, journal, today):
     jenis = set(row.get('jenis') or [])
     if 'Redesign' in jenis or not jenis & AUTO_JENIS:
         return 'jenis_redesign_atau_lain'
-    if row.get('deadline'):
-        try:
-            telat = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(row['deadline'])
-        except ValueError:
-            telat = datetime.timedelta(0)
-        if telat > DEADLINE_GRACE:
-            return 'deadline_terlewat'
+    try:
+        telat = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(str(row.get('deadline')))
+    except ValueError:
+        telat = None
+    if PRIORITAS == 'terlama':
+        if telat is None or telat < MIN_TELAT:
+            # Belum lewat deadline (atau tanpa deadline): wilayah webmaster.
+            return 'deadline_belum_lewat_dikerjakan_webmaster'
+    elif telat is not None and telat > DEADLINE_GRACE:
+        return 'deadline_terlewat'
     if not read_client_form(ON_PROGRESS / domain)['fields']:
         return 'form_isian_klien_tidak_terbaca'
     return None

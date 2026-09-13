@@ -381,9 +381,12 @@ CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/instal
 `installer-autopilot.timer` tiap 10 menit. Satu putaran:
 
 1. Domain yang sedang dipegang autopilot dilanjutkan: dry-run OK + `site=empty` → apply. Dry-run gagal, situs sudah berisi (`site=wordpress|not_empty`), atau run macet >2 jam → fase `manual` (tanpa notifikasi untuk tahap dry-run; apply yang gagal tetap dilaporkan).
-2. Kalau tidak ada run berjalan, ambil **satu** project `belum diambil` yang lolos saringan (deadline terdekat dulu): klaim → generate manifest → dry-run.
+2. Kalau tidak ada run berjalan, ambil **satu** project `belum diambil` yang lolos saringan: klaim → generate manifest → dry-run.
 
-Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), deadline belum terlewat, FORM ISIAN klien terbaca, belum pernah ditangani autopilot.
+Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), FORM ISIAN klien terbaca, belum pernah ditangani autopilot, dan aturan deadline sesuai `AUTOPILOT_PRIORITAS`:
+
+- `terlama` (bawaan, keputusan user 2026-09-13): hanya project yang deadline-nya **sudah lewat** (minimal `AUTOPILOT_MIN_TELAT_DAYS`, bawaan 1 hari), yang paling lama lewat diambil dulu. Project yang deadline-nya belum lewat sedang dikerjakan manual oleh webmaster selama masa uji coba, jadi dilewati (`deadline_belum_lewat_dikerjakan_webmaster`). Saat diterapkan kandidat berubah dari 0 menjadi 12.
+- `terdekat` (perilaku lama): deadline terdekat dulu; yang lewat lebih dari `AUTOPILOT_DEADLINE_GRACE_DAYS` (10) hari dilewati.
 
 Mode di `/etc/velocity/installer-autopilot.env`: `AUTOPILOT_MODE=observe` (default — hanya mencatat rencana ke `/var/lib/velocity/installer/autopilot-last.json` + journald) atau `AUTOPILOT_MODE=active`. Jejak per domain: `/var/lib/velocity/installer/autopilot.json`.
 
