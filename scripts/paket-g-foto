@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""Foto contoh untuk setiap slot gambar child theme Paket G.
+
+Pemakaian: paket-g-foto <manifest> [--coba]     (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Keputusan user 2026-09-13: slot gambar tidak boleh dibiarkan kosong. Urutannya:
+
+  1. slot yang sudah terisi (dipasang orang atau run sebelumnya) — tidak disentuh
+  2. foto kiriman klien yang sudah diimpor site-finish (meta _velocity_source)
+  3. foto contoh dari Openverse sesuai kata kunci di <domain>-tema.json
+
+Foto contoh dibatasi ke lisensi CC0 / Public Domain Mark: bebas dipakai situs
+komersial tanpa kewajiban mencantumkan pembuat. Asal-usulnya tetap dicatat di
+meta `_velocity_foto_contoh` (sumber, pembuat, lisensi) supaya bisa ditelusuri
+dan diganti foto klien saat sudah dikirim.
+
+--coba hanya menampilkan pilihan foto per slot, tanpa mengunggah apa pun.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+OPENVERSE = 'https://api.openverse.org/v1/images/'
+UA = {'User-Agent': 'velocity-installer/1.0 (+https://velocitydeveloper.com)'}
+MAKS_BYTE = 8_000_000
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def slot_dari_isi(isi):
+    """[(kunci slot, kata kunci foto, judul untuk alt)] sesuai template tema."""
+    slot = [('hero', isi.get('hero_foto', ''), isi.get('hero_judul', '')),
+            ('tentang', isi.get('tentang_foto', ''), 'Tentang kami')]
+    slot += [(f"layanan-{l['slug']}", l.get('foto', ''), l['judul']) for l in isi.get('layanan', [])]
+    slot += [(p['slug'], p.get('foto', ''), p['judul']) for p in isi.get('produk', [])]
+    slot += [(g['slug'], g.get('foto', ''), g['judul']) for g in isi.get('galeri', [])]
+    return slot
+
+
+# Kata umum yang tidak membuktikan relevansi: "finished packaging products" pernah
+# menghasilkan foto Jeep hanya karena judulnya memuat kata "products".
+KATA_UMUM = {'area', 'areas', 'product', 'products', 'material', 'materials', 'service', 'services',
+             'custom', 'finished', 'modern', 'professional', 'industrial', 'business', 'office',
+             'interior', 'exterior', 'photo', 'image', 'view', 'work', 'working', 'quality'}
+
+
+def relevan(hasil, kata_kunci):
+    """Minimal satu kata kunci penting muncul di judul atau tag foto."""
+    penting = [k for k in re.findall(r'[a-z]+', kata_kunci.lower()) if len(k) > 3 and k not in KATA_UMUM]
+    if not penting:
+        return True
+    teks = ' '.join([str(hasil.get('title') or '')] +
+                    [str(t.get('name') or '') for t in (hasil.get('tags') or [])]).lower()
+    return any(k in teks or k.rstrip('s') in teks for k in penting)
+
+
+class Openverse:
+    """Pencarian dengan tembolok per kata kunci.
+
+    Tanpa kunci API, Openverse membatasi ±200 permintaan per hari. Satu
+    pencarian mengembalikan 20 foto, jadi hasilnya disimpan dan dipakai ulang
+    untuk beberapa slot sekaligus, bukan menembak ulang per slot.
+    """
+
+    def __init__(self):
+        self.tembolok, self.habis, self.jumlah = {}, False, 0
+
+    def cari(self, query):
+        query = re.sub(r'\s+', ' ', query or '').strip().lower()
+        if not query:
+            return []
+        if query in self.tembolok or self.habis:
+            return self.tembolok.get(query, [])
+        url = OPENVERSE + '?' + urllib.parse.urlencode({
+            'q': query, 'license': 'cc0,pdm', 'page_size': 20, 'mature': 'false',
+        })
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as resp:
+                hasil = json.load(resp).get('results', [])
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                self.habis = True
+                print('foto: batas harian Openverse tercapai, pencarian dihentikan')
+            hasil = []
+        except Exception:
+            hasil = []
+        self.jumlah += 1
+        time.sleep(1)  # sopan ke layanan publik tanpa kunci
+        self.tembolok[query] = hasil
+        return hasil
+
+
+# Foto yang fokusnya orang bisa terkesan sebagai karyawan/klien sungguhan situs itu.
+# Aturan di prompt terbukti dilanggar ("volunteers at food bank" tetap dipilih),
+# jadi disaring di kode dari judul & tag.
+ORANG_RE = re.compile(r'\b(people|person|portrait|volunteers?|man|men|woman|women|girls?|boys?|'
+                      r'crowd|selfie|family|students?|kids?|children|couple|wedding|politician|senator|'
+                      r'secretary|minister|president|mayor|governor)\b', re.I)
+
+
+def ada_orang(r):
+    teks = ' '.join([str(r.get('title') or '')] + [str(t.get('name') or '') for t in (r.get('tags') or [])])
+    return bool(ORANG_RE.search(teks))
+
+
+def layak(r, lebar_min, sudah):
+    lebar, tinggi = r.get('width') or 0, r.get('height') or 0
+    return (r.get('url') and r['url'] not in sudah and lebar >= lebar_min and not ada_orang(r)
+            # Panorama tipis (mis. 1024x334) jadi buram saat dipotong ke kartu 4:3.
+            and tinggi >= 500 and tinggi >= lebar * 0.5
+            and str(r.get('filetype') or 'jpg').lower() in ('jpg', 'jpeg', 'png', 'webp'))
+
+
+def kata_penting(teks):
+    return [k for k in re.findall(r'[a-z]+', str(teks).lower()) if len(k) > 3 and k not in KATA_UMUM]
+
+
+def muat_ai(manifest):
+    """Pemanggil AI dari ai-content-generator; None kalau model tidak tersedia."""
+    import importlib.util
+    try:
+        sys.argv = [sys.argv[0], str(manifest)] + [a for a in sys.argv[1:] if a.startswith('--')]
+        spec = importlib.util.spec_from_file_location('acg', Path(__file__).resolve().parent / 'ai-content-generator.py')
+        modul = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modul)
+        model = modul.get_default_model()
+        return (modul, model) if model else None
+    except Exception:
+        return None
+
+
+def ringkas_foto(r):
+    tag = [str(t.get('name') or '') for t in (r.get('tags') or [])][:10]
+    return {'judul': str(r.get('title') or '')[:80], 'tag': tag}
+
+
+def kandidat_slot(slot, isi, ov):
+    """Hingga 8 kandidat layak per slot: dari kata kunci slot, lalu kolam umum.
+
+    Kolam umum hanya frasa multi-kata (hero, tentang, foto_umum). Kata tunggal
+    pernah mendatangkan foto "Jumbo Rocks Campground" untuk pabrik jumbo bag.
+    """
+    kolam = []
+    for kata in [isi.get('hero_foto', ''), isi.get('tentang_foto', '')] + list(isi.get('foto_umum') or []):
+        if len(str(kata).split()) >= 2:
+            kolam += ov.cari(kata)
+    hasil = {}
+    for kunci, kata, _ in slot:
+        lebar_min = 1000 if kunci == 'hero' else 800
+        milik_slot = [r for r in ov.cari(kata) if layak(r, lebar_min, set())]
+        milik_kolam = [r for r in kolam if layak(r, lebar_min, set())]
+        # Selang-seling: kandidat khas slot tetap ada, tapi slot yang kata
+        # kuncinya nihil tidak kehabisan pilihan dari kolam umum.
+        calon, url = [], set()
+        for i in range(max(len(milik_slot), len(milik_kolam))):
+            for sumber in (milik_slot, milik_kolam):
+                if i < len(sumber) and sumber[i]['url'] not in url:
+                    url.add(sumber[i]['url'])
+                    calon.append(sumber[i])
+            if len(calon) >= 12:
+                break
+        hasil[kunci] = calon[:12]
+    return hasil
+
+
+def pilih_dengan_ai(slot, isi, calon, ai, tambahan=''):
+    """Satu panggilan AI menilai judul & tag kandidat untuk semua slot sekaligus.
+
+    Metadata bank foto berisik: pencocokan kata tidak bisa membedakan "jumbo bag"
+    dari "Jumbo Rocks Campground", tetapi model bahasa bisa. Jawabannya urutan
+    indeks per slot; -1 berarti tidak ada yang pantas.
+    """
+    modul, model = ai
+    permintaan = {
+        'bisnis': isi.get('hero_judul', ''),
+        'layanan': [l.get('judul') for l in isi.get('layanan', [])],
+        'slot': [{'slot': k, 'topik': j, 'kandidat': [dict(ringkas_foto(r), i=i) for i, r in enumerate(calon[k])]}
+                 for k, _, j in slot if calon.get(k)],
+    }
+    sistem = 'You select stock photos for a company website. Output ONLY valid JSON, no markdown.'
+    teks = ('Pilih foto untuk setiap slot situs bisnis berikut berdasarkan judul dan tag kandidat.\n'
+            'Foto harus terlihat pantas di situs bisnis itu dan cocok dengan topik slot. '
+            'Tolak foto tempat wisata, produk konsumen yang tidak terkait, orang yang menjadi fokus, '
+            'atau apa pun yang maknanya melenceng dari bidang usaha.\n'
+            + (tambahan + '\n' if tambahan else '') +
+            'Jawab JSON {"<slot>": [indeks terbaik, cadangan, ...]} — daftar kosong kalau tidak ada yang pantas.\n\n'
+            + json.dumps(permintaan, ensure_ascii=False))
+    jawab = modul.ai_call(sistem, teks, model)
+    try:
+        awal, akhir = jawab.find('{'), jawab.rfind('}')
+        pilihan = json.loads(jawab[awal:akhir + 1])
+        return {k: [int(i) for i in (v or []) if isinstance(i, int) or str(i).lstrip('-').isdigit()]
+                for k, v in pilihan.items()}
+    except Exception:
+        return None
+
+
+def pilih_foto(slot, isi, ov, ai=None):
+    """Tentukan foto untuk slot kosong. Dengan AI kalau ada; tanpa AI memakai
+    pencocokan kata kunci penting pada judul/tag sebagai cadangan."""
+    calon = kandidat_slot(slot, isi, ov)
+    urutan = sorted(slot, key=lambda s: s[0] != 'hero')  # hero paling terlihat, didahulukan
+    sudah, hasil = set(), {}
+    pilihan_ai = pilih_dengan_ai(slot, isi, calon, ai) if ai else None
+    if pilihan_ai is None and ai:
+        print('foto: penilaian AI gagal, memakai pencocokan kata kunci')
+    disetujui = []  # foto yang dinilai pantas, untuk cadangan pakai ulang
+    for kunci, kata, _ in urutan:
+        daftar = calon.get(kunci, [])
+        if pilihan_ai is not None:
+            indeks = [i for i in pilihan_ai.get(kunci, []) if 0 <= i < len(daftar)]
+            kandidat = [daftar[i] for i in indeks]
+        else:
+            kandidat = [r for r in daftar if relevan(r, kata)]
+        disetujui += [r for r in kandidat if r['url'] not in {d['url'] for d in disetujui}]
+        for r in kandidat:
+            if r['url'] not in sudah:
+                hasil[kunci] = (r, 'ai' if pilihan_ai is not None else 'kata kunci')
+                sudah.add(r['url'])
+                break
+
+    # Putaran kedua: slot kosong dinilai ulang terhadap SEMUA foto layak yang
+    # belum terpakai — foto suasana umum sektor usaha boleh dipakai di sini.
+    kosong = [s for s in urutan if s[0] not in hasil]
+    if kosong and ai and pilihan_ai is not None:
+        sisa, url = [], set(sudah)
+        for kunci, _, _ in kosong:
+            for r in calon.get(kunci, []):
+                if r['url'] not in url:
+                    url.add(r['url'])
+                    sisa.append(r)
+        sisa = sisa[:30]
+        if sisa:
+            pilihan2 = pilih_dengan_ai([(k, '', j) for k, _, j in kosong], isi, {k: sisa for k, _, _ in kosong}, ai,
+                                       tambahan='Foto suasana umum sektor usaha ini boleh dipakai. '
+                                                'Beri foto BERBEDA untuk setiap slot bila memungkinkan.')
+            for kunci, _, _ in kosong:
+                for i in (pilihan2 or {}).get(kunci, []):
+                    if 0 <= i < len(sisa) and sisa[i]['url'] not in sudah:
+                        hasil[kunci] = (sisa[i], 'ai-2')
+                        sudah.add(sisa[i]['url'])
+                        disetujui.append(sisa[i])
+                        break
+
+    # Cadangan terakhir supaya tidak ada slot kosong: pakai ulang foto yang
+    # sudah dinilai pantas. Galeri dihindarkan dari foto yang sama dua kali.
+    kosong = [s for s in urutan if s[0] not in hasil]
+    if kosong and disetujui:
+        dipakai_galeri = {hasil[k][0]['url'] for k in hasil if k.startswith('galeri-')}
+        putar = 0
+        for kunci, _, _ in kosong:
+            for langkah in range(len(disetujui)):
+                r = disetujui[(putar + langkah) % len(disetujui)]
+                if not (kunci.startswith('galeri-') and r['url'] in dipakai_galeri):
+                    hasil[kunci] = (r, 'ulang')
+                    if kunci.startswith('galeri-'):
+                        dipakai_galeri.add(r['url'])
+                    putar += langkah + 1
+                    break
+    return hasil
+
+
+def unduh(url, tujuan):
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = resp.read(MAKS_BYTE + 1)
+    if len(data) > MAKS_BYTE or len(data) < 15_000:
+        raise ValueError(f'ukuran tidak wajar ({len(data)} byte)')
+    tujuan.write_bytes(data)
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: paket-g-foto <manifest> [--coba]', file=sys.stderr)
+        return 2
+    cfg = read_manifest(args[0])
+    domain, da_user = cfg.get('domain', '').lower(), cfg.get('da_user', '')
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    isi_berkas = GENERATED_DIR / f'{domain}-tema.json'
+    if not isi_berkas.is_file():
+        print('foto: isi contoh belum ada (jalankan paket-g-konten dulu), langkah dilewati')
+        return 0
+    isi = json.loads(isi_berkas.read_text())
+    if not coba and (not key or not Path(key).is_file()):
+        print('foto: kunci SSH tidak ada')
+        return 2
+
+    docroot = f'/home/{da_user}/domains/{domain}/public_html'
+    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{cfg.get('target_host', '')}"]
+
+    # Keadaan situs: awalan tema, slot yang sudah terisi, foto klien yang tersedia.
+    keadaan = {'prefix': '', 'terisi': {}, 'klien': []}
+    if not coba:
+        skrip = r'''
+global $shortcode_tags;
+$prefix = '';
+foreach (array_keys($shortcode_tags) as $t) {
+    if (preg_match('/^([a-z0-9]+)_pemesanan$/', $t, $m)) { $prefix = $m[1]; break; }
+}
+$klien = get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 30,
+    'meta_query' => array(array('key' => '_velocity_source', 'compare' => 'EXISTS')), 'fields' => 'ids'));
+$klien = array_values(array_filter($klien, function ($id) {
+    $s = (string) get_post_meta($id, '_velocity_source', true);
+    return $s !== '' && strpos($s, 'logo') !== 0 && strpos($s, 'icon') !== 0;
+}));
+echo wp_json_encode(array('prefix' => $prefix,
+    'terisi' => $prefix ? (array) get_option($prefix . '_images', array()) : array(),
+    'klien' => $klien));
+'''
+        run = subprocess.run(ssh + [f'cat > /tmp/velocity-foto.php && php -d memory_limit=512M /usr/local/bin/wp '
+                                    f'eval-file /tmp/velocity-foto.php --path={shlex.quote(docroot)} --allow-root '
+                                    f'2>/dev/null; rm -f /tmp/velocity-foto.php'],
+                             input='<?php\n' + skrip, capture_output=True, text=True, timeout=120)
+        try:
+            keadaan = json.loads(run.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            print('foto: keadaan situs tidak terbaca, langkah dilewati')
+            return 1
+        if not re.match(r'^[a-z][a-z0-9]{1,11}$', keadaan.get('prefix') or ''):
+            print('foto: child theme Paket G tidak terbaca di situs, langkah dilewati')
+            return 0
+
+    terisi = {k: v for k, v in (keadaan.get('terisi') or {}).items() if v}
+    foto_klien = list(keadaan.get('klien') or [])
+    peta, rencana, perlu = dict(terisi), [], []
+    for kunci, kata, judul in slot_dari_isi(isi):
+        if kunci in terisi:
+            continue
+        # Foto kiriman klien lebih dulu untuk slot yang paling terlihat.
+        if foto_klien and (kunci.startswith('galeri-') or kunci in ('hero', 'tentang')):
+            peta[kunci] = foto_klien.pop(0)
+            print(f'foto: {kunci:34} <- foto klien (media {peta[kunci]})')
+            continue
+        perlu.append((kunci, kata, judul))
+
+    ov = Openverse()
+    # Semua slot sudah terisi: jangan menghabiskan jatah harian Openverse.
+    ai = muat_ai(args[0]) if perlu else None
+    dipilih = pilih_foto(perlu, isi, ov, ai) if perlu else {}
+    for kunci, kata, judul in perlu:
+        if kunci not in dipilih:
+            print(f'foto: {kunci:34} <- tidak ada foto layak, slot tetap blok bertekstur')
+            continue
+        r, dari = dipilih[kunci]
+        rencana.append((kunci, judul, r))
+        print(f"foto: {kunci:34} <- {r.get('license')} {r.get('width')}x{r.get('height')} "
+              f"[{dari}] {str(r.get('title') or '')[:44]}")
+    print(f'foto: {len(peta) + len(rencana)}/{len(slot_dari_isi(isi))} slot punya foto, '
+          f'{ov.jumlah} pencarian Openverse, penilai: {"AI" if ai else "kata kunci"}')
+    if coba:
+        return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        berkas_ok = []
+        diunduh = {}
+        for kunci, judul, pilihan in rencana:
+            if pilihan['url'] in diunduh:
+                continue
+            diunduh[pilihan['url']] = kunci
+            ekstensi = Path(urllib.parse.urlparse(pilihan['url']).path).suffix.lower() or '.jpg'
+            lokal = tmp / f'{kunci}{ekstensi if ekstensi in (".jpg", ".jpeg", ".png", ".webp") else ".jpg"}'
+            try:
+                unduh(pilihan['url'], lokal)
+                berkas_ok.append((kunci, judul, pilihan, lokal.name))
+            except Exception as e:
+                print(f'foto: {kunci} gagal diunduh ({type(e).__name__}), dilewati')
+        if berkas_ok:
+            folder = f'/tmp/velocity-foto-{domain}'
+            tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(tmp), '.'], stdout=subprocess.PIPE)
+            kirim = subprocess.run(ssh + [f'rm -rf {folder} && mkdir -p {folder} && tar -xzf - -C {folder}'],
+                                   stdin=tar.stdout, capture_output=True, text=True, timeout=300)
+            tar.wait()
+            if kirim.returncode != 0:
+                print(f'foto: gagal mengirim foto ({kirim.stderr.strip()[:120]})')
+                return 1
+            perintah = ['set -e', f'D={shlex.quote(docroot)}',
+                        'wp() { php -d memory_limit=512M /usr/local/bin/wp "$@" --path="$D" --allow-root 2>/dev/null; }']
+            for kunci, judul, pilihan, nama in berkas_ok:
+                asal = json.dumps({'sumber': pilihan.get('foreign_landing_url') or pilihan['url'],
+                                   'pembuat': pilihan.get('creator') or '', 'lisensi': pilihan.get('license'),
+                                   'kata_kunci': kunci})
+                perintah.append(
+                    f'id=$(wp media import {folder}/{shlex.quote(nama)} --title={shlex.quote("Contoh: " + judul)} '
+                    f'--alt={shlex.quote(judul)} --porcelain) && '
+                    f'wp post meta update "$id" _velocity_foto_contoh {shlex.quote(asal)} >/dev/null && '
+                    f'echo "{kunci}=$id"')
+            perintah.append(f'rm -rf {folder}')
+            run = subprocess.run(ssh + ['bash', '-s'], input='\n'.join(perintah), capture_output=True,
+                                 text=True, timeout=600)
+            id_per_url = {}
+            for baris in run.stdout.splitlines():
+                kunci, sep, nilai = baris.partition('=')
+                if sep and nilai.strip().isdigit():
+                    peta[kunci.strip()] = int(nilai)
+                    id_per_url[next(u for u, k in diunduh.items() if k == kunci.strip())] = int(nilai)
+            # Slot yang memakai ulang foto menunjuk ke media yang sama.
+            for kunci, _, pilihan in rencana:
+                if kunci not in peta and pilihan['url'] in id_per_url:
+                    peta[kunci] = id_per_url[pilihan['url']]
+
+    simpan = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp option update '
+                                   f'{keadaan["prefix"]}_images {shlex.quote(json.dumps(peta))} --format=json '
+                                   f'--path={shlex.quote(docroot)} --allow-root >/dev/null 2>&1 && echo ok'],
+                            capture_output=True, text=True, timeout=120)
+    jumlah = len(slot_dari_isi(isi))
+    print(f"foto: {len(peta)}/{jumlah} slot terisi{'' if 'ok' in simpan.stdout else ' (GAGAL menyimpan peta)'}")
+    return 0 if 'ok' in simpan.stdout else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

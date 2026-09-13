@@ -37,6 +37,7 @@ from client_form import read_client_form  # noqa: E402
 API_URL = 'https://api.velocitydeveloper.co/api/v1/themes'
 ON_PROGRESS = Path('/home/On Progress')
 CACHE = Path('/var/lib/velocity/packages/child-themes')
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
 # Signature API = md5(dmY) menurut tanggal kantor (WIB).
 WIB = datetime.timezone(datetime.timedelta(hours=7))
 DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
@@ -234,45 +235,153 @@ def perbaiki_kontras(latar, minimal=KONTRAS_MINIMAL, gelap=None):
     return warna, teks_di_atas(warna, gelap)
 
 
+NOMOR_RE = re.compile(r'(?:\+?62|0)8[\d\s.-]{7,14}\d')
+EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+
+
+def nomor_wa(teks):
+    """Nomor pertama dalam format 628…; '' kalau tidak ada nomor yang sah.
+
+    Isian klien bisa berisi beberapa nomor ("0812… / 0821…"): menggabung digitnya
+    menghasilkan nomor rusak, jadi yang diambil nomor pertama saja."""
+    cocok = NOMOR_RE.search(str(teks or ''))
+    if not cocok:
+        return '', ''
+    tampil = re.sub(r'\s+', ' ', cocok.group(0)).strip()
+    digit = re.sub(r'\D', '', tampil)
+    wa = '62' + digit[1:] if digit.startswith('0') else digit
+    return (wa, tampil) if re.match(r'^628\d{7,11}$', wa) else ('', '')
+
+
 def data_klien(domain, nama=''):
-    """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php."""
+    """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php.
+
+    Kontak PUBLIK hanya dari "Kontak utk di web" atau dokumen tambahan klien
+    (company profile). WhatsApp & email di biodata pemilik adalah data
+    administrasi ("untuk pemberitahuan perpanjangan") dan tidak pernah tampil
+    di situs — email pemilik hanya dipakai sebagai penerima form pemesanan.
+    """
+    folder = ON_PROGRESS / domain
     try:
-        form = read_client_form(ON_PROGRESS / domain)
+        form = read_client_form(folder)
     except Exception:
         form = {'fields': {}, 'text': ''}
-    fields, teks = form.get('fields') or {}, form.get('text') or ''
+    fields, teks_form = form.get('fields') or {}, form.get('text') or ''
 
     def field(pola):
         return next((str(v).strip() for k, v in fields.items() if re.search(pola, k, re.I)), '')
 
+    # Dokumen tambahan (bukan form): company profile, katalog, konsep.
+    dokumen = ''
+    try:
+        from client_docs import collect_client_docs
+        dokumen = '\n'.join(t for n, t in collect_client_docs(folder).get('sources', [])
+                            if not n.upper().startswith('FORM ISIAN'))
+    except Exception:
+        pass
+
     nama = nama.strip() or field(r'nama perusahaan') or domain.split('.')[0].replace('-', ' ').title()
-    telp = field(r'kontak utk di web|kontak untuk di web') or field(r'^whatsapp')
-    digit = re.sub(r'\D', '', telp)
-    if digit.startswith('0'):
-        wa = '62' + digit[1:]
-    elif digit.startswith('8'):
-        wa = '62' + digit
-    else:
-        wa = digit
-    if not re.match(r'^628\d{7,11}$', wa):
-        wa = ''
-    email = ''
-    for calon in re.findall(r'[\w.+-]+@[\w-]+\.[\w.-]+', teks):
-        # Alamat email milik Velocity ada di templat form, bukan milik klien.
-        if not re.search(r'velocity|example', calon, re.I):
-            email = calon
-            break
-    alamat = re.sub(r'\s*,\s*,\s*', ', ', field(r'^alamat'))
-    kota = re.search(r'(?:Kota(?:\s+Adm\.?)?|Kab(?:upaten)?\.?)\s+([A-Za-z .]+?)(?:,|$)', alamat)
-    area = kota.group(1).strip() if kota else ''
+    kontak_web = field(r'kontak utk di web|kontak untuk di web')
+    wa, telp = nomor_wa(kontak_web)
+    if not wa:
+        wa, telp = nomor_wa(dokumen)
+
+    calon_email = [e for e in EMAIL_RE.findall(kontak_web) + EMAIL_RE.findall(dokumen)
+                   if not re.search(r'velocity|example', e, re.I)]
+    # Dari daftar kotak surat (mis. catatan email domain buatan PM), alamat peran
+    # seperti info@/cs@ lebih pantas tampil daripada kotak surat perorangan.
+    peran = [e for e in calon_email if re.match(r'^(info|cs|hello|halo|kontak|contact|sales|marketing|admin)@', e, re.I)]
+    email_publik = (peran or calon_email or [''])[0]
+    # Penerima pesanan boleh email pemilik: tidak ditampilkan ke pengunjung.
+    penerima = email_publik or next((e for e in EMAIL_RE.findall(field(r'^e-?mail') + ' ' + teks_form)
+                                     if not re.search(r'velocity|example', e, re.I)), '')
+
+    kota = re.sub(r'^\s*(kota(\s+adm(inistrasi)?\.?)?|kab(upaten)?\.?)\s+', '', field(r'^kota'), flags=re.I).strip()
+    provinsi = field(r'^prop|^provinsi')
+    kodepos = field(r'^kode ?pos')
+    alamat = re.sub(r'\s*,\s*(,\s*)+', ', ', field(r'^alamat')).strip(' ,')
+    if not kota:
+        cocok = re.search(r'(?:Kota(?:\s+Adm\.?)?|Kab(?:upaten)?\.?)\s+([A-Za-z .]+?)(?:,|$)', alamat)
+        kota = cocok.group(1).strip() if cocok else ''
+    bagian = [alamat]
+    for tambahan in (kota, ' '.join(x for x in (provinsi, kodepos) if x)):
+        if tambahan and tambahan.lower() not in alamat.lower():
+            bagian.append(tambahan)
     return {
         'NAMA': nama[:80],
         'WA': wa,
-        'TELP': telp[:25] or '-',
-        'EMAIL': email or f'admin@{domain}',
-        'ALAMAT': alamat[:200] or '-',
-        'AREA': area or 'sekitarnya',
+        'TELP': telp[:25],
+        'EMAIL': penerima or f'admin@{domain}',
+        'EMAIL_PUBLIK': email_publik,
+        'ALAMAT': ', '.join(b for b in bagian if b)[:200] or '-',
+        'AREA': kota or provinsi or 'sekitarnya',
     }
+
+
+def php_nilai(nilai, indent=5):
+    """Literal array PHP dari data Python (string di-escape untuk kutip tunggal)."""
+    jarak = '    ' * indent
+    if isinstance(nilai, str):
+        return "'" + nilai.replace('\\', '\\\\').replace("'", "\\'") + "'"
+    if isinstance(nilai, bool):
+        return 'true' if nilai else 'false'
+    if isinstance(nilai, (int, float)):
+        return str(nilai)
+    if isinstance(nilai, list):
+        if all(isinstance(v, str) for v in nilai):
+            return 'array(' + ', '.join(php_nilai(v) for v in nilai) + ')'
+        isi = ',\n'.join(jarak + '    ' + php_nilai(v, indent + 1) for v in nilai)
+        return 'array(\n' + isi + ',\n' + jarak + ')'
+    if isinstance(nilai, dict):
+        return 'array(' + ', '.join(f"'{k}' => {php_nilai(v, indent)}" for k, v in nilai.items()) + ')'
+    return "''"
+
+
+def isi_netral(area):
+    """Cadangan terakhir kalau isi contoh AI tidak tersedia (mis. model AI mati)."""
+    return {
+        'hero_judul': '', 'hero_teks': 'Sampaikan kebutuhan Anda dan tim kami akan menindaklanjutinya.',
+        'hero_poin': ['Ditangani tim sendiri', 'Penawaran tertulis sebelum pengerjaan', f'Area layanan {area}'],
+        'layanan': [{'slug': s, 'judul': j, 'teks': 'Jelaskan layanan ini di sini.',
+                     'rincian': ['Rincian pertama', 'Rincian kedua', 'Rincian ketiga']}
+                    for s, j in (('satu', 'Layanan Utama'), ('dua', 'Layanan Kedua'),
+                                 ('tiga', 'Layanan Ketiga'), ('empat', 'Layanan Keempat'))],
+        'produk': [{'slug': f'produk-{i}', 'judul': j, 'teks': 'Keterangan singkat produk.'}
+                   for i, j in enumerate(('Produk Pertama', 'Produk Kedua', 'Produk Ketiga', 'Produk Keempat'), 1)],
+        'keunggulan': [{'ikon': 'area', 'judul': 'Area Layanan Jelas', 'teks': f'Melayani wilayah {area}.'},
+                       {'ikon': 'satu', 'judul': 'Satu Pintu', 'teks': 'Ditangani satu tim dari awal sampai selesai.'},
+                       {'ikon': 'rab', 'judul': 'Lingkup Tertulis', 'teks': 'Ruang lingkup disepakati sebelum pengerjaan.'},
+                       {'ikon': 'chat', 'judul': 'Konsultasi Dulu', 'teks': 'Sampaikan rencana Anda lewat WhatsApp.'}],
+        'alur': [{'judul': j, 'teks': t} for j, t in (('Konsultasi', 'Ceritakan kebutuhan Anda.'),
+                 ('Peninjauan', 'Kebutuhan diperiksa.'), ('Penawaran', 'Rincian disusun tertulis.'),
+                 ('Pengerjaan', 'Pekerjaan berjalan terpantau.'), ('Serah Terima', 'Pemeriksaan akhir bersama.'))],
+        'galeri': [{'slug': f'galeri-{i}', 'judul': f'Dokumentasi {i}'} for i in range(1, 7)],
+    }
+
+
+def muat_isi_contoh(domain):
+    """Isi contoh hasil scripts/paket-g-konten, atau None kalau belum ada."""
+    berkas = GENERATED_DIR / f'{domain}-tema.json'
+    try:
+        return json.loads(berkas.read_text()) if berkas.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def blok_isi(domain, nama, area):
+    """Baris PHP untuk kunci isi di theme-data.php."""
+    isi = muat_isi_contoh(domain) or isi_netral(area)
+    kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri')
+    baris = []
+    for k in kunci:
+        nilai = isi.get(k)
+        if k == 'hero_judul' and not nilai:
+            nilai = nama
+        if k in ('layanan', 'produk', 'galeri'):
+            # Kata kunci foto hanya untuk pencari foto, bukan untuk tema.
+            nilai = [{kk: vv for kk, vv in item.items() if kk != 'foto'} for item in nilai]
+        baris.append(f"                '{k}' => {php_nilai(nilai, 4)},")
+    return '\n'.join(baris)
 
 
 def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
@@ -280,6 +389,7 @@ def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
     # Latar berwarna dipastikan cukup kontras dulu, baru warna teksnya dipilih.
     primary, di_primary = perbaiki_kontras(primary, gelap=ink)
     aksen, di_aksen = perbaiki_kontras(aksen, gelap=ink)
+    data['DATA_ISI'] = blok_isi(domain, data['NAMA'], data['AREA'])
     data.update({
         'ON_PRIMARY': di_primary,
         'ON_PRIMARY_RGB': ', '.join(str(c) for c in hex_ke_rgb(di_primary)),
@@ -375,10 +485,12 @@ def scaffold(domain, nama='', prefix='', primary='', aksen=''):
     dest = CACHE / f'{slug}-{SCAFFOLD_VERSION}.zip'
     if dest.is_file():
         return slug, dest
+    # Warna: manifest dulu, lalu pilihan klien yang dibaca paket-g-konten, baru bawaan.
+    warna_klien = (muat_isi_contoh(domain) or {}).get('warna') or {}
     nilai = nilai_template(
         slug, domain, nama, prefix_dari(domain, prefix),
-        primary if HEX_RE.match(primary or '') else WARNA_DEFAULT['primary'],
-        aksen if HEX_RE.match(aksen or '') else WARNA_DEFAULT['aksen'],
+        next((w for w in (primary, warna_klien.get('utama')) if HEX_RE.match(w or '')), WARNA_DEFAULT['primary']),
+        next((w for w in (aksen, warna_klien.get('aksen')) if HEX_RE.match(w or '')), WARNA_DEFAULT['aksen']),
         WARNA_DEFAULT['ink'],
     )
     tmp = dest.with_suffix('.tmp')
@@ -401,8 +513,12 @@ def main():
     ap.add_argument('--primary', default='', help='warna utama, mis. #14213d')
     ap.add_argument('--accent', default='', help='warna aksen, mis. #fca311')
     ap.add_argument('--override', default='')
+    ap.add_argument('--cache', default='', help='folder zip hasil render (bawaan cache paket)')
     ap.add_argument('--no-download', action='store_true')
     args = ap.parse_args()
+    if args.cache:
+        global CACHE
+        CACHE = Path(args.cache)
     out = {'status': '', 'ref': '', 'slug': '', 'prefix': '', 'version': '', 'zip': '',
            'kontras': '', 'error': ''}
 

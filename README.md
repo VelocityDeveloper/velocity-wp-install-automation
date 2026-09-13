@@ -233,6 +233,26 @@ Placeholder yang diisi generator: awalan fungsi & kelas CSS (`--prefix`, bawaann
 
 Menyempurnakan desain untuk semua situs Paket G berikutnya = menyunting `templates/child-theme-paket-g/`, bukan menyalin-nempel per situs.
 
+## Isi & foto contoh Paket G (`scripts/paket-g-konten`, `scripts/paket-g-foto`)
+
+Keputusan user 2026-09-13: situs Paket G **selalu dibuatkan contoh dulu — konten dan gambar — tetapi tetap sesuai FORM ISIAN klien dan dokumen tambahan**. Isian netral seperti "Layanan Utama" atau slot foto kosong tidak boleh terbit.
+
+**Konten** — `paket-g-konten <manifest> [--segar] [--pasang]` menulis `/var/lib/velocity/ai/generated/<domain>-tema.json` dari form + dokumen klien (company profile, katalog, catatan): hero, 4 layanan, 4 produk, 4 keunggulan, 5 alur kerja, 6 judul galeri, kata kunci foto per slot, frasa foto umum sektor usaha, dan warna. Fakta klien didahulukan; bagian tanpa data diisi contoh yang spesifik ke bidang usahanya. Tetap dilarang mengarang angka, harga, tahun, penghargaan, sertifikat, nama klien, atau testimoni.
+
+- Dijalankan `website-install-from-manifest` **sebelum** child theme dirender, karena `inc/theme-data.php` dibuat dari JSON ini. Tanpa JSON, tema jatuh ke isian netral dan `site-audit` menandainya.
+- `--pasang` mengirim theme-data.php hasil render ke situs yang **sudah** terpasang — hanya kalau berkas di situs masih isian netral (belum disunting orang). Mode `child-theme` di installer-runner memakainya.
+- Dua penjagaan di kode, bukan di prompt, karena AI terbukti melanggarnya: label "CONTOH:" / "(contoh)" dibuang dari teks, dan warna dari AI dibuang kalau isian "WARNA TEMA WEB" berupa teks contoh template ("Misal: … biru dan hijau") — AI membacanya sebagai pilihan klien dua kali berturut-turut meski dilarang.
+
+**Foto** — `paket-g-foto <manifest> [--coba]` mengisi setiap slot gambar (hero, tentang, layanan, produk, galeri) setelah `site-finish`:
+
+1. slot yang sudah terisi tidak disentuh;
+2. foto kiriman klien (diimpor site-finish, meta `_velocity_source`) didahulukan untuk hero/tentang/galeri;
+3. sisanya foto contoh dari **Openverse**, lisensi CC0 / Public Domain Mark saja (bebas komersial tanpa atribusi). Asal-usulnya dicatat di meta `_velocity_foto_contoh`.
+
+Kandidat diambil dari kata kunci slot plus kolam frasa umum sektor (`foto_umum`), lalu **dipilih AI** dari judul & tag kandidat. Pencocokan kata saja tidak cukup: kata "jumbo" (dari jumbo bag) pernah mendatangkan foto *Jumbo Rocks Campground*, dan "finished packaging products" foto Jeep. Tanpa model AI, pemilihan jatuh ke pencocokan kata kunci penting. Pencarian ditembolok per kata kunci karena Openverse tanpa kunci dibatasi ±200 permintaan/hari (±20 per situs).
+
+**Kontak publik** di theme-data hanya dari "Kontak utk di web" atau dokumen tambahan klien (alamat peran seperti info@/cs@ didahulukan). WhatsApp & email di biodata pemilik — di form berlabel "untuk pemberitahuan perpanjangan" — tidak pernah tampil; email pemilik hanya dipakai sebagai penerima form pemesanan (`email` vs `email_publik`). Tidak ada kontak publik → `site-audit` menandai `kontak_publik_kosong`.
+
 ## Artikel per kategori layanan
 
 Artikel dulu menumpuk di satu kategori (`Blog`), sehingga pengunjung tidak bisa menelusuri tulisan per layanan. Sekarang `ai-content-generator.py` membuat kategori mengikuti **layanan yang benar-benar ada di child theme situs** — judulnya dibaca lewat WP-CLI dari `<prefix>_data('layanan')`, bukan ditebak dari template di installer.

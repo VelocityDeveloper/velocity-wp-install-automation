@@ -100,6 +100,20 @@ function velocity_audit_kategori()
     return $hasil;
 }
 
+function velocity_audit_kontak_publik()
+{
+    // Kontak yang tampil di situs menurut child theme: telepon/WA dan email publik.
+    global $shortcode_tags;
+    foreach (array_keys($shortcode_tags) as $t) {
+        if (preg_match('/^([a-z0-9]+)_kontak$/', $t, $m) && function_exists($m[1] . '_data')) {
+            $f = $m[1] . '_data';
+            $telp = trim((string) $f('telp'));
+            return array('telp' => $telp === '-' ? '' : $telp, 'email' => trim((string) $f('email_publik')));
+        }
+    }
+    return null;
+}
+
 function velocity_audit_layanan()
 {
     // Judul layanan dari child theme yang terpasang — sumber kebenaran untuk
@@ -193,6 +207,7 @@ echo wp_json_encode(array(
     'halaman_artikel' => (int) get_option('page_for_posts'),
     'halaman_berita'  => (int) (($b = get_page_by_path('berita')) ? $b->ID : 0),
     'layanan'         => velocity_audit_layanan(),
+    'kontak_publik'   => velocity_audit_kontak_publik(),
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
     'widget_nyasar'   => $widget_nyasar,
@@ -351,6 +366,15 @@ def main():
     if hilang:
         # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
         temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
+
+    # --- kontak publik ---
+    kontak = situs.get('kontak_publik')
+    if isinstance(kontak, dict):
+        info['kontak_publik'] = ' | '.join(x for x in (kontak.get('telp'), kontak.get('email')) if x) or '-'
+        if not kontak.get('telp') and not kontak.get('email'):
+            # Form hanya memuat kontak pribadi pemilik (tidak boleh tampil) dan
+            # dokumen klien tidak menyebut kontak usaha: PM perlu melengkapinya.
+            temuan.append('kontak_publik_kosong')
 
     # --- artikel & kategori layanan ---
     kategori = situs.get('kategori') or {}

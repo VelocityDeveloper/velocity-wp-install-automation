@@ -54,6 +54,30 @@ cadangan.
 `paket-g-setup` membuang blok desain berawalan salah sebelum memasang yang
 benar — jadi menjalankan ulang langkahnya sekaligus memperbaiki kerusakannya.
 
+## Contoh boleh, mengarang tidak — dan penjagaannya harus di kode
+
+Situs Paket G selalu diberi isi dan foto contoh, tetapi tiga pelajaran dari uji
+pada form klien sungguhan:
+
+1. **Aturan di prompt dilanggar AI secara konsisten.** Isian "WARNA TEMA WEB"
+   yang dibiarkan klien berisi teks template "Misal: … biru dan hijau", dan AI
+   memberi warna biru + hijau dua kali berturut-turut meski dilarang. AI juga
+   menempelkan label "CONTOH:" di teks yang akan dibaca pengunjung. Keduanya
+   kini dibuang oleh kode setelah jawaban AI diterima.
+2. **Bagian biodata pemilik bukan kontak publik.** WhatsApp dan email di sana
+   berlabel "untuk pemberitahuan perpanjangan". Versi pertama generator tema
+   memakainya sebagai kontak situs — pelanggaran aturan yang sudah ada. Hanya
+   jasakontraktorindo.com yang punya "Kontak utk di web"; tiga form Paket G lain
+   yang diuji tidak punya, sehingga masalahnya tidak kelihatan di situs contoh.
+   Isian "0812… / 0821…" juga dulu digabung digitnya menjadi nomor rusak.
+3. **Metadata bank foto berisik.** Pencocokan kata di judul/tag meloloskan
+   "Jumbo Rocks Campground" untuk pabrik jumbo bag, sedangkan saringan yang
+   diperketat membuat 13 dari 16 slot kosong. Yang berhasil: kolam frasa visual
+   umum sektor usaha + model bahasa yang memilih kandidat.
+
+Pelajaran umumnya: menguji di satu situs contoh tidak cukup — jalankan generator
+pada beberapa form klien yang masih antre sebelum alurnya dianggap jadi.
+
 ## Isi situs mengikuti layanan klien, bukan daftar bawaan
 
 Artikel AI dulu semuanya masuk satu kategori `Blog`. Isinya tidak salah, tapi

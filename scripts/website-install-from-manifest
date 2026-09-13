@@ -614,6 +614,13 @@ REMOTE_EOF
 # dikirim ke server tujuan bersama paket lain. Kegagalan di sini tidak
 # menggagalkan instalasi: situs tetap memakai tema induk.
 CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
+# Paket G: isi contoh (layanan, produk, alur, kata kunci foto, warna) ditulis dari
+# data klien SEBELUM child theme dirender, karena theme-data.php dibuat dari isi
+# itu. Gagal di sini tidak menggagalkan instalasi — tema jatuh ke isian netral
+# dan site-audit akan menandainya.
+if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" == "paketg" ]]; then
+  /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/paket-g-konten" "$MANIFEST" >&2 || echo "konten:gagal" >&2
+fi
 child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
   --paket "${cfg[paket]:-}" --nama "${cfg[site_title]:-}" \
   --prefix "${cfg[velocity_child_prefix]:-}" \

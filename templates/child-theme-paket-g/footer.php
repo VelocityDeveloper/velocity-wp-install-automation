@@ -49,12 +49,24 @@ defined('ABSPATH') || exit;
 
 		<div class="{{PREFIX}}-footer__kolom">
 			<p class="{{PREFIX}}-footer__judul">Kontak</p>
-			<p class="{{PREFIX}}-footer__teks">
-				<a href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">
-					<?php echo esc_html({{PREFIX}}_data('telp')); ?> (WhatsApp)
-				</a><br />
-				<a href="mailto:<?php echo esc_attr({{PREFIX}}_data('email')); ?>"><?php echo esc_html({{PREFIX}}_data('email')); ?></a>
-			</p>
+			<?php
+			// Hanya kontak publik yang benar-benar ada; kontak pribadi pemilik dari
+			// biodata form tidak pernah ditampilkan.
+			$telp = trim((string) {{PREFIX}}_data('telp'));
+			$email_publik = trim((string) {{PREFIX}}_data('email_publik'));
+			?>
+			<?php if (($telp !== '' && $telp !== '-') || $email_publik !== '') : ?>
+				<p class="{{PREFIX}}-footer__teks">
+					<?php if ($telp !== '' && $telp !== '-') : ?>
+						<a href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow">
+							<?php echo esc_html($telp); ?> (WhatsApp)
+						</a><br />
+					<?php endif; ?>
+					<?php if ($email_publik !== '') : ?>
+						<a href="mailto:<?php echo esc_attr($email_publik); ?>"><?php echo esc_html($email_publik); ?></a>
+					<?php endif; ?>
+				</p>
+			<?php endif; ?>
 			<?php $pemesanan = get_page_by_path('pemesanan'); ?>
 			<?php if ($pemesanan) : ?>
 				<p class="{{PREFIX}}-footer__teks">

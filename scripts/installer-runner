@@ -57,6 +57,11 @@ if [[ "$MODE" == "child-theme" ]]; then
   /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
   rc=$?
   if (( rc == 0 )) && paket_desain_custom; then
+    # Situs yang terpasang sebelum isi contoh ada: pasang isinya (hanya kalau
+    # theme-data.php di situs masih isian netral) lalu foto contohnya.
+    printf '[%s] Isi & foto contoh Paket G\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" --pasang >> "$LOG" 2>&1 || true
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
     printf '[%s] Halaman & menu Paket G\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
     printf '[%s] Bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
@@ -107,6 +112,10 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # Harus SESUDAH site-finish — finishing menulis ulang halaman Galeri & Hubungi
   # Kami (galeri + peta), yang akan menghapus shortcode kalau urutannya dibalik.
   if paket_desain_custom; then
+    # Foto contoh sesudah site-finish: foto kiriman klien sudah diimpor dulu,
+    # sehingga slot mendahulukan foto klien sebelum mencari foto contoh.
+    echo "[$(date -Is)] Foto contoh Paket G" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
     echo "[$(date -Is)] Halaman & menu Paket G" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
     echo "[$(date -Is)] Bersihkan widget bawaan" >> "$LOG"

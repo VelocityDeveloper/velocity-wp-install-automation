@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""Isi contoh situs Paket G dari data klien: hero, layanan, produk, keunggulan,
+alur kerja, galeri, kata kunci foto, dan warna.
+
+Pemakaian: paket-g-konten <manifest> [--segar] [--pasang]
+
+Keputusan user 2026-09-13: data situs SELALU dibuatkan contoh dulu — tidak
+boleh terbit dengan isian netral seperti "Layanan Utama" — tetapi tetap sesuai
+FORM ISIAN klien dan dokumen tambahan (company profile, dsb.). Yang tidak ada
+datanya diisi contoh yang wajar untuk bidang usahanya.
+
+Batas kejujuran tetap berlaku: contoh boleh menjelaskan jenis layanan, TIDAK
+boleh mengarang angka, harga, tahun berdiri, penghargaan, sertifikat, nama
+klien, atau testimoni.
+
+Hasilnya /var/lib/velocity/ai/generated/<domain>-tema.json, dibaca
+scripts/velocity-child-theme saat merender inc/theme-data.php dan oleh
+scripts/paket-g-foto untuk kata kunci foto. --segar membuat ulang; --pasang
+mengirim theme-data.php hasil render ke situs yang SUDAH terpasang, hanya kalau
+berkas di situs masih berisi isian netral template (belum disunting orang).
+"""
+import importlib.util
+import json
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+IKON = ('area', 'satu', 'rab', 'chat')
+HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+# Penanda isian netral template: kalau masih ada di situs, berkas itu belum
+# disunting siapa pun dan boleh diganti isi contoh yang sesuai klien.
+PENANDA_NETRAL = ('Layanan Utama', 'Produk Pertama', 'Dokumentasi 1')
+
+ATURAN = """Aturan isi (wajib):
+- Utamakan fakta dari data klien: nama usaha, bidang, produk/layanan, keunggulan, area, cara kerja.
+- Kalau suatu bagian tidak ada datanya, tulis CONTOH yang wajar untuk bidang usaha klien — tetap spesifik ke bidang itu, bukan kalimat umum yang cocok untuk usaha apa saja.
+- JANGAN mengarang angka, harga, persentase, tahun berdiri, jumlah proyek/klien, penghargaan, sertifikat, nama klien, atau testimoni.
+- Abaikan teks panduan template form ("Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
+- Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau nomor pribadi pemilik.
+- Tulis isi contoh sebagai kalimat biasa. JANGAN memberi label "CONTOH:", "(contoh)", atau penanda sejenis — teks ini tampil langsung ke pengunjung.
+- Bahasa Indonesia yang profesional dan ringkas."""
+
+
+def muat_generator(manifest):
+    """Pakai ulang pembaca data klien & pemanggil AI dari ai-content-generator."""
+    sys.argv = [sys.argv[0], str(manifest)]
+    spec = importlib.util.spec_from_file_location('acg', HERE / 'ai-content-generator.py')
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def slug_dari(teks):
+    s = re.sub(r'[^a-z0-9]+', '-', str(teks).lower()).strip('-')
+    return s[:30].strip('-') or 'layanan'
+
+
+# "CONTOH: …", "Contoh - …", "(contoh) …", "[contoh] …" — tapi bukan kalimat biasa
+# yang kebetulan diawali kata "Contoh" ("Contoh produk unggulan kami").
+LABEL_CONTOH = re.compile(
+    r'^\s*(?:[\(\[]\s*(?:contoh|sample|example)\s*[\)\]]\s*[:\-–]?|(?:contoh|sample|example)\s*[:\-–])\s*', re.I)
+
+
+def teks(nilai, batas):
+    """Teks satu baris, tanpa label "CONTOH:" yang kadang ditulis AI.
+
+    Isinya memang contoh, tapi label itu akan terbaca pengunjung apa adanya."""
+    bersih = re.sub(r'\s+', ' ', str(nilai or '')).strip()
+    return LABEL_CONTOH.sub('', bersih)[:batas]
+
+
+def rapikan(data):
+    """Paksa bentuk & jumlah sesuai kebutuhan template; isi kosong ditolak."""
+    hasil = {
+        'hero_judul': teks(data.get('hero_judul'), 90),
+        'hero_teks': teks(data.get('hero_teks'), 260),
+        'hero_poin': [teks(p, 60) for p in (data.get('hero_poin') or []) if teks(p, 60)][:3],
+        'hero_foto': teks(data.get('hero_foto'), 60),
+        'tentang_foto': teks(data.get('tentang_foto'), 60),
+        # Frasa visual umum sektor usaha: kolam cadangan untuk slot yang kata
+        # kuncinya terlalu spesifik ("custom jumbo bags" nihil hasil di bank foto).
+        'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
+        'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
+        'warna': {'utama': '', 'aksen': ''},
+    }
+    slug_terpakai = set()
+    for l in (data.get('layanan') or [])[:4]:
+        judul = teks(l.get('judul'), 60)
+        if not judul:
+            continue
+        slug = slug_dari(judul)
+        while slug in slug_terpakai:
+            slug += '-2'
+        slug_terpakai.add(slug)
+        hasil['layanan'].append({
+            'slug': slug, 'judul': judul, 'teks': teks(l.get('teks'), 240),
+            'rincian': [teks(r, 60) for r in (l.get('rincian') or []) if teks(r, 60)][:3],
+            'foto': teks(l.get('foto'), 60),
+        })
+    for i, p in enumerate((data.get('produk') or [])[:4], 1):
+        if teks(p.get('judul'), 60):
+            hasil['produk'].append({'slug': f'produk-{i}', 'judul': teks(p.get('judul'), 60),
+                                    'teks': teks(p.get('teks'), 160), 'foto': teks(p.get('foto'), 60)})
+    for k in (data.get('keunggulan') or [])[:4]:
+        if teks(k.get('judul'), 60):
+            ikon = k.get('ikon') if k.get('ikon') in IKON else IKON[len(hasil['keunggulan']) % len(IKON)]
+            hasil['keunggulan'].append({'ikon': ikon, 'judul': teks(k.get('judul'), 60),
+                                        'teks': teks(k.get('teks'), 180)})
+    for a in (data.get('alur') or [])[:5]:
+        if teks(a.get('judul'), 40):
+            hasil['alur'].append({'judul': teks(a.get('judul'), 40), 'teks': teks(a.get('teks'), 140)})
+    for i, g in enumerate((data.get('galeri') or [])[:6], 1):
+        if teks(g.get('judul'), 40):
+            hasil['galeri'].append({'slug': f'galeri-{i}', 'judul': teks(g.get('judul'), 40),
+                                    'foto': teks(g.get('foto'), 60)})
+    warna = data.get('warna') or {}
+    for kunci in ('utama', 'aksen'):
+        if HEX_RE.match(str(warna.get(kunci) or '')):
+            hasil['warna'][kunci] = warna[kunci]
+    kurang = [k for k, n in (('layanan', 4), ('produk', 4), ('keunggulan', 4), ('alur', 5), ('galeri', 6))
+              if len(hasil[k]) < n]
+    if not hasil['hero_judul'] or kurang:
+        raise ValueError(f'isi AI tidak lengkap: {kurang or "hero_judul"}')
+    return hasil
+
+
+TEKS_TEMPLATE_WARNA = re.compile(r'^\s*(misal|contoh|mis\.)|yang saya inginkan|dibedakan dari', re.I)
+
+
+def warna_dipilih_klien(domain):
+    """True kalau isian "WARNA TEMA WEB" berisi pilihan klien sungguhan.
+
+    Form template memuat contoh "Misal: warna dasar tema web yang saya inginkan
+    biru dan hijau." — klien yang tidak mengisi membiarkan kalimat itu, dan AI
+    terbukti membacanya sebagai pilihan biru + hijau meski dilarang di prompt.
+    Karena itu penjagaannya di kode, bukan di prompt."""
+    sys.path.insert(0, str(HERE))
+    from client_form import read_client_form
+    try:
+        fields = read_client_form(Path('/home/On Progress') / domain).get('fields') or {}
+    except Exception:
+        return False
+    nilai = next((str(v) for k, v in fields.items() if re.search(r'warna tema', k, re.I)), '')
+    nilai = re.sub(r'[.\s]+$', '', nilai).strip()
+    return bool(nilai) and not TEKS_TEMPLATE_WARNA.search(nilai)
+
+
+def buat_isi(gen, cfg, domain):
+    client_data = {}
+    for folder in (Path(cfg['_manifest']).parent, gen.ON_PROGRESS / domain):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    docs = gen.collect_client_docs(gen.ON_PROGRESS / domain)
+    info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
+    model = gen.get_default_model()
+    if not model:
+        raise RuntimeError('model AI belum diatur')
+    sistem = ("You are a senior Indonesian copywriter for company websites. Output ONLY one valid JSON object, "
+              "no markdown fences, no extra text. All visible text in Indonesian.")
+    permintaan = f"""Isi contoh situs perusahaan dari data klien berikut.
+- Nama situs: {cfg.get('site_title') or domain}
+- Domain: {domain}
+- Data klien:
+{info}
+
+{ATURAN}
+
+Kata kunci foto ("foto", "hero_foto", "tentang_foto"): 2-4 kata BAHASA INGGRIS berupa benda/tempat yang terlihat di foto dan cocok dengan bidang usaha klien (mis. "kitchen cabinet interior", "rice field harvest"). Hindari orang, logo, teks, dan nama merek.
+
+"foto_umum": 3-4 frasa BAHASA INGGRIS (masing-masing 2-3 kata) tentang suasana UMUM sektor usaha klien yang banyak tersedia di bank foto gratis — mis. untuk pabrik kemasan: "factory production line", "warehouse storage boxes", "industrial machinery". Jangan memakai kata yang maknanya bisa melenceng bila berdiri sendiri (mis. "jumbo", "sack", "bag").
+
+Warna ("warna"): isi kode hex HANYA kalau klien benar-benar menyebut warna pilihannya di form. Kalau isian warna berupa teks contoh template ("Misal: ...") atau hanya "dibedakan dari web contoh", biarkan "".
+
+Kembalikan JSON dengan bentuk persis:
+{{"hero_judul":"","hero_teks":"","hero_poin":["","",""],"hero_foto":"","tentang_foto":"","foto_umum":["","",""],
+"layanan":[{{"judul":"","teks":"","rincian":["","",""],"foto":""}}],
+"produk":[{{"judul":"","teks":"","foto":""}}],
+"keunggulan":[{{"ikon":"area|satu|rab|chat","judul":"","teks":""}}],
+"alur":[{{"judul":"","teks":""}}],
+"galeri":[{{"judul":"","foto":""}}],
+"warna":{{"utama":"","aksen":""}}}}
+Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6."""
+    for percobaan in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model)
+        if not jawab:
+            continue
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            isi = rapikan(json.loads(jawab[awal:akhir + 1]))
+            if not warna_dipilih_klien(domain) and any(isi['warna'].values()):
+                gen.log(f"Warna dari AI dibuang (bukan pilihan klien): {isi['warna']}")
+                isi['warna'] = {'utama': '', 'aksen': ''}
+            return isi
+        except (ValueError, json.JSONDecodeError) as e:
+            gen.log(f'Isi tema percobaan {percobaan + 1} ditolak: {e}')
+    raise RuntimeError('AI tidak menghasilkan isi tema yang lengkap')
+
+
+def prefix_situs(cfg, domain):
+    docroot = f"/home/{cfg['da_user']}/domains/{domain}/public_html"
+    tanya = ("php -d memory_limit=512M /usr/local/bin/wp eval "
+             "'global $shortcode_tags; foreach (array_keys($shortcode_tags) as $t) "
+             "{ if (preg_match(\"/^([a-z0-9]+)_pemesanan$/\", $t, $m)) { echo $m[1]; break; } }' "
+             f"--path={shlex.quote(docroot)} --allow-root 2>/dev/null")
+    return subprocess.run(ssh(cfg) + [tanya], capture_output=True, text=True, timeout=120).stdout.strip()
+
+
+def ssh(cfg):
+    import os
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+
+
+def pasang(cfg, domain):
+    """Kirim theme-data.php berisi isi contoh ke situs terpasang — hanya kalau
+    berkas di situs masih berisi isian netral template."""
+    prefix = prefix_situs(cfg, domain)
+    if not re.match(r'^[a-z][a-z0-9]{1,11}$', prefix):
+        print('konten: child theme Paket G tidak terbaca di situs, pemasangan dilewati')
+        return 0
+    slug = f"velocity-{re.sub(r'-{2,}', '-', re.sub(r'[^a-z0-9-]+', '-', domain.split('.')[0])).strip('-')}"
+    berkas = f"/home/{cfg['da_user']}/domains/{domain}/public_html/wp-content/themes/{slug}/inc/theme-data.php"
+    isi_lama = subprocess.run(ssh(cfg) + [f'cat {shlex.quote(berkas)} 2>/dev/null'],
+                              capture_output=True, text=True, timeout=60).stdout
+    if not isi_lama:
+        print(f'konten: {berkas} tidak ada, pemasangan dilewati')
+        return 0
+    if not any(p in isi_lama for p in PENANDA_NETRAL):
+        print('konten: theme-data.php di situs sudah disunting, tidak ditimpa')
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        tujuan = Path(tmp) / 'zip'
+        run = subprocess.run([sys.executable, str(HERE / 'velocity-child-theme'), domain,
+                              '--paket', 'Paket G', '--nama', cfg.get('site_title', ''),
+                              '--prefix', prefix, '--cache', str(tujuan)],
+                             capture_output=True, text=True, timeout=180)
+        nilai = dict(l.split('=', 1) for l in run.stdout.splitlines() if '=' in l)
+        if not nilai.get('zip'):
+            print(f"konten: render gagal ({nilai.get('error') or run.stderr.strip()[:120]})")
+            return 1
+        with zipfile.ZipFile(nilai['zip']) as z:
+            php = z.read(f'{slug}/inc/theme-data.php')
+        lokal = Path(tmp) / 'theme-data.php'
+        lokal.write_bytes(php)
+        dalam_tema = subprocess.run(ssh(cfg) + [f'php -l /dev/stdin >/dev/null'], input=php.decode(),
+                                    capture_output=True, text=True, timeout=60)
+        if dalam_tema.returncode != 0:
+            print('konten: theme-data.php hasil render tidak lolos php -l, tidak dipasang')
+            return 1
+        kirim = subprocess.run(ssh(cfg) + [f'cat > {shlex.quote(berkas)} && chown $(stat -c %U:%G '
+                                           f'{shlex.quote(str(Path(berkas).parent))}) {shlex.quote(berkas)}'],
+                               input=php.decode(), capture_output=True, text=True, timeout=60)
+        if kirim.returncode != 0:
+            print(f'konten: gagal mengirim ({kirim.stderr.strip()[:120]})')
+            return 1
+    print('konten: theme-data.php berisi isi contoh dipasang ke situs')
+    return 0
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    segar, mau_pasang = '--segar' in sys.argv, '--pasang' in sys.argv
+    if len(args) != 1:
+        print('usage: paket-g-konten <manifest> [--segar] [--pasang]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    cfg = read_manifest(manifest)
+    cfg['_manifest'] = str(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('konten: manifest tidak valid')
+        return 2
+    simpanan = GENERATED_DIR / f'{domain}-tema.json'
+    if segar or not simpanan.is_file():
+        gen = muat_generator(manifest)
+        try:
+            isi = buat_isi(gen, cfg, domain)
+        except Exception as e:
+            print(f'konten: gagal membuat isi contoh ({e})')
+            return 1
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
+        print(f"konten: isi contoh dibuat ({', '.join(l['judul'] for l in isi['layanan'])})")
+    else:
+        print('konten: memakai isi contoh tersimpan')
+    print(f'tema_json={simpanan}')
+    return pasang(cfg, domain) if mau_pasang else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

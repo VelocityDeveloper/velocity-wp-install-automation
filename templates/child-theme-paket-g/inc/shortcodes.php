@@ -126,8 +126,14 @@ if (!function_exists('{{PREFIX}}_render_kontak')) {
         ob_start(); ?>
         <div class="{{PREFIX}}-kontak">
             <ul class="{{PREFIX}}-kontak__daftar">
-                <li><span>WhatsApp / Telepon</span><a href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow"><?php echo esc_html({{PREFIX}}_data('telp')); ?></a></li>
-                <li><span>Email</span><a href="mailto:<?php echo esc_attr({{PREFIX}}_data('email')); ?>"><?php echo esc_html({{PREFIX}}_data('email')); ?></a></li>
+                <?php $telp = trim((string) {{PREFIX}}_data('telp')); ?>
+                <?php if ($telp !== '' && $telp !== '-') : ?>
+                    <li><span>WhatsApp / Telepon</span><a href="<?php echo esc_url({{PREFIX}}_wa_link()); ?>" target="_blank" rel="noopener nofollow"><?php echo esc_html($telp); ?></a></li>
+                <?php endif; ?>
+                <?php $email_publik = trim((string) {{PREFIX}}_data('email_publik')); ?>
+                <?php if ($email_publik !== '') : ?>
+                    <li><span>Email</span><a href="mailto:<?php echo esc_attr($email_publik); ?>"><?php echo esc_html($email_publik); ?></a></li>
+                <?php endif; ?>
                 <li><span>Alamat</span><?php echo esc_html($alamat); ?></li>
                 <li><span>Area Layanan</span><?php echo esc_html({{PREFIX}}_data('area')); ?></li>
             </ul>
