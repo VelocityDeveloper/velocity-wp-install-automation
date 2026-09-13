@@ -18,20 +18,36 @@ defined('ABSPATH') || exit;
 if (!function_exists('{{PREFIX}}_form_fields')) {
     function {{PREFIX}}_form_fields()
     {
-        return array(
-            'nama'     => array('label' => 'Nama Lengkap', 'type' => 'text', 'wajib' => true, 'autocomplete' => 'name'),
-            'wa'       => array('label' => 'Nomor WhatsApp', 'type' => 'tel', 'wajib' => true, 'autocomplete' => 'tel'),
-            'email'    => array('label' => 'Email', 'type' => 'email', 'wajib' => false, 'autocomplete' => 'email'),
-            'jenis'    => array('label' => 'Jenis Pekerjaan', 'type' => 'select', 'wajib' => true, 'opsi' => array(
-                'Renovasi Rumah/Kantor', 'Interior & Furnitur', 'Bangun Baru', 'Desain & Konsultasi', 'Lainnya',
-            )),
-            'lokasi'   => array('label' => 'Lokasi Proyek', 'type' => 'text', 'wajib' => true, 'placeholder' => 'Contoh: Bintaro, Tangerang Selatan'),
-            'luas'     => array('label' => 'Perkiraan Luas', 'type' => 'text', 'wajib' => false, 'placeholder' => 'Contoh: 90 m²'),
-            'anggaran' => array('label' => 'Perkiraan Anggaran', 'type' => 'select', 'wajib' => false, 'opsi' => array(
-                'Belum ditentukan', 'Di bawah 50 juta', '50 - 150 juta', '150 - 500 juta', 'Di atas 500 juta',
-            )),
-            'pesan'    => array('label' => 'Kebutuhan Anda', 'type' => 'textarea', 'wajib' => false, 'placeholder' => 'Ceritakan singkat kondisi bangunan dan yang ingin dikerjakan.'),
+        // Pilihan layanan diambil dari layanan klien sendiri. Dulu tertulis
+        // "Renovasi Rumah/Kantor, Interior & Furnitur…" untuk semua situs.
+        $layanan = array();
+        foreach ((array) {{PREFIX}}_data('layanan') as $l) {
+            if (!empty($l['judul'])) {
+                $layanan[] = (string) $l['judul'];
+            }
+        }
+        $fields = array(
+            'nama'   => array('label' => 'Nama Lengkap', 'type' => 'text', 'wajib' => true, 'autocomplete' => 'name'),
+            'wa'     => array('label' => 'Nomor WhatsApp', 'type' => 'tel', 'wajib' => true, 'autocomplete' => 'tel'),
+            'email'  => array('label' => 'Email', 'type' => 'email', 'wajib' => false, 'autocomplete' => 'email'),
+            'jenis'  => array('label' => 'Layanan yang Dibutuhkan', 'type' => 'select', 'wajib' => true,
+                'opsi' => array_merge($layanan ?: array('Konsultasi'), array('Lainnya'))),
+            'lokasi' => array('label' => 'Kota / Lokasi', 'type' => 'text', 'wajib' => true,
+                'placeholder' => 'Contoh: ' . ({{PREFIX}}_data('area') ?: 'Jakarta')),
         );
+        // Kolom khusus bidang usaha tertentu, diaktifkan lewat theme-data.
+        $tambahan = (array) {{PREFIX}}_data('form_kolom_tambahan');
+        if (in_array('luas', $tambahan, true)) {
+            $fields['luas'] = array('label' => 'Perkiraan Luas', 'type' => 'text', 'wajib' => false, 'placeholder' => 'Contoh: 90 m²');
+        }
+        if (in_array('anggaran', $tambahan, true)) {
+            $fields['anggaran'] = array('label' => 'Perkiraan Anggaran', 'type' => 'select', 'wajib' => false, 'opsi' => array(
+                'Belum ditentukan', 'Di bawah 50 juta', '50 - 150 juta', '150 - 500 juta', 'Di atas 500 juta',
+            ));
+        }
+        $fields['pesan'] = array('label' => 'Kebutuhan Anda', 'type' => 'textarea', 'wajib' => false,
+            'placeholder' => 'Ceritakan singkat kebutuhan Anda.');
+        return apply_filters('{{PREFIX}}_form_fields', $fields);
     }
 }
 

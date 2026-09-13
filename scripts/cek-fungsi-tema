@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Penjaga: fungsi berawalan tema yang dipanggil tapi tidak didefinisikan.
+
+Pemakaian: cek-fungsi-tema <folder child theme> [prefix]
+
+`php -l` hanya memeriksa sintaks per berkas — panggilan ke fungsi yang tidak ada
+baru ketahuan saat halaman dibuka (HTTP 500). Ini terjadi 2026-09-13 di
+jasakontraktorindo.com: template baru memanggil jki_judul(), tetapi
+inc/theme-data.php yang ditimpa dari salinan lama belum punya helper itu.
+Jalankan pada hasil render SEBELUM berkas dikirim ke situs.
+"""
+import re
+import sys
+from pathlib import Path
+
+
+def main():
+    if len(sys.argv) < 2 or not Path(sys.argv[1]).is_dir():
+        print(__doc__.strip().splitlines()[2], file=sys.stderr)
+        return 2
+    folder = Path(sys.argv[1])
+    teks = {p: p.read_text(errors='replace') for p in folder.rglob('*.php')}
+    semua = '\n'.join(teks.values())
+    prefix = sys.argv[2] if len(sys.argv) > 2 else ''
+    if not prefix:
+        m = re.search(r"add_shortcode\(\s*'([a-z0-9]+)_", semua) or re.search(r'function ([a-z0-9]+)_data\(', semua)
+        prefix = m.group(1) if m else ''
+    if not prefix:
+        print('cek-fungsi-tema: awalan tema tidak terbaca')
+        return 2
+    didefinisikan = set(re.findall(rf'function\s+({prefix}_[a-z0-9_]+)\s*\(', semua))
+    hilang = {}
+    for path, isi in teks.items():
+        # Nama di dalam string (callback, add_shortcode) juga dihitung sebagai panggilan.
+        for nama in re.findall(rf"(?<![\w$>:-])({prefix}_[a-z0-9_]+)\s*\(|'({prefix}_render_[a-z0-9_]+)'", isi):
+            nama = nama[0] or nama[1]
+            if nama not in didefinisikan:
+                hilang.setdefault(nama, set()).add(str(path.relative_to(folder)))
+    for nama, berkas in sorted(hilang.items()):
+        print(f'  BELUM TERDEFINISI {nama}()  dipanggil di {", ".join(sorted(berkas))}')
+    print('SEMUA FUNGSI TERDEFINISI' if not hilang else f'{len(hilang)} fungsi hilang')
+    return 1 if hilang else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

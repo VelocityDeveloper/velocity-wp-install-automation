@@ -422,6 +422,71 @@ body.{{PREFIX}} .{{PREFIX}}-figure img {
 .{{PREFIX}}-poin__judul { color: var(--{{PREFIX}}-di-primary); font-size: 1.04rem; margin: 0 0 .4rem; }
 .{{PREFIX}}-poin__teks { margin: 0; font-size: .92rem; color: rgba(var(--{{PREFIX}}-di-primary-rgb), .76); }
 
+/* ---------- data perusahaan (company profile) ---------- */
+
+.{{PREFIX}}-visimisi { display: grid; gap: 1rem; }
+.{{PREFIX}}-visimisi__kartu {
+  background: var(--{{PREFIX}}-putih);
+  border: 1px solid var(--{{PREFIX}}-garis);
+  border-top: 4px solid var(--{{PREFIX}}-aksen);
+  border-radius: var(--{{PREFIX}}-radius);
+  padding: 1.2rem 1.25rem;
+}
+.{{PREFIX}}-visimisi__kartu h3 { font-size: 1.05rem; margin: 0 0 .5rem; }
+.{{PREFIX}}-visimisi__kartu p { margin: 0; }
+
+.{{PREFIX}}-struktur { display: grid; grid-template-columns: repeat(2, 1fr); gap: .8rem; margin-bottom: 2rem; }
+.{{PREFIX}}-struktur__kartu {
+  border: 1px solid var(--{{PREFIX}}-garis);
+  border-left: 4px solid var(--{{PREFIX}}-primary);
+  border-radius: 10px;
+  padding: .8rem .9rem;
+  background: var(--{{PREFIX}}-putih);
+}
+.{{PREFIX}}-struktur__jabatan {
+  margin: 0;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--{{PREFIX}}-teks);
+}
+.{{PREFIX}}-struktur__nama { margin: .2rem 0 0; font-weight: 700; color: var(--{{PREFIX}}-ink); }
+
+.{{PREFIX}}-customer {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 2rem;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: .6rem;
+}
+.{{PREFIX}}-customer__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  padding: .7rem;
+  text-align: center;
+  font-weight: 700;
+  font-size: .88rem;
+  color: var(--{{PREFIX}}-ink);
+  background: var(--{{PREFIX}}-surface);
+  border: 1px solid var(--{{PREFIX}}-garis);
+  border-radius: 10px;
+}
+
+.{{PREFIX}}-legalitas { margin: 0 0 2rem; display: grid; gap: .5rem; }
+.{{PREFIX}}-legalitas__baris {
+  display: grid;
+  gap: .15rem;
+  padding: .7rem .9rem;
+  border: 1px solid var(--{{PREFIX}}-garis);
+  border-radius: 10px;
+}
+.{{PREFIX}}-legalitas dt { font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--{{PREFIX}}-teks); }
+.{{PREFIX}}-legalitas dd { margin: 0; font-weight: 600; color: var(--{{PREFIX}}-ink); }
+
 /* ---------- dua kolom ---------- */
 
 .{{PREFIX}}-duo { display: grid; gap: 1.6rem; }
@@ -553,6 +618,8 @@ body.{{PREFIX}} .{{PREFIX}}-figure img {
 .{{PREFIX}}-footer__daftar { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; font-size: .92rem; }
 .{{PREFIX}}-footer__daftar .sub-menu { display: none; }
 .{{PREFIX}}-footer__bawah {
+  /* Sudut diagonal warna aksen, meniru pita kaki halaman company profile. */
+  background: linear-gradient(115deg, transparent 78%, var(--{{PREFIX}}-aksen) 78%);
   border-top: 1px solid rgba(var(--{{PREFIX}}-di-primary-rgb), .1);
   padding-block: 1rem;
   font-size: .82rem;
@@ -586,6 +653,9 @@ body.{{PREFIX}}.home #wrapper-content { padding: 0; }
   .{{PREFIX}}-kartu-grid--4 { grid-template-columns: repeat(2, 1fr); }
   .{{PREFIX}}-galeri { grid-template-columns: repeat(3, 1fr); }
   .{{PREFIX}}-alur { grid-template-columns: repeat(2, 1fr); }
+  .{{PREFIX}}-visimisi { grid-template-columns: repeat(2, 1fr); }
+  .{{PREFIX}}-struktur { grid-template-columns: repeat(3, 1fr); }
+  .{{PREFIX}}-customer { grid-template-columns: repeat(3, 1fr); }
   .{{PREFIX}}-form { padding: 1.6rem 1.5rem 1.75rem; }
   .{{PREFIX}}-form__baris:not(.{{PREFIX}}-form__baris--penuh) { grid-column: span 1; }
   .{{PREFIX}}-form { grid-template-columns: repeat(2, 1fr); }
@@ -604,6 +674,8 @@ body.{{PREFIX}}.home #wrapper-content { padding: 0; }
   .{{PREFIX}}-hero { padding-block: 6.5rem 5.5rem; }
   .{{PREFIX}}-hero__poin { grid-auto-flow: column; justify-content: start; gap: 1.5rem; }
   .{{PREFIX}}-kartu-grid--4 { grid-template-columns: repeat(4, 1fr); }
+  .{{PREFIX}}-customer { grid-template-columns: repeat(4, 1fr); }
+  .{{PREFIX}}-legalitas__baris { grid-template-columns: 16rem 1fr; align-items: baseline; }
   .{{PREFIX}}-alur { grid-template-columns: repeat(5, 1fr); }
   .{{PREFIX}}-duo { grid-template-columns: 1fr 1fr; align-items: center; gap: 3rem; }
   .{{PREFIX}}-duo--form { grid-template-columns: 5fr 6fr; align-items: start; }

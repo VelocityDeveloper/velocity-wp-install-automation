@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -130,6 +131,97 @@ def layak(r, lebar_min, sudah):
 
 def kata_penting(teks):
     return [k for k in re.findall(r'[a-z]+', str(teks).lower()) if len(k) > 3 and k not in KATA_UMUM]
+
+
+COMPRO_ROOT = Path('/var/lib/velocity/compro')
+
+
+def foto_compro(domain):
+    """Foto tertanam di company profile (hasil scripts/compro-klien) sebagai kandidat.
+
+    Ini foto asli kiriman klien — produk, area produksi, hasil pekerjaan — jadi
+    didahulukan sebelum foto contoh bank foto mana pun."""
+    berkas = COMPRO_ROOT / domain / 'compro.json'
+    try:
+        data = json.loads(berkas.read_text()) if berkas.is_file() else {}
+    except (OSError, ValueError):
+        return []
+    hasil = []
+    for f in data.get('foto') or []:
+        path = Path(f.get('berkas', ''))
+        lebar, tinggi = f.get('lebar') or 0, f.get('tinggi') or 0
+        if not path.is_file() or lebar < 400 or tinggi < 300 or tinggi < lebar * 0.4 or lebar < tinggi * 0.4:
+            continue
+        hasil.append({'url': f'compro:{path.name}', 'path': str(path), 'title': f.get('judul_halaman') or '',
+                      'halaman': f.get('halaman'), 'width': lebar, 'height': tinggi, 'license': 'klien',
+                      'tags': []})
+    return hasil
+
+
+def pilih_foto_klien(slot, isi, foto, ai):
+    """Bagikan foto compro ke slot: AI mencocokkan judul halaman dengan topik slot.
+
+    Tanpa AI: slot layanan/produk mengambil foto yang judul halamannya berbagi kata
+    dengan judul slot, sisanya dibagi berurutan (galeri paling akhir)."""
+    if not foto:
+        return {}
+
+    def cocok(kunci, f):
+        # Hero jadi latar selebar layar: foto potret/potongan produk terpotong
+        # habis oleh object-fit cover, jadi hanya foto lanskap yang boleh.
+        # Banner sangat pipih (mis. strip 3549x354) juga tidak cocok.
+        return kunci != 'hero' or f['height'] * 1.3 <= f['width'] <= f['height'] * 2.2
+
+    pilihan = None
+    if ai:
+        modul, model = ai
+        daftar_foto = [{'i': i, 'judul_halaman': f['title'], 'halaman': f['halaman']} for i, f in enumerate(foto)]
+        daftar_slot = [{'slot': k, 'topik': j} for k, _, j in slot]
+        teks = ('Bagikan foto company profile klien ke slot situsnya. Setiap foto boleh dipakai satu kali. '
+                'Cocokkan judul halaman foto dengan topik slot (mis. foto dari halaman "JASA LAYANAN" untuk slot '
+                'layanan/produk yang sesuai, "AREA PRODUKSI" untuk tentang/galeri). Slot galeri boleh memakai '
+                'foto apa pun yang tersisa. Foto dari halaman "LEGALITAS" hanya untuk galeri kalau benar-benar sisa. '
+                'Slot hero butuh foto lanskap suasana (area produksi/gudang), bukan foto produk tunggal.\n'
+                'Jawab JSON {"<slot>": indeks} — lewati slot yang tidak punya foto cocok.\n\n'
+                + json.dumps({'bisnis': isi.get('hero_judul', ''), 'foto': daftar_foto, 'slot': daftar_slot},
+                             ensure_ascii=False))
+        jawab = modul.ai_call('You assign client photos to website slots. Output ONLY valid JSON.', teks, model)
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            pilihan = {k: int(v) for k, v in json.loads(jawab[awal:akhir + 1]).items()
+                       if str(v).lstrip('-').isdigit()}
+        except Exception:
+            pilihan = None
+    hasil, terpakai = {}, set()
+    if pilihan is not None:
+        for kunci, _, _ in slot:
+            i = pilihan.get(kunci)
+            if i is not None and 0 <= i < len(foto) and i not in terpakai and cocok(kunci, foto[i]):
+                hasil[kunci] = (foto[i], 'foto klien')
+                terpakai.add(i)
+    # Slot yang dilewati AI (atau semua slot bila AI gagal) tetap dicoba dengan
+    # aturan kata kunci & urutan — AI kadang melewati hero padahal ada foto lanskap.
+    if True:
+        for kunci, _, judul in slot:
+            if kunci in hasil:
+                continue
+            if kunci.startswith(('layanan-', 'produk-')):
+                kata = {k for k in re.findall(r'[a-z]+', judul.lower()) if len(k) > 3}
+                i = next((i for i, f in enumerate(foto) if i not in terpakai
+                          and kata & set(re.findall(r'[a-z]+', f['title'].lower()))), None)
+                if i is not None:
+                    hasil[kunci] = (foto[i], 'foto klien')
+                    terpakai.add(i)
+        for kunci, _, _ in sorted(slot, key=lambda s: s[0].startswith('galeri-')):
+            if kunci in hasil:
+                continue
+            i = next((i for i in range(len(foto)) if i not in terpakai and cocok(kunci, foto[i])
+                      and 'LEGALITAS' not in foto[i]['title'].upper()), None)
+            if i is None:
+                continue
+            hasil[kunci] = (foto[i], 'foto klien')
+            terpakai.add(i)
+    return hasil
 
 
 def muat_ai(manifest):
@@ -322,11 +414,24 @@ $klien = get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit'
     'meta_query' => array(array('key' => '_velocity_source', 'compare' => 'EXISTS')), 'fields' => 'ids'));
 $klien = array_values(array_filter($klien, function ($id) {
     $s = (string) get_post_meta($id, '_velocity_source', true);
-    return $s !== '' && strpos($s, 'logo') !== 0 && strpos($s, 'icon') !== 0;
+    // Logo/ikon (termasuk logo potongan company profile) bukan foto; foto compro
+    // dibagikan ke slot oleh pilih_foto_klien, jadi tidak ikut antrean ini.
+    return $s !== '' && strpos($s, 'logo') !== 0 && strpos($s, 'icon') !== 0
+        && strpos($s, 'compro-logo') !== 0 && strpos($s, 'compro:') !== 0;
 }));
-echo wp_json_encode(array('prefix' => $prefix,
-    'terisi' => $prefix ? (array) get_option($prefix . '_images', array()) : array(),
-    'klien' => $klien));
+$terisi = $prefix ? (array) get_option($prefix . '_images', array()) : array();
+// Slot berisi foto contoh bank foto boleh digeser foto asli klien.
+$contoh = array();
+foreach ($terisi as $kunci => $id) {
+    if ($id && get_post_meta((int) $id, '_velocity_foto_contoh', true)) { $contoh[] = $kunci; }
+}
+// Berkas compro yang sudah menempati slot: jangan dibagikan lagi ke slot kosong.
+$compro = array();
+foreach ($terisi as $id) {
+    if (preg_match('/^compro:([^:]+):/', (string) get_post_meta((int) $id, '_velocity_source', true), $m)) { $compro[] = $m[1]; }
+}
+echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => $contoh, 'klien' => $klien,
+    'compro_terpakai' => $compro));
 '''
         run = subprocess.run(ssh + [f'cat > /tmp/velocity-foto.php && php -d memory_limit=512M /usr/local/bin/wp '
                                     f'eval-file /tmp/velocity-foto.php --path={shlex.quote(docroot)} --allow-root '
@@ -342,7 +447,16 @@ echo wp_json_encode(array('prefix' => $prefix,
             return 0
 
     terisi = {k: v for k, v in (keadaan.get('terisi') or {}).items() if v}
-    foto_klien = list(keadaan.get('klien') or [])
+    # Kalau company profile klien punya foto, slot yang masih berisi foto contoh
+    # dianggap kosong supaya foto asli klien bisa menggantikannya. Foto yang
+    # dipasang orang atau foto klien tidak pernah disentuh.
+    contoh_lama = {}
+    if foto_compro(domain):
+        for kunci in keadaan.get('contoh') or []:
+            if kunci in terisi:
+                contoh_lama[kunci] = terisi.pop(kunci)
+    # Media yang sudah menempati slot lain tidak dibagikan dua kali.
+    foto_klien = [i for i in keadaan.get('klien') or [] if i not in set(terisi.values())]
     peta, rencana, perlu = dict(terisi), [], []
     for kunci, kata, judul in slot_dari_isi(isi):
         if kunci in terisi:
@@ -357,7 +471,18 @@ echo wp_json_encode(array('prefix' => $prefix,
     ov = Openverse()
     # Semua slot sudah terisi: jangan menghabiskan jatah harian Openverse.
     ai = muat_ai(args[0]) if perlu else None
-    dipilih = pilih_foto(perlu, isi, ov, ai) if perlu else {}
+    # Foto asli dari company profile klien didahulukan sebelum bank foto.
+    terpakai = set(keadaan.get('compro_terpakai') or [])
+    calon_compro = [f for f in foto_compro(domain) if Path(f['path']).name not in terpakai]
+    dari_compro = pilih_foto_klien(perlu, isi, calon_compro, ai) if perlu else {}
+    sisa = [s for s in perlu if s[0] not in dari_compro]
+    # Slot yang tidak kebagian foto klien tetap memakai foto contoh lamanya —
+    # tanpa ini ia dicarikan foto baru, jatah Openverse terbuang, dan media lama yatim.
+    for kunci, _, _ in [s for s in sisa if s[0] in contoh_lama]:
+        peta[kunci] = contoh_lama[kunci]
+    sisa = [s for s in sisa if s[0] not in contoh_lama]
+    dipilih = dict(dari_compro)
+    dipilih.update(pilih_foto(sisa, isi, ov, ai) if sisa else {})
     for kunci, kata, judul in perlu:
         if kunci not in dipilih:
             print(f'foto: {kunci:34} <- tidak ada foto layak, slot tetap blok bertekstur')
@@ -366,6 +491,7 @@ echo wp_json_encode(array('prefix' => $prefix,
         rencana.append((kunci, judul, r))
         print(f"foto: {kunci:34} <- {r.get('license')} {r.get('width')}x{r.get('height')} "
               f"[{dari}] {str(r.get('title') or '')[:44]}")
+    print(f'foto: {len(dari_compro)} slot dari foto company profile klien')
     print(f'foto: {len(peta) + len(rencana)}/{len(slot_dari_isi(isi))} slot punya foto, '
           f'{ov.jumlah} pencarian Openverse, penilai: {"AI" if ai else "kata kunci"}')
     if coba:
@@ -382,7 +508,10 @@ echo wp_json_encode(array('prefix' => $prefix,
             ekstensi = Path(urllib.parse.urlparse(pilihan['url']).path).suffix.lower() or '.jpg'
             lokal = tmp / f'{kunci}{ekstensi if ekstensi in (".jpg", ".jpeg", ".png", ".webp") else ".jpg"}'
             try:
-                unduh(pilihan['url'], lokal)
+                if pilihan['url'].startswith('compro:'):
+                    shutil.copyfile(pilihan['path'], lokal)
+                else:
+                    unduh(pilihan['url'], lokal)
                 berkas_ok.append((kunci, judul, pilihan, lokal.name))
             except Exception as e:
                 print(f'foto: {kunci} gagal diunduh ({type(e).__name__}), dilewati')
@@ -398,6 +527,18 @@ echo wp_json_encode(array('prefix' => $prefix,
             perintah = ['set -e', f'D={shlex.quote(docroot)}',
                         'wp() { php -d memory_limit=512M /usr/local/bin/wp "$@" --path="$D" --allow-root 2>/dev/null; }']
             for kunci, judul, pilihan, nama in berkas_ok:
+                if pilihan['url'].startswith('compro:'):
+                    # Foto klien: ditandai _velocity_source seperti foto kiriman lain,
+                    # dan tidak memakai awalan "Contoh:" karena memang bukan contoh.
+                    sumber = f"{pilihan['url']}:{Path(pilihan['path']).stat().st_size}"
+                    perintah.append(
+                        f'id=$(wp post list --post_type=attachment --post_status=inherit --meta_key=_velocity_source '
+                        f'--meta_value={shlex.quote(sumber)} --field=ID | head -1); '
+                        f'[ -n "$id" ] || id=$(wp media import {folder}/{shlex.quote(nama)} '
+                        f'--title={shlex.quote(judul)} --alt={shlex.quote(judul)} --porcelain) && '
+                        f'wp post meta update "$id" _velocity_source {shlex.quote(sumber)} >/dev/null && '
+                        f'echo "{kunci}=$id"')
+                    continue
                 asal = json.dumps({'sumber': pilihan.get('foreign_landing_url') or pilihan['url'],
                                    'pembuat': pilihan.get('creator') or '', 'lisensi': pilihan.get('license'),
                                    'kata_kunci': kunci})
@@ -426,6 +567,24 @@ echo wp_json_encode(array('prefix' => $prefix,
                             capture_output=True, text=True, timeout=120)
     jumlah = len(slot_dari_isi(isi))
     print(f"foto: {len(peta)}/{jumlah} slot terisi{'' if 'ok' in simpan.stdout else ' (GAGAL menyimpan peta)'}")
+    yatim = sorted({int(i) for i in contoh_lama.values()} - {int(i) for i in peta.values()})
+    if 'ok' in simpan.stdout and yatim:
+        # Foto contoh yang digeser foto klien dihapus supaya pustaka media tidak
+        # penuh stok tak terpakai — hanya bila tidak dirujuk konten/thumbnail/opsi.
+        php = (
+            'global $wpdb; foreach (array(' + ','.join(map(str, yatim)) + ') as $id) {'
+            ' if (!get_post_meta($id, "_velocity_foto_contoh", true)) { continue; }'
+            ' $rel = preg_replace("/\\.[a-z0-9]+$/i", "", (string) get_post_meta($id, "_wp_attached_file", true));'
+            ' $like = "%" . $wpdb->esc_like($rel) . "%";'
+            ' $pakai = $rel === "" || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type NOT IN (\'attachment\',\'revision\') AND post_content LIKE %s", $like))'
+            ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key=\'_thumbnail_id\' AND meta_value=%d", $id))'
+            ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_value LIKE %s", $like));'
+            ' if ($pakai) { echo "dibiarkan:$id\n"; } elseif (wp_delete_attachment($id, true)) { echo "dihapus:$id\n"; } }')
+        bersih = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
+                                       f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
+                                capture_output=True, text=True, timeout=120)
+        dihapus = bersih.stdout.count('dihapus:')
+        print(f'foto: {dihapus}/{len(yatim)} foto contoh lama yang digantikan foto klien dihapus')
     return 0 if 'ok' in simpan.stdout else 1
 
 

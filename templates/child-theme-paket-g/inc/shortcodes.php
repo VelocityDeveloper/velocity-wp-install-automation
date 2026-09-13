@@ -156,3 +156,150 @@ if (!function_exists('{{PREFIX}}_render_kontak')) {
     }
     add_shortcode('{{PREFIX}}_kontak', '{{PREFIX}}_render_kontak');
 }
+
+if (!function_exists('{{PREFIX}}_render_visimisi')) {
+    /** Visi, misi, moto, dan target dari company profile. Kosong kalau tidak ada datanya. */
+    function {{PREFIX}}_render_visimisi()
+    {
+        $visi = trim((string) {{PREFIX}}_data('visi'));
+        $misi = array_filter((array) {{PREFIX}}_data('misi'));
+        $moto = trim((string) {{PREFIX}}_data('moto'));
+        $target = array_filter((array) {{PREFIX}}_data('target'));
+        if ($visi === '' && !$misi && $moto === '' && !$target) {
+            return '';
+        }
+        ob_start(); ?>
+        <div class="{{PREFIX}}-visimisi">
+            <?php if ($visi !== '') : ?>
+                <article class="{{PREFIX}}-visimisi__kartu">
+                    <h3>Visi</h3>
+                    <p><?php echo esc_html($visi); ?></p>
+                </article>
+            <?php endif; ?>
+            <?php if ($misi) : ?>
+                <article class="{{PREFIX}}-visimisi__kartu">
+                    <h3>Misi</h3>
+                    <ul class="{{PREFIX}}-daftar-cek">
+                        <?php foreach ($misi as $m) : ?>
+                            <li><?php echo {{PREFIX}}_ikon('cek') . esc_html($m); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </article>
+            <?php endif; ?>
+            <?php if ($moto !== '') : ?>
+                <article class="{{PREFIX}}-visimisi__kartu">
+                    <h3>Moto</h3>
+                    <p><?php echo esc_html($moto); ?></p>
+                </article>
+            <?php endif; ?>
+            <?php if ($target) : ?>
+                <article class="{{PREFIX}}-visimisi__kartu">
+                    <h3>Target Pencapaian</h3>
+                    <ul class="{{PREFIX}}-daftar-cek">
+                        <?php foreach ($target as $t) : ?>
+                            <li><?php echo {{PREFIX}}_ikon('cek') . esc_html($t); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </article>
+            <?php endif; ?>
+        </div>
+        <?php return ob_get_clean();
+    }
+}
+
+if (!function_exists('{{PREFIX}}_render_profil')) {
+    /** Profil perusahaan + visi-misi untuk halaman Profil. */
+    function {{PREFIX}}_render_profil()
+    {
+        $profil = trim((string) {{PREFIX}}_data('profil'));
+        $visimisi = {{PREFIX}}_render_visimisi();
+        if ($profil === '' && $visimisi === '') {
+            return '';
+        }
+        ob_start(); ?>
+        <div class="{{PREFIX}}-profil">
+            <?php if ($profil !== '') : ?>
+                <h2>Informasi Perusahaan</h2>
+                <p><?php echo esc_html($profil); ?></p>
+            <?php endif; ?>
+            <?php if ($visimisi !== '') : ?>
+                <h2>Visi &amp; Misi</h2>
+                <?php echo $visimisi; ?>
+            <?php endif; ?>
+        </div>
+        <?php return ob_get_clean();
+    }
+    add_shortcode('{{PREFIX}}_profil', '{{PREFIX}}_render_profil');
+}
+
+if (!function_exists('{{PREFIX}}_render_struktur')) {
+    /** Struktur organisasi: jabatan & nama sesuai company profile. */
+    function {{PREFIX}}_render_struktur()
+    {
+        $struktur = array_filter((array) {{PREFIX}}_data('struktur'), function ($x) {
+            return !empty($x['jabatan']) && !empty($x['nama']);
+        });
+        if (!$struktur) {
+            return '';
+        }
+        ob_start(); ?>
+        <h2>Struktur Organisasi</h2>
+        <div class="{{PREFIX}}-struktur">
+            <?php foreach ($struktur as $x) : ?>
+                <article class="{{PREFIX}}-struktur__kartu">
+                    <p class="{{PREFIX}}-struktur__jabatan"><?php echo esc_html($x['jabatan']); ?></p>
+                    <p class="{{PREFIX}}-struktur__nama"><?php echo esc_html($x['nama']); ?></p>
+                </article>
+            <?php endforeach; ?>
+        </div>
+        <?php return ob_get_clean();
+    }
+    add_shortcode('{{PREFIX}}_struktur', '{{PREFIX}}_render_struktur');
+}
+
+if (!function_exists('{{PREFIX}}_render_customer')) {
+    /** Daftar customer dari company profile; $dengan_judul=false untuk beranda. */
+    function {{PREFIX}}_render_customer($dengan_judul = true)
+    {
+        $customer = array_filter(array_map('trim', (array) {{PREFIX}}_data('customer')));
+        if (!$customer) {
+            return '';
+        }
+        ob_start(); ?>
+        <?php if ($dengan_judul) : ?><h2>Daftar Customer</h2><?php endif; ?>
+        <ul class="{{PREFIX}}-customer">
+            <?php foreach ($customer as $c) : ?>
+                <li class="{{PREFIX}}-customer__item"><?php echo esc_html($c); ?></li>
+            <?php endforeach; ?>
+        </ul>
+        <?php return ob_get_clean();
+    }
+    add_shortcode('{{PREFIX}}_customer', function () {
+        return {{PREFIX}}_render_customer(true);
+    });
+}
+
+if (!function_exists('{{PREFIX}}_render_legalitas')) {
+    /** Data legalitas perusahaan (akta, SK, NIB, NPWP, dsb.) sesuai company profile. */
+    function {{PREFIX}}_render_legalitas()
+    {
+        $legal = array_filter((array) {{PREFIX}}_data('legalitas'), function ($x) {
+            return !empty($x['label']) && !empty($x['nilai']);
+        });
+        if (!$legal) {
+            return '';
+        }
+        ob_start(); ?>
+        <h2>Legalitas</h2>
+        <dl class="{{PREFIX}}-legalitas">
+            <?php foreach ($legal as $x) : ?>
+                <div class="{{PREFIX}}-legalitas__baris">
+                    <dt><?php echo esc_html($x['label']); ?></dt>
+                    <dd><?php echo esc_html($x['nilai']); ?></dd>
+                </div>
+            <?php endforeach; ?>
+        </dl>
+        <?php return ob_get_clean();
+    }
+    add_shortcode('{{PREFIX}}_legalitas', '{{PREFIX}}_render_legalitas');
+}

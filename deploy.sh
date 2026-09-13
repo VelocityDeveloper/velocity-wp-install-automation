@@ -8,11 +8,16 @@ WEB_ROOT=${WEB_ROOT:-/usr/share/nginx/html}
 cd "$REPO_DIR"
 git pull --ff-only origin main
 bash -n scripts/website-install-from-manifest scripts/installer-runner
-python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto services/installer_status.py
+python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto scripts/compro-klien scripts/cek-fungsi-tema services/installer_status.py
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga kontras: template tidak boleh lolos deploy kalau teks di latar gelap
 # kembali jatuh ke warna tinta (lihat docs/warna-dan-kontras.md).
 python3 scripts/cek-warna-tema >/dev/null
+# Penjaga fungsi: render template untuk domain uji — velocity-child-theme menolak
+# zip yang memanggil fungsi tema yang tidak didefinisikan (php -l tidak menangkapnya).
+uji_tema=$(mktemp -d)
+python3 scripts/velocity-child-theme uji-paket-g.test --paket "Paket G" --nama "Uji Paket G" --cache "$uji_tema" | grep -q '^status=generated'
+rm -rf "$uji_tema"
 
 install -d -m 755 "$INSTALL_ROOT/scripts"
 if [[ "$(realpath scripts/website-install-from-manifest)" != "$(realpath "$INSTALL_ROOT/scripts/website-install-from-manifest")" ]]; then

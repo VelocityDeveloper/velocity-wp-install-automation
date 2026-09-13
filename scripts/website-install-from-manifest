@@ -618,6 +618,9 @@ CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 # data klien SEBELUM child theme dirender, karena theme-data.php dibuat dari isi
 # itu. Gagal di sini tidak menggagalkan instalasi — tema jatuh ke isian netral
 # dan site-audit akan menandainya.
+# Company profile PDF (warna, logo, foto, slogan) dibaca lebih dulu: isi contoh,
+# warna tema, dan finishing memakainya. Tanpa PDF langkah ini tidak berbuat apa-apa.
+/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/compro-klien" "${cfg[domain]}" >&2 || echo "compro:gagal" >&2
 if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" == "paketg" ]]; then
   /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/paket-g-konten" "$MANIFEST" >&2 || echo "konten:gagal" >&2
 fi

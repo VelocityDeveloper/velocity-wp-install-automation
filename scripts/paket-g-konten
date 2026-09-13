@@ -43,6 +43,8 @@ ATURAN = """Aturan isi (wajib):
 - JANGAN mengarang angka, harga, persentase, tahun berdiri, jumlah proyek/klien, penghargaan, sertifikat, nama klien, atau testimoni.
 - Abaikan teks panduan template form ("Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
 - Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau nomor pribadi pemilik.
+- DATA PERUSAHAAN (slogan, profil, visi, misi, moto, struktur, customer, legalitas, target) DISALIN dari dokumen klien apa adanya — boleh merapikan ejaan dan huruf kapital, TIDAK boleh ditambah atau dicontohkan. Kalau tidak ada di dokumen, biarkan kosong. Semua yang dikirim klien memang untuk ditampilkan di situs.
+- "judul_seksi": judul & subjudul pendek tiap bagian beranda yang sesuai bidang usaha klien (mis. pabrik kemasan: "Produk & Layanan Kemasan", bukan kalimat untuk usaha lain). Maksimal 7 kata untuk judul, 16 kata untuk subjudul.
 - Tulis isi contoh sebagai kalimat biasa. JANGAN memberi label "CONTOH:", "(contoh)", atau penanda sejenis — teks ini tampil langsung ke pengunjung.
 - Bahasa Indonesia yang profesional dan ringkas."""
 
@@ -128,6 +130,25 @@ def rapikan(data):
         if teks(g.get('judul'), 40):
             hasil['galeri'].append({'slug': f'galeri-{i}', 'judul': teks(g.get('judul'), 40),
                                     'foto': teks(g.get('foto'), 60)})
+    judul = data.get('judul_seksi') if isinstance(data.get('judul_seksi'), dict) else {}
+    hasil.update({
+        'judul_seksi': {k: teks(judul.get(k), 120 if k.endswith('_sub') else 60)
+                        for k in ('layanan', 'layanan_sub', 'keunggulan', 'tentang', 'galeri', 'galeri_sub',
+                                  'produk', 'alur', 'pemesanan', 'pemesanan_sub') if teks(judul.get(k), 120)},
+        'slogan': teks(data.get('slogan'), 70),
+        'profil': teks(data.get('profil'), 900),
+        'visi': teks(data.get('visi'), 320),
+        'misi': [teks(m, 240) for m in (data.get('misi') or []) if teks(m, 240)][:6],
+        'moto': teks(data.get('moto'), 140),
+        'struktur': [{'jabatan': teks(x.get('jabatan'), 50), 'nama': teks(x.get('nama'), 60)}
+                     for x in (data.get('struktur') or []) if isinstance(x, dict)
+                     and teks(x.get('jabatan'), 50) and teks(x.get('nama'), 60)][:24],
+        'customer': [teks(c, 80) for c in (data.get('customer') or []) if teks(c, 80)][:48],
+        'legalitas': [{'label': teks(x.get('label'), 70), 'nilai': teks(x.get('nilai'), 140)}
+                      for x in (data.get('legalitas') or []) if isinstance(x, dict)
+                      and teks(x.get('label'), 70) and teks(x.get('nilai'), 140)][:12],
+        'target': [teks(t, 90) for t in (data.get('target') or []) if teks(t, 90)][:8],
+    })
     warna = data.get('warna') or {}
     for kunci in ('utama', 'aksen'):
         if HEX_RE.match(str(warna.get(kunci) or '')):
@@ -158,6 +179,58 @@ def warna_dipilih_klien(domain):
     nilai = next((str(v) for k, v in fields.items() if re.search(r'warna tema', k, re.I)), '')
     nilai = re.sub(r'[.\s]+$', '', nilai).strip()
     return bool(nilai) and not TEKS_TEMPLATE_WARNA.search(nilai)
+
+
+def normal(teks):
+    return re.sub(r'[^a-z0-9]', '', str(teks or '').lower())
+
+
+def kata(teks):
+    return {k for k in re.findall(r'[a-z0-9]+', str(teks or '').lower()) if len(k) > 3}
+
+
+def saring_data_perusahaan(isi, sumber):
+    """Buang data perusahaan yang tidak tertulis di dokumen klien.
+
+    Isi pemasaran boleh berupa contoh, tetapi customer, nama staf, legalitas,
+    visi-misi, dan slogan adalah klaim faktual. Pelajaran dari proyek ini: aturan
+    di prompt dilanggar AI, jadi keberadaannya di dokumen dicek kode."""
+    polos, semua_kata = normal(sumber), kata(sumber)
+
+    def tertulis(nilai):
+        n = normal(re.sub(r'^\s*(pt|cv|ud)\.?\s+', '', str(nilai), flags=re.I))
+        return len(n) >= 3 and n in polos
+
+    def mirip(nilai, ambang):
+        k = kata(nilai)
+        return bool(k) and len(k & semua_kata) / len(k) >= ambang
+
+    dibuang = []
+    for bidang, uji in (('customer', tertulis), ('target', lambda v: mirip(v, 0.6)),
+                        ('misi', lambda v: mirip(v, 0.6))):
+        lama = isi.get(bidang) or []
+        isi[bidang] = [v for v in lama if uji(v)]
+        dibuang += [f'{bidang}:{v}' for v in lama if v not in isi[bidang]]
+    lama = isi.get('struktur') or []
+    isi['struktur'] = [x for x in lama if tertulis(x['nama'])]
+    dibuang += [f"struktur:{x['nama']}" for x in lama if x not in isi['struktur']]
+    lama = isi.get('legalitas') or []
+    isi['legalitas'] = [x for x in lama if tertulis(x['nilai']) or mirip(x['nilai'], 0.7)]
+    dibuang += [f"legalitas:{x['label']}" for x in lama if x not in isi['legalitas']]
+    for bidang, ambang in (('visi', 0.6), ('moto', 0.6), ('slogan', 0.8), ('profil', 0.5)):
+        if isi.get(bidang) and not mirip(isi[bidang], ambang):
+            dibuang.append(f'{bidang}:{isi[bidang][:40]}')
+            isi[bidang] = ''
+    return dibuang
+
+
+def data_compro(domain):
+    """Hasil scripts/compro-klien (slogan & warna dari PDF), kalau ada."""
+    berkas = Path('/var/lib/velocity/compro') / domain / 'compro.json'
+    try:
+        return json.loads(berkas.read_text()) if berkas.is_file() else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def buat_isi(gen, cfg, domain):
@@ -194,8 +267,11 @@ Kembalikan JSON dengan bentuk persis:
 "keunggulan":[{{"ikon":"area|satu|rab|chat","judul":"","teks":""}}],
 "alur":[{{"judul":"","teks":""}}],
 "galeri":[{{"judul":"","foto":""}}],
-"warna":{{"utama":"","aksen":""}}}}
-Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6."""
+"warna":{{"utama":"","aksen":""}},
+"judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
+"slogan":"","profil":"","visi":"","misi":[""],"moto":"",
+"struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
+Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
         jawab = gen.ai_call(sistem, permintaan, model)
         if not jawab:
@@ -203,6 +279,17 @@ Jumlah wajib: layanan 4, produk 4, keunggulan 4, alur 5, galeri 6."""
         try:
             awal, akhir = jawab.find('{'), jawab.rfind('}')
             isi = rapikan(json.loads(jawab[awal:akhir + 1]))
+            dibuang = saring_data_perusahaan(isi, info)
+            if dibuang:
+                gen.log(f'Data perusahaan yang tidak tertulis di dokumen dibuang: {dibuang[:8]}')
+            compro = data_compro(domain)
+            if compro.get('slogan'):
+                # Slogan dari PDF dibaca kode secara pasti; lebih dipercaya daripada AI.
+                isi['slogan'] = compro['slogan']
+            if isi.get('moto') and normal(isi['moto']) == normal(isi.get('slogan')):
+                # Judul MOTO di compro MAS tanpa teks; AI mengisinya dengan slogan,
+                # sehingga kalimat yang sama tampil dua kali di situs.
+                isi['moto'] = ''
             if not warna_dipilih_klien(domain) and any(isi['warna'].values()):
                 gen.log(f"Warna dari AI dibuang (bukan pilihan klien): {isi['warna']}")
                 isi['warna'] = {'utama': '', 'aksen': ''}

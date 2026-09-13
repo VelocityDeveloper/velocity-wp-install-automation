@@ -36,7 +36,10 @@ HALAMAN = (
         'Permintaan Anda kami terima langsung melalui email.</p>[{P}_pemesanan]')),
 )
 # Halaman yang sudah dibuat installer, cukup ditambahi blok desain di bawahnya.
+# Profil memuat data perusahaan dari company profile klien; shortcode-nya tidak
+# mencetak apa pun kalau datanya kosong, jadi aman dipasang di semua situs.
 TAMBAHAN = (
+    ('tentang-kami', '[{P}_profil][{P}_struktur][{P}_customer][{P}_legalitas]'),
     ('galeri', '[{P}_galeri]'),
     ('hubungi-kami', '[{P}_kontak]<h2>Ajukan Pemesanan</h2>[{P}_pemesanan]'),
 )
@@ -119,6 +122,51 @@ for baris in "${TAMBAHAN[@]}"; do
     echo "blok_ditambahkan:$slug"
   fi
 done
+
+# --- Tentang Kami: bagian tulisan AI yang kini dicetak shortcode data perusahaan ---
+# Tanpa ini Visi/Misi/Struktur tampil dua kali: sekali dari teks AI, sekali dari
+# data company profile. Bagian hanya dibuang kalau shortcode-nya benar-benar
+# menghasilkan isi, jadi situs tanpa compro tetap memakai teks AI.
+cat > /tmp/velocity-profil.php <<'PHP'
+<?php
+global $shortcode_tags;
+$prefix = '';
+foreach (array_keys($shortcode_tags) as $t) {
+    if (preg_match('/^([a-z0-9]+)_pemesanan$/', $t, $m)) { $prefix = $m[1]; break; }
+}
+$p = get_page_by_path('tentang-kami');
+if (!$prefix || !$p) { echo 'profil_dobel:lewati' . PHP_EOL; return; }
+$topik = array(
+    'visimisi'  => '/\b(visi|misi|moto|motto|target)\b/i',
+    'struktur'  => '/struktur|organisasi|manajemen|tim kami/i',
+    'customer'  => '/customer|pelanggan|klien kami/i',
+    'legalitas' => '/legalitas|perizinan|dokumen legal/i',
+);
+$aktif = array();
+foreach ($topik as $f => $re) {
+    $fn = $prefix . '_render_' . $f;
+    if (function_exists($fn) && trim((string) call_user_func($fn)) !== '') { $aktif[] = $re; }
+}
+$isi = (string) $p->post_content;
+$dibuang = array();
+$baru = preg_replace_callback('#<h2\b[^>]*>(.*?)</h2>.*?(?=<h2\b|</section>|\[|$)#is',
+    function ($m) use ($aktif, &$dibuang) {
+        $judul = trim(wp_strip_all_tags($m[1]));
+        foreach ($aktif as $re) {
+            if (preg_match($re, $judul)) { $dibuang[] = $judul; return ''; }
+        }
+        return $m[0];
+    }, $isi);
+$baru = preg_replace('#<section\b[^>]*>\s*</section>#i', '', $baru);
+if ($baru !== $isi) {
+    wp_update_post(array('ID' => $p->ID, 'post_content' => $baru));
+    echo 'profil_dobel_dibuang:' . implode(', ', $dibuang) . PHP_EOL;
+} else {
+    echo 'profil_dobel:tidak ada' . PHP_EOL;
+}
+PHP
+wp eval-file /tmp/velocity-profil.php
+rm -f /tmp/velocity-profil.php
 
 # --- menu utama ---
 if [[ -n "$(wp option get velocity_paket_g_menu 2>/dev/null || true)" ]]; then

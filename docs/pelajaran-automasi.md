@@ -284,3 +284,64 @@ Sebelum mengubah aturan penyaringan apa pun, sajikan angka "sebelum vs sesudah"
 ke user. Contoh: penopang membaca paket dari nama file form diperiksa dulu atas
 22 folder antrean — 5 file bernama "paket g" (4 memang Paket G di CRM, 1
 paketnya kosong), nol tabrakan dengan paket lain, dan hanya menambah 1 domain.
+
+## Desain mengikuti company profile (compro) klien
+
+Kalau klien mengirim PDF company profile, itulah referensi desain Paket G.
+`scripts/compro-klien <domain>` membacanya jadi `/var/lib/velocity/compro/<domain>/`
+(compro.json, logo.png, foto-NN.*); `paket-g-konten`, `velocity-child-theme`,
+`site-finish`, dan `paket-g-foto` memakainya otomatis.
+
+- **Warna merek dari piksel logo, bukan dari warna vektor halaman.** Percobaan
+  pertama membaca warna isian SVG tiap halaman: hasilnya merah tua #910000 karena
+  teks judul kuning dan foto ikut terhitung. Logo adalah sinyal merek paling
+  bersih — warna lebih gelap jadi utama, rona lain yang cukup jauh jadi aksen.
+  Penjaga kontras tetap boleh menggeser aksen (#eb1a22 → #d8181f untuk teks putih).
+- **Laporan harus membaca nilai yang benar-benar dipakai.** `kontras=` sempat
+  melaporkan warna bawaan (argumen mentah) padahal CSS sudah memakai warna logo;
+  kini keduanya lewat `warna_tema()` yang sama.
+- **Semua yang dikirim klien ditampilkan** (struktur/staf, customer, legalitas
+  termasuk NPWP & rekening, visi/misi/target) — keputusan user. Data perusahaan
+  **disalin**, tidak boleh dicontohkan AI; `saring_data_perusahaan` membuang
+  isian yang tidak ada di dokumen. Pengecualian: biodata pemilik di FORM ISIAN
+  ("untuk administrasi kami") tetap internal.
+- **Template membawa teks bidang lain.** Judul seksi kontraktor ("Layanan
+  Renovasi" dsb.) ikut ke situs packaging; kini judul seksi datang dari
+  `judul_seksi` di tema.json dengan bawaan netral.
+- **AI mengulang slogan sebagai moto** kalau judul MOTO di PDF kosong → moto yang
+  sama dengan slogan dibuang, supaya kalimat tidak tampil dua kali.
+- **Isi halaman buatan AI + seksi tema = tampil dobel.** Beranda kini hanya
+  mencetak pembuka sebelum H2 pertama; Tentang Kami membuang bagian AI
+  (Visi/Misi/Struktur/Pelanggan/Legalitas) hanya bila shortcode data
+  perusahaannya benar-benar menghasilkan isi (`profil_dobel_dibuang`).
+
+### Foto company profile
+
+- Foto klien menggeser foto contoh Openverse; foto contoh yang tergeser dihapus
+  otomatis bila tidak dirujuk konten/thumbnail/opsi.
+- **Logo compro bukan foto.** Penanda `_velocity_source` logo sempat
+  `compro-logo:` sehingga lolos saringan "bukan logo" dan dipasang jadi hero.
+  Penanda logo harus berawalan `logo` (`logo-compro:`).
+- **Hero butuh foto lanskap suasana** (rasio 1.3–2.2). Foto potret potongan
+  produk berlatar hitam dan banner strip 3549x354 terpotong habis oleh cover.
+- AI boleh melewati slot; aturan kata kunci/urutan tetap mengisi slot yang
+  dilewati, dan foto compro yang sudah menempati slot tidak dibagikan lagi.
+- `--coba` tidak membaca keadaan situs: semua slot tampak kosong, jadi hasilnya
+  bukan gambaran run sungguhan.
+
+## `php -l` lolos, situs tetap 500: fungsi yang hilang
+
+2026-09-13 jasakontraktorindo.com sempat HTTP 500 beberapa menit. Template baru
+memanggil `jki_judul()`, sedangkan `inc/theme-data.php` situs itu ditimpa dari
+salinan build lama (demi mempertahankan isi khas kontraktornya) yang belum punya
+helper tersebut. `php -l` hanya memeriksa sintaks per berkas, jadi lolos.
+
+- Setiap render child theme kini dijaga `scripts/cek-fungsi-tema <folder> [prefix]`:
+  semua fungsi berawalan tema yang dipanggil harus terdefinisi di salah satu berkas.
+- Kalau mempertahankan theme-data.php milik situs saat template berubah, bawa
+  juga helper baru dari template — isi (array data) boleh milik situs, fungsi
+  milik template.
+- Setelah deploy, cek HTTP beranda **dan** halaman lain: di sini hanya beranda
+  yang 500 (front-page.php), halaman lain tetap 200.
+- Salah satu upaya perbaikan hampir mengirim berkas rusak; yang menahannya
+  adalah `php -l` di server + `set -e` sebelum menyalin. Pertahankan urutan itu.

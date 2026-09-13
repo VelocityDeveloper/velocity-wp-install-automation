@@ -251,13 +251,25 @@ Keputusan user 2026-09-13: situs Paket G **selalu dibuatkan contoh dulu — kont
 
 **Foto** — `paket-g-foto <manifest> [--coba]` mengisi setiap slot gambar (hero, tentang, layanan, produk, galeri) setelah `site-finish`:
 
-1. slot yang sudah terisi tidak disentuh;
+1. slot yang sudah terisi tidak disentuh — kecuali slot berisi foto contoh bila company profile klien punya foto (foto contoh yang tergeser dihapus kalau tidak dirujuk di mana pun);
 2. foto kiriman klien (diimpor site-finish, meta `_velocity_source`) didahulukan untuk hero/tentang/galeri;
-3. sisanya foto contoh dari **Openverse**, lisensi CC0 / Public Domain Mark saja (bebas komersial tanpa atribusi). Asal-usulnya dicatat di meta `_velocity_foto_contoh`.
+3. foto tertanam di company profile (`compro-klien`) dibagikan AI ke slot sesuai judul halamannya; hero hanya menerima foto lanskap (rasio 1.3–2.2), logo tidak pernah dianggap foto;
+4. sisanya foto contoh dari **Openverse**, lisensi CC0 / Public Domain Mark saja (bebas komersial tanpa atribusi). Asal-usulnya dicatat di meta `_velocity_foto_contoh`.
 
 Kandidat diambil dari kata kunci slot plus kolam frasa umum sektor (`foto_umum`), lalu **dipilih AI** dari judul & tag kandidat. Pencocokan kata saja tidak cukup: kata "jumbo" (dari jumbo bag) pernah mendatangkan foto *Jumbo Rocks Campground*, dan "finished packaging products" foto Jeep. Tanpa model AI, pemilihan jatuh ke pencocokan kata kunci penting. Pencarian ditembolok per kata kunci karena Openverse tanpa kunci dibatasi ±200 permintaan/hari (±20 per situs).
 
 **Kontak publik** di theme-data hanya dari "Kontak utk di web" atau dokumen tambahan klien (alamat peran seperti info@/cs@ didahulukan). WhatsApp & email di biodata pemilik — di form berlabel "untuk pemberitahuan perpanjangan" — tidak pernah tampil; email pemilik hanya dipakai sebagai penerima form pemesanan (`email` vs `email_publik`). Tidak ada kontak publik → `site-audit` menandai `kontak_publik_kosong`.
+
+## Desain dari company profile klien (`scripts/compro-klien`)
+
+Kalau folder klien berisi PDF company profile, itulah referensi desain Paket G. `compro-klien <domain> [--segar]` menulis `/var/lib/velocity/compro/<domain>/` — `compro.json` (slogan, warna, daftar foto per judul halaman), `logo.png` (dipotong dari gambar halaman sampul), dan `foto-NN.*`. Dijalankan otomatis oleh `website-install-from-manifest` dan mode `child-theme`/`apply`/`finish` di installer-runner.
+
+- **Warna** diambil dari piksel logo (warna gelap = utama, rona lain = aksen), bukan warna vektor halaman yang tercemar teks & foto. Prioritas: manifest → pilihan klien di form → compro → bawaan; penjaga kontras tetap berlaku.
+- **Isi**: `paket-g-konten` menyalin profil, visi, misi, moto, target, struktur organisasi, customer, dan legalitas dari dokumen (isian yang tidak ditemukan di teks sumber dibuang — tidak boleh dicontohkan AI), plus `judul_seksi` beranda sesuai bidang usaha. Semua yang dikirim klien ditampilkan; biodata pemilik di FORM ISIAN tetap internal.
+- **Tema** menampilkannya lewat seksi Visi & Misi dan "Dipercaya oleh" di beranda, serta `[<prefix>_profil][<prefix>_struktur][<prefix>_customer][<prefix>_legalitas]` di Tentang Kami (dipasang `paket-g-setup`, yang juga membuang bagian tulisan AI yang jadi dobel). Shortcode tidak mencetak apa pun bila datanya kosong.
+- **Logo & slogan**: `site-finish` memakai logo compro kalau folder klien tidak punya logo, dan slogan compro sebagai tagline.
+
+Penjaga render: `scripts/cek-fungsi-tema <folder> [prefix]` menolak tema yang memanggil fungsi berawalan tema yang tidak didefinisikan (HTTP 500 yang lolos `php -l`). Dijalankan `velocity-child-theme` pada setiap zip dan oleh `deploy.sh`.
 
 ## Artikel per kategori layanan
 

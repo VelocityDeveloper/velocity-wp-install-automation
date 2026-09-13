@@ -52,3 +52,16 @@ if (!function_exists('{{PREFIX}}_wa_link')) {
         return 'https://wa.me/' . $nomor . '?text=' . rawurlencode($pesan);
     }
 }
+
+if (!function_exists('{{PREFIX}}_judul')) {
+    /**
+     * Judul/subjudul seksi beranda. Isinya ditulis paket-g-konten sesuai bidang
+     * usaha klien; bawaannya netral. Dulu judul ini tertulis langsung di template
+     * sehingga pabrik kemasan ikut berjudul "Satu Tim untuk Renovasi dan Interior".
+     */
+    function {{PREFIX}}_judul($kunci, $bawaan = '')
+    {
+        $judul = (array) {{PREFIX}}_data('judul_seksi');
+        return !empty($judul[$kunci]) ? (string) $judul[$kunci] : $bawaan;
+    }
+}

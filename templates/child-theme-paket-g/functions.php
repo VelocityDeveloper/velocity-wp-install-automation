@@ -3,9 +3,8 @@
 /**
  * {{THEME_NAME}} — child theme desain custom.
  *
- * Dibuat untuk {{DOMAIN}} (Paket G). Desain mengikuti referensi
- * yang diminta klien di FORM ISIAN (kontraktorhijau.com) dengan susunan dan
- * warna yang dibedakan: palet navy + amber, dan tata letak yang disusun ulang
+ * Dibuat untuk {{DOMAIN}} (Paket G) dari templates/child-theme-paket-g.
+ * Isi, warna, logo, dan foto berasal dari data klien; tata letak disusun
  * untuk layar HP lebih dulu.
  */
 

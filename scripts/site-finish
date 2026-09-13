@@ -159,6 +159,18 @@ def image_size(path):
         return None
 
 
+COMPRO_ROOT = Path('/var/lib/velocity/compro')
+
+
+def data_compro(domain):
+    """Hasil scripts/compro-klien: logo, slogan, warna dari company profile PDF."""
+    berkas = COMPRO_ROOT / domain / 'compro.json'
+    try:
+        return json.loads(berkas.read_text()) if berkas.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def client_assets(folder):
     if not folder.is_dir():
         return None, []
@@ -482,6 +494,9 @@ def logo_media_key(logo, folder, contoh):
         return ''
     if contoh:
         return 'logo-contoh:' + str(logo.stat().st_size)
+    if COMPRO_ROOT in logo.parents:
+        # Logo hasil potongan company profile tinggal di luar folder klien.
+        return 'logo-compro:' + str(logo.stat().st_size)
     return f'{logo.relative_to(folder)}:{logo.stat().st_size}'
 
 
@@ -592,9 +607,19 @@ def main():
     title = cfg.get('site_title') or domain
     wa = wa_number(field(fields, r'kontak utk di web|kontak untuk di web'))
     address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
-    tagline = slogan(form['text']) or ai_tagline(domain)
+    compro = data_compro(domain)
+    # Slogan: tulisan klien di form → slogan di company profile → buatan AI.
+    tagline = slogan(form['text']) or compro.get('slogan') or ai_tagline(domain)
     css = colors_css(pick_colors(field(fields, r'warna tema')))
     logo, photos = client_assets(folder)
+    if not logo:
+        # Logo yang terpotong dari kepala halaman company profile adalah logo asli
+        # klien: dipakai sebelum membuat logo contoh, dan menggeser logo contoh
+        # yang sudah terpasang (aturan penggantian sudah menanganinya).
+        logo_compro = Path((compro.get('logo') or {}).get('berkas', ''))
+        if logo_compro.is_file():
+            logo = logo_compro
+            print(f'finish: logo dari company profile ({logo_compro.name})')
     # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa
     # identitas sama sekali, dibuatkan logo contoh dari nama + warna tema —
     # penanda sementara yang gampang diganti PM/desainer, bukan logo final.

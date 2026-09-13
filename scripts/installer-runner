@@ -60,6 +60,7 @@ if [[ "$MODE" == "child-theme" ]]; then
     # Situs yang terpasang sebelum isi contoh ada: pasang isinya (hanya kalau
     # theme-data.php di situs masih isian netral) lalu foto contohnya.
     printf '[%s] Isi & foto contoh Paket G\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
     /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" --pasang >> "$LOG" 2>&1 || true
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
     printf '[%s] Halaman & menu Paket G\n' "$(date -Is)" >> "$LOG"
@@ -99,6 +100,8 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   [[ "$MODE" == "finish" ]] && refresh=1
   echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
   INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Tembolok compro: murah kalau sudah pernah dibaca, perlu untuk situs lama (mode finish).
+  /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] Finishing: aset & pengaturan dari data klien" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-finish" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Hapus tema & plugin bawaan yang tidak dipakai — hanya kalau run ini memasang

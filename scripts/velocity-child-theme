@@ -333,7 +333,8 @@ def php_nilai(nilai, indent=5):
         isi = ',\n'.join(jarak + '    ' + php_nilai(v, indent + 1) for v in nilai)
         return 'array(\n' + isi + ',\n' + jarak + ')'
     if isinstance(nilai, dict):
-        return 'array(' + ', '.join(f"'{k}' => {php_nilai(v, indent)}" for k, v in nilai.items()) + ')'
+        aman = lambda k: str(k).replace('\\', '\\\\').replace("'", "\\'")
+        return 'array(' + ', '.join(f"'{aman(k)}' => {php_nilai(v, indent)}" for k, v in nilai.items()) + ')'
     return "''"
 
 
@@ -356,6 +357,11 @@ def isi_netral(area):
                  ('Peninjauan', 'Kebutuhan diperiksa.'), ('Penawaran', 'Rincian disusun tertulis.'),
                  ('Pengerjaan', 'Pekerjaan berjalan terpantau.'), ('Serah Terima', 'Pemeriksaan akhir bersama.'))],
         'galeri': [{'slug': f'galeri-{i}', 'judul': f'Dokumentasi {i}'} for i in range(1, 7)],
+        # Data perusahaan tidak pernah dicontohkan: kosong berarti seksinya disembunyikan.
+        'slogan': '', 'profil': '', 'visi': '', 'misi': [], 'moto': '',
+        'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
+        # Judul seksi netral; paket-g-konten menggantinya dengan judul sesuai bidang usaha.
+        'judul_seksi': {}, 'form_kolom_tambahan': [],
     }
 
 
@@ -371,10 +377,14 @@ def muat_isi_contoh(domain):
 def blok_isi(domain, nama, area):
     """Baris PHP untuk kunci isi di theme-data.php."""
     isi = muat_isi_contoh(domain) or isi_netral(area)
-    kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri')
+    kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri',
+             'slogan', 'profil', 'visi', 'misi', 'moto', 'struktur', 'customer', 'legalitas', 'target',
+             'judul_seksi', 'form_kolom_tambahan')
+    kosong = {'misi': [], 'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
+              'judul_seksi': {}, 'form_kolom_tambahan': []}
     baris = []
     for k in kunci:
-        nilai = isi.get(k)
+        nilai = isi.get(k, kosong.get(k, ''))
         if k == 'hero_judul' and not nilai:
             nilai = nama
         if k in ('layanan', 'produk', 'galeri'):
@@ -476,6 +486,19 @@ def prefix_dari(domain, diminta=''):
     return label if label[0].isalpha() else 'v' + label
 
 
+def warna_tema(domain, primary='', aksen=''):
+    """Warna: manifest → pilihan klien di form (dibaca paket-g-konten) → warna
+    company profile (scripts/compro-klien) → bawaan. Penjaga kontras tetap berlaku."""
+    warna_klien = (muat_isi_contoh(domain) or {}).get('warna') or {}
+    try:
+        warna_compro = json.loads((Path('/var/lib/velocity/compro') / domain / 'compro.json').read_text()).get('warna') or {}
+    except (OSError, ValueError):
+        warna_compro = {}
+    pilih = lambda *calon: next((w for w in calon if HEX_RE.match(w or '')), '')
+    return (pilih(primary, warna_klien.get('utama'), warna_compro.get('utama')) or WARNA_DEFAULT['primary'],
+            pilih(aksen, warna_klien.get('aksen'), warna_compro.get('aksen')) or WARNA_DEFAULT['aksen'])
+
+
 def scaffold(domain, nama='', prefix='', primary='', aksen=''):
     """Bikin (atau pakai ulang) zip child theme Paket G bernama project."""
     slug = scaffold_slug(domain)
@@ -485,12 +508,9 @@ def scaffold(domain, nama='', prefix='', primary='', aksen=''):
     dest = CACHE / f'{slug}-{SCAFFOLD_VERSION}.zip'
     if dest.is_file():
         return slug, dest
-    # Warna: manifest dulu, lalu pilihan klien yang dibaca paket-g-konten, baru bawaan.
-    warna_klien = (muat_isi_contoh(domain) or {}).get('warna') or {}
+    utama, warna_aksen = warna_tema(domain, primary, aksen)
     nilai = nilai_template(
-        slug, domain, nama, prefix_dari(domain, prefix),
-        next((w for w in (primary, warna_klien.get('utama')) if HEX_RE.match(w or '')), WARNA_DEFAULT['primary']),
-        next((w for w in (aksen, warna_klien.get('aksen')) if HEX_RE.match(w or '')), WARNA_DEFAULT['aksen']),
+        slug, domain, nama, prefix_dari(domain, prefix), utama, warna_aksen,
         WARNA_DEFAULT['ink'],
     )
     tmp = dest.with_suffix('.tmp')
@@ -500,8 +520,29 @@ def scaffold(domain, nama='', prefix='', primary='', aksen=''):
             info = zipfile.ZipInfo(f'{slug}/{name}', date_time=(2026, 1, 1, 0, 0, 0))
             info.external_attr = 0o644 << 16
             z.writestr(info, data)
+    periksa_fungsi(tmp, prefix_dari(domain, prefix))
     tmp.replace(dest)
     return slug, dest
+
+
+def periksa_fungsi(zip_path, prefix):
+    """Tolak zip yang memanggil fungsi tema yang tidak didefinisikan (HTTP 500 di situs).
+
+    `php -l` tidak menangkapnya; lihat scripts/cek-fungsi-tema."""
+    import subprocess
+    import tempfile
+    penjaga = Path(__file__).resolve().parent / 'cek-fungsi-tema'
+    if not penjaga.is_file():
+        return
+    with tempfile.TemporaryDirectory() as folder:
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(folder)
+        tema = next((d for d in Path(folder).iterdir() if d.is_dir()), Path(folder))
+        hasil = subprocess.run([sys.executable, str(penjaga), str(tema), prefix],
+                               capture_output=True, text=True, timeout=60)
+    if hasil.returncode != 0:
+        Path(zip_path).unlink(missing_ok=True)
+        raise ValueError('fungsi tema hilang: ' + ' '.join(hasil.stdout.split())[:200])
 
 
 def main():
@@ -548,7 +589,7 @@ def main():
                 out['slug'], zip_path = scaffold(domain, args.nama, args.prefix,
                                                   args.primary, args.accent)
                 out.update(status='generated', version=SCAFFOLD_VERSION, zip=str(zip_path))
-                out['kontras'] = laporan_kontras(args.primary, args.accent)
+                out['kontras'] = laporan_kontras(*warna_tema(domain, args.primary, args.accent))
         except Exception as e:
             out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
         return emit()

@@ -3,9 +3,9 @@
 /**
  * Beranda desain custom.
  *
- * Susunan seksi mengikuti pola situs referensi yang diminta klien, tetapi
- * urutan, isi, dan warnanya dibedakan sesuai catatan klien ("web dibuat agak
- * beda dari web contoh"). Isi teks diambil dari inc/theme-data.php.
+ * Semua teks berasal dari inc/theme-data.php (data klien & isi contoh) — tidak
+ * ada kalimat khas satu bidang usaha di template, karena template ini dipakai
+ * untuk semua situs Paket G. Seksi data perusahaan hanya tampil kalau datanya ada.
  */
 
 defined('ABSPATH') || exit;
@@ -19,9 +19,12 @@ $nama = {{PREFIX}}_data('nama');
 <main id="main" class="{{PREFIX}}-beranda" role="main">
 
     <section class="{{PREFIX}}-hero<?php echo $hero ? '' : ' {{PREFIX}}-hero--polos'; ?>"
-        <?php if ($hero) : ?>style="background-image:linear-gradient(180deg,rgba(20,33,61,.82),rgba(20,33,61,.94)),url('<?php echo esc_url($hero); ?>')"<?php endif; ?>>
+        <?php if ($hero) : ?>style="background-image:linear-gradient(180deg,rgba(var(--{{PREFIX}}-primary-rgb),.82),rgba(var(--{{PREFIX}}-primary-rgb),.94)),url('<?php echo esc_url($hero); ?>')"<?php endif; ?>>
         <div class="{{PREFIX}}-wrap {{PREFIX}}-hero__isi">
-            <p class="{{PREFIX}}-hero__label"><?php echo esc_html({{PREFIX}}_data('area')); ?> · Renovasi · Interior</p>
+            <?php $label = {{PREFIX}}_data('slogan') ?: {{PREFIX}}_data('area'); ?>
+            <?php if ($label) : ?>
+                <p class="{{PREFIX}}-hero__label"><?php echo esc_html($label); ?></p>
+            <?php endif; ?>
             <h1 class="{{PREFIX}}-hero__judul"><?php echo esc_html({{PREFIX}}_data('hero_judul')); ?></h1>
             <p class="{{PREFIX}}-hero__teks"><?php echo esc_html({{PREFIX}}_data('hero_teks')); ?></p>
             <ul class="{{PREFIX}}-hero__poin">
@@ -40,8 +43,10 @@ $nama = {{PREFIX}}_data('nama');
         <div class="{{PREFIX}}-wrap">
             <header class="{{PREFIX}}-judul-seksi">
                 <p class="{{PREFIX}}-judul-seksi__label">Layanan</p>
-                <h2>Pekerjaan yang Kami Tangani</h2>
-                <p class="{{PREFIX}}-judul-seksi__teks">Renovasi dan interior dikerjakan satu tim, dari perencanaan sampai serah terima.</p>
+                <h2><?php echo esc_html({{PREFIX}}_judul('layanan', 'Layanan Kami')); ?></h2>
+                <?php if ({{PREFIX}}_judul('layanan_sub')) : ?>
+                    <p class="{{PREFIX}}-judul-seksi__teks"><?php echo esc_html({{PREFIX}}_judul('layanan_sub')); ?></p>
+                <?php endif; ?>
             </header>
             <?php echo {{PREFIX}}_render_layanan(); ?>
         </div>
@@ -51,7 +56,7 @@ $nama = {{PREFIX}}_data('nama');
         <div class="{{PREFIX}}-wrap">
             <header class="{{PREFIX}}-judul-seksi {{PREFIX}}-judul-seksi--terang">
                 <p class="{{PREFIX}}-judul-seksi__label">Kenapa Kami</p>
-                <h2>Cara Kerja yang Jelas Sejak Awal</h2>
+                <h2><?php echo esc_html({{PREFIX}}_judul('keunggulan', 'Kenapa Memilih Kami')); ?></h2>
             </header>
             <div class="{{PREFIX}}-kartu-grid {{PREFIX}}-kartu-grid--4">
                 <?php foreach ({{PREFIX}}_data('keunggulan') as $k) : ?>
@@ -65,20 +70,37 @@ $nama = {{PREFIX}}_data('nama');
         </div>
     </section>
 
+    <?php $visimisi = {{PREFIX}}_render_visimisi(); ?>
+    <?php if ($visimisi) : ?>
+        <section class="{{PREFIX}}-seksi {{PREFIX}}-seksi--abu" id="visi-misi">
+            <div class="{{PREFIX}}-wrap">
+                <header class="{{PREFIX}}-judul-seksi">
+                    <p class="{{PREFIX}}-judul-seksi__label">Visi &amp; Misi</p>
+                    <h2><?php echo esc_html({{PREFIX}}_data('slogan') ?: $nama); ?></h2>
+                </header>
+                <?php echo $visimisi; ?>
+            </div>
+        </section>
+    <?php endif; ?>
+
     <section class="{{PREFIX}}-seksi" id="tentang">
         <div class="{{PREFIX}}-wrap {{PREFIX}}-duo">
             <div class="{{PREFIX}}-duo__media">
-                <?php {{PREFIX}}_figure('tentang', 'Pekerjaan renovasi ' . $nama, '{{PREFIX}}-figure--tinggi'); ?>
+                <?php {{PREFIX}}_figure('tentang', $nama, '{{PREFIX}}-figure--tinggi'); ?>
             </div>
             <div class="{{PREFIX}}-duo__teks">
                 <p class="{{PREFIX}}-judul-seksi__label">Tentang Kami</p>
-                <h2>Satu Tim untuk Renovasi dan Interior Anda</h2>
+                <h2><?php echo esc_html({{PREFIX}}_judul('tentang', 'Tentang ' . $nama)); ?></h2>
                 <?php
                 // Isi halaman "Beranda" tetap ditampilkan di sini supaya teks yang
                 // disunting lewat WordPress ikut tampil; judul H1-nya dibuang
-                // karena beranda sudah punya judul utama di hero.
+                // karena beranda sudah punya judul utama di hero. Hanya pembuka
+                // sebelum H2 pertama: bagian lanjutannya (layanan, keunggulan,
+                // kontak) sudah punya seksi sendiri dan akan tampil dobel.
                 $isi = get_post_field('post_content', get_the_ID());
                 $isi = preg_replace('#<h1\b[^>]*>.*?</h1>#is', '', (string) $isi);
+                $isi = preg_split('#<h2\b#i', $isi)[0];
+                $isi = force_balance_tags($isi);
                 echo wp_kses_post(apply_filters('the_content', $isi));
                 ?>
                 <?php
@@ -98,18 +120,33 @@ $nama = {{PREFIX}}_data('nama');
         <div class="{{PREFIX}}-wrap">
             <header class="{{PREFIX}}-judul-seksi">
                 <p class="{{PREFIX}}-judul-seksi__label">Galeri</p>
-                <h2>Gaya Pengerjaan &amp; Hasil Akhir</h2>
-                <p class="{{PREFIX}}-judul-seksi__teks">Gambaran ruang yang bisa dikerjakan. Foto proyek klien menyusul.</p>
+                <h2><?php echo esc_html({{PREFIX}}_judul('galeri', 'Galeri')); ?></h2>
+                <?php if ({{PREFIX}}_judul('galeri_sub')) : ?>
+                    <p class="{{PREFIX}}-judul-seksi__teks"><?php echo esc_html({{PREFIX}}_judul('galeri_sub')); ?></p>
+                <?php endif; ?>
             </header>
             <?php echo {{PREFIX}}_render_galeri(); ?>
         </div>
     </section>
 
+    <?php $customer = {{PREFIX}}_render_customer(false); ?>
+    <?php if ($customer) : ?>
+        <section class="{{PREFIX}}-seksi" id="customer">
+            <div class="{{PREFIX}}-wrap">
+                <header class="{{PREFIX}}-judul-seksi">
+                    <p class="{{PREFIX}}-judul-seksi__label">Customer</p>
+                    <h2>Dipercaya oleh</h2>
+                </header>
+                <?php echo $customer; ?>
+            </div>
+        </section>
+    <?php endif; ?>
+
     <section class="{{PREFIX}}-seksi" id="produk">
         <div class="{{PREFIX}}-wrap">
             <header class="{{PREFIX}}-judul-seksi">
                 <p class="{{PREFIX}}-judul-seksi__label">Produk</p>
-                <h2>Pekerjaan Interior yang Sering Diminta</h2>
+                <h2><?php echo esc_html({{PREFIX}}_judul('produk', 'Produk Kami')); ?></h2>
             </header>
             <?php echo {{PREFIX}}_render_produk(); ?>
         </div>
@@ -119,7 +156,7 @@ $nama = {{PREFIX}}_data('nama');
         <div class="{{PREFIX}}-wrap">
             <header class="{{PREFIX}}-judul-seksi">
                 <p class="{{PREFIX}}-judul-seksi__label">Alur Kerja</p>
-                <h2>Lima Langkah dari Rencana ke Serah Terima</h2>
+                <h2><?php echo esc_html({{PREFIX}}_judul('alur', 'Alur Kerja Kami')); ?></h2>
             </header>
             <?php echo {{PREFIX}}_render_alur(); ?>
         </div>
@@ -129,12 +166,17 @@ $nama = {{PREFIX}}_data('nama');
         <div class="{{PREFIX}}-wrap {{PREFIX}}-duo {{PREFIX}}-duo--form">
             <div class="{{PREFIX}}-duo__teks">
                 <p class="{{PREFIX}}-judul-seksi__label">Pemesanan</p>
-                <h2 class="{{PREFIX}}-terang">Ceritakan Rencana Anda</h2>
-                <p class="{{PREFIX}}-terang-teks">Isi formulir ini dan permintaan Anda langsung masuk ke email kami. Ingin lebih cepat? Hubungi WhatsApp <?php echo esc_html({{PREFIX}}_data('telp')); ?>.</p>
+                <h2 class="{{PREFIX}}-terang"><?php echo esc_html({{PREFIX}}_judul('pemesanan', 'Ajukan Pemesanan')); ?></h2>
+                <p class="{{PREFIX}}-terang-teks">
+                    <?php echo esc_html({{PREFIX}}_judul('pemesanan_sub', 'Isi formulir ini dan permintaan Anda langsung masuk ke email kami.')); ?>
+                    <?php if (trim((string) {{PREFIX}}_data('telp')) !== '') : ?>
+                        Ingin lebih cepat? Hubungi WhatsApp <?php echo esc_html({{PREFIX}}_data('telp')); ?>.
+                    <?php endif; ?>
+                </p>
                 <ul class="{{PREFIX}}-daftar-cek {{PREFIX}}-daftar-cek--terang">
-                    <li><?php echo {{PREFIX}}_ikon('cek'); ?>Konsultasi awal tanpa biaya</li>
-                    <li><?php echo {{PREFIX}}_ikon('cek'); ?>Survei lokasi untuk area <?php echo esc_html({{PREFIX}}_data('area')); ?></li>
-                    <li><?php echo {{PREFIX}}_ikon('cek'); ?>Penawaran tertulis sebelum pengerjaan</li>
+                    <?php foreach ((array) {{PREFIX}}_data('hero_poin') as $poin) : ?>
+                        <li><?php echo {{PREFIX}}_ikon('cek') . esc_html($poin); ?></li>
+                    <?php endforeach; ?>
                 </ul>
             </div>
             <div class="{{PREFIX}}-duo__media">
