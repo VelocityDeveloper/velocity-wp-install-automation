@@ -177,7 +177,13 @@ if (!function_exists('{{PREFIX}}_compro_sampul')) {
                     </p>
                 </div>
                 <?php if ($hero) : ?>
-                    <div class="{{PREFIX}}-sampul__media"><?php echo {{PREFIX}}_figure_id($hero, $nama, '', 'large'); ?></div>
+                    <?php
+                    // Foto sampul compro sering ditaruh tembus pandang di atas warna halaman;
+                    // opasitas yang sama (dibaca compro-klien dari mask PDF) ditiru di sini.
+                    $opasitas = (float) {{PREFIX}}_data('hero_opasitas');
+                    $gaya = $opasitas > 0 && $opasitas < 1 ? sprintf(' style="--{{PREFIX}}-opasitas:%.2f"', $opasitas) : '';
+                    ?>
+                    <div class="{{PREFIX}}-sampul__media"<?php echo $gaya; ?>><?php echo {{PREFIX}}_figure_id($hero, $nama, '', 'large'); ?></div>
                 <?php endif; ?>
             </div>
         </section>

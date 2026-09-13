@@ -517,6 +517,9 @@ def ambil_foto(pdf, gambar, keluar, tmp):
         tembus = 0
         puncak = max(max(r) for r in alpha[::8]) if alpha else 0
         if alpha and (puncak - min(min(r) for r in alpha[::8]) < 40 or puncak < 160):
+            if puncak < 230:
+                # Situs meniru opasitas yang sama di atas warna latar halaman.
+                data['opasitas'] = round(puncak / 255, 2)
             # Mask seragam atau serba redup = opasitas (foto sampul MAS ditaruh
             # tembus pandang di bawah kotak lavender), bukan bentuk potongan:
             # fotonya dipakai utuh.

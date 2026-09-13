@@ -817,10 +817,11 @@ body.{{PREFIX}} .{{PREFIX}}-sampul__judul { color: var(--{{PREFIX}}-primary); fo
 body.{{PREFIX}} .{{PREFIX}}-sampul__slogan { color: var(--{{PREFIX}}-ink); font-size: 1.05rem; margin: 0 0 .8rem; }
 .{{PREFIX}}-sampul__isi { margin: 0 0 1.3rem; }
 .{{PREFIX}}-sampul__media .{{PREFIX}}-figure { position: relative; aspect-ratio: 4 / 3; border-radius: var(--{{PREFIX}}-radius); box-shadow: var(--{{PREFIX}}-bayang-kuat); }
-/* Foto sampul compro ditaruh tembus pandang di atas warna halaman, sehingga
-   berkas aslinya gelap. Dicerahkan + disaput warna utama supaya mirip sampulnya. */
-body.{{PREFIX}} .{{PREFIX}}-sampul__media img { filter: brightness(2.1) contrast(.9) saturate(.8); }
-.{{PREFIX}}-sampul__media .{{PREFIX}}-figure::after { content: ""; position: absolute; inset: 0; background: rgba(var(--{{PREFIX}}-primary-rgb), .16); pointer-events: none; }
+/* Foto sampul compro ditaruh tembus pandang di atas warna halaman (berkas aslinya
+   gelap). Menaikkan brightness tidak menolong; opasitas aslinya ditiru di atas
+   latar halaman yang disaput warna utama. */
+body.{{PREFIX}} .{{PREFIX}}-sampul__media .{{PREFIX}}-figure { background: linear-gradient(rgba(var(--{{PREFIX}}-primary-rgb), .18), rgba(var(--{{PREFIX}}-primary-rgb), .18)), var(--{{PREFIX}}-latar); }
+body.{{PREFIX}} .{{PREFIX}}-sampul__media img { opacity: var(--{{PREFIX}}-opasitas, 1); }
 
 /* prakata */
 .{{PREFIX}}-prakata { max-width: 920px; margin-inline: auto; }

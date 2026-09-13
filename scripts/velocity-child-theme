@@ -390,7 +390,7 @@ def blok_isi(domain, nama, area):
     isi = muat_isi_contoh(domain) or isi_netral(area)
     kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri',
              'slogan', 'profil', 'visi', 'misi', 'moto', 'struktur', 'customer', 'legalitas', 'target',
-             'judul_seksi', 'form_kolom_tambahan', 'prakata', 'gaya', 'subjudul', 'seksi')
+             'judul_seksi', 'form_kolom_tambahan', 'prakata', 'gaya', 'subjudul', 'seksi', 'hero_opasitas')
     kosong = {'misi': [], 'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
               'judul_seksi': {}, 'form_kolom_tambahan': [], 'prakata': {}, 'seksi': []}
     # Company profile menentukan gaya & urutan beranda: 'seksi' kosong berarti
@@ -404,6 +404,11 @@ def blok_isi(domain, nama, area):
                                  for x in compro['seksi'] if x.get('jenis')])
         if not isi.get('prakata') and (compro.get('prakata') or {}).get('paragraf'):
             isi['prakata'] = compro['prakata']
+        sampul = next((x for x in compro['seksi'] if x.get('jenis') == 'sampul'), {})
+        foto_sampul = next((f for f in compro.get('foto') or []
+                            if Path(f.get('berkas', '')).name in (sampul.get('foto') or [])[:1]), {})
+        if foto_sampul.get('opasitas'):
+            isi.setdefault('hero_opasitas', str(foto_sampul['opasitas']))
     baris = []
     for k in kunci:
         nilai = isi.get(k, kosong.get(k, ''))
