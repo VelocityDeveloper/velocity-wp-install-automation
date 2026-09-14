@@ -471,3 +471,39 @@ situs** (company profile vs portal berita). Template tetap satu, variannya lewat
 - **"Belum disunting" bukan soal tanggal.** Artikel contoh lama berbeda
   `post_modified` karena installer sendiri menerbitkannya ulang; yang benar
   membandingkan isi dengan versi generator (md5).
+
+## Kerapian padding & margin desktop dan mobile
+
+Keputusan user 2026-09-14: tampilan wajib rapi di desktop **dan** HP, terutama
+padding dan margin. HTML valid dan HTTP 200 tidak membuktikan apa pun soal ini —
+semua temuan di bawah hanya ketahuan dari screenshot. Periksa setiap halaman
+utama di lebar 1366px dan 390px (Playwright, `scripts/potret-halaman`), lalu
+lihat hasilnya sebelum melapor selesai.
+
+Daftar periksa:
+- **Gutter kiri-kanan** minimal ±16px di HP; teks, tombol, dan kartu tidak
+  menempel ke tepi layar atau ke tepi kartunya sendiri.
+- **Tidak ada scroll horizontal** (`document.documentElement.scrollWidth` ≤
+  `clientWidth`). Pelakunya biasanya gambar/iframe ber-lebar tetap atau
+  `min-width` yang lebih lebar dari layar.
+- **Jarak antarseksi konsisten** — pakai preset spacing tema, bukan angka acak
+  per seksi — dan tidak ada ruang kosong besar atau pita putih yang tak disengaja.
+- **Kartu dalam satu baris seragam**: gambar satu rasio (`aspect-ratio` +
+  `object-fit: cover`), isi kartu punya padding yang sama.
+- **Elemen melayang** (tombol WhatsApp, scroll-to-top) tidak menutupi tombol,
+  teks, atau baris hak cipta footer di HP.
+- **Ornamen dekoratif** (lingkaran, pola) tidak menimpa teks di layar sempit.
+- Judul besar tidak pecah jadi satu kata per baris di HP; kurangi ukurannya
+  dengan `clamp()`.
+
+Kasus nyata:
+- **Pita putih 16px di atas footer** (layananhipnoterapi.com): `blockGap` di
+  theme.json memberi `<footer>` margin atas. Tidak terlihat selama seksi di atasnya
+  berupa kartu, langsung kelihatan begitu seksi itu dibuat penuh berlatar navy.
+  Solusinya `.wp-site-blocks > footer.wp-block-template-part { margin-block-start: 0 }`.
+- **Ornamen menimpa teks di HP** (seksi ajakan konsultasi yang sama): lingkaran
+  hiasan 280px pas di desktop tapi melintasi paragraf di lebar 390px — dikecilkan
+  lewat media query.
+- **Ruang kosong besar karena peta dobel** (anaksegalabangsa.com, bagian di atas).
+- **Kartu tidak seragam**: satu kartu lokasi berisi blok gradien sementara dua
+  lainnya foto — diganti gambar dengan rasio yang sama.

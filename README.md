@@ -329,6 +329,15 @@ scripts/velocity-map <domain> --alamat "…"        # [--segar] untuk mengabaika
 
 `site-audit` menandai `peta_tidak_spesifik` kalau yang ketemu hanya titik Indonesia — tanda alamat klien perlu diperbaiki.
 
+## Wajib di setiap situs
+
+Keputusan user 2026-09-14, berlaku untuk semua paket (tema klasik, child theme, maupun FSE). Situs belum boleh dilaporkan selesai sebelum keempatnya terpenuhi.
+
+1. **Favicon wajib ada.** `site-finish` memasangnya: logo klien kalau ada, ikon logo contoh kalau tidak (bagian [Favicon](#favicon) dan [Logo contoh](#logo-contoh-scriptsvelocity-logo)). Situs FSE yang temanya dipasang manual juga wajib diperiksa. Audit: `favicon_belum_terpasang`.
+2. **Halaman kebijakan privasi (Privacy Policy) wajib ada dan terbit.** `website-install-from-manifest` membuat halaman "Kebijakan Privasi" berstatus publish dan menetapkannya sebagai `wp_page_for_privacy_policy` (Pengaturan → Privasi). Draft "Privacy Policy" bawaan WordPress tidak dihitung. Audit: `halaman_privasi_tidak_ada` / `halaman_privasi_belum_terbit:<status>`.
+3. **Tampilan desktop dan mobile wajib rapi, terutama padding dan margin.** Periksa lewat screenshot di lebar desktop (1366px) dan HP (390px), jangan hanya HTTP 200. `paket-g-cek-visual` sudah memotret keduanya. Daftar periksa dan contoh kasus nyata ada di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md#kerapian-padding--margin-desktop-dan-mobile).
+4. **Featured image (foto utama) setiap post wajib punya caption.** Caption = kolom *Keterangan* attachment (`post_excerpt`, dibaca `wp_get_attachment_caption()`), dan **wajib tampil** di halaman artikel di bawah foto. Isinya harus benar: keterangan dari klien, atau sumber/kredit foto contoh (mis. judul & pembuat dari Openverse). Jangan mengarang peristiwa, nama orang, atau lokasi. Keadaan saat ini (2026-09-14): `paket-g-foto` memasang foto utama lewat `wp media import --featured_image` **tanpa** caption, `templates/child-theme-paket-g/single.php` hanya `the_post_thumbnail()`, dan blok `core/post-featured-image` di tema FSE tidak mencetak caption. Ketiganya perlu disesuaikan. Audit: `foto_utama_tanpa_caption:<jumlah>`.
+
 ## Favicon
 
 **Kalau klien punya logo, favicon selalu logo klien** (keputusan 2026-09-14, berlaku untuk semua paket). Logo klien = gambar bernama `logo*` di folder klien, atau logo yang dipotong `compro-klien` dari company profile.

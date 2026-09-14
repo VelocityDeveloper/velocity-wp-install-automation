@@ -190,6 +190,23 @@ echo wp_json_encode(array(
     'logo_contoh'     => (int) get_option('velocity_logo_contoh'),
     'favicon'         => (int) get_option('site_icon'),
     'favicon_contoh'  => (int) get_option('velocity_icon_contoh'),
+    // Halaman kebijakan privasi wajib ada & terbit (keputusan user 2026-09-14).
+    'privasi'         => (function () {
+        $id = (int) get_option('wp_page_for_privacy_policy');
+        $p = $id ? get_post($id) : null;
+        return $p ? array('id' => $id, 'status' => $p->post_status, 'judul' => $p->post_title) : array('id' => $id, 'status' => '', 'judul' => '');
+    })(),
+    // Foto utama post terbit wajib ber-caption (keputusan user 2026-09-14).
+    'foto_utama'      => (function () {
+        $ids = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'fields' => 'ids', 'numberposts' => -1, 'meta_key' => '_thumbnail_id'));
+        $tanpa = 0;
+        foreach ($ids as $pid) {
+            if (trim((string) wp_get_attachment_caption((int) get_post_thumbnail_id($pid))) === '') {
+                $tanpa++;
+            }
+        }
+        return array('ada' => count($ids), 'tanpa_caption' => $tanpa);
+    })(),
     'maintenance'     => (int) get_option('maintenance_mode'),
     'maintenance_installer' => (string) get_option('velocity_installer_maintenance'),
     'maintenance_paket_g' => (string) get_option('velocity_maintenance_paket_g'),
@@ -390,6 +407,19 @@ def main():
         temuan.append('logo_belum_terpasang')
     if not situs['favicon']:
         temuan.append('favicon_belum_terpasang')
+    # Wajib: halaman kebijakan privasi (Privacy Policy) ada, ditetapkan di
+    # Pengaturan → Privasi, dan berstatus terbit (keputusan user 2026-09-14).
+    privasi = situs.get('privasi') or {}
+    info['privasi'] = f"{privasi.get('judul')} ({privasi.get('status')})" if privasi.get('status') else 'tidak ada'
+    if not privasi.get('status') or privasi.get('status') == 'trash':
+        temuan.append('halaman_privasi_tidak_ada')
+    elif privasi.get('status') != 'publish':
+        temuan.append(f"halaman_privasi_belum_terbit:{privasi.get('status')}")
+    # Wajib: foto utama setiap post ber-caption (keputusan user 2026-09-14).
+    foto_utama = situs.get('foto_utama') or {}
+    info['foto_utama'] = f"{foto_utama.get('ada', 0)} post, {foto_utama.get('tanpa_caption', 0)} tanpa caption"
+    if foto_utama.get('tanpa_caption'):
+        temuan.append(f"foto_utama_tanpa_caption:{foto_utama['tanpa_caption']}")
     if not situs['tagline']:
         temuan.append('tagline_kosong')
 
