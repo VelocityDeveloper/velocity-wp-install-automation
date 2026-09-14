@@ -156,7 +156,7 @@ Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
 
 - **Konten AI** dibersihkan `content_sanitize.py` (tanpa `<img>`/`<iframe>`/`<form>`/placeholder). Halaman tulisan installer ditandai meta `_velocity_content_md5`; apply ulang hanya menimpa halaman yang belum disunting orang. Konten tersimpan di `/var/lib/velocity/ai/generated/` dipakai ulang.
 - **Bahan AI**: isi FORM ISIAN + dokumen di folder Drive (`client_docs.py`); PDF hasil scan dibaca OCR (`tesseract`, bahasa ind+eng).
-- **`site-finish`**: logo (+favicon bila persegi) & foto klien ke Media Library, galeri `[gallery]` di halaman Galeri, tagline (slogan form / AI), warna tema (Additional CSS dari "WARNA TEMA WEB"), tombol WhatsApp velocity-addons (dari "Kontak utk di web"), peta Google Maps di Hubungi Kami. Tidak menimpa pengaturan yang sudah diubah orang.
+- **`site-finish`**: logo (+favicon, lihat "Favicon") & foto klien ke Media Library, galeri `[gallery]` di halaman Galeri, tagline (slogan form / AI), warna tema (Additional CSS dari "WARNA TEMA WEB"), tombol WhatsApp velocity-addons (dari "Kontak utk di web"), peta Google Maps di Hubungi Kami. Tidak menimpa pengaturan yang sudah diubah orang.
 - **`site-qa`**: SSL valid untuk domain, gambar tidak 404, tanpa teks placeholder, menu Tentang Kami/Hubungi Kami ada, artikel tidak di Uncategorized.
 
 Mode `finish` (`POST /api/installer/run` `{"domain":..., "mode":"finish"}`) menjalankan ulang konten + finishing + QA untuk situs yang sudah terpasang, tanpa install ulang dan tanpa notifikasi.
@@ -328,6 +328,15 @@ scripts/velocity-map <domain> --alamat "…"        # [--segar] untuk mengabaika
 `site-finish` memanggilnya, menyimpan hasilnya di opsi `velocity_map` (`{status, lat, lon, zoom, label, q}`), dan memakai koordinat itu di iframe — termasuk `z=` yang menyesuaikan ketelitian. Child theme membaca opsi yang sama. Geocodernya Nominatim (OpenStreetMap); hasilnya disimpan per domain di `/var/lib/velocity/geocode/`.
 
 `site-audit` menandai `peta_tidak_spesifik` kalau yang ketemu hanya titik Indonesia — tanda alamat klien perlu diperbaiki.
+
+## Favicon
+
+**Kalau klien punya logo, favicon selalu logo klien** (keputusan 2026-09-14, berlaku untuk semua paket). Logo klien = gambar bernama `logo*` di folder klien, atau logo yang dipotong `compro-klien` dari company profile.
+
+- Logo tidak dipakai mentah: `site-finish` menaruhnya utuh di tengah kanvas transparan 512×512 (`favicon_klien`, lewat `rsvg-convert`), karena WordPress butuh ikon persegi ≥512px dan logo klien sering mendatar atau kecil. Media-nya bertanda `_velocity_source=favicon-klien:…`.
+- Favicon yang dipasang installer (ikon logo contoh, logo mentah dari versi lama) digeser favicon logo klien. Favicon yang diunggah orang lewat Customizer (tanpa `_velocity_source`) tidak pernah ditimpa.
+- WebP tidak bisa dibaca `rsvg-convert` di server installer (tidak ada loader gdk-pixbuf): logo dipakai langsung dan log mencatat `favicon_persegi_gagal:.webp`.
+- Klien tanpa logo tetap memakai ikon dari logo contoh (bagian berikut).
 
 ## Logo contoh (`scripts/velocity-logo`)
 

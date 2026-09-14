@@ -11,6 +11,7 @@ _velocity_source, logo/ikon/WhatsApp hanya diisi kalau masih kosong, tagline &
 CSS hanya ditimpa kalau masih milik installer, galeri & peta hanya ditambahkan
 ke halaman yang isinya belum disunting sejak ditulis installer (md5).
 """
+import base64
 import json
 import os
 import re
@@ -159,6 +160,34 @@ def image_size(path):
         return None
 
 
+def favicon_klien(logo, dest):
+    """Favicon persegi 512px dari logo klien; True kalau berhasil.
+
+    Keputusan user 2026-09-14: kalau klien punya logo, favicon SELALU logo klien.
+    Logo mendatar/kecil tidak bisa dipakai langsung (WordPress butuh ikon persegi
+    >=512px), jadi logo ditaruh utuh di tengah kanvas transparan lewat rsvg-convert.
+    gdk-pixbuf server installer tidak punya loader WebP: format itu dilaporkan
+    gagal dan pemanggil memakai logonya langsung."""
+    mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif'}.get(logo.suffix.lower())
+    alat = shutil.which('rsvg-convert')
+    if not mime or not alat:
+        return False
+    data = base64.b64encode(logo.read_bytes()).decode()
+    svg = dest.with_suffix('.svg')
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+                   'width="512" height="512" viewBox="0 0 512 512"><image x="16" y="16" width="480" height="480" '
+                   f'preserveAspectRatio="xMidYMid meet" xlink:href="data:{mime};base64,{data}"/></svg>')
+    try:
+        run = subprocess.run([alat, '-w', '512', '-h', '512', str(svg), '-o', str(dest)],
+                             capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        svg.unlink(missing_ok=True)
+    # Kanvas kosong (gambar gagal dibaca) tetap 512x512 tapi hanya ratusan byte.
+    return run.returncode == 0 and image_size(dest) == (512, 512) and dest.stat().st_size > 2000
+
+
 COMPRO_ROOT = Path('/var/lib/velocity/compro')
 
 
@@ -238,16 +267,28 @@ if [[ -n "$LOGO_FILE" ]]; then
   ikon_boleh=0
   [[ "$ikon_kini" =~ ^0?$ ]] && ikon_boleh=1
   [[ -n "$ikon_contoh_lama" && "$ikon_kini" == "$ikon_contoh_lama" ]] && ikon_boleh=1
+  # Klien punya logo → favicon SELALU logo klien (keputusan user 2026-09-14).
+  # Favicon apa pun yang dipasang installer (bertanda _velocity_source: logo
+  # mentah lama, ikon contoh) boleh digeser; unggahan manual orang tidak.
+  if [[ "$ICON_KLIEN" == 1 && "$ikon_boleh" == 0 ]] \
+      && [[ -n "$(wp post meta get "$ikon_kini" _velocity_source 2>/dev/null || true)" ]]; then
+    ikon_boleh=1
+  fi
 
-  # Logo contoh punya berkas persegi sendiri untuk favicon; logo klien dipakai
-  # sebagai favicon hanya kalau bentuknya memang mendekati persegi.
+  # Favicon persegi siap pakai: ikon logo contoh, atau logo klien yang sudah
+  # ditaruh di kanvas persegi 512px (favicon_klien di sisi installer).
   if [[ "$ikon_boleh" == 1 && -n "$ICON_FILE" ]]; then
     icon_id=$(import_media "$ICON_FILE" "$ICON_KEY")
-    if [[ -n "$icon_id" ]]; then
-      wp option update site_icon "$icon_id" >/dev/null && echo "site_icon_set:$icon_id:contoh" >&2
-      wp option update velocity_icon_contoh "$icon_id" >/dev/null
-      ikon_boleh=0
+    if [[ -n "$icon_id" && "$icon_id" != "$ikon_kini" ]]; then
+      if [[ "$ICON_KLIEN" == 1 ]]; then
+        wp option update site_icon "$icon_id" >/dev/null && echo "site_icon_set:$icon_id:logo_klien" >&2
+        if [[ -n "$ikon_contoh_lama" ]]; then wp option delete velocity_icon_contoh >/dev/null 2>&1 || true; fi
+      else
+        wp option update site_icon "$icon_id" >/dev/null && echo "site_icon_set:$icon_id:contoh" >&2
+        wp option update velocity_icon_contoh "$icon_id" >/dev/null
+      fi
     fi
+    if [[ -n "$icon_id" ]]; then ikon_boleh=0; fi
   fi
   if [[ "$ikon_boleh" == 1 && "$ICON_OK" == 1 && -n "$logo_id" ]]; then
     wp option update site_icon "$logo_id" >/dev/null && echo "site_icon_set:$logo_id" >&2
@@ -643,6 +684,15 @@ def main():
             icon_file = 'icon' + logo_contoh['icon'].suffix.lower()
             shutil.copy2(logo_contoh['icon'], stage / icon_file)
             icon_key = 'logo-contoh-icon:' + str(logo_contoh['icon'].stat().st_size)
+        elif logo and not logo_contoh:
+            if favicon_klien(logo, stage / 'icon.png'):
+                icon_file = 'icon.png'
+                icon_key = 'favicon-klien:' + logo_media_key(logo, folder, False)
+                icon_ok = True
+            else:
+                # Gagal dibuat persegi (mis. WebP): logo klien tetap dipakai apa adanya.
+                icon_ok = True
+                print(f'finish: favicon_persegi_gagal:{logo.suffix.lower()} (logo dipakai langsung)')
         photo_files, photo_keys = [], []
         for i, photo in enumerate(photos, 1):
             name = f'photo-{i:02d}{photo.suffix.lower()}'
@@ -661,6 +711,7 @@ def main():
             f'ICON_FILE={shlex.quote(icon_file)}',
             f'ICON_KEY={shlex.quote(icon_key)}',
             f'ICON_OK={1 if icon_ok else 0}',
+            f'ICON_KLIEN={0 if logo_contoh or not logo else 1}',
             'PHOTO_FILES=(' + ' '.join(shlex.quote(n) for n in photo_files) + ')',
             'PHOTO_KEYS=(' + ' '.join(shlex.quote(k) for k in photo_keys) + ')',
             f'MAP_QUERY={shlex.quote(peta["q"])}',
