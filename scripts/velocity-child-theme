@@ -48,7 +48,9 @@ LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
 # Paket yang desainnya custom per project: child theme-nya digenerate, bukan
 # dicocokkan ke API. norm() dipakai supaya "Paket G" / "paket g" sama saja.
-SCAFFOLD_PAKET = {'paketg'}
+# Paket desain custom: child theme digenerate bernama project. Portal Berita Custom
+# memakai template yang sama dengan varian berita (keputusan user 2026-09-14).
+SCAFFOLD_PAKET = {'paketg', 'paketportalberitacustom'}
 SCAFFOLD_VERSION = '1.1.0'
 # Kerangka desain Paket G: berkas tema lengkap dengan placeholder {{KUNCI}}.
 TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
@@ -261,6 +263,13 @@ def data_compro(domain):
         return {}
 
 
+def alamat_kontak_web(teks):
+    """Baris beralamat dari isian "Kontak utk di web" (bukan biodata pemilik)."""
+    pola = re.compile(r'\b(jl|jalan|kabupaten|kab|kecamatan|kec|desa|kelurahan|kota|rt|rw|blok|perumahan|gedung|ruko)\b', re.I)
+    baris = [b.strip(' ,.') for b in re.split(r'[\n;]+', str(teks or '')) if pola.search(b)]
+    return ', '.join(baris)
+
+
 def data_klien(domain, nama=''):
     """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php.
 
@@ -288,7 +297,7 @@ def data_klien(domain, nama=''):
     except Exception:
         pass
 
-    nama = nama.strip() or field(r'nama perusahaan') or domain.split('.')[0].replace('-', ' ').title()
+    nama = nama.strip() or field(r'nama perusahaan|nama media') or domain.split('.')[0].replace('-', ' ').title()
     kontak_web = field(r'kontak utk di web|kontak untuk di web')
     wa, telp = nomor_wa(kontak_web)
     if not wa:
@@ -324,7 +333,12 @@ def data_klien(domain, nama=''):
         'TELP': telp[:25],
         'EMAIL': penerima or f'admin@{domain}',
         'EMAIL_PUBLIK': email_publik,
-        'ALAMAT': (alamat_compro or ', '.join(b for b in bagian if b))[:200] or '-',
+        # Alamat biodata FORM ISIAN ("Alamat lengkap" pemilik) hanya dipakai kalau
+        # memang tidak ada bagian biodata terpisah; anaksegalabangsa.com sempat
+        # menampilkan alamat rumah pemilik di footer. Kota tetap dipakai untuk peta.
+        'ALAMAT': (alamat_compro or alamat_kontak_web(kontak_web)
+                   or ('' if re.search(r'BIO\s*A?DATA|data ini kami gunakan untuk administrasi', teks_form, re.I)
+                       else ', '.join(b for b in bagian if b)))[:200],
         'AREA': kota or provinsi or 'sekitarnya',
     }
 
@@ -390,9 +404,11 @@ def blok_isi(domain, nama, area):
     isi = muat_isi_contoh(domain) or isi_netral(area)
     kunci = ('hero_judul', 'hero_teks', 'hero_poin', 'layanan', 'produk', 'keunggulan', 'alur', 'galeri',
              'slogan', 'profil', 'visi', 'misi', 'moto', 'struktur', 'customer', 'legalitas', 'target',
-             'judul_seksi', 'form_kolom_tambahan', 'prakata', 'gaya', 'subjudul', 'seksi', 'hero_opasitas')
+             'judul_seksi', 'form_kolom_tambahan', 'prakata', 'gaya', 'subjudul', 'seksi', 'hero_opasitas',
+             'jenis', 'rubrik', 'tentang', 'redaksi')
     kosong = {'misi': [], 'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
-              'judul_seksi': {}, 'form_kolom_tambahan': [], 'prakata': {}, 'seksi': []}
+              'judul_seksi': {}, 'form_kolom_tambahan': [], 'prakata': {}, 'seksi': [],
+              'rubrik': [], 'redaksi': []}
     # Company profile menentukan gaya & urutan beranda: 'seksi' kosong berarti
     # template memakai susunan bawaan (situs tanpa compro tidak berubah).
     compro = data_compro(domain)
@@ -462,6 +478,11 @@ def gaya_warna(domain, primary, aksen, di_primary):
 
 def nilai_template(slug, domain, nama, prefix, primary, aksen, ink):
     data = data_klien(domain, nama)
+    # Nama media/usaha yang di form ditulis menyambung ("anaksegalabangsa") boleh
+    # ditampilkan berspasi dari isi contoh — hanya kalau huruf & urutannya sama.
+    tampil = str((muat_isi_contoh(domain) or {}).get('nama_tampil') or '')
+    if tampil and re.sub(r'[^a-z0-9]', '', tampil.lower()) == re.sub(r'[^a-z0-9]', '', data['NAMA'].lower()):
+        data['NAMA'] = tampil[:80]
     # Latar berwarna dipastikan cukup kontras dulu, baru warna teksnya dipilih.
     primary, di_primary = perbaiki_kontras(primary, gelap=ink)
     aksen, di_aksen = perbaiki_kontras(aksen, gelap=ink)

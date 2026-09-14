@@ -4,6 +4,7 @@ AI Content Generator for Velocity WP Install
 Reads manifest + client folder data, calls OpenAI-compatible API,
 generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
 """
+import hashlib
 import json
 import os
 import re
@@ -187,8 +188,28 @@ Use Indonesian language. Content should be professional HTML without images, for
         log(f'Response: {response[:500]}')
         return None
 
+def rapikan_artikel(daftar, category):
+    """Artikel valid saja, dengan nama kolom baku.
+
+    AI kadang memakai kolom berbahasa Indonesia ("judul", "isi", "ringkasan"):
+    anaksegalabangsa.com menyimpan 3 artikel Pendidikan dengan judul, slug, dan
+    isi kosong, yang lalu diam-diam tidak terbit."""
+    hasil = []
+    for a in daftar if isinstance(daftar, list) else []:
+        if not isinstance(a, dict):
+            continue
+        judul = str(a.get('title') or a.get('judul') or '').strip()
+        isi = str(a.get('content') or a.get('isi') or a.get('konten') or '').strip()
+        if not judul or len(re.sub(r'<[^>]+>', ' ', isi).split()) < 120:
+            continue
+        slug = re.sub(r'[^a-z0-9]+', '-', str(a.get('slug') or judul).lower()).strip('-')[:80]
+        hasil.append({'title': judul, 'slug': slug, 'category': category, 'content': isi,
+                      'excerpt': str(a.get('excerpt') or a.get('ringkasan') or '').strip()})
+    return hasil
+
+
 def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog',
-                      rincian_topik=''):
+                      rincian_topik='', gaya='bisnis'):
     """Artikel untuk satu kategori.
 
     `category` bukan sekadar label yang ditempel: semua artikel dalam satu
@@ -201,6 +222,40 @@ def generate_articles(site_title, domain, client_info, model, num_articles=5, ca
     client_info = client_info.strip() or '(tidak ada data klien)'
     topik = f'{category}. {rincian_topik}'.strip() if rincian_topik else category
     
+    if gaya == 'berita':
+        # Portal berita custom (2026-09-14): contoh artikel tidak boleh berupa
+        # laporan peristiwa karangan — situs berita yang menerbitkan kejadian,
+        # nama, atau kutipan fiktif sama dengan menyebar hoaks.
+        user_prompt = f"""Tulis {num_articles} artikel contoh untuk rubrik "{category}" di portal berita {site_title} ({domain}).
+Keterangan rubrik: {rincian_topik or category}
+
+ATURAN WAJIB:
+- Artikel informatif/feature yang TIDAK terikat peristiwa tertentu: penjelasan, panduan, tips, latar belakang isu umum yang sesuai rubrik.
+- JANGAN menulis laporan kejadian. JANGAN mengarang peristiwa, nama orang, nama instansi atau perusahaan tertentu, kutipan wawancara, angka statistik, tanggal, atau lokasi kejadian.
+- Gaya jurnalistik ringkas: paragraf pendek, subjudul <h2> bila perlu, judul menarik tetapi tidak clickbait.
+- Setiap artikel membahas sudut yang berbeda dan jelas termasuk rubrik "{category}".
+
+{CONTENT_RULES}
+
+Return JSON array:
+[
+  {{"title":"<judul>","slug":"<url-slug>","category":"{category}","content":"<isi HTML 350-550 kata>","excerpt":"<ringkasan 20-30 kata>"}}
+]"""
+        for percobaan in range(2):
+            response = ai_call(system_prompt, user_prompt, model)
+            if not response:
+                log(f'Artikel rubrik {category} percobaan {percobaan + 1}: AI tidak menjawab')
+                continue
+            try:
+                articles = rapikan_artikel(json.loads(response[response.find('['):response.rfind(']') + 1]), category)
+            except json.JSONDecodeError as e:
+                log(f'Artikel rubrik {category} percobaan {percobaan + 1}: JSON rusak ({e})')
+                continue
+            if articles:
+                return articles
+            log(f'Artikel rubrik {category} percobaan {percobaan + 1}: tidak ada artikel yang lengkap')
+        return None
+
     user_prompt = f"""Generate {num_articles} blog articles for a website with these details:
 - Site title: {site_title}
 - Domain: {domain}
@@ -252,7 +307,10 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
         "global $shortcode_tags;"
         "foreach (array_keys($shortcode_tags) as $t) {"
         "  if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {"
-        "    foreach ((array) call_user_func($m[1] . '_data', 'layanan') as $l) {"
+        "    $jenis = call_user_func($m[1] . '_data', 'jenis');"
+        "    if ($jenis === 'berita') { echo \"#jenis\\tberita\\n\"; }"
+        "    $daftar = $jenis === 'berita' ? call_user_func($m[1] . '_data', 'rubrik') : call_user_func($m[1] . '_data', 'layanan');"
+        "    foreach ((array) $daftar as $l) {"
         "      if (!empty($l['judul'])) {"
         "        $r = !empty($l['rincian']) ? implode(', ', (array) $l['rincian']) : '';"
         "        echo $l['judul'] . \"\\t\" . trim(($l['teks'] ?? '') . ' ' . $r) . \"\\n\";"
@@ -270,17 +328,21 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return []
-    layanan = []
+    layanan, jenis = [], ''
     for baris in hasil.stdout.splitlines():
+        if baris.startswith('#jenis\t'):
+            jenis = baris.split('\t', 1)[1].strip()
+            continue
         if not baris.strip():
             continue
         judul, _, keterangan = baris.partition('\t')
         # Judul kategori dipakai apa adanya; batasi panjang agar wajar.
-        layanan.append({'judul': judul.strip()[:60], 'keterangan': keterangan.strip()[:400]})
-    return layanan[:6]
+        layanan.append({'judul': judul.strip()[:60], 'keterangan': keterangan.strip()[:400], 'jenis': jenis})
+    # Portal berita bisa punya lebih banyak rubrik daripada layanan perusahaan.
+    return layanan[:10 if jenis == 'berita' else 6]
 
 
-def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles):
+def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun=()):
     """Publish generated content to WordPress via SSH + WP-CLI"""
     ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     if not ssh_key or not Path(ssh_key).is_file():
@@ -389,6 +451,24 @@ fi''')
         if nama not in peta_kategori:
             peta_kategori[nama] = id_kategori(nama)
     
+    # Artikel contoh lama yang kategorinya sudah tidak dipakai situs (mis. semua
+    # "Blog" sebelum rubrik ada) dihapus — hanya kalau belum pernah disunting.
+    # "Belum disunting" = isinya masih sama dengan versi generator. Tanggal ubah tidak
+    # bisa dipakai: installer sendiri memperbarui artikel (terbitkan draft) di run yang sama.
+    for slug_lama, md5_isi in pensiun:
+        if not re.match(r'^[a-z0-9-]+$', str(slug_lama)) or not re.match(r'^[0-9a-f]{32}$', str(md5_isi)):
+            continue
+        keluaran, _ = wp_remote(f'''pid=$($WP_BIN post list --post_type=post --post_status=publish --name='{slug_lama}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -n "$pid" ]]; then
+  if [[ "$($WP_BIN post get "$pid" --field=post_content --path="$DOCROOT" --allow-root | md5sum | cut -d' ' -f1)" == "{md5_isi}" ]]; then
+    $WP_BIN post delete "$pid" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_retired:{slug_lama}"
+  else
+    echo "article_retire_skip_edited:{slug_lama}"
+  fi
+fi''')
+        if keluaran:
+            log(f'Artikel lama {slug_lama}: {keluaran}')
+
     # Create articles
     articles_done = 0
     for art in articles:
@@ -522,13 +602,42 @@ def main():
     
     # Generate articles
     articles = load_saved(GENERATED_DIR / f'{domain}-articles.json')
+    pensiun = []
+    kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
+    berita = bool(kategori) and kategori[0].get('jenis') == 'berita'
+    if berita:
+        per_kategori = max(per_kategori, int(cfg.get('articles_per_rubrik', '3')))
+    nama_kategori = {k['judul'] for k in kategori}
+    if articles and kategori and not any(str(a.get('category')) in nama_kategori for a in articles):
+        # Artikel tersimpan dibuat sebelum kategori situs ada (mis. semua "Blog"):
+        # dibuat ulang per kategori, yang lama dipensiunkan bila belum disunting.
+        log(f'Artikel tersimpan tidak cocok kategori situs ({", ".join(sorted(nama_kategori))}), dibuat ulang')
+        pensiun = [(a.get('slug'), hashlib.md5(clean_html(a.get('content', '')).encode()).hexdigest())
+                   for a in articles if a.get('slug')]
+        articles = None
+        if not docs['sources']:
+            docs = collect_client_docs(ON_PROGRESS / domain)
+            client_info = format_for_prompt(client_data, docs)
+    if articles and kategori:
+        articles = [a for a in articles if str(a.get('title') or '').strip() and str(a.get('slug') or '').strip()]
+        ada = {str(a.get('category')) for a in articles}
+        kurang = [k for k in kategori if k['judul'] not in ada]
+        for k in kurang:
+            if not docs['sources']:
+                docs = collect_client_docs(ON_PROGRESS / domain)
+                client_info = format_for_prompt(client_data, docs)
+            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {per_kategori}')
+            bagian = generate_articles(site_title, domain, client_info, model, per_kategori, k['judul'],
+                                       k.get('keterangan', ''), 'berita' if berita else 'bisnis') or []
+            for art in bagian:
+                art['category'] = k['judul']
+            articles.extend(bagian)
     if articles:
-        log('Pakai konten artikel tersimpan')
+        log('Pakai konten artikel tersimpan (+ yang baru dilengkapi)')
     else:
-        # Kategori mengikuti layanan yang benar-benar ada di child theme situs.
-        # Kalau temanya tidak punya daftar layanan (paket lain), kembali ke
-        # satu kategori seperti sebelumnya.
-        kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
+        # Kategori mengikuti layanan (atau rubrik portal berita) yang benar-benar
+        # ada di child theme situs. Kalau temanya tidak punya daftar layanan
+        # (paket lain), kembali ke satu kategori seperti sebelumnya.
         if kategori:
             log(f'Kategori dari layanan situs: {", ".join(k["judul"] for k in kategori)}')
             articles = []
@@ -536,7 +645,8 @@ def main():
                 nama = layanan['judul']
                 log(f'Generating {per_kategori} artikel untuk kategori "{nama}"...')
                 bagian = generate_articles(site_title, domain, client_info, model,
-                                           per_kategori, nama, layanan.get('keterangan', '')) or []
+                                           per_kategori, nama, layanan.get('keterangan', ''),
+                                           'berita' if berita else 'bisnis') or []
                 for art in bagian:
                     # Kategori dari AI kadang meleset; yang dipakai yang diminta.
                     art['category'] = nama
@@ -572,7 +682,7 @@ def main():
     
     # Apply: publish content
     log('Publishing content to remote...')
-    success = publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles)
+    success = publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun)
     
     if success:
         log('AI content generation completed')

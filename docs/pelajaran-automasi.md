@@ -417,3 +417,30 @@ Yang harus diubah supaya langkah tangan bisa jadi otomatis:
 - **Cek visual** menyimpan screenshot di `/var/lib/velocity/visual/<domain>/`
   (5 run terakhir); `site-audit` membaca temuan terakhirnya, dan menandai
   `tema_belum_mengikuti_compro` serta `tombol_whatsapp_tanpa_nomor`.
+
+## Portal Berita Custom ikut alur desain custom (anaksegalabangsa.com)
+
+User 2026-09-14: "paket G = paket custom design, untuk portal berita custom juga
+sama dengan paket G". Saya sempat menahan eksekusi karena CRM menulis paket lain —
+yang benar: bedakan **alur** (sama: desain custom per project) dari **bentuk
+situs** (company profile vs portal berita). Template tetap satu, variannya lewat
+`jenis` di theme-data.
+
+- **Contoh berita tidak boleh berupa laporan peristiwa karangan.** Portal berita
+  yang menerbitkan kejadian, nama, atau kutipan fiktif = menyebar hoaks, walau
+  "hanya contoh". Artikel contoh berupa tulisan informatif per rubrik.
+- **Warna dari gambar contoh klien**: "orange mclaren dan maroon" + dua kartu
+  warna. OCR tesseract membaca "#550000" hanya dengan `--psm 11 --dpi 300`, dan
+  sama sekali tidak membaca tulisan kecil "#FF8000" di kartu orange. Server
+  installer tidak punya PIL/ImageMagick/djpeg, dan ffmpeg bawaan Playwright tidak
+  bisa membuka JPEG maupun PNG — Chromium headless memotret gambarnya ke PNG,
+  lalu warna dominannya dibaca pembaca PNG murni Python (hasil #ff7f00).
+- **Urutan tema vs generator artikel.** Generator membaca layanan/rubrik dari
+  child theme yang TERPASANG. Pada instalasi baru tema sudah ada; pada situs lama
+  tanpa child theme, generator jalan duluan dan artikelnya tetap "Blog". Alur
+  dipecah `paket_g_tema` (sebelum konten AI) dan `paket_g_isi` (sesudah finishing).
+- **Artikel tersimpan bisa basi**: `<domain>-articles.json` berkategori "Blog"
+  dipakai ulang selamanya. Kini dibuat ulang bila tidak satu pun kategorinya ada di
+  situs, dan artikel lama dihapus hanya bila `post_modified_gmt == post_date_gmt`.
+- **Nama media menyambung** ("anaksegalabangsa") boleh ditampilkan berspasi dari
+  AI hanya bila huruf & urutannya identik — nama klien tidak boleh berubah.

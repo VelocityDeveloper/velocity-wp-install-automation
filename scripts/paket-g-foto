@@ -513,6 +513,114 @@ def unduh(url, tujuan):
     tujuan.write_bytes(data)
 
 
+CADANGAN_RUBRIK = {
+    'ekonomi': 'market trade money', 'bisnis': 'market trade money', 'kriminal': 'police car night',
+    'hukum': 'courthouse law justice', 'pendidikan': 'school classroom books', 'teknologi': 'computer technology circuit',
+    'hiburan': 'concert stage lights', 'olahraga': 'football stadium', 'kesehatan': 'hospital medicine',
+    'politik': 'parliament building', 'wisata': 'tropical beach travel', 'daerah': 'city street aerial',
+}
+
+
+def foto_berita(cfg, domain, isi, key, coba, manifest):
+    """Foto utama artikel portal berita dari foto contoh Openverse (CC0/PDM).
+
+    Portal berita tanpa foto utama tampil sebagai kotak polos. Kata kunci per
+    artikel ditulis AI (benda/suasana, bukan orang atau peristiwa), cadangannya
+    kata kunci per rubrik. Hanya artikel yang belum punya foto utama yang diisi."""
+    if not key or not Path(key).is_file():
+        print('foto: kunci SSH tidak ada')
+        return 2
+    docroot = f"/home/{cfg.get('da_user', '')}/domains/{domain}/public_html"
+    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 60)) as $p) {"
+           " if (has_post_thumbnail($p->ID)) { continue; } $k = get_the_category($p->ID);"
+           " $o[] = array('id' => $p->ID, 'judul' => $p->post_title, 'rubrik' => $k ? $k[0]->name : ''); }"
+           " echo wp_json_encode($o);")
+    run = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
+                                f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
+                         capture_output=True, text=True, timeout=120)
+    try:
+        artikel = json.loads(run.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        print('foto: daftar artikel tidak terbaca, langkah dilewati')
+        return 1
+    if not artikel:
+        print('foto: semua artikel sudah punya foto utama')
+        return 0
+    kunci = {}
+    ai = muat_ai(manifest)
+    if ai:
+        modul, model = ai
+        teks = ('Untuk tiap artikel portal berita, tulis 2-4 kata kunci BAHASA INGGRIS untuk mencari foto '
+                'ilustrasi di bank foto bebas lisensi: benda, tempat, atau suasana yang terlihat — bukan orang, '
+                'logo, teks, atau peristiwa spesifik. Jawab JSON {"<id>": "kata kunci"}.\n\n'
+                + json.dumps(artikel, ensure_ascii=False))
+        jawab = modul.ai_call('You write stock photo search keywords. Output ONLY valid JSON.', teks, model) or ''
+        try:
+            kunci = {int(k): str(v) for k, v in json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1]).items()}
+        except (ValueError, TypeError):
+            kunci = {}
+    ov, sudah, rencana = Openverse(), set(), []
+    for a in artikel:
+        cadangan = next((v for k, v in CADANGAN_RUBRIK.items() if k in a['rubrik'].lower()), '')
+        pilihan, dipakai = None, ''
+        for q in (kunci.get(a['id'], ''), cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])):
+            if not q:
+                continue
+            calon = [r for r in ov.cari(q) if layak(r, 1000, sudah)]
+            pilihan = next((r for r in calon if relevan(r, q)), calon[0] if calon else None)
+            if pilihan:
+                dipakai = q
+                break
+        if pilihan:
+            sudah.add(pilihan['url'])
+            rencana.append((a, pilihan, dipakai))
+        print(f"foto: {a['id']:>5} {a['judul'][:48]:48} <- "
+              + (f"{str(pilihan.get('title') or '')[:36]} [{dipakai}]" if pilihan else '(tidak ada foto layak)'))
+        if ov.habis:
+            break
+    print(f'foto: {len(rencana)}/{len(artikel)} artikel punya calon foto, {ov.jumlah} pencarian Openverse')
+    if coba or not rencana:
+        return 0
+    folder = f'/tmp/velocity-berita-{domain}'
+    with tempfile.TemporaryDirectory() as tmp:
+        siap = []
+        for a, pilihan, q in rencana:
+            ekstensi = Path(urllib.parse.urlparse(pilihan['url']).path).suffix.lower()
+            nama = f"berita-{a['id']}{ekstensi if ekstensi in ('.jpg', '.jpeg', '.png', '.webp') else '.jpg'}"
+            try:
+                unduh(pilihan['url'], Path(tmp) / nama)
+                siap.append((a, pilihan, q, nama))
+            except Exception as e:
+                print(f"foto: {a['id']} gagal diunduh ({type(e).__name__})")
+        if not siap:
+            return 1
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', tmp, '.'], stdout=subprocess.PIPE)
+        kirim = subprocess.run(ssh + [f'rm -rf {folder} && mkdir -p {folder} && tar -xzf - -C {folder}'],
+                               stdin=tar.stdout, capture_output=True, text=True, timeout=300)
+        tar.wait()
+    if kirim.returncode != 0:
+        print(f'foto: gagal mengirim foto ({kirim.stderr.strip()[:120]})')
+        return 1
+    perintah = [f'D={shlex.quote(docroot)}',
+                'wp() { php -d memory_limit=512M /usr/local/bin/wp "$@" --path="$D" --allow-root 2>/dev/null; }']
+    for a, pilihan, q, nama in siap:
+        asal = json.dumps({'sumber': pilihan.get('foreign_landing_url') or pilihan['url'],
+                           'pembuat': pilihan.get('creator') or '', 'lisensi': pilihan.get('license'),
+                           'kata_kunci': q})
+        perintah.append(
+            f"id=$(wp media import {folder}/{shlex.quote(nama)} --post_id={a['id']} --featured_image "
+            f"--title={shlex.quote('Contoh: ' + a['judul'])} --alt={shlex.quote(a['judul'])} --porcelain) && "
+            f'wp post meta update "$id" _velocity_foto_contoh {shlex.quote(asal)} >/dev/null && '
+            f"echo \"pasang={a['id']}\"")
+    perintah.append(f'rm -rf {folder}')
+    run = subprocess.run(ssh + ['bash', '-s'], input='\n'.join(perintah), capture_output=True, text=True, timeout=900)
+    print(f"foto: {run.stdout.count('pasang=')}/{len(artikel)} artikel diberi foto utama")
+    return 0
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     coba = '--coba' in sys.argv
@@ -527,6 +635,9 @@ def main():
         print('foto: isi contoh belum ada (jalankan paket-g-konten dulu), langkah dilewati')
         return 0
     isi = json.loads(isi_berkas.read_text())
+    if isi.get('jenis') == 'berita':
+        # Portal berita custom: yang perlu foto adalah artikel, bukan slot desain.
+        return foto_berita(cfg, domain, isi, key, coba, args[0])
     if coba and rencana_compro(domain, isi):
         rencana = rencana_compro(domain, isi)
         for kunci, nama in rencana['slot'].items():

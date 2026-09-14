@@ -12,6 +12,13 @@ defined('ABSPATH') || exit;
 
 get_header();
 
+if ({{PREFIX}}_jenis_berita()) {
+    // Portal berita: berita utama, terbaru, dan blok per rubrik.
+    {{PREFIX}}_beranda_berita();
+    get_footer();
+    return;
+}
+
 if ({{PREFIX}}_gaya_compro()) {
     // Klien mengirim company profile: susunan beranda mengikuti urutan halamannya.
     {{PREFIX}}_beranda_compro();

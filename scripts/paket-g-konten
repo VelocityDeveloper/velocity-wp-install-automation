@@ -349,6 +349,186 @@ Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4,
     raise RuntimeError('AI tidak menghasilkan isi tema yang lengkap')
 
 
+def jenis_paket(cfg):
+    """'berita' untuk Paket Portal Berita Custom, selain itu 'perusahaan'."""
+    return 'berita' if 'berita' in re.sub(r'[^a-z]', '', str(cfg.get('paket', '')).lower()) else 'perusahaan'
+
+
+def warna_sampel(domain):
+    """(utama, aksen) dari gambar contoh warna kiriman klien.
+
+    anaksegalabangsa.com melampirkan folder "Warna" berisi kartu "Maroon #550000"
+    dan "McLaren Orange #FF8000". Kode hex yang terbaca OCR didahulukan; kalau
+    tidak terbaca (kartu orange: tulisan kecil di bawah), warna dominan gambarnya
+    yang dipakai. Server installer tidak punya pengurai JPEG (tanpa PIL/ImageMagick),
+    jadi gambar dipotret Chromium headless ke PNG dan dibaca pembaca PNG compro-klien.
+    Warna yang lebih gelap jadi utama (latar bertulisan putih)."""
+    import colorsys
+    import glob
+    import html as html_mod
+    import importlib.machinery
+    import importlib.util
+    import shutil
+    from collections import Counter
+    folder = Path('/home/On Progress') / domain
+    if not folder.is_dir():
+        return '', ''
+    gambar = [g for g in sorted(folder.rglob('*')) if g.suffix.lower() in ('.jpg', '.jpeg', '.png')
+              and re.search(r'warna|color|colour', str(g.relative_to(folder)), re.I)][:6]
+    if not gambar:
+        return '', ''
+    chrome = next((c for c in sorted(glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome'), reverse=True)
+                   + [shutil.which('chromium') or '', shutil.which('google-chrome') or ''] if c), '')
+    loader = importlib.machinery.SourceFileLoader('compro_klien', str(HERE / 'compro-klien'))
+    spec = importlib.util.spec_from_loader('compro_klien', loader)
+    png = importlib.util.module_from_spec(spec)
+    loader.exec_module(png)
+    kode = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, g in enumerate(gambar):
+            dari_teks = []
+            for psm in ('11', '6'):
+                try:
+                    keluar = subprocess.run(['tesseract', str(g), '-', '--psm', psm, '--dpi', '300'],
+                                            capture_output=True, text=True, timeout=60).stdout
+                except (OSError, subprocess.SubprocessError):
+                    keluar = ''
+                dari_teks = ['#' + h.lower() for h in re.findall(r'#\s?([0-9A-Fa-f]{6})\b', keluar)]
+                if dari_teks:
+                    break
+            if dari_teks:
+                kode += dari_teks
+                continue
+            if not chrome:
+                continue
+            halaman = Path(tmp) / f'w{i}.html'
+            halaman.write_text('<html><body style="margin:0;background:#fff"><img src="file://'
+                               + html_mod.escape(str(g)) + '" style="width:400px;height:400px;object-fit:contain;display:block">'
+                               '</body></html>')
+            potret = Path(tmp) / f'w{i}.png'
+            subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
+                            '--allow-file-access-from-files', '--window-size=400,400',
+                            f'--screenshot={potret}', f'file://{halaman}'], capture_output=True, timeout=120)
+            try:
+                lebar, tinggi, kanal, baris = png.baca_png(potret)
+            except (OSError, ValueError):
+                continue
+            hitung = Counter()
+            for y in range(0, tinggi, 2):
+                for x in range(0, lebar, 2):
+                    r, gg, b = baris[y][x * kanal:x * kanal + 3]
+                    h, l, sat = colorsys.rgb_to_hls(r / 255, gg / 255, b / 255)
+                    if sat >= 0.3 and 0.08 <= l <= 0.9:
+                        hitung[(r, gg, b)] += 1
+            if hitung and sum(hitung.values()) > (lebar * tinggi / 4) * 0.2:
+                kode.append('#%02x%02x%02x' % hitung.most_common(1)[0][0])
+    kode = list(dict.fromkeys(kode))
+    if len(kode) < 2:
+        return (kode[0], '') if kode else ('', '')
+    terang = lambda h: colorsys.rgb_to_hls(*(int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)))[1]
+    kode.sort(key=terang)
+    return kode[0], kode[-1]
+
+
+def rubrik_form(domain):
+    """Rubrik dari susunan menu FORM ISIAN: isian yang bernilai "berisi berita-berita …"."""
+    sys.path.insert(0, str(HERE))
+    from client_form import read_client_form
+    try:
+        fields = read_client_form(Path('/home/On Progress') / domain).get('fields') or {}
+    except Exception:
+        return []
+    hasil, terpakai = [], set()
+    for kunci, nilai in fields.items():
+        if not re.search(r'berisi\s+(berita|artikel|info)', str(nilai), re.I):
+            continue
+        judul = teks(kunci, 40).title()
+        slug = slug_dari(judul)
+        if not judul or slug in terpakai:
+            continue
+        terpakai.add(slug)
+        keterangan = re.sub(r'^\s*berisi\s+', '', str(nilai), flags=re.I).strip().rstrip('.')
+        hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan[:1].upper() + keterangan[1:] + '.', 160)})
+    return hasil[:10]
+
+
+def buat_isi_berita(gen, cfg, domain):
+    """Isi awal portal berita: identitas media, rubrik, pedoman redaksi, warna.
+
+    Rubrik & warna dibaca kode dari form dan gambar contoh; AI hanya menulis
+    kalimat identitas (slogan, tentang, pedoman redaksi) — tanpa nama awak
+    redaksi, badan hukum, nomor verifikasi Dewan Pers, atau angka pembaca."""
+    client_data = {}
+    for folder in (Path(cfg['_manifest']).parent, gen.ON_PROGRESS / domain):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    docs = gen.collect_client_docs(gen.ON_PROGRESS / domain)
+    info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
+    model = gen.get_default_model()
+    if not model:
+        raise RuntimeError('model AI belum diatur')
+    rubrik = rubrik_form(domain)
+    nama_form = cfg.get('site_title') or domain.split('.')[0]
+    permintaan = f"""Isi awal portal berita dari data klien berikut.
+- Nama media (dari form): {nama_form}
+- Domain: {domain}
+- Rubrik: {', '.join(r['judul'] for r in rubrik) or '(ambil dari susunan menu di data klien)'}
+- Data klien:
+{info}
+
+Aturan (wajib):
+- JANGAN mengarang nama awak redaksi, badan hukum, nomor izin atau verifikasi Dewan Pers, alamat kantor, jumlah pembaca, atau penghargaan.
+- Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, nomor, atau alamat pribadi pemilik.
+- Tanpa label "CONTOH:". Bahasa Indonesia yang lugas.
+- "nama_tampil": nama media yang ditulis rapi dengan spasi dan huruf kapital bila di form ditulis menyambung (mis. "kabarkotaku" -> "Kabar Kotaku"). Huruf dan urutannya TIDAK boleh berubah.
+- "slogan": maksimal 8 kata. "hero_teks": 1 kalimat. "tentang": 2-3 kalimat tentang arah pemberitaan media.
+- "redaksi": 3 paragraf pedoman redaksi umum (independensi & akurasi, verifikasi sebelum terbit, hak jawab & koreksi).
+- "rubrik": hanya diisi kalau daftar rubrik di atas kosong.
+- "foto_umum": 3 frasa BAHASA INGGRIS (2-3 kata) suasana umum dunia berita, tanpa orang (mis. "newspaper printing press").
+
+Kembalikan JSON persis:
+{{"nama_tampil":"","slogan":"","hero_teks":"","tentang":"","redaksi":["","",""],"rubrik":[{{"judul":"","teks":""}}],"foto_umum":["","",""]}}"""
+    sistem = ("You are a senior Indonesian newsroom editor. Output ONLY one valid JSON object, "
+              "no markdown fences, no extra text.")
+    data = {}
+    for percobaan in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model)
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            data = json.loads(jawab[awal:akhir + 1])
+            break
+        except (AttributeError, ValueError):
+            gen.log(f'Isi portal berita percobaan {percobaan + 1} ditolak')
+    if not data:
+        raise RuntimeError('AI tidak menghasilkan isi portal berita')
+    tampil = teks(data.get('nama_tampil'), 80)
+    if re.sub(r'[^a-z0-9]', '', tampil.lower()) != re.sub(r'[^a-z0-9]', '', nama_form.lower()):
+        tampil = ''
+    if not rubrik:
+        for r in data.get('rubrik') or []:
+            if isinstance(r, dict) and teks(r.get('judul'), 40):
+                rubrik.append({'slug': slug_dari(r['judul']), 'judul': teks(r['judul'], 40),
+                               'teks': teks(r.get('teks'), 160)})
+    utama, aksen = warna_sampel(domain)
+    if not utama and warna_dipilih_klien(domain):
+        gen.log('Warna klien tertulis tanpa kode hex yang terbaca; memakai warna bawaan')
+    nama = tampil or nama_form
+    return {
+        'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
+        'hero_judul': nama, 'hero_teks': teks(data.get('hero_teks'), 220), 'hero_poin': [],
+        'tentang': teks(data.get('tentang'), 600),
+        'redaksi': [teks(x, 600) for x in (data.get('redaksi') or []) if teks(x, 600)][:4],
+        'rubrik': rubrik[:10],
+        'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
+        'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
+        'judul_seksi': {'terbaru': 'Berita Terbaru', 'pemesanan': 'Kirim Pesan ke Redaksi'},
+        'warna': {'utama': utama if HEX_RE.match(utama or '') else '', 'aksen': aksen if HEX_RE.match(aksen or '') else ''},
+        'slogan_sumber': 'ai', 'profil': '', 'visi': '', 'misi': [], 'moto': '',
+        'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
+    }
+
+
 def prefix_situs(cfg, domain):
     docroot = f"/home/{cfg['da_user']}/domains/{domain}/public_html"
     tanya = ("php -d memory_limit=512M /usr/local/bin/wp eval "
@@ -429,13 +609,14 @@ def main():
     if segar or not simpanan.is_file():
         gen = muat_generator(manifest)
         try:
-            isi = buat_isi(gen, cfg, domain)
+            # Portal berita custom: isi berbentuk media (rubrik, redaksi), bukan company profile.
+            isi = buat_isi_berita(gen, cfg, domain) if jenis_paket(cfg) == 'berita' else buat_isi(gen, cfg, domain)
         except Exception as e:
             print(f'konten: gagal membuat isi contoh ({e})')
             return 1
         GENERATED_DIR.mkdir(parents=True, exist_ok=True)
         simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
-        print(f"konten: isi contoh dibuat ({', '.join(l['judul'] for l in isi['layanan'])})")
+        print(f"konten: isi contoh dibuat ({', '.join(x['judul'] for x in (isi.get('rubrik') or isi['layanan']))})")
     else:
         isi = json.loads(simpanan.read_text())
         if sesuaikan_compro(isi, domain):

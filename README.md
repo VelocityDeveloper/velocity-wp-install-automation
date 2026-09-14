@@ -212,7 +212,7 @@ Untuk paket lain mode ini hanya memasang + mengaktifkan child theme (`scripts/ch
 
 ## Alur Paket G baku
 
-Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nanti seperti itu alurnya"). Satu fungsi `paket_g_alur` di `installer-runner`, dijalankan pada mode `apply` dan `finish` (sesudah `site-finish`) serta mode `child-theme`:
+Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nanti seperti itu alurnya"). Di `installer-runner` terbagi dua fungsi: `paket_g_tema` (langkah 1–3, sebelum konten AI) dan `paket_g_isi` (langkah 4–7, sesudah `site-finish`), dipakai mode `apply`, `finish`, dan `child-theme` (yang juga menjalankan generator artikel di antaranya). Berlaku untuk Paket G dan Paket Portal Berita Custom:
 
 | # | Langkah | Hasil |
 |---|---|---|
@@ -225,6 +225,17 @@ Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nan
 | 7 | `paket-g-cek-visual <manifest>` | Screenshot desktop & HP ke `/var/lib/velocity/visual/<domain>/<waktu>/` + cek HTTP/layar kosong; `site-audit` membaca temuannya |
 
 Semua langkah boleh gagal tanpa menggagalkan instalasi (kecuali pemasangan tema di mode `child-theme`). Hasilnya tetap dilihat manusia/Claude lewat screenshot sebelum dilaporkan selesai — kesalahan tampilan tidak terlihat dari HTML. Audit terkait: `tema_belum_mengikuti_compro`, `tombol_whatsapp_tanpa_nomor`, `visual:<temuan>`.
+
+## Portal Berita Custom = desain custom (varian berita)
+
+Keputusan user 2026-09-14: "paket G = paket custom design, untuk portal berita custom juga sama dengan paket G". `Paket Portal Berita Custom` kini dikenali sebagai paket desain custom di `installer-runner`, `website-install-from-manifest`, `velocity-child-theme`, dan `site-audit`, dan menjalankan alur yang sama — tetapi hasilnya **portal berita**, bukan web company profile.
+
+- **Isi** (`paket-g-konten`, `jenis=berita`): rubrik dibaca kode dari susunan menu FORM ISIAN (isian bernilai "berisi berita-berita …"); warna dari gambar contoh warna klien — kode hex hasil OCR, atau warna dominan gambar yang dipotret Chromium headless (server tanpa pengurai JPEG); AI hanya menulis nama tampil (huruf & urutan harus sama dengan nama di form), slogan, tentang, dan pedoman redaksi. Tidak mengarang nama awak redaksi, badan hukum, nomor verifikasi, atau jumlah pembaca.
+- **Tema** (`inc/berita.php`, `single.php`, `archive.php`, `home.php`; body class `<prefix>--berita`): topbar tanggal + slogan, beranda berita utama + terbaru + blok per rubrik dengan kolom samping (terpopuler, rubrik, tentang), arsip & indeks berita, halaman artikel dengan berita terkait, `[<prefix>_redaksi]`, dan form "Kirim Pesan ke Redaksi". Situs non-berita tetap memakai single/archive/index tema induk.
+- **Artikel** (`ai-content-generator.py`): kategori = rubrik tema; `articles_per_rubrik` (bawaan 3) artikel per rubrik bergaya **tulisan informatif, bukan laporan peristiwa** — tanpa kejadian, nama orang, kutipan, angka, atau tanggal karangan. Artikel tersimpan yang kategorinya tidak cocok dengan situs dibuat ulang; artikel contoh lama dihapus hanya bila belum pernah disunting.
+- **Foto** (`paket-g-foto`): foto utama tiap artikel tanpa thumbnail dari Openverse (CC0/PDM), kata kunci per artikel dari AI dengan cadangan per rubrik.
+- **Halaman & menu** (`paket-g-setup`): kategori rubrik (slug sama dengan theme-data), halaman Redaksi, blok kontak + form di Hubungi Kami, menu Home → rubrik → Redaksi → Kontak Kami.
+- **Urutan**: di situs lama tanpa child theme, tema harus dipasang **sebelum** generator artikel (`paket_g_tema` → konten AI & `site-finish` → `paket_g_isi`); kalau terbalik, generator tidak melihat rubrik dan artikel tetap satu kategori "Blog".
 
 ## Kerangka desain Paket G (`templates/child-theme-paket-g/`)
 

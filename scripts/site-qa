@@ -93,6 +93,9 @@ def main():
     maintenance = 'maintenance-shell' in home
     info['maintenance'] = maintenance
     menu = {s for s in ('tentang-kami', 'hubungi-kami') if re.search(rf'href="[^"]*/{s}/?"', home)}
+    # Portal berita (tema varian berita) memakai Redaksi sebagai halaman profil media.
+    if re.search(r'--berita\b', home) and re.search(r'href="[^"]*/redaksi/?"', home):
+        menu.add('tentang-kami')
     if home and not maintenance and len(menu) < 2:
         problems.append('menu_tidak_lengkap')
 

@@ -168,8 +168,10 @@ if (!function_exists('{{PREFIX}}_render_kontak')) {
                 <?php if ($email_publik !== '') : ?>
                     <li><span>Email</span><a href="mailto:<?php echo esc_attr($email_publik); ?>"><?php echo esc_html($email_publik); ?></a></li>
                 <?php endif; ?>
-                <li><span>Alamat</span><?php echo esc_html($alamat); ?></li>
-                <li><span>Area Layanan</span><?php echo esc_html({{PREFIX}}_data('area')); ?></li>
+                <?php if (trim((string) $alamat, ' -') !== '') : ?>
+                    <li><span>Alamat</span><?php echo esc_html($alamat); ?></li>
+                <?php endif; ?>
+                <li><span><?php echo function_exists('{{PREFIX}}_jenis_berita') && {{PREFIX}}_jenis_berita() ? 'Wilayah Liputan' : 'Area Layanan'; ?></span><?php echo esc_html({{PREFIX}}_data('area')); ?></li>
             </ul>
             <div class="{{PREFIX}}-kontak__peta">
                 <?php

@@ -937,6 +937,141 @@ body.{{PREFIX}} .{{PREFIX}}-pita__kontak a { display: inline-flex; align-items: 
   .{{PREFIX}}-pita__kontak { justify-content: flex-end; margin: 0; padding: 0; background: transparent; }
 }
 
+/* ---------- portal berita (body.{{PREFIX}}--berita, lihat inc/berita.php) ----------
+   Warna teks mengikuti token terbaca (di-primary, di-aksen, aksen-teks); aturan
+   di latar berwarna berawalan body.{{PREFIX}} karena jebakan spesifisitas judul
+   global (lihat bagian "teks di atas latar berwarna"). */
+
+.{{PREFIX}}-layar-baca { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.{{PREFIX}}-topbar { background: var(--{{PREFIX}}-primary-3); font-size: .8rem; }
+.{{PREFIX}}-topbar__isi { display: flex; justify-content: space-between; gap: 1rem; padding-block: .35rem; }
+body.{{PREFIX}} .{{PREFIX}}-topbar span { color: rgba(var(--{{PREFIX}}-di-primary-rgb), .92); }
+.{{PREFIX}}-topbar__slogan { display: none; }
+
+.{{PREFIX}}-berita-utama { padding-block: 1.4rem .4rem; }
+.{{PREFIX}}-berita-utama__grid { display: grid; gap: 1.1rem; }
+.{{PREFIX}}-berita-tata { display: grid; gap: 2rem; padding-block: 1.4rem 3rem; }
+.{{PREFIX}}-berita-isi { min-width: 0; }
+.{{PREFIX}}-berita-tumpuk { display: grid; gap: .95rem; align-content: start; }
+.{{PREFIX}}-berita-grid { display: grid; gap: 1.3rem; }
+.{{PREFIX}}-berita-daftar { display: grid; gap: 1.4rem; margin-bottom: 2rem; }
+.{{PREFIX}}-rubrik-blok { margin-bottom: 2.4rem; }
+.{{PREFIX}}-rubrik-blok__grid { display: grid; gap: 1.1rem; }
+
+.{{PREFIX}}-rubrik-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1.1rem;
+  border-bottom: 3px solid var(--{{PREFIX}}-primary);
+}
+body.{{PREFIX}} .{{PREFIX}}-rubrik-bar h1,
+body.{{PREFIX}} .{{PREFIX}}-rubrik-bar h2 {
+  margin: 0;
+  padding: .4rem .95rem;
+  border-radius: 6px 6px 0 0;
+  background: var(--{{PREFIX}}-primary);
+  color: var(--{{PREFIX}}-di-primary);
+  font-size: .95rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+body.{{PREFIX}} .{{PREFIX}}-rubrik-bar--besar h1 { font-size: 1.2rem; }
+body.{{PREFIX}} .{{PREFIX}}-rubrik-bar a { color: var(--{{PREFIX}}-aksen-teks); font-size: .85rem; font-weight: 700; text-decoration: none; padding-bottom: .35rem; }
+.{{PREFIX}}-berita-arsip__teks { margin: -.3rem 0 1.4rem; }
+
+.{{PREFIX}}-label {
+  display: inline-block;
+  padding: .2rem .55rem;
+  border-radius: 4px;
+  background: var(--{{PREFIX}}-aksen);
+  color: var(--{{PREFIX}}-di-aksen) !important;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-decoration: none !important;
+}
+
+.{{PREFIX}}-berita { position: relative; margin: 0; }
+.{{PREFIX}}-berita__foto { display: block; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 10px; background: var(--{{PREFIX}}-surface); }
+body.{{PREFIX}} .{{PREFIX}}-berita__foto img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s ease; }
+.{{PREFIX}}-berita:hover .{{PREFIX}}-berita__foto img { transform: scale(1.04); }
+.{{PREFIX}}-berita__foto--kosong {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--{{PREFIX}}-primary), var(--{{PREFIX}}-primary-3));
+  font-size: .8rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+body.{{PREFIX}} .{{PREFIX}}-berita__foto--kosong span { color: var(--{{PREFIX}}-di-primary); }
+body.{{PREFIX}} .{{PREFIX}}-berita__judul { font-size: 1.02rem; line-height: 1.35; margin: .5rem 0 .3rem; }
+body.{{PREFIX}} .{{PREFIX}}-berita__judul a { color: var(--{{PREFIX}}-ink); text-decoration: none; }
+body.{{PREFIX}} .{{PREFIX}}-berita__judul a:hover { color: var(--{{PREFIX}}-aksen-teks); }
+.{{PREFIX}}-berita__meta { margin: 0; font-size: .78rem; color: #5f6570; }
+.{{PREFIX}}-berita__ringkas { margin: .35rem 0 0; font-size: .92rem; }
+
+.{{PREFIX}}-berita--utama .{{PREFIX}}-berita__foto { border-radius: 12px; aspect-ratio: 16 / 10; }
+.{{PREFIX}}-berita--utama .{{PREFIX}}-berita__teks {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 3.5rem 1.2rem 1.1rem;
+  border-radius: 0 0 12px 12px;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .86));
+}
+body.{{PREFIX}} .{{PREFIX}}-berita--utama .{{PREFIX}}-berita__judul { font-size: clamp(1.2rem, 3.6vw, 1.95rem); }
+body.{{PREFIX}} .{{PREFIX}}-berita--utama .{{PREFIX}}-berita__judul a { color: #fff; }
+body.{{PREFIX}} .{{PREFIX}}-berita--utama .{{PREFIX}}-berita__meta,
+body.{{PREFIX}} .{{PREFIX}}-berita--utama .{{PREFIX}}-berita__ringkas { color: rgba(255, 255, 255, .9); }
+
+.{{PREFIX}}-berita--daftar { display: grid; grid-template-columns: 112px 1fr; gap: .85rem; align-items: start; }
+.{{PREFIX}}-berita--daftar .{{PREFIX}}-berita__foto { aspect-ratio: 4 / 3; border-radius: 8px; }
+body.{{PREFIX}} .{{PREFIX}}-berita--daftar .{{PREFIX}}-berita__judul { font-size: .93rem; margin-top: 0; }
+.{{PREFIX}}-berita--lebar { display: grid; gap: .9rem; }
+
+.{{PREFIX}}-berita-samping { display: grid; gap: 1.5rem; align-content: start; }
+.{{PREFIX}}-kotak { padding: 1rem; border: 1px solid var(--{{PREFIX}}-garis); border-radius: 10px; background: var(--{{PREFIX}}-putih); }
+.{{PREFIX}}-kotak__teks { font-size: .92rem; margin: 0 0 .6rem; }
+.{{PREFIX}}-populer { list-style: none; margin: 0; padding: 0; counter-reset: populer; display: grid; gap: .85rem; }
+.{{PREFIX}}-populer li { counter-increment: populer; display: grid; grid-template-columns: 2rem 1fr; gap: .55rem; align-items: start; }
+.{{PREFIX}}-populer li::before { content: counter(populer); color: var(--{{PREFIX}}-aksen-teks); font-size: 1.45rem; font-weight: 800; line-height: 1; }
+body.{{PREFIX}} .{{PREFIX}}-populer a { color: var(--{{PREFIX}}-ink); font-size: .9rem; font-weight: 700; line-height: 1.35; text-decoration: none; }
+.{{PREFIX}}-daftar-rubrik { list-style: none; margin: 0; padding: 0; }
+body.{{PREFIX}} .{{PREFIX}}-daftar-rubrik a { display: flex; justify-content: space-between; padding: .5rem 0; border-bottom: 1px solid var(--{{PREFIX}}-garis); color: var(--{{PREFIX}}-ink); font-weight: 600; text-decoration: none; }
+
+.{{PREFIX}}-artikel__jejak { margin-bottom: .8rem; font-size: .82rem; color: #5f6570; }
+body.{{PREFIX}} .{{PREFIX}}-artikel__judul { font-size: clamp(1.5rem, 4.6vw, 2.35rem); margin: .65rem 0 .5rem; }
+.{{PREFIX}}-artikel__meta { margin: 0 0 1.1rem; font-size: .86rem; color: #5f6570; }
+.{{PREFIX}}-artikel__foto { margin: 0 0 1.3rem; border-radius: 12px; overflow: hidden; }
+body.{{PREFIX}} .{{PREFIX}}-artikel__foto img { width: 100%; height: auto; display: block; }
+.{{PREFIX}}-artikel__isi { font-size: 1.05rem; }
+.{{PREFIX}}-artikel__bagikan { margin-top: 1.6rem; }
+.{{PREFIX}}-terkait { margin-top: 2.6rem; }
+
+.{{PREFIX}}-redaksi__nama { margin: 0; font-size: 1.4rem; font-weight: 800; color: var(--{{PREFIX}}-ink); }
+.{{PREFIX}}-redaksi__slogan { margin: 0 0 1rem; color: var(--{{PREFIX}}-aksen-teks); font-weight: 700; }
+
+body.{{PREFIX}}--berita #wrapper-content { padding-block: 0; }
+
+@media (min-width: 640px) {
+  .{{PREFIX}}-berita-grid { grid-template-columns: repeat(2, 1fr); }
+  .{{PREFIX}}-rubrik-blok__grid { grid-template-columns: 1.15fr 1fr; }
+  .{{PREFIX}}-berita--lebar { grid-template-columns: 260px 1fr; align-items: start; }
+  body.{{PREFIX}} .{{PREFIX}}-berita--lebar .{{PREFIX}}-berita__judul { margin-top: .35rem; font-size: 1.15rem; }
+}
+
+@media (min-width: 992px) {
+  .{{PREFIX}}-topbar__slogan { display: inline; }
+  .{{PREFIX}}-berita-utama__grid { grid-template-columns: 1.65fr 1fr; align-items: start; }
+  .{{PREFIX}}-berita-tata { grid-template-columns: minmax(0, 1fr) 320px; gap: 2.5rem; }
+  .{{PREFIX}}-berita-grid { grid-template-columns: repeat(3, 1fr); }
+  .{{PREFIX}}-berita-samping { position: sticky; top: 90px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .{{PREFIX}}-kartu, .{{PREFIX}}-galeri__item img, .{{PREFIX}}-btn { transition: none; }
 }

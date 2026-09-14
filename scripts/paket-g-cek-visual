@@ -40,6 +40,9 @@ HALAMAN = (
     ('layanan', '/layanan/', 1366, 3000, UA),
     ('galeri', '/galeri/', 1366, 4000, UA),
     ('hubungi-kami', '/hubungi-kami/', 1366, 3000, UA),
+    # Portal berita: indeks berita & redaksi (situs perusahaan tidak punya -> dilewati).
+    ('berita', '/berita/', 1366, 4000, UA),
+    ('redaksi', '/redaksi/', 1366, 3000, UA),
 )
 
 
@@ -115,7 +118,10 @@ def main():
         url = f'https://{domain}{path}?cekvisual={int(time.time())}'
         kode = http_kode(url)
         hasil = {'http': kode, 'potongan': 0}
-        if kode != 200:
+        if kode == 404 and nama != 'beranda':
+            # Halaman ini memang tidak ada di jenis situs tersebut.
+            hasil['dilewati'] = True
+        elif kode != 200:
             temuan.append(f'{nama}:http_{kode}')
         else:
             mentah = folder / f'{nama}-mentah.png'

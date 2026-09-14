@@ -72,17 +72,32 @@ defined('ABSPATH') || exit;
 
 		<div class="{{PREFIX}}-footer__kolom">
 			<p class="{{PREFIX}}-footer__nama"><?php echo esc_html({{PREFIX}}_data('nama')); ?></p>
-			<p class="{{PREFIX}}-footer__teks"><?php echo esc_html({{PREFIX}}_data('alamat')); ?></p>
-			<p class="{{PREFIX}}-footer__teks">Area layanan: <?php echo esc_html({{PREFIX}}_data('area')); ?></p>
+			<?php if (trim((string) {{PREFIX}}_data('alamat'), ' -') !== '') : ?>
+				<p class="{{PREFIX}}-footer__teks"><?php echo esc_html({{PREFIX}}_data('alamat')); ?></p>
+			<?php endif; ?>
+			<?php if ({{PREFIX}}_jenis_berita()) : ?>
+				<p class="{{PREFIX}}-footer__teks"><?php echo esc_html({{PREFIX}}_data('slogan')); ?></p>
+			<?php else : ?>
+				<p class="{{PREFIX}}-footer__teks">Area layanan: <?php echo esc_html({{PREFIX}}_data('area')); ?></p>
+			<?php endif; ?>
 		</div>
 
 		<div class="{{PREFIX}}-footer__kolom">
-			<p class="{{PREFIX}}-footer__judul">Layanan</p>
-			<ul class="{{PREFIX}}-footer__daftar">
-				<?php foreach ({{PREFIX}}_data('layanan') as $layanan) : ?>
-					<li><?php echo esc_html($layanan['judul']); ?></li>
-				<?php endforeach; ?>
-			</ul>
+			<?php if ({{PREFIX}}_jenis_berita()) : ?>
+				<p class="{{PREFIX}}-footer__judul">Rubrik</p>
+				<ul class="{{PREFIX}}-footer__daftar">
+					<?php foreach ({{PREFIX}}_rubrik() as $r) : ?>
+						<li><?php if ($r['url']) : ?><a href="<?php echo esc_url($r['url']); ?>"><?php echo esc_html($r['judul']); ?></a><?php else : echo esc_html($r['judul']); endif; ?></li>
+					<?php endforeach; ?>
+				</ul>
+			<?php else : ?>
+				<p class="{{PREFIX}}-footer__judul">Layanan</p>
+				<ul class="{{PREFIX}}-footer__daftar">
+					<?php foreach ((array) {{PREFIX}}_data('layanan') as $layanan) : ?>
+						<li><?php echo esc_html($layanan['judul']); ?></li>
+					<?php endforeach; ?>
+				</ul>
+			<?php endif; ?>
 		</div>
 
 		<div class="{{PREFIX}}-footer__kolom">
@@ -98,14 +113,17 @@ defined('ABSPATH') || exit;
 			?>
 		</div>
 
+		<?php
+		// Hanya kontak publik yang benar-benar ada; kontak pribadi pemilik dari
+		// biodata form tidak pernah ditampilkan. Tanpa kontak & tanpa halaman
+		// pemesanan, kolomnya tidak dicetak (dulu judul "Kontak" tampil kosong).
+		$telp = trim((string) {{PREFIX}}_data('telp'));
+		$email_publik = trim((string) {{PREFIX}}_data('email_publik'));
+		$pemesanan = get_page_by_path('pemesanan');
+		?>
+		<?php if (($telp !== '' && $telp !== '-') || $email_publik !== '' || $pemesanan) : ?>
 		<div class="{{PREFIX}}-footer__kolom">
 			<p class="{{PREFIX}}-footer__judul">Kontak</p>
-			<?php
-			// Hanya kontak publik yang benar-benar ada; kontak pribadi pemilik dari
-			// biodata form tidak pernah ditampilkan.
-			$telp = trim((string) {{PREFIX}}_data('telp'));
-			$email_publik = trim((string) {{PREFIX}}_data('email_publik'));
-			?>
 			<?php if (($telp !== '' && $telp !== '-') || $email_publik !== '') : ?>
 				<p class="{{PREFIX}}-footer__teks">
 					<?php if ($telp !== '' && $telp !== '-') : ?>
@@ -118,7 +136,6 @@ defined('ABSPATH') || exit;
 					<?php endif; ?>
 				</p>
 			<?php endif; ?>
-			<?php $pemesanan = get_page_by_path('pemesanan'); ?>
 			<?php if ($pemesanan) : ?>
 				<p class="{{PREFIX}}-footer__teks">
 					<a class="{{PREFIX}}-btn {{PREFIX}}-btn--utama {{PREFIX}}-btn--kecil"
@@ -126,6 +143,7 @@ defined('ABSPATH') || exit;
 				</p>
 			<?php endif; ?>
 		</div>
+		<?php endif; ?>
 
 	</div>
 

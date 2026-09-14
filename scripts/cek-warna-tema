@@ -65,6 +65,12 @@ UJI_KASKADE = [
     ('slogan di pita kaki', ['{P}', '{P}--compro', '{P}-footer', '{P}-pita'], 'p', ['{P}-pita__slogan'], 'sorot-di-gelap'),
     ('tautan di pita kaki', ['{P}', '{P}--compro', '{P}-footer', '{P}-pita__kontak'], 'a', [], 'di-aksen'),
     ('tautan footer compro', ['{P}', '{P}--compro', '{P}-footer', '{P}-footer__grid'], 'a', [], 'primary'),
+    # Portal berita: bar judul rubrik berlatar warna utama, label rubrik berlatar aksen.
+    ('judul bar rubrik berita', ['{P}', '{P}--berita', '{P}-rubrik-bar'], 'h2', [], 'di-primary'),
+    ('tautan bar rubrik berita', ['{P}', '{P}--berita', '{P}-rubrik-bar'], 'a', [], 'aksen-teks'),
+    ('label rubrik berita', ['{P}', '{P}--berita', '{P}-berita'], 'a', ['{P}-label'], 'di-aksen'),
+    ('tanggal di topbar berita', ['{P}', '{P}--berita', '{P}-topbar'], 'span', [], 'di-primary'),
+    ('judul kartu berita', ['{P}', '{P}--berita', '{P}-berita__judul'], 'a', [], 'ink'),
 ]
 # Gambar kartu harus mengisi penuh kotaknya. Aturan global `body img { height:
 # auto }` bernilai lebih tinggi daripada aturan komponen, dan kalau ia yang

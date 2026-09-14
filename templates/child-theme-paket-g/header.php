@@ -30,6 +30,18 @@ defined('ABSPATH') || exit;
 
 	<div class="site" id="page">
 
+		<?php if ({{PREFIX}}_jenis_berita()) : ?>
+			<?php // Portal berita: baris tanggal hari ini + slogan media di atas header. ?>
+			<div class="{{PREFIX}}-topbar">
+				<div class="{{PREFIX}}-wrap {{PREFIX}}-topbar__isi">
+					<span><?php echo esc_html({{PREFIX}}_hari_ini()); ?></span>
+					<?php if ({{PREFIX}}_data('slogan')) : ?>
+						<span class="{{PREFIX}}-topbar__slogan"><?php echo esc_html({{PREFIX}}_data('slogan')); ?></span>
+					<?php endif; ?>
+				</div>
+			</div>
+		<?php endif; ?>
+
 		<header class="{{PREFIX}}-header" id="{{PREFIX}}-header">
 			<div class="{{PREFIX}}-wrap {{PREFIX}}-header__bar">
 

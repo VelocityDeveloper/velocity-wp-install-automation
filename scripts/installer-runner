@@ -40,38 +40,39 @@ paket_desain_custom() {
   [[ -f "$MANIFEST" ]] || return 1
   local paket
   paket=$(sed -n 's/^paket=//p' "$MANIFEST" | head -1 | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-  [[ "$paket" == "paketg" ]]
+  # Paket Portal Berita Custom juga desain custom (keputusan user 2026-09-14);
+  # tampilannya varian berita dari template yang sama.
+  [[ "$paket" == "paketg" || "$paket" == "paketportalberitacustom" ]]
 }
 
-# Alur Paket G (disepakati user 2026-09-13 lewat uji ptmitraajegselaras.com).
-# Urutan adalah bagian dari kebenaran:
-#   1. compro-klien       baca company profile PDF (susunan, warna, foto, prakata)
-#   2. paket-g-konten     isi contoh dari form + dokumen, disesuaikan dengan compro
-#   3. child-theme-apply  render tema dari data terbaru; perbarui berkas yang belum
-#                         disunting orang, pertahankan yang sudah (--perbarui)
-#   4. paket-g-foto       foto compro per halaman (atau foto contoh bila tanpa compro)
-#   5. paket-g-setup      halaman blok desain + menu (SESUDAH site-finish)
-#   6. site-finish --widget
-#   7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
-# Semua langkah boleh gagal tanpa menggagalkan instalasi, kecuali pemasangan tema
-# pada mode child-theme (kode keluarnya dilaporkan).
-paket_g_alur() {
-  local rc_tema
-  printf '[%s] Paket G: company profile & isi contoh\n' "$(date -Is)" >> "$LOG"
+# Alur paket desain custom (Paket G & Portal Berita Custom), disepakati user
+# 2026-09-13/14. Urutan adalah bagian dari kebenaran:
+#   paket_g_tema  1. compro-klien       baca company profile PDF
+#                 2. paket-g-konten     isi contoh (perusahaan atau portal berita)
+#                 3. child-theme-apply  render & pasang/perbarui tema (--perbarui)
+#   (konten AI & site-finish di mode apply/finish berjalan DI ANTARA keduanya:
+#    generator artikel membaca layanan/rubrik dari tema yang sudah terpasang —
+#    di situs lama tanpa child theme, urutan terbalik membuat artikel tetap "Blog")
+#   paket_g_isi   4. paket-g-foto       foto compro / foto contoh / foto utama artikel
+#                 5. paket-g-setup      halaman blok desain, rubrik, menu (SESUDAH site-finish)
+#                 6. site-finish --widget
+#                 7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
+paket_g_tema() {
+  printf '[%s] Paket custom: company profile & isi contoh\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
   /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
-  printf '[%s] Paket G: tema (perbarui berkas yang belum disunting)\n' "$(date -Is)" >> "$LOG"
+  printf '[%s] Paket custom: tema (perbarui berkas yang belum disunting)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/child-theme-apply" --perbarui "$MANIFEST" >> "$LOG" 2>&1
-  rc_tema=$?
-  printf '[%s] Paket G: foto\n' "$(date -Is)" >> "$LOG"
+}
+paket_g_isi() {
+  printf '[%s] Paket custom: foto\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
-  printf '[%s] Paket G: halaman & menu\n' "$(date -Is)" >> "$LOG"
+  printf '[%s] Paket custom: halaman, rubrik & menu\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-setup" "$MANIFEST" >> "$LOG" 2>&1 || true
-  printf '[%s] Paket G: bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
+  printf '[%s] Paket custom: bersihkan widget bawaan\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-finish" --widget "$MANIFEST" >> "$LOG" 2>&1 || true
-  printf '[%s] Paket G: cek visual\n' "$(date -Is)" >> "$LOG"
+  printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
-  return $rc_tema
 }
 
 # Audit hanya membaca: status instalasi & notifikasi tidak disentuh.
@@ -86,8 +87,12 @@ if [[ "$MODE" == "child-theme" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] child_theme: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
   printf '[%s] Child theme\n' "$(date -Is)" >> "$LOG"
   if paket_desain_custom; then
-    paket_g_alur
+    paket_g_tema
     rc=$?
+    # Artikel per layanan/rubrik dari tema yang baru terpasang; konten tersimpan
+    # dipakai ulang, jadi hanya yang belum ada yang dibuat.
+    INSTALL_MODE=apply /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
+    paket_g_isi
   else
     /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
     rc=$?
@@ -122,6 +127,10 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
   refresh=0
   [[ "$MODE" == "finish" ]] && refresh=1
+  # Paket desain custom: tema dipasang/diperbarui dulu (lihat paket_g_tema).
+  if paket_desain_custom; then
+    paket_g_tema || true
+  fi
   echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
   INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Tembolok compro: murah kalau sudah pernah dibaca, perlu untuk situs lama (mode finish).
@@ -141,8 +150,8 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   if paket_desain_custom; then
     # Foto sesudah site-finish (foto kiriman klien sudah diimpor), halaman &
     # menu sesudah finishing menulis ulang Galeri/Hubungi Kami. Detail urutan
-    # di paket_g_alur.
-    paket_g_alur || true
+    # di paket_g_tema / paket_g_isi.
+    paket_g_isi || true
   fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"

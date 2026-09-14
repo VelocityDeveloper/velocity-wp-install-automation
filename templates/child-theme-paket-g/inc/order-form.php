@@ -26,13 +26,18 @@ if (!function_exists('{{PREFIX}}_form_fields')) {
                 $layanan[] = (string) $l['judul'];
             }
         }
+        $berita = function_exists('{{PREFIX}}_jenis_berita') && {{PREFIX}}_jenis_berita();
         $fields = array(
             'nama'   => array('label' => 'Nama Lengkap', 'type' => 'text', 'wajib' => true, 'autocomplete' => 'name'),
             'wa'     => array('label' => 'Nomor WhatsApp', 'type' => 'tel', 'wajib' => true, 'autocomplete' => 'tel'),
             'email'  => array('label' => 'Email', 'type' => 'email', 'wajib' => false, 'autocomplete' => 'email'),
-            'jenis'  => array('label' => 'Layanan yang Dibutuhkan', 'type' => 'select', 'wajib' => true,
-                'opsi' => array_merge($layanan ?: array('Konsultasi'), array('Lainnya'))),
-            'lokasi' => array('label' => 'Kota / Lokasi', 'type' => 'text', 'wajib' => true,
+            'jenis'  => $berita
+                // Portal berita: form "Kirim Pesan" ke redaksi, bukan pemesanan layanan.
+                ? array('label' => 'Keperluan', 'type' => 'select', 'wajib' => true,
+                    'opsi' => array('Kirim Berita / Informasi', 'Pemasangan Iklan', 'Kerja Sama', 'Lainnya'))
+                : array('label' => 'Layanan yang Dibutuhkan', 'type' => 'select', 'wajib' => true,
+                    'opsi' => array_merge($layanan ?: array('Konsultasi'), array('Lainnya'))),
+            'lokasi' => array('label' => 'Kota / Lokasi', 'type' => 'text', 'wajib' => !$berita,
                 'placeholder' => 'Contoh: ' . ({{PREFIX}}_data('area') ?: 'Jakarta')),
         );
         // Kolom khusus bidang usaha tertentu, diaktifkan lewat theme-data.

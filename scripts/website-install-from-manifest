@@ -621,7 +621,8 @@ CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 # Company profile PDF (warna, logo, foto, slogan) dibaca lebih dulu: isi contoh,
 # warna tema, dan finishing memakainya. Tanpa PDF langkah ini tidak berbuat apa-apa.
 /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/compro-klien" "${cfg[domain]}" >&2 || echo "compro:gagal" >&2
-if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" == "paketg" ]]; then
+# Paket desain custom: Paket G dan Paket Portal Berita Custom (keputusan user 2026-09-14).
+if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" =~ ^(paketg|paketportalberitacustom)$ ]]; then
   /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/paket-g-konten" "$MANIFEST" >&2 || echo "konten:gagal" >&2
 fi
 child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
