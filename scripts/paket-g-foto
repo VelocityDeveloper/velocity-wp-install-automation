@@ -521,6 +521,26 @@ CADANGAN_RUBRIK = {
 }
 
 
+def pilih_foto_berita_ai(ai, judul, calon):
+    """AI memilih foto ilustrasi. -> foto, False (tidak ada yang layak), atau None (AI gagal).
+
+    Saringan judul/tag tidak cukup: "ABOUT TESFAYE TSTAPP CANADA" (potret orang) dan
+    gambar kutipan "Labor automation..." lolos sebagai foto artikel."""
+    modul, model = ai
+    daftar = [{'i': i, 'judul': str(r.get('title') or '')[:90],
+               'tag': [str(t.get('name') or '') for t in (r.get('tags') or [])][:8]} for i, r in enumerate(calon)]
+    teks = ('Pilih satu foto ilustrasi untuk artikel portal berita berjudul "' + judul + '". Syarat: benda, tempat, '
+            'atau suasana yang sesuai topik. BUKAN potret atau wajah orang, BUKAN gambar berisi kutipan/poster/banyak '
+            'teks, BUKAN foto tokoh atau peristiwa tertentu. Jawab JSON {"i": <indeks>} atau {"i": -1} bila tidak '
+            'ada yang layak.\n\n' + json.dumps(daftar, ensure_ascii=False))
+    jawab = modul.ai_call('You pick stock photos for news articles. Output ONLY valid JSON.', teks, model) or ''
+    try:
+        i = int(json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1]).get('i', -1))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return calon[i] if 0 <= i < len(calon) else False
+
+
 def foto_berita(cfg, domain, isi, key, coba, manifest):
     """Foto utama artikel portal berita dari foto contoh Openverse (CC0/PDM).
 
@@ -570,7 +590,11 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
             if not q:
                 continue
             calon = [r for r in ov.cari(q) if layak(r, 1000, sudah)]
-            pilihan = next((r for r in calon if relevan(r, q)), calon[0] if calon else None)
+            pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8]) if ai and calon else None
+            if pilihan is False:
+                continue  # AI menilai tidak ada yang layak: coba kata kunci berikutnya
+            if pilihan is None:
+                pilihan = next((r for r in calon if relevan(r, q)), calon[0] if calon else None)
             if pilihan:
                 dipakai = q
                 break

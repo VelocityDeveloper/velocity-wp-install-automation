@@ -177,6 +177,25 @@ PHP
 wp eval-file /tmp/velocity-profil.php
 rm -f /tmp/velocity-profil.php
 
+# --- peta dobel ---
+# site-finish memasang iframe peta di Hubungi Kami SEBELUM blok kontak tema ada;
+# blok [<prefix>_kontak] sudah memuat peta, jadi iframe lama menjadi peta kedua
+# dan ruang kosong besar (anaksegalabangsa.com).
+cat > /tmp/velocity-peta.php <<'PHP'
+<?php
+foreach (array('hubungi-kami', 'kontak', 'kontak-kami') as $slug) {
+    $p = get_page_by_path($slug);
+    if (!$p || strpos($p->post_content, '_kontak]') === false) { continue; }
+    $baru = preg_replace('#<!--\s*velocity-map\s*-->\s*<iframe\b[^>]*>\s*</iframe>\s*#i', '', $p->post_content);
+    if ($baru !== $p->post_content) {
+        wp_update_post(array('ID' => $p->ID, 'post_content' => $baru));
+        echo 'peta_dobel_dibuang:' . $slug . PHP_EOL;
+    }
+}
+PHP
+wp eval-file /tmp/velocity-peta.php
+rm -f /tmp/velocity-peta.php
+
 # --- rubrik portal berita -> kategori (slug sama dengan theme-data) ---
 for baris in "${RUBRIK[@]}"; do
   slug=${baris%%|*}; sisa=${baris#*|}; judul=${sisa%%|*}; teks=${sisa#*|}

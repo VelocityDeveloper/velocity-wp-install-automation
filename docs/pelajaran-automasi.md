@@ -444,3 +444,30 @@ situs** (company profile vs portal berita). Template tetap satu, variannya lewat
   situs, dan artikel lama dihapus hanya bila `post_modified_gmt == post_date_gmt`.
 - **Nama media menyambung** ("anaksegalabangsa") boleh ditampilkan berspasi dari
   AI hanya bila huruf & urutannya identik — nama klien tidak boleh berubah.
+
+### Temuan uji akhir anaksegalabangsa.com
+
+- **Biodata pemilik terbit lewat tulisan AI.** Halaman Hubungi Kami hasil instalasi
+  11 September memuat "Alamat Media: Desa Kedanyang RT 4 RW 1" — alamat rumah dari
+  bagian biodata FORM ISIAN — padahal prompt melarangnya, dan theme-data juga
+  sempat menaruh alamat itu di footer. Kini dua lapis di kode: `data_klien` tidak
+  memakai alamat biodata bila form punya bagian biodata, dan
+  `buang_data_pemilik` di generator membuang paragraf/butir yang memuat alamat,
+  nama, WhatsApp, atau email pemilik (beserta judulnya) sebelum terbit.
+- **Peta dobel karena urutan.** `site-finish` menambah iframe peta ke Hubungi Kami
+  karena blok `[<prefix>_kontak]` belum ada; sesudah `paket-g-setup` menambah blok
+  itu, halaman punya dua peta dan ruang kosong besar. `paket-g-setup` kini membuang
+  iframe `velocity-map` bila blok kontak tema sudah terpasang.
+- **Foto contoh berisi orang/kutipan lolos saringan judul.** "ABOUT TESFAYE TSTAPP
+  CANADA" (potret) dan poster kutipan "Labor automation…" terpasang sebagai foto
+  artikel. Foto berita kini dipilih AI dari 8 kandidat dengan larangan potret,
+  teks/kutipan, dan tokoh/peristiwa; AI boleh menolak semua lalu kata kunci
+  cadangan dicoba.
+- **Keluaran AI berkolom kosong disimpan diam-diam.** Tiga artikel Pendidikan
+  bertitel & berisi kosong masuk `articles.json` dan tidak pernah terbit; rubrik
+  Ekonomi gagal tanpa log. Kini artikel dinormalkan (judul/isi/ringkasan),
+  yang kurang dari 120 kata dibuang, dicoba ulang, dan kategori yang masih kosong
+  dilengkapi pada run berikutnya.
+- **"Belum disunting" bukan soal tanggal.** Artikel contoh lama berbeda
+  `post_modified` karena installer sendiri menerbitkannya ulang; yang benar
+  membandingkan isi dengan versi generator (md5).

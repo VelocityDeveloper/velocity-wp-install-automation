@@ -208,6 +208,51 @@ def rapikan_artikel(daftar, category):
     return hasil
 
 
+BIODATA_KUNCI = re.compile(r'^(alamat lengkap|nama anda|nama pemilik|whatsapp|no\.? ?wa|e-?mail|kodepos)$', re.I)
+
+
+def buang_data_pemilik(konten, client_data):
+    """Buang paragraf/butir yang memuat biodata pemilik dari isi halaman & artikel.
+
+    Aturan prompt melarangnya, tetapi halaman Hubungi Kami anaksegalabangsa.com
+    tetap terbit dengan "Alamat Media: Desa Kedanyang RT 4 RW 1" — alamat rumah
+    pemilik dari bagian biodata FORM ISIAN. Karena itu dijaga di kode."""
+    nilai = []
+    for kunci, isi in (client_data or {}).items():
+        if not BIODATA_KUNCI.match(str(kunci).strip()):
+            continue
+        teks = re.sub(r'\s+', ' ', str(isi or '')).strip().lower()
+        angka = re.sub(r'\D', '', teks)
+        if len(angka) >= 8 and len(angka) >= len(re.sub(r'\W', '', teks)) * 0.7:
+            nilai.append(('angka', angka))
+        elif len(teks) >= 6:
+            nilai.append(('teks', teks))
+    if not nilai or not konten:
+        return konten, 0
+
+    def berisi_biodata(blok):
+        polos = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', blok)).strip().lower()
+        angka = re.sub(r'\D', '', polos)
+        return any((v in angka) if jenis == 'angka' else (v in polos) for jenis, v in nilai)
+
+    dibuang = [0]
+
+    def saring(m):
+        if berisi_biodata(m.group(0)):
+            dibuang[0] += 1
+            return '<!--biodata-dibuang-->'
+        return m.group(0)
+
+    hasil = re.sub(r'<(p|li|address|td)\b[^>]*>.*?</\1>', saring, str(konten), flags=re.S | re.I)
+    # Judul yang isinya langsung dibuang ("Alamat Media" di atas alamat pemilik)
+    # ikut dibuang, begitu pula judul yang kehilangan seluruh isinya.
+    hasil = re.sub(r'<h([2-4])\b[^>]*>[^<]*</h\1>\s*(?=<!--biodata-dibuang-->)', '', hasil, flags=re.I)
+    hasil = re.sub(r'\s*<!--biodata-dibuang-->\s*', '', hasil)
+    hasil = re.sub(r'<(ul|ol)\b[^>]*>\s*</\1>', '', hasil, flags=re.I)
+    hasil = re.sub(r'<h[2-4]\b[^>]*>[^<]*</h[2-4]>\s*(?=<h[1-4]\b|</section>|$)', '', hasil, flags=re.I)
+    return hasil, dibuang[0]
+
+
 def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog',
                       rincian_topik='', gaya='bisnis'):
     """Artikel untuk satu kategori.
@@ -663,6 +708,18 @@ def main():
     articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
     log(f'Articles saved: {articles_file}')
     
+    # Biodata pemilik tidak boleh terbit, apa pun yang ditulis AI.
+    jumlah_buang = 0
+    for daftar in (pages, articles):
+        for item in daftar if isinstance(daftar, list) else []:
+            if isinstance(item, dict) and item.get('content'):
+                item['content'], n = buang_data_pemilik(item['content'], client_data)
+                jumlah_buang += n
+    if jumlah_buang:
+        log(f'Data pribadi pemilik dibuang dari konten: {jumlah_buang} paragraf/butir')
+        pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+
     # Dry-run: stop here
     if MODE == 'dry-run':
         log('DRY-RUN complete. Content generated but not published.')

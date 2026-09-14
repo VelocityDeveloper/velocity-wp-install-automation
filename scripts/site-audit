@@ -338,7 +338,8 @@ def main():
             compro = {}
         prefix = harapan.get('prefix', '')
         if kode_beranda == 200:
-            info['gaya'] = 'compro' if prefix and f'{prefix}--compro'.encode() in beranda else 'bawaan'
+            info['gaya'] = ('compro' if prefix and f'{prefix}--compro'.encode() in beranda
+                            else 'berita' if prefix and f'{prefix}--berita'.encode() in beranda else 'bawaan')
             if compro.get('seksi') and info['gaya'] != 'compro':
                 temuan.append('tema_belum_mengikuti_compro')
             # Tanpa nomor publik tombol WA jatuh ke mailto/nomor kosong; tema
@@ -374,7 +375,8 @@ def main():
 
     # --- form pemesanan (permintaan tetap Paket G) ---
     if paket_custom:
-        pemesanan = situs['halaman'].get('pemesanan') or {}
+        # Portal berita memasang form "Kirim Pesan ke Redaksi" di Hubungi Kami.
+        pemesanan = situs['halaman'].get('hubungi-kami' if paket_berita else 'pemesanan') or {}
         if not pemesanan.get('shortcode'):
             temuan.append('form_pemesanan_tidak_terpasang')
         info['pemesanan_masuk'] = situs.get('pemesanan_masuk', 0)
