@@ -133,6 +133,45 @@ def ai_tagline(domain):
     return text if 3 <= len(text) <= 80 else ''
 
 
+def potong_kalimat(teks, batas):
+    """Potong di batas kata tanpa memotong kata di tengah."""
+    teks = re.sub(r'\s+', ' ', str(teks or '')).strip()
+    if len(teks) <= batas:
+        return teks
+    return teks[:batas].rsplit(' ', 1)[0].rstrip(' ,;:-') + '…'
+
+
+def seo_dasar(domain, title, tagline):
+    """SEO dasar velocity-addons (Home Title/Description/Keywords) dari data klien.
+
+    Keputusan user 2026-09-15: konfigurasi SEO dasar otomatis terisi saat instalasi
+    kalau datanya tersedia. Sumber: isi contoh paket-g-konten (<domain>-tema.json:
+    hero_teks, layanan, produk) lalu tagline. Biodata pemilik (alamat rumah) tidak
+    dipakai. Nilai kosong berarti opsi tidak disentuh."""
+    import html as _html
+    try:
+        tema = json.loads((GENERATED / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        tema = {}
+    judul = re.sub(r'\s+', ' ', _html.unescape(str(title or ''))).strip()
+    judul_item = lambda kunci: [re.sub(r'\s+', ' ', str(x.get('judul') or '')).strip()
+                                for x in (tema.get(kunci) or []) if isinstance(x, dict) and x.get('judul')]
+    layanan, produk = judul_item('layanan'), judul_item('produk')
+    teks = re.sub(r'\s+', ' ', str(tema.get('hero_teks') or tagline or '')).strip()
+    if teks:
+        desc = teks if judul.lower() in teks.lower() else f'{judul}: {teks}'
+    elif layanan:
+        desc = f'{judul}: ' + ', '.join(layanan[:3]) + '.'
+    else:
+        desc = ''
+    kata = []
+    for k in [judul] + layanan + produk:
+        if k and k.lower() not in (x.lower() for x in kata):
+            kata.append(k)
+    keywords = ', '.join(kata[:8]) if len(kata) > 1 else ''
+    return {'title': judul, 'desc': potong_kalimat(desc, 160), 'keywords': keywords}
+
+
 def image_size(path):
     try:
         with open(path, 'rb') as f:
@@ -295,6 +334,35 @@ if [[ -n "$LOGO_FILE" ]]; then
     [[ -n "$ikon_contoh_lama" ]] && wp option delete velocity_icon_contoh >/dev/null 2>&1
   fi
 fi
+
+# SEO dasar velocity-addons (keputusan user 2026-09-15): Home Title, Home
+# Description, Home Keywords, dan Share Image = logo situs (kosong kalau belum ada
+# logo). Opsi hanya diisi kalau masih kosong atau masih berisi nilai tulisan
+# installer sebelumnya (dicatat di opsi velocity_installer_seo) — isian PM tidak
+# pernah ditimpa. Data kosong = opsi tidak disentuh.
+SEO_TITLE="$SEO_TITLE" SEO_DESC="$SEO_DESC" SEO_KEYWORDS="$SEO_KEYWORDS" wp eval '
+$m = get_option("velocity_installer_seo", array());
+$m = is_array($m) ? $m : array();
+$nilai = array("home_title" => (string) getenv("SEO_TITLE"), "home_description" => (string) getenv("SEO_DESC"), "home_keywords" => (string) getenv("SEO_KEYWORDS"));
+$logo = (int) get_option("site_logo");
+if (!$logo) { $logo = (int) get_theme_mod("custom_logo"); }
+$url = $logo ? wp_get_attachment_image_url($logo, "full") : "";
+$nilai["share_image"] = $url ? esc_url_raw($url) : "";
+if ((string) get_option("seo_velocity", "") === "") { update_option("seo_velocity", "1"); }
+$hasil = array();
+foreach ($nilai as $k => $v) {
+  $kini = (string) get_option($k, "");
+  $milik = isset($m[$k]) && (string) $m[$k] === $kini;
+  if ($v === "") { $hasil[] = "$k:data_kosong"; continue; }
+  if (trim($kini) !== "" && !$milik) { $hasil[] = "$k:diatur_manual"; continue; }
+  if ($kini !== $v) { update_option($k, $v); }
+  $m[$k] = $v;
+  $hasil[] = "$k:set";
+}
+update_option("velocity_installer_seo", $m, false);
+echo "seo_dasar:" . implode(",", $hasil);
+' >&2 || echo "seo_dasar_gagal" >&2
+echo >&2
 
 ids=()
 for i in "${!PHOTO_FILES[@]}"; do
@@ -690,6 +758,7 @@ def main():
     # Slogan: tulisan klien di form → slogan di company profile → buatan AI.
     tagline = slogan(form['text']) or compro.get('slogan') or ai_tagline(domain)
     css = colors_css(pick_colors(field(fields, r'warna tema')))
+    seo = seo_dasar(domain, title, tagline)
     logo, photos = client_assets(folder)
     if not logo:
         # Logo yang terpotong dari kepala halaman company profile adalah logo asli
@@ -766,6 +835,9 @@ def main():
             f'WA_CONTACTS={shlex.quote(json.dumps([{"name": WA_LABEL, "number": wa}]) if wa else "")}',
             f'WA_MESSAGE={shlex.quote(f"Halo {title}, saya ingin bertanya.")}',
             f'TAGLINE={shlex.quote(tagline)}',
+            f'SEO_TITLE={shlex.quote(seo["title"])}',
+            f'SEO_DESC={shlex.quote(seo["desc"])}',
+            f'SEO_KEYWORDS={shlex.quote(seo["keywords"])}',
             f'CSS={shlex.quote(css)}',
         ])
         # Hanya secret per domain yang disalin dari catatan hosting PM; file password
