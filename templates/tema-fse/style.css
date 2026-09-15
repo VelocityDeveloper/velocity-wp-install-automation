@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.2.4
+Version: 1.3.0
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -326,6 +326,185 @@ img { height: auto; }
 .vf-footer__bawah p { margin: 0; }
 .vf-footer a { text-decoration: none; }
 .vf-footer a:hover { text-decoration: underline; }
+
+/* ---------- statistik pengunjung di footer (aturan user 2026-09-15, semua build) ----------
+   Markup [velocity-statistics style="list"] memakai kelas Bootstrap (d-flex, fw-bold)
+   yang tidak dimuat tema: ditata ulang jadi kotak berikon, angka menonjol. */
+
+.vf-statistik {
+  margin-top: 2rem !important;
+  padding: 1rem 1.1rem !important;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 12px;
+}
+.vf-statistik > * { margin-block: 0 !important; }
+.vf-statistik:not(:has(.velocity-list-stats)) { display: none; }
+.vf-statistik__judul { margin-bottom: .75rem !important; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; opacity: .75; }
+.vf-statistik .velocity-list-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
+.vf-statistik .velocity-list-stats > div {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: .6rem;
+  align-items: center;
+  padding: .45rem .5rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+.vf-statistik .velocity-list-stats > div::before {
+  content: "";
+  grid-row: 1 / span 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--wp--preset--color--aksen-di-primary) 20%, transparent);
+}
+.vf-statistik .velocity-list-stats > div::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(.5rem + 8px);
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
+  background: var(--wp--preset--color--aksen-di-primary);
+  -webkit-mask: var(--vf-ikon-stat) center / contain no-repeat;
+  mask: var(--vf-ikon-stat) center / contain no-repeat;
+}
+.vf-statistik .velocity-list-stats .fw-bold { grid-column: 2; grid-row: 1; font-size: 1.25rem; font-weight: 800; line-height: 1.1; }
+.vf-statistik .velocity-list-stats > div > span:first-child { grid-column: 2; grid-row: 2; font-size: .76rem; line-height: 1.3; opacity: .8; }
+.vf-statistik .velocity-list-stats > div:nth-child(1) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z'/><circle cx='12' cy='12' r='3'/></svg>"); }
+.vf-statistik .velocity-list-stats > div:nth-child(2) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='4'/><path d='M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'/></svg>"); }
+.vf-statistik .velocity-list-stats > div:nth-child(3) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 3v18h18'/><path d='m7 15 4-4 3 3 5-6'/></svg>"); }
+.vf-statistik .velocity-list-stats > div:nth-child(4) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'/></svg>"); }
+.vf-statistik .velocity-list-stats > div:nth-child(5) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M5.6 5.6a9 9 0 0 0 0 12.8M18.4 18.4a9 9 0 0 0 0-12.8'/></svg>"); }
+@media (max-width: 781px) {
+  .vf-statistik .velocity-list-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vf-statistik .velocity-list-stats > div:nth-child(5) { grid-column: 1 / -1; }
+}
+
+/* ---------- gaya beranda perusahaan "korporat" & "terbelah" ----------
+   Dipilih scripts/fse-apply dari screenshot beranda referensi klien: hero berfoto
+   gelap -> korporat, hero terang -> terbelah. Pola dari referensi antrean Paket G
+   2026-09-15; tampilan & teks milik sendiri (jangan terlalu mirip referensi). */
+
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-topbar { display: none; }
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-header {
+  background: var(--wp--preset--color--putih) !important;
+  color: var(--wp--preset--color--ink) !important;
+  box-shadow: 0 1px 0 var(--wp--preset--color--garis), 0 8px 24px rgba(15, 23, 42, .06);
+}
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-header a:where(:not(.wp-element-button)),
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-nav .wp-block-navigation-item__content { color: var(--wp--preset--color--ink); }
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-nav .current-menu-item > .wp-block-navigation-item__content,
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-nav .wp-block-navigation-item__content:hover { color: var(--wp--preset--color--aksen-teks); }
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { color: var(--wp--preset--color--di-primary); }
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-header .wp-block-site-logo a { padding: 0; background: transparent; }
+/* Beranda ditutup pita ajakan selebar layar: tanpa jarak putih sebelum footer. */
+:is(.vf-gaya-korporat, .vf-gaya-terbelah).home main.wp-block-group { padding-bottom: 0 !important; }
+
+.vf-label-seksi { margin-bottom: .4rem !important; color: var(--wp--preset--color--aksen-teks); font-size: .8rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.vf-kepala-seksi { max-width: 720px; margin-inline: auto !important; margin-bottom: 2rem !important; text-align: center; }
+.vf-kepala-seksi > * { margin-block: 0 !important; }
+.vf-kepala-seksi p:not(.vf-label-seksi) { margin-top: .55rem !important; color: var(--wp--preset--color--abu); }
+.vf-pita { margin-block: var(--wp--preset--spacing--60) !important; }
+.vf-pita :is(h2, h3) { color: inherit; }
+.vf-pita .vf-kepala-seksi p:not(.vf-label-seksi) { color: inherit; opacity: .85; }
+.vf-seksi { margin-block: var(--wp--preset--spacing--60) !important; }
+
+/* hero berfoto (korporat) */
+.wp-block-post-content > :is(.vf-hero-foto, .vf-hero-terang):first-child { margin-top: calc(-1 * var(--wp--preset--spacing--40)) !important; }
+.vf-hero-foto { margin-bottom: 0 !important; padding: var(--wp--preset--spacing--60) 1.25rem !important; }
+.vf-hero-foto > .wp-block-cover__inner-container { width: 100%; max-width: var(--wp--style--global--wide-size, 1200px); margin-inline: auto; }
+.vf-hero-foto > .wp-block-cover__inner-container > * { max-width: 680px; }
+.vf-hero-foto h1 { margin: .2rem 0 1rem; color: var(--wp--preset--color--putih); font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; }
+.vf-hero-foto p { color: var(--wp--preset--color--putih); font-size: 1.1rem; }
+.vf-hero-foto .vf-label-seksi { color: var(--wp--preset--color--aksen-di-primary); }
+.vf-hero-foto .wp-block-buttons { margin-top: 1.6rem; }
+
+/* hero terang (terbelah) */
+.vf-hero-terang { margin-bottom: 0 !important; }
+.vf-hero-terang__baris { align-items: center !important; gap: clamp(1.5rem, 4vw, 3.5rem) !important; }
+.vf-hero-terang h1 { margin: .2rem 0 1rem; font-size: clamp(2rem, 4.6vw, 3rem); line-height: 1.15; }
+.vf-hero-terang p { font-size: 1.08rem; }
+.vf-hero-terang .wp-block-buttons { margin-top: 1.4rem; }
+
+.vf-foto-bingkai { margin: 0 !important; }
+.vf-foto-bingkai img { display: block; width: 100%; border-radius: 16px; box-shadow: 0 18px 40px rgba(15, 23, 42, .14); }
+.vf-tentang { align-items: center !important; gap: clamp(1.5rem, 4vw, 3.5rem) !important; margin-block: var(--wp--preset--spacing--60) !important; }
+.vf-tentang h2 { margin-top: 0; }
+
+/* kartu berfoto (layanan, produk) */
+.vf-kartu-foto {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 14px;
+  background: var(--wp--preset--color--putih);
+  color: var(--wp--preset--color--teks);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, .06);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.vf-kartu-foto:hover { transform: translateY(-3px); box-shadow: 0 14px 30px rgba(15, 23, 42, .12); }
+.vf-kartu-foto > * { margin-block: 0 !important; }
+.vf-kartu-foto .wp-block-image { margin: 0; }
+.vf-kartu-foto .wp-block-image img { display: block; width: 100%; }
+.vf-kartu-foto--tanpa { border-top: 4px solid var(--wp--preset--color--aksen); }
+.vf-kartu-foto__isi { padding: 1.1rem 1.25rem 1.35rem; }
+.vf-kartu-foto__isi > * { margin-block: 0 !important; }
+.vf-kartu-foto h3 { color: var(--wp--preset--color--ink); font-size: 1.12rem; line-height: 1.3; }
+.vf-kartu-foto p { margin-top: .5rem !important; font-size: .93rem; }
+.vf-kartu-foto ul { margin-top: .6rem !important; padding-left: 1.1rem; font-size: .9rem; }
+
+/* keunggulan berikon */
+.vf-kotak-ikon {
+  position: relative;
+  height: 100%;
+  padding: 1.35rem 1.25rem !important;
+  border-radius: 14px;
+  background: var(--wp--preset--color--putih);
+  color: var(--wp--preset--color--teks);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, .06);
+}
+.vf-pita--gelap .vf-kotak-ikon {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, var(--wp--preset--color--putih) 7%, transparent);
+  color: inherit;
+  box-shadow: none;
+}
+.vf-kotak-ikon > * { margin-block: 0 !important; }
+.vf-kotak-ikon::before { content: ""; display: block; width: 48px; height: 48px; margin-bottom: .9rem; border-radius: 12px; background: var(--wp--preset--color--aksen); }
+.vf-kotak-ikon::after {
+  content: "";
+  position: absolute;
+  top: calc(1.35rem + 12px);
+  left: calc(1.25rem + 12px);
+  width: 24px;
+  height: 24px;
+  background: var(--wp--preset--color--di-aksen);
+  -webkit-mask: var(--vf-ikon) center / contain no-repeat;
+  mask: var(--vf-ikon) center / contain no-repeat;
+}
+.vf-kotak-ikon h3 { color: var(--wp--preset--color--ink); font-size: 1.05rem; line-height: 1.3; }
+.vf-pita--gelap .vf-kotak-ikon h3 { color: inherit; }
+.vf-kotak-ikon p { margin-top: .45rem !important; font-size: .92rem; }
+.vf-ikon--area { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12Z'/><circle cx='12' cy='10' r='2.5'/></svg>"); }
+.vf-ikon--satu { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='m8.5 12 2.5 2.5 4.5-5'/></svg>"); }
+.vf-ikon--rab { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='5' y='4' width='14' height='17' rx='2'/><path d='M9 4V3h6v1M9 11h6M9 15h4'/></svg>"); }
+.vf-ikon--chat { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z'/></svg>"); }
+
+/* galeri & pita ajakan berfoto */
+.vf-galeri .wp-block-image { margin: 0; overflow: hidden; border-radius: 12px; }
+.vf-galeri img { display: block; width: 100%; transition: transform .35s ease; }
+.vf-galeri .wp-block-image:hover img { transform: scale(1.05); }
+.vf-seksi--galeri > .wp-block-buttons { justify-content: center; margin-top: 1.5rem; }
+.vf-ajakan-foto { margin-block: var(--wp--preset--spacing--60) 0 !important; padding: var(--wp--preset--spacing--60) 1.25rem !important; text-align: center; }
+.vf-ajakan-foto h2 { margin-top: 0; color: var(--wp--preset--color--putih); }
+.vf-ajakan-foto p { max-width: 640px; margin-inline: auto; color: var(--wp--preset--color--putih); }
+.vf-ajakan-foto .wp-block-buttons { justify-content: center; }
+:is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-ajakan { margin-bottom: var(--wp--preset--spacing--60) !important; }
 
 /* ---------- font dari referensi desain klien (velocity_situs font_teks/font_judul) ---------- */
 

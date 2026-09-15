@@ -48,7 +48,8 @@ HERE = Path(__file__).resolve().parent
 TEMA = HERE.parent / 'templates' / 'tema-fse'
 SLUG = 'velocity-fse'
 GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
-RENCANA_DIR = Path('/var/lib/velocity/fse-rencana')
+# Uji desain di WordPress lokal (VELOCITY_LOKAL_*) tidak boleh menulis cache rencana situs sungguhan.
+RENCANA_DIR = Path(os.environ.get('VELOCITY_FSE_RENCANA') or '/var/lib/velocity/fse-rencana')
 UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 
 # Shortcode desain child theme Paket G lama. Setelah tema diganti fungsinya tidak
@@ -112,6 +113,16 @@ GAYA = {
                'digelapkan, pita judul seksi berikon di tengah per kategori, grid 2 kolom kartu foto besar, tanpa '
                'kolom samping, header putih.',
 }
+# Gaya beranda situs perusahaan (Paket G). Pola dari referensi klien antrean 2026-09-15
+# (erhaeschemical, jatrascale, tasseminarpalupi, jasabongkarbangunanbali, jasarilismedia);
+# teks & tampilan tetap milik sendiri (aturan user 2026-09-14: jangan terlalu mirip referensi).
+GAYA_PERUSAHAAN = {
+    'klasik': 'Header berwarna, hero gradasi warna utama, kartu teks (tanpa referensi desain).',
+    'korporat': 'Header putih, hero foto selebar layar berlapis gelap, tentang kami foto + teks berdampingan, '
+                'kartu layanan berfoto, keunggulan berikon di pita gelap, galeri, pita ajakan berfoto.',
+    'terbelah': 'Header putih, hero terang (teks kiri, foto kanan), tentang kami berdampingan, seksi layanan '
+                'berlatar warna aksen dengan kartu berfoto, keunggulan berikon, galeri.',
+}
 
 
 def referensi_form(domain):
@@ -173,11 +184,48 @@ def muat_ai(manifest):
         return None
 
 
-def referensi_desain(cfg, domain):
+def gaya_perusahaan(url, domain):
+    """Gaya beranda perusahaan dari screenshot beranda referensi klien -> (gaya, alasan, font).
+
+    Referensi Paket G (2026-09-15) dibangun Beaver Builder: kelas HTML-nya
+    (fl-builder-content-27) tidak menggambarkan tata letak, dan AI installer hanya
+    menerima teks — jadi yang diukur piksel. Terang rata-rata pita hero (y 120–620,
+    lebar 1366): foto berlapis gelap L 70–127 (erhaeschemical, jatrascale,
+    tasseminarpalupi, jasabongkarbangunanbali), hero putih teks+foto L 234 (jasarilismedia)."""
+    fonts = []
+    try:
+        fonts = ciri_referensi(url).get('fonts') or []
+    except (OSError, ValueError, urllib.error.URLError):
+        pass
+    folder = RENCANA_DIR / domain
+    folder.mkdir(parents=True, exist_ok=True)
+    potret = folder / 'referensi-potret.png'
+    potret.unlink(missing_ok=True)
+    try:
+        subprocess.run(['node', str(HERE / 'potret-halaman'), url, str(potret), '1366', '900'],
+                       capture_output=True, text=True, timeout=200)
+        ck = muat_modul('compro_klien', HERE / 'compro-klien')
+        lebar, tinggi, kanal, baris = ck.baca_png(potret)
+    except Exception as e:  # situs referensi berat/mati: gaya paling umum di referensi klien
+        return 'korporat', f'referensi_tidak_terpotret:{type(e).__name__}', fonts
+    nilai = [0.2126 * r[x * kanal] + 0.7152 * r[x * kanal + 1] + 0.0722 * r[x * kanal + 2]
+             for r in list(baris)[120:min(620, tinggi):4] for x in range(0, lebar, 6)]
+    if not nilai:
+        return 'korporat', 'potret_terlalu_pendek', fonts
+    terang = sum(nilai) / len(nilai)
+    if terang >= 190:
+        return 'terbelah', f'hero terang L={terang:.0f}', fonts
+    return 'korporat', f'hero berfoto/gelap L={terang:.0f}', fonts
+
+
+def referensi_desain(cfg, domain, jenis='berita'):
     """Referensi klien + gaya beranda terpilih (manifest `gaya_beranda=` menang).
 
+    Portal berita memilih dari GAYA (AI membaca kerangka HTML referensi); situs
+    perusahaan dari GAYA_PERUSAHAAN lewat screenshot referensi (gaya_perusahaan).
     Disimpan di fse-rencana/<domain>/referensi.json supaya --tema dan --isi sepakat
     dan halaman referensi/AI tidak dipanggil ulang setiap run."""
+    katalog = GAYA if jenis == 'berita' else GAYA_PERUSAHAAN
     berkas = RENCANA_DIR / domain / 'referensi.json'
     try:
         lama = json.loads(berkas.read_text())
@@ -185,12 +233,16 @@ def referensi_desain(cfg, domain):
         lama = {}
     ref = referensi_form(domain)
     paksa = cfg.get('gaya_beranda', '').strip().lower()
-    if paksa in GAYA:
+    if paksa in katalog:
         hasil = dict(ref, gaya=paksa, sumber='manifest', fonts=lama.get('fonts', []))
     elif not ref:
         hasil = {'gaya': 'klasik', 'sumber': 'tanpa_referensi'}
-    elif lama.get('url') == ref['url'] and lama.get('gaya') in GAYA and lama.get('sumber') != 'manifest':
+    elif (lama.get('url') == ref['url'] and lama.get('gaya') in katalog and lama.get('sumber') != 'manifest'
+          and lama.get('jenis', 'berita') == jenis):
         return lama
+    elif jenis != 'berita':
+        gaya, alasan, fonts = gaya_perusahaan(ref['url'], domain)
+        hasil = dict(ref, gaya=gaya, alasan=alasan, sumber='screenshot', fonts=fonts)
     else:
         try:
             ciri = ciri_referensi(ref['url'])
@@ -219,6 +271,7 @@ def referensi_desain(cfg, domain):
                     else 'klasik')
             sumber = 'heuristik'
         hasil = dict(ref, gaya=gaya, alasan=alasan, sumber=sumber, fonts=ciri.get('fonts', []))
+    hasil['jenis'] = jenis
     berkas.parent.mkdir(parents=True, exist_ok=True)
     berkas.write_text(json.dumps(hasil, ensure_ascii=False, indent=1))
     return hasil
@@ -260,6 +313,11 @@ class Situs:
         self.ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
                     '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
                     f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+        # Uji desain di WordPress lokal: VELOCITY_LOKAL_SSH = pengganti ssh yang menjalankan
+        # perintah di mesin ini, VELOCITY_LOKAL_DOCROOT = folder WordPress uji.
+        if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
+            self.ssh = [os.environ['VELOCITY_LOKAL_SSH']]
+            self.docroot = os.environ['VELOCITY_LOKAL_DOCROOT']
 
     def bash(self, skrip, timeout=300):
         return subprocess.run(self.ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=timeout)
@@ -502,7 +560,7 @@ def langkah_tema(cfg, situs, coba):
         print('fse: isi contoh belum ada (paket-g-konten), data situs memakai FORM ISIAN saja')
     vct = muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
     primary, aksen = vct.warna_tema(domain)
-    ref = referensi_desain(cfg, domain)
+    ref = referensi_desain(cfg, domain, 'berita' if isi.get('jenis') == 'berita' else 'perusahaan')
     if ref.get('url'):
         print(f"fse: referensi={ref['url']} gaya={ref['gaya']} ({ref.get('sumber')}) "
               f"font={','.join(ref.get('fonts') or []) or '-'}" + (f" alasan={ref['alasan']}" if ref.get('alasan') else ''))
@@ -837,7 +895,183 @@ def beranda_sorotan(q, sd, info):
     return '\n\n'.join(bagian)
 
 
+def paragraf_kelas(dalam, kelas):
+    return blok('paragraph', {'className': kelas}, f'<p class="{kelas}">{dalam}</p>')
+
+
+def tombol_ganda(daftar):
+    """Tombol berdampingan: [(label, url, garis)] — garis=True memakai gaya outline."""
+    anak = []
+    for label, url, garis in daftar:
+        cls = 'wp-block-button' + (' is-style-outline' if garis else '')
+        anak.append(blok('button', {'className': 'is-style-outline'} if garis else None,
+                         f'<div class="{cls}"><a class="wp-block-button__link wp-element-button" '
+                         f'href="{esc_attr(url)}">{esc(label)}</a></div>'))
+    return blok('buttons', None, '<div class="wp-block-buttons">' + '\n\n'.join(anak) + '</div>')
+
+
+def gambar(foto, kelas=None, aspek='4/3'):
+    """core/image dari foto slot (opsi vfse_images, diisi paket-g-foto); '' kalau slot kosong."""
+    if not foto:
+        return ''
+    attrs = {'id': int(foto['id']), 'sizeSlug': 'large', 'linkDestination': 'none', 'aspectRatio': aspek, 'scale': 'cover'}
+    cls = 'wp-block-image size-large'
+    if kelas:
+        attrs['className'] = kelas
+        cls += f' {kelas}'
+    return blok('image', attrs, f'<figure class="{cls}"><img src="{esc_attr(foto["url"])}" alt="{esc_attr(foto.get("alt"))}" '
+                               f'class="wp-image-{int(foto["id"])}" style="aspect-ratio:{aspek};object-fit:cover"/></figure>')
+
+
+def sampul(foto, anak, kelas, redup=60, tinggi=520):
+    """core/cover berfoto berlapis warna utama gelap (hero & pita ajakan)."""
+    attrs = {'url': foto['url'], 'id': int(foto['id']), 'dimRatio': redup, 'overlayColor': 'primary-gelap',
+             'isUserOverlayColor': True, 'minHeight': tinggi, 'minHeightUnit': 'px', 'align': 'full',
+             'className': kelas, 'layout': {'type': 'default'}}
+    return blok('cover', attrs,
+                f'<div class="wp-block-cover alignfull {kelas}" style="min-height:{tinggi}px">'
+                f'<img class="wp-block-cover__image-background wp-image-{int(foto["id"])}" alt="" '
+                f'src="{esc_attr(foto["url"])}" data-object-fit="cover"/>'
+                f'<span aria-hidden="true" class="wp-block-cover__background has-primary-gelap-background-color '
+                f'has-background-dim-{redup} has-background-dim"></span>'
+                '<div class="wp-block-cover__inner-container">' + '\n\n'.join(anak) + '</div></div>')
+
+
+def kepala_seksi(teks, sub='', label=''):
+    anak = [paragraf_kelas(esc(label), 'vf-label-seksi')] if label else []
+    anak.append(judul(esc(teks)))
+    if sub:
+        anak.append(paragraf(esc(sub)))
+    return grup(anak, kelas='vf-kepala-seksi')
+
+
+def kartu_foto(daftar, foto, kunci):
+    """Kartu berfoto (layanan/produk) dalam grid; kunci[i] = slot foto butir ke-i."""
+    kartu = []
+    for i, b in enumerate(daftar):
+        g = gambar(foto.get(kunci[i]) if i < len(kunci) else None, 'vf-kartu-foto__gambar')
+        isi_kartu = [judul(esc(b.get('judul')), 3)]
+        if b.get('teks'):
+            isi_kartu.append(paragraf(esc(b['teks'])))
+        if b.get('rincian'):
+            isi_kartu.append(daftar_poin([esc(r) for r in b['rincian'][:4]]))
+        kartu.append(grup(([g] if g else []) + [grup(isi_kartu, kelas='vf-kartu-foto__isi')],
+                          kelas='vf-kartu-foto' + ('' if g else ' vf-kartu-foto--tanpa')))
+    return grup(kartu, kelas='vf-grid-kartu', align='wide',
+                layout={'type': 'grid', 'columnCount': 4 if len(daftar) == 4 else 3, 'minimumColumnWidth': '15rem'})
+
+
+def beranda_perusahaan_foto(q, sd, isi, info, gaya):
+    """Beranda perusahaan mengikuti pola referensi klien (permintaan user 2026-09-15:
+    "pastikan untuk desain sesuai referensi dari klien").
+
+      korporat  hero foto selebar layar berlapis gelap, keunggulan di pita gelap
+      terbelah  hero terang teks kiri + foto kanan, layanan di pita warna aksen
+
+    Slot foto kosong tidak meninggalkan bingkai kosong: hero jatuh ke gradasi warna,
+    kartu tanpa foto diberi garis aksen, galeri dilewati."""
+    js = isi.get('judul_seksi') or {}
+    foto = info.get('foto') or {}
+
+    def tautan(slug):
+        return ((info['halaman'].get(slug) or {}).get('url') or (info['semua'].get(slug) or {}).get('url')
+                or f"{info['home']}{slug}/")
+
+    kontak = tautan('hubungi-kami')
+    bagian = []
+
+    teks_hero = []
+    if isi.get('hero_judul'):
+        teks_hero.append(paragraf_kelas(esc(sd['slogan'] or sd['nama']), 'vf-label-seksi'))
+    teks_hero.append(judul(esc(isi.get('hero_judul') or sd['nama']), 1))
+    if isi.get('hero_teks'):
+        teks_hero.append(paragraf(esc(isi['hero_teks'])))
+    teks_hero.append(tombol_ganda([('Layanan Kami', tautan('layanan'), False), ('Hubungi Kami', kontak, True)]
+                                  if sd['layanan'] else [('Hubungi Kami', kontak, False)]))
+    if gaya == 'korporat' and foto.get('hero'):
+        bagian.append(sampul(foto['hero'], teks_hero, 'vf-hero-foto', 60, 560))
+    elif gaya == 'terbelah':
+        kolom_hero = [kolom(teks_hero, '55%')]
+        if foto.get('hero'):
+            kolom_hero.append(kolom([gambar(foto['hero'], 'vf-foto-bingkai', '4/3')]))
+        bagian.append(grup([barisan(kolom_hero, kelas='vf-hero-terang__baris', align='wide')], kelas='vf-hero-terang',
+                           align='full', latar='latar', padding='var:preset|spacing|60', layout={'type': 'constrained'}))
+    else:
+        bagian.append(grup(teks_hero, kelas='vf-hero', align='full', teks='di-primary', padding='var:preset|spacing|70',
+                           layout={'type': 'constrained'}))
+
+    # Ringkasan tentang: Data Situs, atau paragraf pertama halaman Tentang Kami tulisan AI
+    # (glcagro.com: velocity_situs.tentang kosong, seksi tampil hanya judul + tombol).
+    ringkas = sd.get('tentang') or ''
+    if not ringkas:
+        for p in re.findall(r'<p\b[^>]*>(.*?)</p>', (info['halaman'].get('tentang-kami') or {}).get('isi', ''), re.S):
+            p = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', p))).strip()
+            if len(p) >= 60:
+                ringkas = p if len(p) <= 320 else p[:320].rsplit(' ', 1)[0] + '…'
+                break
+    if ringkas or foto.get('tentang'):
+        teks = [paragraf_kelas(esc(js.get('tentang') or 'Tentang Kami'), 'vf-label-seksi'), judul(esc(sd['nama']))]
+        if ringkas:
+            teks.append(paragraf(esc(ringkas)))
+        teks.append(tombol('Selengkapnya', tautan('tentang-kami')))
+        kolom_tentang = [kolom([gambar(foto['tentang'], 'vf-foto-bingkai', '4/3')])] if foto.get('tentang') else []
+        bagian.append(barisan(kolom_tentang + [kolom(teks)], kelas='vf-tentang', align='wide'))
+
+    if sd['layanan']:
+        kunci = [f"layanan-{l.get('slug', '')}" for l in isi.get('layanan') or []]
+        isi_seksi = [kepala_seksi(js.get('layanan') or 'Layanan Kami', js.get('layanan_sub', '')),
+                     kartu_foto(sd['layanan'], foto, kunci)]
+        if gaya == 'terbelah':
+            bagian.append(grup(isi_seksi, kelas='vf-pita vf-pita--aksen', align='full', latar='aksen', teks='di-aksen',
+                               padding='var:preset|spacing|60', layout={'type': 'constrained'}))
+        else:
+            bagian.append(grup(isi_seksi, kelas='vf-seksi', align='wide'))
+
+    if isi.get('keunggulan'):
+        kotak = [grup([judul(esc(k.get('judul')), 3), paragraf(esc(k.get('teks')))],
+                      kelas='vf-kotak-ikon vf-ikon--' + (re.sub(r'[^a-z]', '', str(k.get('ikon') or '')) or 'satu'))
+                 for k in isi['keunggulan'][:4]]
+        isi_seksi = [kepala_seksi(js.get('keunggulan') or 'Mengapa Memilih Kami'),
+                     grup(kotak, kelas='vf-grid-ikon', align='wide',
+                          layout={'type': 'grid', 'columnCount': 4, 'minimumColumnWidth': '13rem'})]
+        if gaya == 'korporat':
+            bagian.append(grup(isi_seksi, kelas='vf-pita vf-pita--gelap', align='full', latar='primary', teks='di-primary',
+                               padding='var:preset|spacing|60', layout={'type': 'constrained'}))
+        else:
+            bagian.append(grup(isi_seksi, kelas='vf-seksi', align='wide'))
+
+    if isi.get('produk'):
+        bagian.append(grup([kepala_seksi(js.get('produk') or 'Produk Kami'),
+                            kartu_foto(isi['produk'], foto, [p.get('slug', '') for p in isi['produk']])],
+                           kelas='vf-seksi', align='wide'))
+
+    foto_galeri = [foto[k] for k in sorted(foto) if k.startswith('galeri-')][:6]
+    if foto_galeri:
+        bagian.append(grup([kepala_seksi(js.get('galeri') or 'Galeri Kegiatan', js.get('galeri_sub', '')),
+                            grup([gambar(f, 'vf-galeri__foto', '1/1') for f in foto_galeri], kelas='vf-galeri', align='wide',
+                                 layout={'type': 'grid', 'columnCount': 3, 'minimumColumnWidth': '12rem'}),
+                            tombol('Lihat Galeri', tautan('galeri'))],
+                           kelas='vf-seksi vf-seksi--galeri', align='wide'))
+
+    arsip = tautan('berita')
+    bagian.append(grup([bar('Artikel Terbaru', ('Lihat semua →', arsip)), q(3, 0, 'vf-kartu', KARTU, grid=3)],
+                       kelas='vf-seksi', align='wide'))
+
+    ajakan = [judul(esc(js.get('pemesanan') or 'Siap membantu kebutuhan Anda')),
+              paragraf(esc(js.get('pemesanan_sub') or f"Ceritakan kebutuhan Anda, tim {sd['nama']} akan segera menghubungi kembali.")),
+              tombol('Hubungi Kami', kontak)]
+    foto_ajakan = foto.get('galeri-1') or foto.get('tentang') or foto.get('hero')
+    if gaya == 'korporat' and foto_ajakan:
+        bagian.append(sampul(foto_ajakan, ajakan, 'vf-ajakan-foto', 70, 320))
+    else:
+        bagian.append(grup(ajakan, kelas='vf-ajakan', align='wide', teks='di-primary', latar='primary',
+                           padding='var:preset|spacing|50', layout={'type': 'constrained'}))
+    return '\n\n'.join(bagian)
+
+
 def beranda_perusahaan(q, sd, isi, info):
+    if sd.get('gaya') in ('korporat', 'terbelah'):
+        return beranda_perusahaan_foto(q, sd, isi, info, sd['gaya'])
     js = isi.get('judul_seksi') or {}
     kontak = (info['halaman'].get('hubungi-kami') or {}).get('url') or info['home'] + 'hubungi-kami/'
     hero = [judul(esc(isi.get('hero_judul') or sd['nama']), 1)]
@@ -962,8 +1196,17 @@ foreach (get_posts(array('post_type' => 'wp_navigation', 'post_status' => 'publi
 }
 $halaman_id = array();
 foreach (get_pages(array('post_status' => 'publish')) as $p) { $halaman_id[$p->post_name] = array('id' => $p->ID, 'url' => get_permalink($p)); }
+// Foto per slot desain (hero, tentang, layanan-*, produk-*, galeri-*) dari paket-g-foto.
+$foto = array();
+foreach ((array) get_option('vfse_images', array()) as $slot => $id) {
+    $url = $id ? wp_get_attachment_image_url((int) $id, 'large') : '';
+    if ($url) {
+        $foto[$slot] = array('id' => (int) $id, 'url' => $url, 'alt' => (string) get_post_meta((int) $id, '_wp_attachment_image_alt', true));
+    }
+}
 vfse_keluar(array('tema' => get_stylesheet(), 'halaman' => $hal, 'sisa' => $sisa, 'kategori' => $kat, 'menu' => $menu,
-    'nav' => $nav, 'semua' => $halaman_id, 'home' => home_url('/'), 'depan' => (int) get_option('page_on_front')));
+    'nav' => $nav, 'semua' => $halaman_id, 'home' => home_url('/'), 'depan' => (int) get_option('page_on_front'),
+    'foto' => (object) $foto));
 '''
 
 PHP_TULIS = r'''
@@ -1068,7 +1311,8 @@ def langkah_isi(cfg, situs, coba):
     domain = situs.domain
     isi = baca_isi(domain)
     vct = muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
-    sd = data_situs(cfg, domain, isi, vct, referensi_desain(cfg, domain))
+    sd = data_situs(cfg, domain, isi, vct,
+                    referensi_desain(cfg, domain, 'berita' if isi.get('jenis') == 'berita' else 'perusahaan'))
     berita = sd['jenis'] == 'berita'
     target = ['beranda', 'tentang-kami', 'galeri', 'hubungi-kami', 'berita'] + (
         ['redaksi'] if berita else ['layanan', 'produk', 'pemesanan'])

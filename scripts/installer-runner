@@ -65,9 +65,10 @@ portal_berita() {
 #   (konten AI & site-finish di mode apply/finish berjalan DI ANTARA keduanya:
 #    generator artikel membaca layanan/rubrik dari tema yang sudah terpasang —
 #    di situs lama tanpa tema desain, urutan terbalik membuat artikel tetap "Blog")
-#   paket_g_isi   4. fse-apply --isi    halaman berupa blok + menu (SESUDAH site-finish)
-#                 5. paket-g-foto       foto utama artikel portal berita
-#                 6. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
+#   paket_g_isi   4. paket-g-foto       foto per slot desain perusahaan (hero, tentang, layanan, galeri)
+#                 5. fse-apply --isi    halaman berupa blok + menu (SESUDAH site-finish)
+#                 6. paket-g-foto       foto utama artikel portal berita
+#                 7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
 paket_g_tema() {
   printf '[%s] Paket custom: company profile & isi contoh\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
@@ -81,11 +82,19 @@ paket_g_tema() {
 }
 paket_g_isi() {
   [[ "$JALUR_TEMA" == fse ]] || return 0
+  if ! portal_berita; then
+    # Beranda perusahaan bergaya referensi memuat URL foto slot: foto harus ada SEBELUM halaman disusun.
+    printf '[%s] Paket custom: foto per slot desain\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   printf '[%s] Paket custom: halaman blok & menu (FSE)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Foto utama artikel (ber-caption kredit foto): portal berita dan situs perusahaan.
+  printf '[%s] Paket custom: foto utama artikel\n' "$(date -Is)" >> "$LOG"
   if portal_berita; then
-    printf '[%s] Paket custom: foto utama artikel\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
+  else
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
   printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true

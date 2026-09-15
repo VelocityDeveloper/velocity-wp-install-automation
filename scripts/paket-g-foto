@@ -113,7 +113,10 @@ class Openverse:
 # jadi disaring di kode dari judul & tag.
 ORANG_RE = re.compile(r'\b(people|person|portrait|volunteers?|man|men|woman|women|girls?|boys?|'
                       r'crowd|selfie|family|students?|kids?|children|couple|wedding|politician|senator|'
-                      r'secretary|minister|president|mayor|governor)\b', re.I)
+                      r'secretary|minister|president|mayor|governor|farmers?|workers?|employees?|staff|'
+                      r'meeting|conference|officials?|director|chief|speaks?|speaking|interview|delegation|'
+                      r'participants?|attendees?|visitors?|owners?|rancher|grower|community|operators?|'
+                      r'drivers?)\b', re.I)
 
 
 def ada_orang(r):
@@ -121,9 +124,20 @@ def ada_orang(r):
     return bool(ORANG_RE.search(teks))
 
 
+def tak_terbaca(r):
+    """Judul tidak menjelaskan isi foto, jadi foto berisi orang tidak bisa disaring.
+
+    glcagro.com (2026-09-15): foto USDA berjudul kode "20160521-RD-LSC-0166" lolos ke
+    kartu layanan dan ternyata potret petani / rapat pejabat. Tag tidak menolong (tag
+    arsip USDA umum seperti "agriculture"), dan potongan kode huruf besar ("NRCS", "LSC")
+    bukan kata — yang dihitung hanya kata berhuruf kecil."""
+    kata = re.findall(r'\b[A-Za-z]*[a-z][A-Za-z]{2,}\b', str(r.get('title') or ''))
+    return len(kata) < 2
+
+
 def layak(r, lebar_min, sudah):
     lebar, tinggi = r.get('width') or 0, r.get('height') or 0
-    return (r.get('url') and r['url'] not in sudah and lebar >= lebar_min and not ada_orang(r)
+    return (r.get('url') and r['url'] not in sudah and lebar >= lebar_min and not ada_orang(r) and not tak_terbaca(r)
             # Panorama tipis (mis. 1024x334) jadi buram saat dipotong ke kartu 4:3.
             and tinggi >= 500 and tinggi >= lebar * 0.5
             and str(r.get('filetype') or 'jpg').lower() in ('jpg', 'jpeg', 'png', 'webp'))
@@ -424,7 +438,9 @@ def pilih_dengan_ai(slot, isi, calon, ai, tambahan=''):
     sistem = 'You select stock photos for a company website. Output ONLY valid JSON, no markdown.'
     teks = ('Pilih foto untuk setiap slot situs bisnis berikut berdasarkan judul dan tag kandidat.\n'
             'Foto harus terlihat pantas di situs bisnis itu dan cocok dengan topik slot. '
-            'Tolak foto tempat wisata, produk konsumen yang tidak terkait, orang yang menjadi fokus, '
+            'Tolak foto tempat wisata, produk konsumen yang tidak terkait, foto yang memperlihatkan orang '
+            '(pekerja, petani, operator, pengunjung — bisa terkesan karyawan/klien sungguhan), foto hitam-putih '
+            'atau arsip sejarah (judul berisi tahun lama, "historic", "archive"), '
             'atau apa pun yang maknanya melenceng dari bidang usaha.\n'
             + (tambahan + '\n' if tambahan else '') +
             'Jawab JSON {"<slot>": [indeks terbaik, cadangan, ...]} — daftar kosong kalau tidak ada yang pantas.\n\n'
@@ -504,6 +520,20 @@ def pilih_foto(slot, isi, ov, ai=None):
     return hasil
 
 
+def kredit_foto(r):
+    """Caption foto utama = kredit foto contoh (aturan user 2026-09-14: foto utama post wajib
+    ber-caption yang benar — sumber/kredit, bukan peristiwa karangan)."""
+    judul = re.sub(r'\s+', ' ', str(r.get('title') or '')).strip()[:90]
+    pembuat = re.sub(r'\s+', ' ', str(r.get('creator') or '')).strip()[:60]
+    lisensi = {'cc0': 'CC0', 'pdm': 'Public Domain'}.get(str(r.get('license') or '').lower(), str(r.get('license') or ''))
+    bagian = [f'Foto ilustrasi: {judul}' if judul else 'Foto ilustrasi']
+    if pembuat:
+        bagian.append(pembuat)
+    if lisensi:
+        bagian.append(lisensi)
+    return ' — '.join(bagian[:1] + [', '.join(bagian[1:])]) if len(bagian) > 1 else bagian[0]
+
+
 def unduh(url, tujuan):
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=60) as resp:
@@ -554,6 +584,8 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
     ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
+        ssh, docroot = [os.environ['VELOCITY_LOKAL_SSH']], os.environ['VELOCITY_LOKAL_DOCROOT']
     php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 60)) as $p) {"
            " if (has_post_thumbnail($p->ID)) { continue; } $k = get_the_category($p->ID);"
            " $o[] = array('id' => $p->ID, 'judul' => $p->post_title, 'rubrik' => $k ? $k[0]->name : ''); }"
@@ -644,7 +676,8 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
                            'kata_kunci': q})
         perintah.append(
             f"id=$(wp media import {folder}/{shlex.quote(nama)} --post_id={a['id']} --featured_image "
-            f"--title={shlex.quote('Contoh: ' + a['judul'])} --alt={shlex.quote(a['judul'])} --porcelain) && "
+            f"--title={shlex.quote('Contoh: ' + a['judul'])} --alt={shlex.quote(a['judul'])} "
+            f"--caption={shlex.quote(kredit_foto(pilihan))} --porcelain) && "
             f'wp post meta update "$id" _velocity_foto_contoh {shlex.quote(asal)} >/dev/null && '
             f"echo \"pasang={a['id']}\"")
     perintah.append(f'rm -rf {folder}')
@@ -667,8 +700,10 @@ def main():
         print('foto: isi contoh belum ada (jalankan paket-g-konten dulu), langkah dilewati')
         return 0
     isi = json.loads(isi_berkas.read_text())
-    if isi.get('jenis') == 'berita':
+    if isi.get('jenis') == 'berita' or '--artikel' in sys.argv:
         # Portal berita custom: yang perlu foto adalah artikel, bukan slot desain.
+        # --artikel: foto utama artikel situs perusahaan (kartu Artikel Terbaru beranda FSE
+        # tampil polos tanpa foto, sedangkan referensi klien selalu berfoto).
         return foto_berita(cfg, domain, isi, key, coba, args[0])
     if coba and rencana_compro(domain, isi):
         rencana = rencana_compro(domain, isi)
@@ -685,6 +720,9 @@ def main():
     ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg.get('target_host', '')}"]
+    # Uji desain di WordPress lokal (sama dengan scripts/fse-apply).
+    if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
+        ssh, docroot = [os.environ['VELOCITY_LOKAL_SSH']], os.environ['VELOCITY_LOKAL_DOCROOT']
 
     # Keadaan situs: awalan tema, slot yang sudah terisi, foto klien yang tersedia.
     keadaan = {'prefix': '', 'terisi': {}, 'klien': []}
@@ -695,6 +733,8 @@ $prefix = '';
 foreach (array_keys($shortcode_tags) as $t) {
     if (preg_match('/^([a-z0-9]+)_pemesanan$/', $t, $m)) { $prefix = $m[1]; break; }
 }
+// Tema FSE velocity-fse: peta foto slot di opsi vfse_images, dibaca scripts/fse-apply --isi.
+if (get_stylesheet() === 'velocity-fse') { $prefix = 'vfse'; }
 $klien = get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 30,
     'meta_query' => array(array('key' => '_velocity_source', 'compare' => 'EXISTS')), 'fields' => 'ids'));
 $klien = array_values(array_filter($klien, function ($id) {
