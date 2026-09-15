@@ -52,7 +52,8 @@ defined('ABSPATH') || exit;
 		<div class="{{PREFIX}}-wrap {{PREFIX}}-pita__isi">
 			<div>
 				<p class="{{PREFIX}}-pita__slogan"><?php echo esc_html({{PREFIX}}_data('slogan') ?: {{PREFIX}}_data('nama')); ?></p>
-				<p class="{{PREFIX}}-pita__hak">&copy; <?php echo esc_html(date_i18n('Y')); ?> <?php echo esc_html({{PREFIX}}_data('nama')); ?></p>
+				<?php // Kredit wajib di semua situs buatan installer (keputusan user 2026-09-14). ?>
+				<p class="{{PREFIX}}-pita__hak">&copy; <?php echo esc_html(date_i18n('Y')); ?> <?php echo esc_html({{PREFIX}}_data('nama')); ?>. Design by <a href="https://velocitydeveloper.com" target="_blank" rel="noopener">Velocity Developer</a></p>
 			</div>
 			<div class="{{PREFIX}}-pita__kontak">
 				<?php if ({{PREFIX}}_ada_wa()) : ?>
@@ -149,7 +150,7 @@ defined('ABSPATH') || exit;
 
 	<div class="{{PREFIX}}-footer__bawah">
 		<div class="{{PREFIX}}-wrap">
-			<p>&copy; <?php echo esc_html(date_i18n('Y')); ?> <?php echo esc_html({{PREFIX}}_data('nama')); ?>. Seluruh hak cipta dilindungi.</p>
+			<p>&copy; <?php echo esc_html(date_i18n('Y')); ?> <?php echo esc_html({{PREFIX}}_data('nama')); ?>. Seluruh hak cipta dilindungi. Design by <a href="https://velocitydeveloper.com" target="_blank" rel="noopener">Velocity Developer</a></p>
 		</div>
 	</div>
 </footer>

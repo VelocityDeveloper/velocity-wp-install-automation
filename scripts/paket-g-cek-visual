@@ -79,6 +79,10 @@ def potong(modul, berkas, tujuan, nama):
     while akhir > 0 and len(set(baris[akhir - 1][::kanal * 40])) <= 1:
         akhir -= 1
     ragam = {baris[y][x:x + 3] for y in range(0, akhir, 97) for x in range(0, lebar * kanal, kanal * 53)}
+    # Grid jarang di atas meleset dari teks tipis di halaman berlatar polos (tema FSE
+    # anaksegalabangsa.com: Tentang Kami/Redaksi penuh teks tetap dinilai kosong).
+    # Tambahan: berapa baris yang berisi lebih dari satu warna. Layar putih/galat ≈ 0.
+    berisi = sum(1 for y in range(0, akhir, 5) if len({baris[y][x:x + 3] for x in range(0, lebar * kanal, kanal * 3)}) > 2)
     ubah = (lambda r: r) if kanal == 4 else (lambda r: b''.join(r[i:i + 3] + b'\xff' for i in range(0, len(r), 3)))
     jumlah, y = 0, 0
     while y < akhir:
@@ -86,7 +90,7 @@ def potong(modul, berkas, tujuan, nama):
         modul.tulis_png_rgba(tujuan / f'{nama}-{jumlah + 1}.png', lebar, y1 - y, [ubah(r) for r in baris[y:y1]])
         jumlah, y = jumlah + 1, y1
     berkas.unlink(missing_ok=True)
-    return jumlah, len(ragam) > 20
+    return jumlah, len(ragam) > 20 or berisi * 5 >= 0.15 * max(akhir, 1)
 
 
 def domain_dari(argumen):
@@ -114,6 +118,39 @@ def main():
     folder.mkdir(parents=True, exist_ok=True)
     modul = png()
     ringkasan, temuan = {'domain': domain, 'folder': str(folder), 'halaman': {}}, []
+    # Referensi desain klien (dicatat scripts/fse-apply): dipotret di folder yang sama
+    # supaya hasil dan referensi bisa dibandingkan berdampingan, bukan diingat-ingat.
+    try:
+        import json as _json
+        ref = _json.loads((Path('/var/lib/velocity/fse-rencana') / domain / 'referensi.json').read_text())
+    except (OSError, ValueError):
+        ref = {}
+    if ref.get('url'):
+        mentah = folder / 'referensi-beranda-mentah.png'
+        # Playwright dulu (scripts/potret-halaman): Chromium CLI menggantung di situs
+        # referensi berat (ourgrandfatherstory.com, 2026-09-14). CLI hanya cadangan.
+        try:
+            subprocess.run(['node', str(HERE / 'potret-halaman'), ref['url'], str(mentah), '1366', '900'],
+                           capture_output=True, timeout=170)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if not mentah.is_file():
+            try:
+                subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
+                                f'--user-agent={UA}', '--window-size=1366,4000', '--virtual-time-budget=15000',
+                                f'--screenshot={mentah}', ref['url']], capture_output=True, timeout=90)
+            except subprocess.TimeoutExpired:
+                # Situs referensi yang berat bisa menggantung Chromium; itu bukan kesalahan
+                # situs klien, jadi pemotretan halaman kita tetap jalan.
+                print(f"visual: referensi     {ref['url']} tidak terpotret (timeout)")
+        if mentah.is_file():
+            try:
+                jumlah, _ = potong(modul, mentah, folder, 'referensi-beranda')
+                ringkasan['referensi'] = {'url': ref['url'], 'gaya': ref.get('gaya'), 'catatan': ref.get('catatan', ''),
+                                          'potongan': jumlah}
+                print(f"visual: referensi     {ref['url']} potongan={jumlah} (bandingkan dengan beranda-*.png)")
+            except (OSError, ValueError):
+                pass
     for nama, path, lebar, tinggi, ua in HALAMAN:
         url = f'https://{domain}{path}?cekvisual={int(time.time())}'
         kode = http_kode(url)
@@ -125,9 +162,16 @@ def main():
             temuan.append(f'{nama}:http_{kode}')
         else:
             mentah = folder / f'{nama}-mentah.png'
-            subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
-                            f'--user-agent={ua}', f'--window-size={lebar},{tinggi}', '--virtual-time-budget=20000',
-                            f'--screenshot={mentah}', url], capture_output=True, timeout=180)
+            try:
+                subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
+                                f'--user-agent={ua}', f'--window-size={lebar},{tinggi}', '--virtual-time-budget=20000',
+                                f'--screenshot={mentah}', url], capture_output=True, timeout=180)
+            except subprocess.TimeoutExpired:
+                # Chromium bisa menggantung (peta Google di Hubungi Kami, 2026-09-14);
+                # satu halaman macet tidak boleh menghentikan pemeriksaan halaman lain.
+                temuan.append(f'{nama}:screenshot_timeout')
+                ringkasan['halaman'][nama] = hasil
+                continue
             if not mentah.is_file():
                 temuan.append(f'{nama}:screenshot_gagal')
             else:

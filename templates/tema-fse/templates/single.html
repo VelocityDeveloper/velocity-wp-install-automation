@@ -1,0 +1,43 @@
+<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+
+<!-- wp:group {"tagName":"main","style":{"spacing":{"padding":{"top":"var:preset|spacing|40","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
+<main class="wp-block-group" style="padding-top:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60)"><!-- wp:columns {"align":"wide","className":"vf-tata"} -->
+<div class="wp-block-columns alignwide vf-tata"><!-- wp:column {"width":"68%"} -->
+<div class="wp-block-column" style="flex-basis:68%"><!-- wp:post-terms {"term":"category","className":"vf-label"} /-->
+
+<!-- wp:post-title {"level":1,"className":"vf-artikel__judul"} /-->
+
+<!-- wp:post-date {"className":"vf-artikel__tanggal"} /-->
+
+<!-- wp:post-featured-image {"className":"vf-artikel__foto"} /-->
+
+<!-- wp:post-content {"className":"vf-artikel__isi","layout":{"type":"default"}} /-->
+
+<!-- wp:group {"className":"vf-terkait","layout":{"type":"default"}} -->
+<div class="wp-block-group vf-terkait"><!-- wp:group {"className":"vf-rubrik-bar","layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between"}} -->
+<div class="wp-block-group vf-rubrik-bar"><!-- wp:heading -->
+<h2 class="wp-block-heading">Baca Juga</h2>
+<!-- /wp:heading --></div>
+<!-- /wp:group -->
+
+<!-- wp:query {"queryId":7,"query":{"perPage":3,"pages":0,"offset":0,"postType":"post","order":"desc","orderBy":"date","author":"","search":"","exclude":[],"sticky":"","inherit":false,"excludeCurrent":true}} -->
+<div class="wp-block-query"><!-- wp:post-template {"className":"vf-kartu","layout":{"type":"grid","columnCount":3,"minimumColumnWidth":"12rem"}} -->
+<!-- wp:post-featured-image {"isLink":true,"aspectRatio":"16/10"} /-->
+
+<!-- wp:post-terms {"term":"category","className":"vf-label"} /-->
+
+<!-- wp:post-title {"level":3,"isLink":true} /-->
+
+<!-- wp:post-date /-->
+<!-- /wp:post-template --></div>
+<!-- /wp:query --></div>
+<!-- /wp:group --></div>
+<!-- /wp:column -->
+
+<!-- wp:column {"width":"32%"} -->
+<div class="wp-block-column" style="flex-basis:32%"><!-- wp:template-part {"slug":"sidebar"} /--></div>
+<!-- /wp:column --></div>
+<!-- /wp:columns --></main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->

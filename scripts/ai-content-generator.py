@@ -26,6 +26,16 @@ CONTENT_RULES = """Aturan konten (wajib):
 - Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ.
 - Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto, galeri, peta, dan tombol WhatsApp dipasang otomatis oleh sistem dari file klien."""
 
+# Artikel contoh portal berita: pengetahuan umum per rubrik. CONTENT_RULES ("HANYA
+# fakta dari data klien") membuat AI menolak rubrik umum seperti Rasa/Tokoh
+# (anaksegalabangsa.com 2026-09-14) karena prompt berita tidak memuat data klien.
+ATURAN_BERITA = """Aturan konten (wajib):
+- Tulis pengetahuan umum yang benar dan tidak diperdebatkan. Jangan mengarang angka, harga, penghargaan, kutipan, atau klaim yang tidak bisa diperiksa.
+- Jangan menyebut nama, alamat, email, atau nomor telepon siapa pun, termasuk pemilik situs.
+- Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto utama dipasang otomatis oleh sistem."""
+
+PENOLAKAN_AI = re.compile(r'data klien|belum tersedia|tidak tersedia|tidak dapat (menulis|membuat)|maaf,? saya', re.I)
+
 CREDENTIAL_RE = re.compile(r'^\s*(pass(word)?|user(name)?|sandi|login)\s*[:=]', re.I | re.M)
 
 MANIFEST = Path(sys.argv[1]) if len(sys.argv) > 1 else None
@@ -202,6 +212,10 @@ def rapikan_artikel(daftar, category):
         isi = str(a.get('content') or a.get('isi') or a.get('konten') or '').strip()
         if not judul or len(re.sub(r'<[^>]+>', ' ', isi).split()) < 120:
             continue
+        # AI yang menolak menulis tetap mengisi kolom lengkap ("Data Klien Belum
+        # Tersedia untuk Artikel Rubrik Tokoh", 166 kata) dan lolos batas panjang.
+        if PENOLAKAN_AI.search(judul) or PENOLAKAN_AI.search(isi[:600]):
+            continue
         slug = re.sub(r'[^a-z0-9]+', '-', str(a.get('slug') or judul).lower()).strip('-')[:80]
         hasil.append({'title': judul, 'slug': slug, 'category': category, 'content': isi,
                       'excerpt': str(a.get('excerpt') or a.get('ringkasan') or '').strip()})
@@ -279,8 +293,9 @@ ATURAN WAJIB:
 - JANGAN menulis laporan kejadian. JANGAN mengarang peristiwa, nama orang, nama instansi atau perusahaan tertentu, kutipan wawancara, angka statistik, tanggal, atau lokasi kejadian.
 - Gaya jurnalistik ringkas: paragraf pendek, subjudul <h2> bila perlu, judul menarik tetapi tidak clickbait.
 - Setiap artikel membahas sudut yang berbeda dan jelas termasuk rubrik "{category}".
+- Artikel ini pengetahuan umum sesuai rubrik, TIDAK membutuhkan data klien. Jangan menolak, jangan menulis bahwa data belum tersedia.
 
-{CONTENT_RULES}
+{ATURAN_BERITA}
 
 Return JSON array:
 [
@@ -349,18 +364,25 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
     # Judul + keterangan layanan: keterangannya dipakai sebagai batasan topik
     # artikel, supaya isinya benar-benar tentang layanan itu.
     skrip = (
-        "global $shortcode_tags;"
+        "global $shortcode_tags; $jenis = ''; $daftar = null;"
         "foreach (array_keys($shortcode_tags) as $t) {"
         "  if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {"
         "    $jenis = call_user_func($m[1] . '_data', 'jenis');"
-        "    if ($jenis === 'berita') { echo \"#jenis\\tberita\\n\"; }"
         "    $daftar = $jenis === 'berita' ? call_user_func($m[1] . '_data', 'rubrik') : call_user_func($m[1] . '_data', 'layanan');"
-        "    foreach ((array) $daftar as $l) {"
-        "      if (!empty($l['judul'])) {"
-        "        $r = !empty($l['rincian']) ? implode(', ', (array) $l['rincian']) : '';"
-        "        echo $l['judul'] . \"\\t\" . trim(($l['teks'] ?? '') . ' ' . $r) . \"\\n\";"
-        "      }"
-        "    } break;"
+        "    break;"
+        "  }"
+        "}"
+        # Tema FSE velocity-fse (scripts/fse-apply): rubrik/layanan tinggal di opsi velocity_situs.
+        "$s = get_option('velocity_situs');"
+        "if ($daftar === null && is_array($s) && !empty($s['jenis'])) {"
+        "  $jenis = $s['jenis'];"
+        "  $daftar = $jenis === 'berita' ? ($s['rubrik'] ?? array()) : ($s['layanan'] ?? array());"
+        "}"
+        "if ($jenis === 'berita') { echo \"#jenis\\tberita\\n\"; }"
+        "foreach ((array) $daftar as $l) {"
+        "  if (!empty($l['judul'])) {"
+        "    $r = !empty($l['rincian']) ? implode(', ', (array) $l['rincian']) : '';"
+        "    echo $l['judul'] . \"\\t\" . trim(($l['teks'] ?? '') . ' ' . $r) . \"\\n\";"
         "  }"
         "}"
     )
@@ -455,9 +477,16 @@ if [[ -z "$page_id" ]]; then
 else
   current=$($WP_BIN post get "$page_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null || true)
   stored=$($WP_BIN post meta get "$page_id" _velocity_content_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  fse_milik=$($WP_BIN post meta get "$page_id" _velocity_fse_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  fse_tata=$($WP_BIN post meta get "$page_id" _velocity_fse_layout --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  # Tema FSE (scripts/fse-apply): Beranda berisi tata letak blok dan tidak pernah
+  # ditimpa tulisan AI; halaman lain sudah diubah jadi blok, ditulis ulang hanya di
+  # mode finish (fse-apply --isi mengubahnya lagi jadi blok sesudahnya).
+  if [[ -n "$fse_tata" || ( -n "$fse_milik" && "{refresh}" != 1 ) ]]; then
+    echo "page_kept_fse:{slug}:$page_id"
   # Ditimpa hanya kalau masih placeholder, mode finish, atau isinya belum berubah
   # sejak terakhir ditulis installer (md5 sama) — suntingan manusia tidak hilang.
-  if [[ "$current" == '{placeholder}' || "{refresh}" == 1 ]] || {{ [[ -n "$stored" ]] && [[ "$stored" == "$(cur_md5 "$page_id")" ]]; }}; then
+  elif [[ "$current" == '{placeholder}' || "{refresh}" == 1 ]] || {{ [[ -n "$stored" ]] && [[ "$stored" == "$(cur_md5 "$page_id")" ]]; }}; then
     $WP_BIN post update "$page_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && save_md5 "$page_id" && echo "page_filled:{slug}:$page_id"
   else
     echo "page_kept:{slug}:$page_id"
@@ -500,12 +529,17 @@ fi''')
     # "Blog" sebelum rubrik ada) dihapus — hanya kalau belum pernah disunting.
     # "Belum disunting" = isinya masih sama dengan versi generator. Tanggal ubah tidak
     # bisa dipakai: installer sendiri memperbarui artikel (terbitkan draft) di run yang sama.
-    for slug_lama, md5_isi in pensiun:
-        if not re.match(r'^[a-z0-9-]+$', str(slug_lama)) or not re.match(r'^[0-9a-f]{32}$', str(md5_isi)):
+    for slug_lama, md5_isi, md5_baris in pensiun:
+        # `wp post get | md5sum` ikut menghitung baris baru di akhir keluaran WP-CLI:
+        # tanpa md5 isi + "\n" artikel yang tak pernah disentuh terbaca "disunting"
+        # dan tidak pernah dipensiunkan (glcagro.com 2026-09-15).
+        if not re.match(r'^[a-z0-9-]+$', str(slug_lama)) \
+                or not all(re.match(r'^[0-9a-f]{32}$', str(h)) for h in (md5_isi, md5_baris)):
             continue
         keluaran, _ = wp_remote(f'''pid=$($WP_BIN post list --post_type=post --post_status=publish --name='{slug_lama}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
 if [[ -n "$pid" ]]; then
-  if [[ "$($WP_BIN post get "$pid" --field=post_content --path="$DOCROOT" --allow-root | md5sum | cut -d' ' -f1)" == "{md5_isi}" ]]; then
+  h=$($WP_BIN post get "$pid" --field=post_content --path="$DOCROOT" --allow-root | md5sum | cut -d' ' -f1)
+  if [[ "$h" == "{md5_isi}" || "$h" == "{md5_baris}" ]]; then
     $WP_BIN post delete "$pid" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_retired:{slug_lama}"
   else
     echo "article_retire_skip_edited:{slug_lama}"
@@ -657,7 +691,8 @@ def main():
         # Artikel tersimpan dibuat sebelum kategori situs ada (mis. semua "Blog"):
         # dibuat ulang per kategori, yang lama dipensiunkan bila belum disunting.
         log(f'Artikel tersimpan tidak cocok kategori situs ({", ".join(sorted(nama_kategori))}), dibuat ulang')
-        pensiun = [(a.get('slug'), hashlib.md5(clean_html(a.get('content', '')).encode()).hexdigest())
+        pensiun = [(a.get('slug'), hashlib.md5(clean_html(a.get('content', '')).encode()).hexdigest(),
+                    hashlib.md5((clean_html(a.get('content', '')) + '\n').encode()).hexdigest())
                    for a in articles if a.get('slug')]
         articles = None
         if not docs['sources']:

@@ -1,0 +1,12 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/topbar",
+	"title": "Baris Atas",
+	"category": "theme",
+	"icon": "calendar-alt",
+	"description": "Tanggal hari ini (portal berita) atau alamat, dan slogan dari Data Situs.",
+	"supports": { "html": false, "multiple": false },
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

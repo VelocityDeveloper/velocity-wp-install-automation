@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+/*
+ * Validasi markup blok memakai parser editor WordPress sendiri (@wordpress/blocks
+ * + block-library): templates/parts/patterns tema FSE dan isi halaman buatan
+ * scripts/fse-apply. Blok yang tidak valid di sini tampil "Blok ini berisi konten
+ * yang tidak terduga" di editor — dan atribut yang tidak lagi dikenal dibuang
+ * diam-diam, jadi hanya ketahuan dari tampilan (pelajaran birutourtravel.com).
+ *
+ * Pemakaian: cek-blok <berkas.html|.php> ...
+ * Keluaran : "ok <berkas>" / "tidak_valid <berkas>: <blok>: <alasan>"
+ * Kode keluar: 0 semua valid, 1 ada yang tidak valid, 3 alat belum terpasang.
+ * Modul node dibaca dari VELOCITY_BLOCKVAL (bawaan /var/lib/velocity/tools/blockval).
+ */
+const fs = require('fs');
+const path = require('path');
+const util = require('util');
+
+const akar = process.env.VELOCITY_BLOCKVAL || '/var/lib/velocity/tools/blockval';
+const modul = (nama) => require(path.join(akar, 'node_modules', nama));
+if (!fs.existsSync(path.join(akar, 'node_modules', '@wordpress', 'blocks'))) {
+  console.log('cek_blok:alat_tidak_ada');
+  process.exit(3);
+}
+
+const tulis = console.log.bind(console);
+// Parser mencetak peringatan validasi sendiri; alasannya diambil dari validationIssues.
+console.error = console.warn = console.info = console.log = () => {};
+
+modul('global-jsdom')();
+window.matchMedia = window.matchMedia || (() => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
+global.requestAnimationFrame = global.requestAnimationFrame || ((cb) => setTimeout(cb, 0));
+
+const blocks = modul('@wordpress/blocks');
+modul('@wordpress/block-library').registerCoreBlocks();
+// Blok dinamis tema (render.php): markupnya selalu self-closing.
+for (const nama of ['velocity/topbar', 'velocity/populer', 'velocity/kontak', 'velocity/form-kirim', 'velocity/hak-cipta', 'velocity/judul-arsip']) {
+  blocks.registerBlockType(nama, { apiVersion: 3, title: nama, category: 'theme', edit: () => null, save: () => null });
+}
+
+function periksa(daftar, jejak, masalah) {
+  for (const b of daftar) {
+    if (!b.name) continue;
+    if (b.name === 'core/missing') {
+      masalah.push(b.attributes.originalName
+        ? `${jejak}${b.attributes.originalName}: blok tidak dikenal`
+        : `${jejak}HTML di luar blok: ${String(b.attributes.originalContent || '').trim().slice(0, 80)}`);
+    } else if (b.name === 'core/freeform' && String(b.attributes.content || '').trim()) {
+      masalah.push(`${jejak}HTML di luar blok: ${String(b.attributes.content).trim().slice(0, 80)}`);
+    } else if (!b.isValid) {
+      const alasan = (b.validationIssues || []).map((i) => util.format(...(i.args || []))).join(' | ');
+      masalah.push(`${jejak}${b.name}: ${alasan.replace(/\s+/g, ' ').slice(0, 400)}`);
+    }
+    periksa(b.innerBlocks || [], `${jejak}${b.name} > `, masalah);
+  }
+}
+
+let gagal = 0;
+for (const berkas of process.argv.slice(2)) {
+  let isi = fs.readFileSync(berkas, 'utf8');
+  if (berkas.endsWith('.php')) {
+    // Pattern: buang kepala docblock, ganti sisipan PHP dengan teks biasa.
+    isi = isi.replace(/^<\?php[\s\S]*?\?>\s*/, '').replace(/<\?php[\s\S]*?\?>/g, 'x');
+  }
+  const masalah = [];
+  periksa(blocks.parse(isi), '', masalah);
+  if (masalah.length) {
+    gagal = 1;
+    for (const m of masalah) tulis(`tidak_valid ${berkas}: ${m}`);
+  } else {
+    tulis(`ok ${berkas}`);
+  }
+}
+process.exit(gagal);

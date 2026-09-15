@@ -66,9 +66,15 @@ def theme_note(domain):
         lines = (LOG_DIR / f'{domain}.log').read_text(errors='replace').splitlines()[-800:]
     except OSError:
         return ''
-    active = next((l.split(':', 1)[1].strip() for l in reversed(lines) if l.startswith('active_theme:')), '')
-    if not active:
+    active_i = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].startswith('active_theme:')), -1)
+    if active_i < 0:
         return ''
+    active = lines[active_i].split(':', 1)[1].strip()
+    # Paket custom: installer mencatat tema bawaan WordPress (active_theme), baru
+    # sesudahnya fse-apply mengaktifkan velocity-fse ("fse: tema_siap:<slug>:<versi>").
+    fse = next((l.split(':') for l in lines[active_i:] if l.startswith('fse: tema_siap:')), [])
+    if len(fse) >= 4:
+        return f'{fse[2]} {fse[3].strip()} (block theme FSE, desain custom)'
     child = next((l.split(':') for l in reversed(lines) if l.startswith('child_theme:')), [])
     status = child[1] if len(child) > 1 else ''
     ref = child[2] if len(child) > 2 else ''

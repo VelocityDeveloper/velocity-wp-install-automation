@@ -1,0 +1,1248 @@
+#!/usr/bin/env python3
+"""Tema FSE (block theme) untuk paket desain custom — pengganti child theme klasik.
+
+Keputusan user 2026-09-14 ("fse first, tidak pakai child theme"): Paket G dan
+Portal Berita Custom dipasangi block theme `velocity-fse` dari
+templates/tema-fse/. Kerangkanya sama untuk semua klien; yang khas per klien
+ditulis ke database supaya bisa disunting dari wp-admin tanpa menyentuh berkas:
+
+  opsi velocity_situs   nama, slogan, kontak publik, rubrik/layanan (Tampilan → Data Situs)
+  wp_global_styles      palet warna klien (Site Editor → Gaya)
+  isi halaman           Beranda (tata letak blok), Redaksi/Layanan/Produk/Pemesanan,
+                        Tentang Kami/Galeri/Hubungi Kami (tulisan AI diubah jadi blok)
+  wp_navigation         menu utama
+
+Pemakaian (butuh WP_INSTALL_SSH_KEY_FILE):
+  fse-apply --deteksi <manifest>   cetak jalur tema installer: fse | lewati | gagal
+  fse-apply --tema <manifest>      pasang/perbarui tema, aktifkan, data situs, palet, rubrik
+  fse-apply --isi <manifest>       isi halaman berupa blok + menu
+  tambahkan --coba untuk hanya menyusun & memvalidasi rencana tanpa menulis ke situs.
+
+Aturan menimpa (docs/pelajaran-automasi.md): semua yang ditulis ditandai md5
+(_velocity_fse_md5, velocity_situs_md5, velocity_fse_warna_md5). Run berikutnya
+hanya menimpa kalau md5-nya masih sama — suntingan orang tidak pernah hilang.
+Paket custom hanya FSE (keputusan user 2026-09-15). Situs lama yang masih memakai
+child theme klasik tidak dipindah otomatis; tulis `tema_desain=fse` di manifest
+untuk memindahkannya.
+"""
+import base64
+import hashlib
+import html
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import ssl
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+TEMA = HERE.parent / 'templates' / 'tema-fse'
+SLUG = 'velocity-fse'
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+RENCANA_DIR = Path('/var/lib/velocity/fse-rencana')
+UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+
+# Shortcode desain child theme Paket G lama. Setelah tema diganti fungsinya tidak
+# terdaftar lagi, sehingga tercetak mentah ("[anak_kontak]") ke pengunjung.
+SHORTCODE_LAMA = re.compile(r'\[[a-z][a-z0-9]{0,11}_(?:redaksi|kontak|pemesanan|layanan|produk|galeri|alur|profil'
+                            r'|struktur|customer|legalitas|visimisi)\]')
+# Judul yang dulu ditambahkan paket-g-setup bersama shortcode di atas.
+JUDUL_LAMA = ('<h2>Kirim Pesan ke Redaksi</h2>', '<h2>Ajukan Pemesanan</h2>', '<h2>Alur Kerja</h2>')
+# Isi awal halaman buatan installer (belum pernah diisi siapa pun).
+PLACEHOLDER = ('Selamat datang di website kami.', 'Halaman tentang kami.', 'Halaman galeri.',
+               'Halaman hubungi kami.', 'Halaman arsip berita.')
+# Bagian tulisan AI di Tentang Kami yang digantikan data company profile.
+TOPIK_PROFIL = {
+    'visi': r'\b(visi|misi|moto|motto)\b',
+    'struktur': r'struktur|organisasi|manajemen|tim kami',
+    'customer': r'customer|pelanggan|klien kami',
+    'legalitas': r'legalitas|perizinan|dokumen legal',
+}
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='ignore').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            kunci, nilai = line.split('=', 1)
+            cfg[kunci.strip()] = nilai.strip()
+    return cfg
+
+
+def muat_modul(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def md5(teks):
+    return hashlib.md5(teks.encode()).hexdigest()
+
+
+def baca_isi(domain):
+    """Isi contoh hasil paket-g-konten (identitas, rubrik/layanan, warna)."""
+    try:
+        return json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Referensi desain dari FORM ISIAN
+# ---------------------------------------------------------------------------
+
+# Font yang dibawa tema (theme.json fontFamilies): nama di Google Fonts -> slug.
+FONT_LOKAL = {'plus jakarta sans': 'jakarta', 'montserrat': 'montserrat', 'pt serif': 'pt-serif'}
+# Gaya beranda yang tersedia di tema; deskripsinya dipakai AI untuk memilih.
+GAYA = {
+    'klasik': 'Portal berita padat: berita utama besar dengan daftar berita kecil di sampingnya, grid kartu kecil '
+              '(foto di atas judul), blok per rubrik, kolom samping (terpopuler, kategori), header berwarna.',
+    'sorotan': 'Majalah foto: kartu foto selebar layar bertumpuk dengan judul serif di tengah di atas foto yang '
+               'digelapkan, pita judul seksi berikon di tengah per kategori, grid 2 kolom kartu foto besar, tanpa '
+               'kolom samping, header putih.',
+}
+
+
+def referensi_form(domain):
+    """URL "website yang ingin dicontoh" + catatan klien dari FORM ISIAN.
+
+    anaksegalabangsa.com: "Untuk desain halaman depan versi PC seperti
+    ourgrandfatherstory.com, sedangkan desain halaman lain, halaman mobile dan
+    fiturnya mengikuti kami". Contoh isian template form (alamatWebContoh.com) dan
+    tautan syarat & ketentuan Velocity bukan referensi."""
+    sys.path.insert(0, str(HERE))
+    try:
+        from client_form import read_client_form
+        teks = read_client_form(Path('/home/On Progress') / domain).get('text') or ''
+    except Exception:
+        return {}
+    awal = re.search(r'INGIN\s+DICONTOH|YANG\s+ANDA\s+SUKAI\s+DESAINNYA', teks, re.I)
+    if not awal:
+        return {}
+    akhir = re.search(r'Contoh\s+Jawaban|WARNA\s+TEMA', teks[awal.end():], re.I)
+    potong = teks[awal.end():awal.end() + (akhir.start() if akhir else 1500)]
+    url = next((u.rstrip('.,)"') for u in re.findall(r'https?://[^\s"<>]+', potong)
+                if not re.search(r'velocitydeveloper|alamatwebcontoh|example\.', u, re.I)), '')
+    if not url:
+        return {}
+    host = urllib.parse.urlparse(url).netloc.lower().replace('www.', '')
+    catatan = next((b.strip() for b in potong.splitlines()
+                    if host in b.lower() and not b.strip().startswith(('HYPERLINK', 'http'))), '')
+    return {'url': url, 'catatan': catatan[:400]}
+
+
+def ciri_referensi(url):
+    """Ciri tata letak halaman referensi yang terbaca dari HTML-nya."""
+    req = urllib.request.Request(url, headers={'User-Agent': UA})
+    with urllib.request.urlopen(req, timeout=40, context=ssl._create_unverified_context()) as r:
+        h = r.read(800_000).decode(errors='ignore')
+    fonts = []
+    for kelompok in re.findall(r'fonts\.googleapis\.com/css2?\?family=([^"\'>]+)', h):
+        for bagian in re.split(r'\||&(?:amp;)?family=', urllib.parse.unquote(kelompok.split('&display')[0])):
+            nama = bagian.split(':')[0].replace('+', ' ').strip()
+            if nama and nama not in fonts:
+                fonts.append(nama)
+    badan = re.sub(r'<script.*?</script>|<style.*?</style>|<svg.*?</svg>', '', h[h.find('<body'):], flags=re.S | re.I)
+    kelas = ' '.join(re.findall(r'class="([^"]+)"', badan)).lower()
+    garis = [f'{m.group(1)}.{m.group(2)[:60]}' for m in
+             re.finditer(r'<(header|nav|main|section|article|aside|footer)\b[^>]*class="([^"]+)"', badan)][:100]
+    return {'fonts': fonts[:4],
+            'sidebar': bool(re.search(r'\b(sidebar|widget-area)\b', kelas)) or '<aside' in badan.lower(),
+            'kartu_penuh': len(re.findall(r'\b(full|fullwidth|full-width|hero|cover)\b', kelas)),
+            'kolom_dua': bool(re.search(r'two-by|col-md-6|columns-2|\bhalf\b', kelas)),
+            'garis': garis}
+
+
+def muat_ai(manifest):
+    try:
+        gen = muat_modul('ai_content_generator', HERE / 'ai-content-generator.py')
+        model = gen.get_default_model()
+        return (gen, model) if model else None
+    except Exception:
+        return None
+
+
+def referensi_desain(cfg, domain):
+    """Referensi klien + gaya beranda terpilih (manifest `gaya_beranda=` menang).
+
+    Disimpan di fse-rencana/<domain>/referensi.json supaya --tema dan --isi sepakat
+    dan halaman referensi/AI tidak dipanggil ulang setiap run."""
+    berkas = RENCANA_DIR / domain / 'referensi.json'
+    try:
+        lama = json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        lama = {}
+    ref = referensi_form(domain)
+    paksa = cfg.get('gaya_beranda', '').strip().lower()
+    if paksa in GAYA:
+        hasil = dict(ref, gaya=paksa, sumber='manifest', fonts=lama.get('fonts', []))
+    elif not ref:
+        hasil = {'gaya': 'klasik', 'sumber': 'tanpa_referensi'}
+    elif lama.get('url') == ref['url'] and lama.get('gaya') in GAYA and lama.get('sumber') != 'manifest':
+        return lama
+    else:
+        try:
+            ciri = ciri_referensi(ref['url'])
+        except (OSError, ValueError, urllib.error.URLError) as e:
+            print(f'fse: referensi_tidak_terbaca:{type(e).__name__}')
+            ciri = {}
+        gaya, alasan, sumber = '', '', 'heuristik'
+        ai = muat_ai(cfg.get('_manifest', ''))
+        if ai and ciri:
+            modul, model = ai
+            prompt = ('Pilih gaya beranda portal berita yang PALING mirip tata letak halaman depan situs referensi klien.\n'
+                      f"URL: {ref['url']}\nCatatan klien: {ref.get('catatan') or '-'}\n"
+                      f"Ciri HTML: kolom_samping={ciri['sidebar']}, kelas_kartu_selebar_layar={ciri['kartu_penuh']}, "
+                      f"grid_dua_kolom={ciri['kolom_dua']}, font={ciri['fonts']}\n"
+                      'Kerangka elemen halaman depan (tag.kelas, berurutan):\n' + '\n'.join(ciri['garis'][:80])
+                      + '\n\nPilihan gaya:\n' + '\n'.join(f'- {k}: {v}' for k, v in GAYA.items())
+                      + '\n\nJawab JSON {"gaya": "<kunci pilihan>", "alasan": "<satu kalimat>"}')
+            jawab = modul.ai_call('You classify website homepage layouts. Output ONLY valid JSON.', prompt, model) or ''
+            try:
+                pilih = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1])
+                gaya, alasan, sumber = str(pilih.get('gaya', '')), str(pilih.get('alasan', ''))[:200], 'ai'
+            except ValueError:
+                pass
+        if gaya not in GAYA:
+            gaya = ('sorotan' if ciri and not ciri['sidebar'] and (ciri['kartu_penuh'] >= 3 or ciri['kolom_dua'])
+                    else 'klasik')
+            sumber = 'heuristik'
+        hasil = dict(ref, gaya=gaya, alasan=alasan, sumber=sumber, fonts=ciri.get('fonts', []))
+    berkas.parent.mkdir(parents=True, exist_ok=True)
+    berkas.write_text(json.dumps(hasil, ensure_ascii=False, indent=1))
+    return hasil
+
+
+def font_situs(fonts):
+    """(font teks, font judul) dari font referensi yang dibawa tema; '' = bawaan tema."""
+    lokal = [(f.lower(), FONT_LOKAL[f.lower()]) for f in fonts if f.lower() in FONT_LOKAL]
+    serif = next((slug for nama, slug in lokal if 'serif' in nama and 'sans' not in nama), '')
+    teks = next((slug for nama, slug in lokal if slug != serif), '')
+    return teks, serif or teks
+
+
+# ---------------------------------------------------------------------------
+# Akses situs
+# ---------------------------------------------------------------------------
+
+PHP_AWAL = r'''<?php
+// Admin sebagai pengguna aktif & kses dimatikan: tanpa ini WordPress membuang
+// iframe peta dan markup blok secara diam-diam (pelajaran birutourtravel.com).
+$velocity_admin = get_users(array('role' => 'administrator', 'number' => 1, 'orderby' => 'ID', 'fields' => 'ID'));
+if ($velocity_admin) { wp_set_current_user((int) $velocity_admin[0]); }
+kses_remove_filters();
+$d = json_decode((string) file_get_contents(getenv('VELOCITY_FSE_DATA')), true);
+$d = is_array($d) ? $d : array();
+function vfse_keluar($data) { echo PHP_EOL . 'VFSE:' . wp_json_encode($data) . PHP_EOL; }
+'''
+
+
+class Situs:
+    """Satu situs klien lewat SSH + WP-CLI."""
+
+    def __init__(self, cfg):
+        key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+        if not key or not Path(key).is_file():
+            raise RuntimeError('kunci SSH tidak ada')
+        self.domain = cfg['domain'].lower()
+        self.docroot = f"/home/{cfg['da_user']}/domains/{self.domain}/public_html"
+        self.ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+                    '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+                    f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+
+    def bash(self, skrip, timeout=300):
+        return subprocess.run(self.ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=timeout)
+
+    def php(self, kode, data=None, timeout=300):
+        """PHP di dalam WordPress; hasilnya JSON pada baris berawalan VFSE:."""
+        muatan = base64.b64encode(json.dumps(data or {}, ensure_ascii=False).encode()).decode()
+        skrip = (
+            'set -e\n'
+            'T=$(mktemp -d /tmp/velocity-fse.XXXXXX)\n'
+            "trap 'rm -rf \"$T\"' EXIT\n"
+            "cat > \"$T/skrip.php\" <<'VELOCITY_FSE_PHP'\n" + PHP_AWAL + kode + '\nVELOCITY_FSE_PHP\n'
+            "base64 -d > \"$T/data.json\" <<'VELOCITY_FSE_DATA'\n" + muatan + '\nVELOCITY_FSE_DATA\n'
+            f'VELOCITY_FSE_DATA="$T/data.json" php -d memory_limit=512M /usr/local/bin/wp eval-file "$T/skrip.php" '
+            f'--path={shlex.quote(self.docroot)} --allow-root 2>&1\n'
+        )
+        run = self.bash(skrip, timeout=timeout)
+        for baris in reversed(run.stdout.splitlines()):
+            if baris.startswith('VFSE:'):
+                return json.loads(baris[5:])
+        raise RuntimeError('php_gagal: ' + re.sub(r'\s+', ' ', run.stdout + run.stderr).strip()[-300:])
+
+
+PHP_DETEKSI = r'''
+global $shortcode_tags;
+$prefix = '';
+foreach (array_keys($shortcode_tags) as $t) {
+    if (preg_match('/^([a-z0-9]+)_pemesanan$/', $t, $m)) { $prefix = $m[1]; break; }
+}
+$fse = wp_get_theme('velocity-fse');
+vfse_keluar(array('tema' => get_stylesheet(), 'blok' => (bool) wp_is_block_theme(), 'prefix' => $prefix,
+    'versi' => $fse->exists() ? (string) $fse->get('Version') : ''));
+'''
+
+
+def deteksi(cfg, situs):
+    """Jalur tema untuk installer-runner.
+
+    fse    tema velocity-fse sudah aktif, situs belum punya desain custom, atau
+           manifest tema_desain=fse (memindahkan situs child klasik lama)
+    lewati block theme lain yang dibuat tangan (mis. birutourtravel.com), atau
+           child theme klasik Paket G lama yang belum diputuskan dipindah
+
+    Tidak ada lagi jalur child (keputusan user 2026-09-15, paket custom FSE saja).
+    """
+    if cfg.get('tema_desain', '').strip().lower() == 'fse':
+        return 'fse', 'manifest'
+    k = situs.php(PHP_DETEKSI)
+    if k['tema'] == SLUG:
+        return 'fse', 'tema_aktif'
+    if k['prefix']:
+        # Memindahkan mengganti desain yang sudah jadi (compro, foto per slot belum
+        # ada di velocity-fse) — keputusan per situs, bukan otomatis.
+        return 'lewati', f"child_klasik_belum_dipindah:{k['tema']}"
+    # Tema bawaan WordPress (twentytwentyfive dst.) juga block theme, dan sejak tema
+    # induk velocity tidak dipasang lagi itulah tema situs baru — bukan buatan tangan.
+    # Tanpa pengecualian ini glcagro.com (2026-09-15) terpasang tanpa velocity-fse.
+    if k['blok'] and not k['tema'].startswith('twenty'):
+        return 'lewati', f"block_theme_lain:{k['tema']}"
+    return 'fse', f"tema_awal:{k['tema']}"
+
+
+# ---------------------------------------------------------------------------
+# --tema
+# ---------------------------------------------------------------------------
+
+def versi_tuple(versi):
+    return tuple(int(x) for x in re.findall(r'\d+', versi or '')) or (0,)
+
+
+def versi_template():
+    cocok = re.search(r'^Version:\s*(\S+)', (TEMA / 'style.css').read_text(), re.M)
+    return cocok.group(1) if cocok else '0'
+
+
+def periksa_template():
+    """Markup blok & sintaks PHP tema. Tema rusak tidak boleh sampai ke situs klien."""
+    berkas = sorted(str(p) for p in TEMA.glob('templates/*.html')) + sorted(str(p) for p in TEMA.glob('parts/*.html')) \
+        + sorted(str(p) for p in TEMA.glob('patterns/*.php'))
+    run = subprocess.run(['node', str(HERE / 'cek-blok')] + berkas, capture_output=True, text=True, timeout=180)
+    if run.returncode == 3:
+        print('fse: cek_blok_dilewati:alat_tidak_ada')
+    elif run.returncode != 0:
+        for baris in run.stdout.splitlines():
+            if baris.startswith('tidak_valid'):
+                print('fse: ' + baris[:300])
+        return False
+    for php in TEMA.rglob('*.php'):
+        lint = subprocess.run(['php', '-l', str(php)], capture_output=True, text=True)
+        if lint.returncode != 0:
+            print(f'fse: php_rusak:{php.relative_to(TEMA)}')
+            return False
+    return True
+
+
+def buat_zip(tujuan):
+    with zipfile.ZipFile(tujuan, 'w', zipfile.ZIP_DEFLATED) as z:
+        for berkas in sorted(TEMA.rglob('*')):
+            if berkas.is_file():
+                z.write(berkas, f'{SLUG}/{berkas.relative_to(TEMA)}')
+
+
+def hitung_palet(vct, primary, aksen):
+    """Palet klien dengan penjaga kontras WCAG yang sama dengan child theme Paket G."""
+    utama, di_primary = vct.perbaiki_kontras(primary)
+    aksen, di_aksen = vct.perbaiki_kontras(aksen)
+    aksen_teks = aksen
+    for _ in range(14):
+        if vct.kontras(aksen_teks, '#ffffff') >= 4.5:
+            break
+        aksen_teks = vct.geser_terang(aksen_teks, -0.08)
+    # Topbar & footer memakai versi gelap dengan teks yang sama seperti di atas warna utama.
+    gelap = vct.geser_terang(utama, -0.3 if di_primary == '#ffffff' else -0.1)
+    for _ in range(14):
+        if vct.kontras(gelap, di_primary) >= 4.5:
+            break
+        gelap = vct.geser_terang(gelap, -0.08 if di_primary == '#ffffff' else 0.08)
+    # Menu aktif: aksen di atas warna utama hanya kalau masih terbaca.
+    aksen_di_primary = aksen if vct.kontras(aksen, utama) >= 3 else di_primary
+    return [
+        {'slug': 'primary', 'color': utama, 'name': 'Utama'},
+        {'slug': 'primary-gelap', 'color': gelap, 'name': 'Utama gelap'},
+        {'slug': 'aksen', 'color': aksen, 'name': 'Aksen'},
+        {'slug': 'aksen-teks', 'color': aksen_teks, 'name': 'Aksen untuk teks'},
+        {'slug': 'aksen-di-primary', 'color': aksen_di_primary, 'name': 'Aksen di atas warna utama'},
+        {'slug': 'di-primary', 'color': di_primary, 'name': 'Teks di atas warna utama'},
+        {'slug': 'di-aksen', 'color': di_aksen, 'name': 'Teks di atas aksen'},
+        {'slug': 'ink', 'color': '#14171f', 'name': 'Judul'},
+        {'slug': 'teks', 'color': '#454b57', 'name': 'Teks'},
+        {'slug': 'abu', 'color': '#5f6570', 'name': 'Teks redup'},
+        {'slug': 'latar', 'color': '#f7f8fa', 'name': 'Latar abu'},
+        {'slug': 'garis', 'color': '#e3e6ec', 'name': 'Garis'},
+        {'slug': 'putih', 'color': '#ffffff', 'name': 'Putih'},
+    ]
+
+
+def data_situs(cfg, domain, isi, vct, ref=None):
+    """Isi opsi velocity_situs. Kontak publik hanya dari "Kontak utk di web" /
+    dokumen klien (data_klien) — biodata pemilik tidak pernah ikut."""
+    klien = vct.data_klien(domain, isi.get('nama_tampil') or '')
+    area = klien.get('AREA', '')
+    teks = lambda nilai, batas: re.sub(r'\s+', ' ', str(nilai or '')).strip()[:batas]
+    return {
+        'jenis': 'berita' if isi.get('jenis') == 'berita' else 'perusahaan',
+        'nama': teks(isi.get('nama_tampil') or klien.get('NAMA') or cfg.get('site_title') or domain, 80),
+        'slogan': teks(isi.get('slogan'), 90),
+        'tentang': teks(isi.get('tentang'), 600),
+        'email': klien.get('EMAIL', ''),
+        'email_publik': klien.get('EMAIL_PUBLIK', ''),
+        'wa': klien.get('WA', ''),
+        'telp': klien.get('TELP', ''),
+        'alamat': klien.get('ALAMAT', ''),
+        'area': '' if area == 'sekitarnya' else area,
+        # Gaya beranda & font mengikuti referensi desain klien (referensi_desain).
+        'gaya': (ref or {}).get('gaya') or 'klasik',
+        'referensi': (ref or {}).get('url', ''),
+        'font_teks': font_situs((ref or {}).get('fonts') or [])[0],
+        'font_judul': font_situs((ref or {}).get('fonts') or [])[1],
+        'rubrik': [{'slug': r.get('slug', ''), 'judul': teks(r.get('judul'), 60), 'teks': teks(r.get('teks'), 200)}
+                   for r in isi.get('rubrik') or [] if isinstance(r, dict) and r.get('judul')],
+        'layanan': [{'judul': teks(l.get('judul'), 80), 'teks': teks(l.get('teks'), 300),
+                     'rincian': [teks(x, 120) for x in l.get('rincian') or []][:6]}
+                    for l in isi.get('layanan') or [] if isinstance(l, dict) and l.get('judul')],
+    }
+
+
+PHP_TEMA = r'''
+$hasil = array();
+$sebelum = get_stylesheet();
+if ($sebelum !== 'velocity-fse') {
+    // Logo tersimpan sebagai theme mod tema lama; block theme membaca opsi site_logo.
+    $logo = (int) get_theme_mod('custom_logo');
+    switch_theme('velocity-fse');
+    update_option('velocity_fse_tema_sebelumnya', $sebelum, false);
+    if ($logo && !(int) get_option('site_logo')) { update_option('site_logo', $logo); }
+    $hasil[] = 'tema_diaktifkan:' . $sebelum . '->velocity-fse';
+} else {
+    $hasil[] = 'tema_aktif:velocity-fse';
+}
+
+// Data situs: ditimpa hanya selama belum disunting di Tampilan → Data Situs.
+$lama = get_option('velocity_situs');
+if (!is_array($lama) || (string) get_option('velocity_situs_md5') === md5(wp_json_encode($lama))) {
+    update_option('velocity_situs', $d['situs']);
+    update_option('velocity_situs_md5', md5(wp_json_encode(get_option('velocity_situs'))), false);
+    $hasil[] = 'data_situs_ditulis';
+} else {
+    // Suntingan PM dipertahankan; susunan rubrik/layanan tetap mengikuti installer.
+    foreach (array('jenis', 'rubrik', 'layanan') as $k) { $lama[$k] = $d['situs'][$k]; }
+    update_option('velocity_situs', $lama);
+    $hasil[] = 'data_situs_disunting_dipertahankan';
+}
+
+// Palet klien di wp_global_styles (origin pengguna) — bukan salinan tema per klien.
+$gaya = WP_Theme_JSON_Resolver::get_user_data_from_wp_global_styles(wp_get_theme('velocity-fse'), true);
+$gaya_id = isset($gaya['ID']) ? (int) $gaya['ID'] : 0;
+if ($gaya_id) {
+    $isi = json_decode((string) get_post_field('post_content', $gaya_id), true);
+    $isi = is_array($isi) ? $isi : array();
+    $isi += array('version' => 3, 'isGlobalStylesUserThemeJSON' => true);
+    $kini = isset($isi['settings']['color']['palette']['theme']) ? $isi['settings']['color']['palette']['theme'] : null;
+    if ($kini === null || (string) get_option('velocity_fse_warna_md5') === md5(wp_json_encode($kini))) {
+        $isi['settings']['color']['palette']['theme'] = $d['palet'];
+        wp_update_post(array('ID' => $gaya_id, 'post_content' => wp_slash(wp_json_encode($isi))));
+        $baca = json_decode((string) get_post_field('post_content', $gaya_id), true);
+        $tulis = isset($baca['settings']['color']['palette']['theme']) ? $baca['settings']['color']['palette']['theme'] : array();
+        update_option('velocity_fse_warna_md5', md5(wp_json_encode($tulis)), false);
+        $hasil[] = $tulis === $d['palet'] ? 'palet_ditulis:' . $gaya_id : 'palet_gagal_terbaca';
+    } else {
+        $hasil[] = 'palet_disunting_dipertahankan';
+    }
+    if (function_exists('wp_clean_theme_json_cache')) { wp_clean_theme_json_cache(); }
+} else {
+    $hasil[] = 'palet_gagal:global_styles_tidak_ada';
+}
+
+// Rubrik portal berita = kategori dengan slug yang sama.
+foreach ((array) $d['situs']['rubrik'] as $r) {
+    if (empty($r['slug'])) { continue; }
+    $t = get_term_by('slug', $r['slug'], 'category');
+    if (!$t && ($t = get_term_by('name', $r['judul'], 'category'))) {
+        wp_update_term($t->term_id, 'category', array('slug' => $r['slug']));
+    }
+    if (!$t) {
+        $baru = wp_insert_term($r['judul'], 'category', array('slug' => $r['slug'], 'description' => $r['teks']));
+        $hasil[] = is_wp_error($baru) ? 'rubrik_gagal:' . $r['slug'] : 'rubrik_dibuat:' . $r['slug'];
+    }
+}
+vfse_keluar(array('hasil' => $hasil));
+'''
+
+
+def langkah_tema(cfg, situs, coba):
+    domain = situs.domain
+    if not periksa_template():
+        print('fse: template tema tidak lolos pemeriksaan, tidak dipasang')
+        return 1
+    isi = baca_isi(domain)
+    if not isi:
+        print('fse: isi contoh belum ada (paket-g-konten), data situs memakai FORM ISIAN saja')
+    vct = muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
+    primary, aksen = vct.warna_tema(domain)
+    ref = referensi_desain(cfg, domain)
+    if ref.get('url'):
+        print(f"fse: referensi={ref['url']} gaya={ref['gaya']} ({ref.get('sumber')}) "
+              f"font={','.join(ref.get('fonts') or []) or '-'}" + (f" alasan={ref['alasan']}" if ref.get('alasan') else ''))
+    data = {'situs': data_situs(cfg, domain, isi, vct, ref), 'palet': hitung_palet(vct, primary, aksen)}
+    print(f"fse: jenis={data['situs']['jenis']} nama={data['situs']['nama']} warna={primary}/{aksen} "
+          f"kontak_publik={'ada' if any(data['situs'][k] for k in ('wa', 'email_publik', 'alamat')) else 'tidak ada'}")
+
+    keadaan = situs.php(PHP_DETEKSI)
+    versi = versi_template()
+    perlu_pasang = versi_tuple(keadaan['versi']) < versi_tuple(versi)
+    print(f"fse: tema_terpasang={keadaan['versi'] or '-'} template={versi} aktif={keadaan['tema']}")
+    if coba:
+        print('fse: coba — ' + ('tema akan dipasang' if perlu_pasang else 'tema sudah terbaru'))
+        print('fse: palet ' + ' '.join(f"{w['slug']}={w['color']}" for w in data['palet'][:7]))
+        return 0
+
+    if perlu_pasang:
+        tujuan = f'/tmp/{SLUG}-{versi}.zip'
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_lokal = Path(tmp) / f'{SLUG}.zip'
+            buat_zip(zip_lokal)
+            kirim = subprocess.run(situs.ssh + [f'cat > {tujuan}'], input=zip_lokal.read_bytes(),
+                                   capture_output=True, timeout=180)
+        if kirim.returncode != 0:
+            print('fse: gagal mengirim zip tema')
+            return 1
+        d = shlex.quote(situs.docroot)
+        pasang = situs.bash(
+            f'php -d memory_limit=512M /usr/local/bin/wp theme install {tujuan} --force --path={d} --allow-root 2>&1 | tail -2; '
+            f'rm -f {tujuan}; chown -R --reference={d}/wp-content/themes {d}/wp-content/themes/{SLUG} 2>/dev/null || true')
+        print('fse: ' + re.sub(r'\s+', ' ', pasang.stdout).strip()[:200])
+        keadaan = situs.php(PHP_DETEKSI)
+        if keadaan['versi'] != versi:
+            print(f"fse: tema_gagal_terpasang (terbaca {keadaan['versi'] or '-'})")
+            return 1
+
+    for baris in situs.php(PHP_TEMA, data)['hasil']:
+        print(f'fse: {baris}')
+    # Baca ulang dari proses baru: exit code sukses belum berarti tema aktif.
+    akhir = situs.php(PHP_DETEKSI)
+    if akhir['tema'] != SLUG or not akhir['blok']:
+        print(f"fse: tema_tidak_aktif (aktif={akhir['tema']})")
+        return 1
+    print(f"fse: tema_siap:{SLUG}:{akhir['versi']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Markup blok
+# ---------------------------------------------------------------------------
+
+def atribut(data):
+    """JSON atribut blok dengan escape yang sama seperti serializer editor."""
+    teks = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+    return (teks.replace('\\"', '\\u0022').replace('--', '\\u002d\\u002d').replace('<', '\\u003c')
+            .replace('>', '\\u003e').replace('&', '\\u0026'))
+
+
+def blok(nama, attrs=None, isi=None):
+    a = f' {atribut(attrs)}' if attrs else ''
+    if isi is None:
+        return f'<!-- wp:{nama}{a} /-->'
+    return f'<!-- wp:{nama}{a} -->\n{isi}\n<!-- /wp:{nama} -->'
+
+
+def esc(teks):
+    return html.escape(str(teks or ''), quote=False)
+
+
+def esc_attr(teks):
+    return html.escape(str(teks or ''), quote=True)
+
+
+def paragraf(dalam):
+    return blok('paragraph', None, f'<p>{dalam}</p>')
+
+
+def judul(dalam, level=2, kelas=None):
+    attrs = {}
+    if level != 2:
+        attrs['level'] = level
+    if kelas:
+        attrs['className'] = kelas
+    cls = 'wp-block-heading' + (f' {kelas}' if kelas else '')
+    return blok('heading', attrs or None, f'<h{level} class="{cls}">{dalam}</h{level}>')
+
+
+def grup(anak, kelas=None, layout=None, align=None, teks=None, latar=None, padding=None):
+    attrs, cls, gaya = {}, ['wp-block-group'], []
+    if align:
+        attrs['align'] = align
+        cls.append(f'align{align}')
+    if kelas:
+        attrs['className'] = kelas
+        cls.append(kelas)
+    if latar:
+        attrs['backgroundColor'] = latar
+    if teks:
+        attrs['textColor'] = teks
+    if padding:
+        attrs['style'] = {'spacing': {'padding': {'top': padding, 'bottom': padding}}}
+        css = f"var(--wp--preset--spacing--{padding.rsplit('|', 1)[-1]})" if padding.startswith('var:') else padding
+        gaya = [f'padding-top:{css}', f'padding-bottom:{css}']
+    if teks:
+        cls.append(f'has-{teks}-color')
+    if latar:
+        cls.append(f'has-{latar}-background-color')
+    if teks:
+        cls.append('has-text-color')
+    if latar:
+        cls.append('has-background')
+    attrs['layout'] = layout or {'type': 'default'}
+    style = f' style="{";".join(gaya)}"' if gaya else ''
+    return blok('group', attrs, f'<div class="{" ".join(cls)}"{style}>' + '\n\n'.join(anak) + '</div>')
+
+
+def kolom(anak, lebar=None):
+    style = f' style="flex-basis:{lebar}"' if lebar else ''
+    return blok('column', {'width': lebar} if lebar else None, f'<div class="wp-block-column"{style}>' + '\n\n'.join(anak) + '</div>')
+
+
+def barisan(daftar, kelas=None, align=None):
+    attrs, cls = {}, ['wp-block-columns']
+    if align:
+        attrs['align'] = align
+        cls.append(f'align{align}')
+    if kelas:
+        attrs['className'] = kelas
+        cls.append(kelas)
+    return blok('columns', attrs or None, f'<div class="{" ".join(cls)}">' + '\n\n'.join(daftar) + '</div>')
+
+
+def daftar_poin(butir, kelas=None, bernomor=False):
+    tag = 'ol' if bernomor else 'ul'
+    attrs = {}
+    if bernomor:
+        attrs['ordered'] = True
+    if kelas:
+        attrs['className'] = kelas
+    li = ''.join(blok('list-item', None, f'<li>{b}</li>') for b in butir)
+    cls = 'wp-block-list' + (f' {kelas}' if kelas else '')
+    return blok('list', attrs or None, f'<{tag} class="{cls}">{li}</{tag}>')
+
+
+def tombol(label, url):
+    satu = blok('button', None, f'<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" '
+                                f'href="{esc_attr(url)}">{esc(label)}</a></div>')
+    return blok('buttons', None, f'<div class="wp-block-buttons">{satu}</div>')
+
+
+# Aturan user 2026-09-14 (semua build): Kontak Kami & footer memuat email dan ikon
+# media sosial saja, tautan bawaan ke beranda tiap platform (diganti PM bila klien punya akun).
+SOSMED = (('facebook', 'https://www.facebook.com/'), ('instagram', 'https://www.instagram.com/'),
+          ('x', 'https://x.com/'), ('youtube', 'https://www.youtube.com/'), ('tiktok', 'https://www.tiktok.com/'))
+
+
+def ikon_sosmed():
+    ikon = '\n\n'.join(blok('social-link', {'url': url, 'service': layanan}) for layanan, url in SOSMED)
+    return blok('social-links', {'className': 'is-style-logos-only vf-sosmed'},
+                f'<ul class="wp-block-social-links is-style-logos-only vf-sosmed">{ikon}</ul>')
+
+
+def bar(teks, tautan=None):
+    anak = [judul(esc(teks))]
+    if tautan:
+        anak.append(paragraf(f'<a href="{esc_attr(tautan[1])}">{esc(tautan[0])}</a>'))
+    return grup(anak, kelas='vf-rubrik-bar', layout={'type': 'flex', 'flexWrap': 'nowrap', 'justifyContent': 'space-between'})
+
+
+KARTU = '\n\n'.join([
+    blok('post-featured-image', {'isLink': True, 'aspectRatio': '16/10'}),
+    blok('post-terms', {'term': 'category', 'className': 'vf-label'}),
+    blok('post-title', {'level': 3, 'isLink': True}),
+    blok('post-date'),
+])
+DAFTAR = '\n\n'.join([
+    blok('post-featured-image', {'isLink': True, 'aspectRatio': '4/3'}),
+    grup([blok('post-title', {'level': 3, 'isLink': True}), blok('post-date')], kelas='vf-daftar__teks'),
+])
+UTAMA = grup([
+    blok('post-featured-image', {'isLink': True, 'aspectRatio': '16/10'}),
+    grup([blok('post-terms', {'term': 'category', 'className': 'vf-label'}),
+          blok('post-title', {'level': 2, 'isLink': True}),
+          blok('post-date'),
+          blok('post-excerpt', {'excerptLength': 26})], kelas='vf-utama__teks'),
+], kelas='vf-utama__kartu')
+
+
+class Query:
+    def __init__(self):
+        self.nomor = 100
+
+    def __call__(self, per, offset, kelas, isi, kategori=None, grid=None, min_lebar='12rem', align=None):
+        self.nomor += 1
+        q = {'perPage': per, 'pages': 0, 'offset': offset, 'postType': 'post', 'order': 'desc', 'orderBy': 'date',
+             'author': '', 'search': '', 'exclude': [], 'sticky': '', 'inherit': False}
+        if kategori:
+            # Format taxQuery WP 7.0+ (build_query_vars_from_query_block).
+            q['taxQuery'] = {'include': {'category': [int(kategori)]}}
+        tpl = {'className': kelas}
+        if grid:
+            tpl['layout'] = {'type': 'grid', 'columnCount': grid}
+            if min_lebar:
+                tpl['layout']['minimumColumnWidth'] = min_lebar
+        attrs, cls = {'queryId': self.nomor, 'query': q}, 'wp-block-query'
+        if align:
+            attrs['align'] = align
+            cls += f' align{align}'
+        return blok('query', attrs, f'<div class="{cls}">' + blok('post-template', tpl, isi) + '</div>')
+
+
+# ---------------------------------------------------------------------------
+# Isi halaman
+# ---------------------------------------------------------------------------
+
+BLOK_HTML = re.compile(r'<(h[1-6]|p|ul|ol|blockquote|figure|table)\b[^>]*>.*?</\1\s*>'
+                       r'|(?:<!--\s*velocity-map\s*-->\s*)?<iframe\b.*?</iframe\s*>'
+                       r'|\[[a-z][a-z0-9_-]*(?:\s[^\]]*)?\]', re.S | re.I)
+
+
+def dalam_tag(teks):
+    return re.sub(r'^<[^>]+>|</[^>]+>$', '', teks.strip()).strip()
+
+
+def html_ke_blok(isi, topik_dibuang=()):
+    """Tulisan AI (HTML polos) → blok core yang bisa disunting per bagian.
+
+    <h1> dibuang karena judul halaman sudah dicetak template; bagian ber-<h2>
+    yang topiknya kini ditampilkan dari data company profile ikut dibuang."""
+    isi = SHORTCODE_LAMA.sub('', isi)
+    for j in JUDUL_LAMA:
+        isi = isi.replace(j, '')
+    isi = re.sub(r'</?(?:section|div|article|main|header)\b[^>]*>', '\n', isi, flags=re.I)
+    hasil, pos, lewati = [], 0, False
+
+    def teks_lepas(potongan):
+        potongan = potongan.strip()
+        if potongan and not lewati:
+            hasil.append(paragraf(potongan) if not re.search(r'<(?!/?(?:a|strong|em|b|i|br)\b)[a-z]', potongan, re.I)
+                         else blok('html', None, potongan))
+
+    for m in BLOK_HTML.finditer(isi):
+        teks_lepas(isi[pos:m.start()])
+        pos = m.end()
+        potong, tag = m.group(0).strip(), (m.group(1) or '').lower()
+        if tag[:1] == 'h':
+            level, dalam = int(tag[1]), dalam_tag(potong)
+            if level == 1:
+                continue
+            if level == 2:
+                polos = re.sub(r'<[^>]+>', '', dalam)
+                lewati = any(re.search(p, polos, re.I) for p in topik_dibuang)
+            if not lewati:
+                hasil.append(judul(dalam, level))
+        elif lewati:
+            continue
+        elif tag == 'p':
+            if dalam_tag(potong):
+                hasil.append(paragraf(dalam_tag(potong)))
+        elif tag in ('ul', 'ol'):
+            butir = re.findall(r'<li\b[^>]*>(.*?)</li\s*>', potong, re.S | re.I)
+            if butir and not re.search(r'<(?:ul|ol)\b', ''.join(butir), re.I):
+                hasil.append(daftar_poin([b.strip() for b in butir], bernomor=tag == 'ol'))
+            else:
+                hasil.append(blok('html', None, potong))
+        elif potong.startswith('['):
+            hasil.append(blok('shortcode', None, potong))
+        else:
+            hasil.append(blok('html', None, potong))
+    teks_lepas(isi[pos:])
+    return '\n\n'.join(hasil)
+
+
+def kartu_isi(butir):
+    """Kartu judul + teks (+ rincian) dalam baris tiga kolom."""
+    baris = []
+    for i in range(0, len(butir), 3):
+        kolom_baris = []
+        for b in butir[i:i + 3]:
+            anak = [judul(esc(b.get('judul')), 3)]
+            if b.get('teks'):
+                anak.append(paragraf(esc(b['teks'])))
+            if b.get('rincian'):
+                anak.append(daftar_poin([esc(r) for r in b['rincian']]))
+            kolom_baris.append(kolom([grup(anak, kelas='vf-kotak vf-kartu-isi')]))
+        baris.append(barisan(kolom_baris))
+    return baris
+
+
+def beranda_berita(q, sd, info):
+    arsip = (info['halaman'].get('berita') or {}).get('url') or info['home'] + 'berita/'
+    atas = barisan([kolom([q(1, 0, 'vf-utama', UTAMA)], '62%'), kolom([q(4, 1, 'vf-daftar', DAFTAR)])],
+                   kelas='vf-utama-baris', align='wide')
+    seksi = [grup([bar('Berita Terbaru', ('Indeks berita →', arsip)), q(6, 5, 'vf-kartu', KARTU, grid=3)], kelas='vf-seksi')]
+    for r in sd['rubrik']:
+        t = info['kategori'].get(r['slug'])
+        if not t:
+            continue
+        seksi.append(grup([
+            bar(r['judul'], ('Lihat semua →', t['url'])),
+            barisan([kolom([q(1, 0, 'vf-kartu', KARTU, t['id'])], '53%'), kolom([q(3, 1, 'vf-daftar', DAFTAR, t['id'])])],
+                    kelas='vf-utama-baris'),
+        ], kelas='vf-seksi'))
+    tata = barisan([kolom(seksi, '68%'), kolom([blok('template-part', {'slug': 'sidebar'})], '32%')],
+                   kelas='vf-tata', align='wide')
+    return '\n\n'.join([judul(esc(sd['nama']), 1, 'screen-reader-text'), atas, tata])
+
+
+SAMPUL = '\n\n'.join([
+    blok('post-featured-image'),
+    grup([blok('post-title', {'level': 2, 'isLink': True}), blok('post-terms', {'term': 'category'})], kelas='vf-sampul__teks'),
+])
+
+
+def beranda_sorotan(q, sd, info):
+    """Gaya "sorotan": pita pembuka + 5 kartu foto selebar layar, lalu per rubrik
+    pita judul berikon + grid 2x2 kartu foto (referensi majalah foto, mis.
+    ourgrandfatherstory.com untuk anaksegalabangsa.com). Tanpa kolom samping."""
+    bagian = [judul(esc(sd['nama']), 1, 'screen-reader-text'),
+              grup([judul('Sorotan Pekan Ini')], kelas='vf-masthead vf-masthead--hot', align='full'),
+              q(5, 0, 'vf-sampul', SAMPUL, align='full')]
+    for r in sd['rubrik']:
+        t = info['kategori'].get(r['slug'])
+        if not t:
+            continue
+        pita = [judul(esc(r['judul']))]
+        if r.get('teks'):
+            pita.append(paragraf(esc(r['teks'])))
+        pita.append(paragraf(f'<a href="{esc_attr(t["url"])}">Lihat semua →</a>'))
+        bagian += [grup(pita, kelas='vf-masthead', align='full'),
+                   q(4, 0, 'vf-sampul vf-sampul--dua', SAMPUL, t['id'], grid=2, min_lebar=None, align='full')]
+    return '\n\n'.join(bagian)
+
+
+def beranda_perusahaan(q, sd, isi, info):
+    js = isi.get('judul_seksi') or {}
+    kontak = (info['halaman'].get('hubungi-kami') or {}).get('url') or info['home'] + 'hubungi-kami/'
+    hero = [judul(esc(isi.get('hero_judul') or sd['nama']), 1)]
+    if isi.get('hero_teks'):
+        hero.append(paragraf(esc(isi['hero_teks'])))
+    if isi.get('hero_poin'):
+        hero.append(daftar_poin([esc(p) for p in isi['hero_poin']], kelas='vf-hero__poin'))
+    hero.append(tombol('Hubungi Kami', kontak))
+    bagian = [grup(hero, kelas='vf-hero', align='full', teks='di-primary', padding='var:preset|spacing|70',
+                   layout={'type': 'constrained'})]
+    if sd['layanan']:
+        anak = [judul(esc(js.get('layanan') or 'Layanan Kami'))]
+        if js.get('layanan_sub'):
+            anak.append(paragraf(esc(js['layanan_sub'])))
+        bagian.append(grup(anak + kartu_isi(sd['layanan']), kelas='vf-seksi', align='wide', padding='var:preset|spacing|50'))
+    if isi.get('keunggulan'):
+        bagian.append(grup([judul(esc(js.get('keunggulan') or 'Mengapa Memilih Kami'))] + kartu_isi(isi['keunggulan']),
+                           kelas='vf-seksi', align='wide'))
+    if isi.get('alur'):
+        langkah = [kolom([judul(esc(a.get('judul')), 3), paragraf(esc(a.get('teks')))]) for a in isi['alur'][:5]]
+        bagian.append(grup([judul('Alur Kerja'), barisan(langkah, kelas='vf-langkah')], kelas='vf-seksi', align='wide'))
+    arsip = (info['halaman'].get('berita') or {}).get('url') or info['home'] + 'berita/'
+    bagian.append(grup([bar('Artikel Terbaru', ('Lihat semua →', arsip)), q(3, 0, 'vf-kartu', KARTU, grid=3)],
+                       kelas='vf-seksi', align='wide'))
+    bagian.append(grup([judul('Siap membantu kebutuhan Anda'),
+                        paragraf(esc(f"Ceritakan kebutuhan Anda, tim {sd['nama']} akan segera menghubungi kembali.")),
+                        tombol('Hubungi Kami', kontak)],
+                       kelas='vf-ajakan', align='wide', teks='di-primary', latar='primary', padding='var:preset|spacing|50',
+                       layout={'type': 'constrained'}))
+    return '\n\n'.join(bagian)
+
+
+def halaman_redaksi(sd, isi, info):
+    kepala = f"<strong>{esc(sd['nama'])}</strong>" + (f"<br><em>{esc(sd['slogan'])}</em>" if sd['slogan'] else '')
+    anak = [paragraf(kepala)]
+    if sd['tentang']:
+        anak.append(paragraf(esc(sd['tentang'])))
+    pedoman = [p for p in isi.get('redaksi') or [] if str(p).strip()]
+    if pedoman:
+        anak.append(judul('Pedoman Redaksi'))
+        anak += [paragraf(esc(p)) for p in pedoman]
+    # Nama awak redaksi tidak dikarang: dilengkapi PM bila klien mengirimnya.
+    anak += [judul('Kontak Redaksi'), blok('velocity/kontak')]
+    kontak = (info['halaman'].get('hubungi-kami') or {}).get('url')
+    if kontak:
+        anak.append(paragraf(f'<a href="{esc_attr(kontak)}">Kirim pesan ke redaksi →</a>'))
+    return '\n\n'.join(anak)
+
+
+def profil_perusahaan(isi):
+    """Data company profile di Tentang Kami (keputusan user 2026-09-13: semua kiriman klien tampil)."""
+    anak, topik = [], []
+    if isi.get('visi') or isi.get('misi'):
+        topik.append(TOPIK_PROFIL['visi'])
+        anak.append(judul('Visi &amp; Misi'))
+        if isi.get('visi'):
+            anak.append(paragraf(f"<strong>Visi:</strong> {esc(isi['visi'])}"))
+        if isi.get('misi'):
+            anak += [paragraf('<strong>Misi:</strong>'), daftar_poin([esc(m) for m in isi['misi']])]
+    if isi.get('struktur'):
+        topik.append(TOPIK_PROFIL['struktur'])
+        anak += [judul('Struktur Organisasi'),
+                 daftar_poin([f"<strong>{esc(s.get('jabatan'))}</strong>: {esc(s.get('nama'))}" for s in isi['struktur']])]
+    if isi.get('customer'):
+        topik.append(TOPIK_PROFIL['customer'])
+        anak += [judul('Pelanggan Kami'), daftar_poin([esc(c if isinstance(c, str) else c.get('nama', '')) for c in isi['customer']])]
+    if isi.get('legalitas'):
+        topik.append(TOPIK_PROFIL['legalitas'])
+        anak += [judul('Legalitas'),
+                 daftar_poin([f"<strong>{esc(l.get('label'))}</strong>: {esc(l.get('nilai'))}" for l in isi['legalitas']])]
+    return (grup(anak, kelas='vf-profil') if anak else ''), topik
+
+
+def milik_installer(hal):
+    """Boleh ditimpa: kosong/placeholder, atau isinya masih persis tulisan installer."""
+    isi = hal['isi']
+    if not isi.strip() or isi.strip() in PLACEHOLDER:
+        return True
+    if hal['fse_md5']:
+        return hal['fse_md5'] == md5(isi)
+    bersih = SHORTCODE_LAMA.sub('', isi)
+    for j in JUDUL_LAMA:
+        bersih = bersih.replace(j, '')
+    if not bersih.strip():
+        return True
+    # _velocity_content_md5 dari generator AI/site-finish = md5 keluaran WP-CLI (isi + "\n").
+    return bool(hal['isi_md5']) and hal['isi_md5'] in (md5(isi), md5(isi + '\n'), md5(bersih), md5(bersih + '\n'))
+
+
+PHP_BACA = r'''
+$hal = array();
+foreach ((array) $d['slug'] as $s) {
+    $p = get_page_by_path($s, OBJECT, 'page');
+    if (!$p || $p->post_status === 'trash') { $hal[$s] = null; continue; }
+    $hal[$s] = array('id' => $p->ID, 'judul' => $p->post_title, 'status' => $p->post_status, 'isi' => $p->post_content,
+        'url' => get_permalink($p), 'fse_md5' => (string) get_post_meta($p->ID, '_velocity_fse_md5', true),
+        'isi_md5' => (string) get_post_meta($p->ID, '_velocity_content_md5', true));
+}
+$sisa = array();
+foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
+    if (!isset($hal[$p->post_name]) && preg_match('/\[[a-z][a-z0-9]{0,11}_(redaksi|kontak|pemesanan|layanan|produk|galeri|alur|profil|struktur|customer|legalitas|visimisi)\]/', $p->post_content)) {
+        $sisa[$p->post_name] = array('id' => $p->ID, 'judul' => $p->post_title, 'isi' => $p->post_content);
+    }
+}
+$kat = array();
+foreach ((array) $d['rubrik'] as $s) {
+    $t = get_term_by('slug', $s, 'category');
+    if ($t) { $kat[$s] = array('id' => (int) $t->term_id, 'nama' => $t->name, 'url' => get_category_link($t->term_id)); }
+}
+$menu = array();
+foreach (get_nav_menu_locations() as $lokasi => $tid) {
+    if (!$tid) { continue; }
+    foreach ((array) wp_get_nav_menu_items($tid) as $it) {
+        if ((int) $it->menu_item_parent) { continue; }
+        $menu[] = array('judul' => $it->title, 'jenis' => $it->type, 'objek' => $it->object, 'id' => (int) $it->object_id, 'url' => $it->url);
+    }
+    break;
+}
+$nav = array();
+foreach (get_posts(array('post_type' => 'wp_navigation', 'post_status' => 'publish', 'numberposts' => 20, 'orderby' => 'date', 'order' => 'DESC')) as $n) {
+    $nav[] = array('id' => $n->ID, 'judul' => $n->post_title, 'milik' => (string) get_post_meta($n->ID, '_velocity_fse_md5', true), 'md5' => md5($n->post_content));
+}
+$halaman_id = array();
+foreach (get_pages(array('post_status' => 'publish')) as $p) { $halaman_id[$p->post_name] = array('id' => $p->ID, 'url' => get_permalink($p)); }
+vfse_keluar(array('tema' => get_stylesheet(), 'halaman' => $hal, 'sisa' => $sisa, 'kategori' => $kat, 'menu' => $menu,
+    'nav' => $nav, 'semua' => $halaman_id, 'home' => home_url('/'), 'depan' => (int) get_option('page_on_front')));
+'''
+
+PHP_TULIS = r'''
+$hasil = array();
+$ubah = array();
+foreach ((array) $d['halaman'] as $h) {
+    $data = array('post_content' => wp_slash($h['isi']));
+    if (!empty($h['id'])) {
+        $data['ID'] = (int) $h['id'];
+        $id = wp_update_post($data, true);
+        $aksi = 'diisi';
+    } else {
+        $data += array('post_type' => 'page', 'post_status' => 'publish', 'post_title' => wp_slash($h['judul']), 'post_name' => $h['slug']);
+        $id = wp_insert_post($data, true);
+        $aksi = 'dibuat';
+    }
+    if (is_wp_error($id) || !$id) { $hasil[] = 'halaman_gagal:' . $h['slug']; continue; }
+    // md5 dari isi yang BENAR-BENAR tersimpan: filter simpan WordPress bisa mengubahnya.
+    $simpan = (string) get_post_field('post_content', $id, 'raw');
+    update_post_meta($id, '_velocity_fse_md5', md5($simpan));
+    update_post_meta($id, '_velocity_content_md5', md5($simpan . "\n"));
+    if (!empty($h['tata'])) { update_post_meta($id, '_velocity_fse_layout', '1'); }
+    if ($simpan !== $h['isi']) { $ubah[$h['slug']] = $simpan; }
+    $hasil[] = 'halaman_' . $aksi . ':' . $h['slug'] . ':' . $id;
+}
+if (!empty($d['nav'])) {
+    $n = $d['nav'];
+    $data = array('post_content' => wp_slash($n['isi']));
+    if (!empty($n['id'])) {
+        $data['ID'] = (int) $n['id'];
+        $id = wp_update_post($data, true);
+    } else {
+        $data += array('post_type' => 'wp_navigation', 'post_status' => 'publish', 'post_title' => 'Menu Utama');
+        $id = wp_insert_post($data, true);
+    }
+    if (is_wp_error($id) || !$id) {
+        $hasil[] = 'menu_gagal';
+    } else {
+        update_post_meta($id, '_velocity_fse_md5', md5((string) get_post_field('post_content', $id, 'raw')));
+        $hasil[] = 'menu_ditulis:' . $id;
+    }
+}
+if (!empty($d['depan']) && !(int) get_option('page_on_front')) {
+    update_option('show_on_front', 'page');
+    update_option('page_on_front', (int) $d['depan']);
+    $hasil[] = 'halaman_depan_diatur';
+}
+vfse_keluar(array('hasil' => $hasil, 'ubah' => $ubah));
+'''
+
+
+def tautan_menu(info, sd, slugs_ada):
+    """Menu utama: susunan menu klasik yang sudah disepakati (paket-g-setup) dibawa apa adanya."""
+    butir = []
+    for m in info['menu']:
+        if m['jenis'] == 'post_type' and m['objek'] == 'page':
+            butir.append({'label': m['judul'], 'type': 'page', 'id': m['id'], 'url': m['url'], 'kind': 'post-type'})
+        elif m['jenis'] == 'taxonomy' and m['objek'] == 'category':
+            butir.append({'label': m['judul'], 'type': 'category', 'id': m['id'], 'url': m['url'], 'kind': 'taxonomy'})
+        else:
+            butir.append({'label': m['judul'], 'url': m['url'], 'kind': 'custom', 'isTopLevelLink': True})
+    if not butir:
+        semua = info['semua']
+        halaman = lambda slug, label: butir.append({'label': label, 'type': 'page', 'id': semua[slug]['id'],
+                                                    'url': semua[slug]['url'], 'kind': 'post-type'}) if slug in semua else None
+        if sd['jenis'] == 'berita':
+            halaman('beranda', 'Home')
+            for r in sd['rubrik']:
+                t = info['kategori'].get(r['slug'])
+                if t:
+                    butir.append({'label': r['judul'], 'type': 'category', 'id': t['id'], 'url': t['url'], 'kind': 'taxonomy'})
+            halaman('redaksi', 'Redaksi')
+        else:
+            for slug, label in (('beranda', 'Beranda'), ('tentang-kami', 'Profil'), ('layanan', 'Layanan'),
+                                ('produk', 'Produk'), ('pemesanan', 'Pemesanan'), ('galeri', 'Galeri Foto'), ('berita', 'Berita')):
+                halaman(slug, label)
+        halaman('hubungi-kami', 'Kontak Kami')
+    return '\n\n'.join(blok('navigation-link', b) for b in butir)
+
+
+def cek_markup(berkas):
+    run = subprocess.run(['node', str(HERE / 'cek-blok')] + [str(b) for b in berkas], capture_output=True, text=True, timeout=180)
+    if run.returncode == 3:
+        print('fse: cek_blok_dilewati:alat_tidak_ada')
+        return set()
+    return {Path(b.split(' ', 1)[1].split(':', 1)[0]).stem for b in run.stdout.splitlines() if b.startswith('tidak_valid')} | (
+        set() if run.returncode in (0, 1) else {'*'}), run.stdout
+
+
+def cek_http(url):
+    req = urllib.request.Request(url, headers={'User-Agent': UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl._create_unverified_context()) as r:
+            return r.status, r.read().decode(errors='ignore')
+    except urllib.error.HTTPError as e:
+        return e.code, ''
+    except (urllib.error.URLError, OSError):
+        return 0, ''
+
+
+def langkah_isi(cfg, situs, coba):
+    domain = situs.domain
+    isi = baca_isi(domain)
+    vct = muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
+    sd = data_situs(cfg, domain, isi, vct, referensi_desain(cfg, domain))
+    berita = sd['jenis'] == 'berita'
+    target = ['beranda', 'tentang-kami', 'galeri', 'hubungi-kami', 'berita'] + (
+        ['redaksi'] if berita else ['layanan', 'produk', 'pemesanan'])
+    info = situs.php(PHP_BACA, {'slug': target, 'rubrik': [r['slug'] for r in sd['rubrik']]})
+    if info['tema'] != SLUG:
+        print(f"fse: isi_dilewati:tema_aktif_{info['tema']}")
+        return 1
+
+    q = Query()
+    rencana = {}  # slug -> (id, judul, isi, tata)
+
+    def rencanakan(slug, judul_hal, isi_baru, tata=False):
+        hal = info['halaman'].get(slug)
+        if hal and not milik_installer(hal):
+            print(f'fse: halaman_dibiarkan:{slug} (sudah disunting orang)')
+            return
+        if hal and hal['isi'] == isi_baru:
+            print(f'fse: halaman_sama:{slug}')
+            return
+        rencana[slug] = ((hal or {}).get('id', 0), (hal or {}).get('judul') or judul_hal, isi_baru, tata)
+
+    def lanjutan(slug, tambahan):
+        """Halaman tulisan AI: diubah jadi blok, lalu blok wajib ditambahkan kalau belum ada."""
+        hal = info['halaman'].get(slug)
+        lama = (hal or {}).get('isi', '')
+        topik = []
+        profil = ''
+        if slug == 'tentang-kami' and not berita:
+            profil, topik = profil_perusahaan(isi)
+        dasar = lama.strip() if '<!-- wp:' in lama else html_ke_blok('' if lama.strip() in PLACEHOLDER else lama, topik)
+        bagian = [dasar] if dasar else []
+        if profil and 'vf-profil' not in dasar:
+            bagian.append(profil)
+        for penanda, markup in tambahan:
+            if penanda not in dasar:
+                bagian.append(markup)
+        return '\n\n'.join(bagian)
+
+    # Beranda: tata letak penuh (Query Loop per rubrik / seksi perusahaan).
+    if berita:
+        beranda = beranda_sorotan(q, sd, info) if sd['gaya'] == 'sorotan' else beranda_berita(q, sd, info)
+    else:
+        # Gaya "sorotan" baru ada untuk portal berita; perusahaan tetap susunan bawaan.
+        beranda = beranda_perusahaan(q, sd, isi, info)
+    rencanakan('beranda', 'Beranda', beranda, tata=True)
+    rencanakan('tentang-kami', 'Tentang Kami', lanjutan('tentang-kami', []))
+    rencanakan('galeri', 'Galeri', lanjutan('galeri', []))
+    judul_form = 'Kirim Pesan ke Redaksi' if berita else 'Ajukan Pemesanan'
+    rencanakan('hubungi-kami', 'Hubungi Kami', lanjutan('hubungi-kami', [
+        ('wp:velocity/kontak', judul('Kontak') + '\n\n' + blok('velocity/kontak')),
+        ('wp:social-links', judul('Media Sosial') + '\n\n' + ikon_sosmed()),
+        ('wp:velocity/form-kirim', judul(judul_form) + '\n\n' + blok('velocity/form-kirim')),
+    ]))
+    if berita:
+        rencanakan('redaksi', 'Redaksi', halaman_redaksi(sd, isi, info))
+    else:
+        if sd['layanan']:
+            anak = [paragraf('Kebutuhan Anda ditangani satu tim — mulai dari peninjauan, penawaran tertulis, pengerjaan, sampai serah terima.')]
+            anak += kartu_isi(sd['layanan'])
+            if isi.get('alur'):
+                anak += [judul('Alur Kerja'), barisan([kolom([judul(esc(a.get('judul')), 3), paragraf(esc(a.get('teks')))])
+                                                      for a in isi['alur'][:5]], kelas='vf-langkah')]
+            rencanakan('layanan', 'Layanan', '\n\n'.join(anak))
+        if isi.get('produk'):
+            rencanakan('produk', 'Produk', '\n\n'.join([paragraf('Pekerjaan dan produk yang paling sering diminta pelanggan.')]
+                                                       + kartu_isi(isi['produk'])))
+        rencanakan('pemesanan', 'Pemesanan', '\n\n'.join([
+            paragraf('Isi formulir di bawah ini untuk mengajukan pemesanan atau konsultasi. Permintaan Anda kami terima langsung melalui email.'),
+            blok('velocity/form-kirim')]))
+    # Halaman lain yang masih berisi shortcode desain child theme lama.
+    for slug, hal in (info.get('sisa') or {}).items():
+        bersih = SHORTCODE_LAMA.sub('', hal['isi'])
+        for j in JUDUL_LAMA:
+            bersih = bersih.replace(j, '')
+        rencana[slug] = (hal['id'], hal['judul'], bersih.strip(), False)
+        print(f'fse: shortcode_lama_dibuang:{slug}')
+
+    # Menu utama (wp_navigation).
+    nav_isi = tautan_menu(info, sd, set(info['semua']))
+    milik = next((n for n in info['nav'] if n['milik']), None)
+    nav = None
+    if milik and milik['milik'] != milik['md5']:
+        print('fse: menu_dibiarkan (sudah disunting orang)')
+    elif milik and milik['md5'] == md5(nav_isi):
+        print('fse: menu_sama')
+    elif nav_isi:
+        nav = {'id': milik['id'] if milik else 0, 'isi': nav_isi}
+
+    # Validasi semua markup sebelum menyentuh situs.
+    folder = RENCANA_DIR / domain
+    folder.mkdir(parents=True, exist_ok=True)
+    berkas = []
+    for slug, (_, _, isi_baru, _) in rencana.items():
+        (folder / f'{slug}.html').write_text(isi_baru)
+        berkas.append(folder / f'{slug}.html')
+    if nav:
+        (folder / 'menu.html').write_text(nav['isi'])
+        berkas.append(folder / 'menu.html')
+    if berkas:
+        tidak_valid, keluaran = cek_markup(berkas)
+        for baris in keluaran.splitlines():
+            if baris.startswith('tidak_valid'):
+                print('fse: ' + baris[:300])
+        if '*' in tidak_valid:
+            print('fse: cek_blok_gagal_dijalankan, tidak ada yang ditulis')
+            return 1
+        for slug in tidak_valid:
+            print(f'fse: {slug}_tidak_ditulis:markup_tidak_valid')
+            rencana.pop(slug, None)
+            if slug == 'menu':
+                nav = None
+    print(f"fse: rencana halaman={','.join(rencana) or '-'} menu={'ya' if nav else 'tidak'} (berkas di {folder})")
+    if coba or (not rencana and not nav):
+        return 0
+
+    depan = (info['halaman'].get('beranda') or {}).get('id', 0)
+    kirim = {'halaman': [{'slug': s, 'id': v[0], 'judul': v[1], 'isi': v[2], 'tata': v[3]} for s, v in rencana.items()],
+             'nav': nav, 'depan': depan}
+    tulis = situs.php(PHP_TULIS, kirim)
+    for baris in tulis['hasil']:
+        print(f'fse: {baris}')
+    # Filter simpan WordPress mengubah isi: markup yang tersimpan diperiksa ulang.
+    if tulis.get('ubah'):
+        ulang = []
+        for slug, simpan in tulis['ubah'].items():
+            (folder / f'{slug}.tersimpan.html').write_text(simpan)
+            ulang.append(folder / f'{slug}.tersimpan.html')
+        tidak_valid, keluaran = cek_markup(ulang)
+        print(f"fse: isi_diubah_wp:{','.join(tulis['ubah'])} -> "
+              + ('tetap valid' if not tidak_valid else 'TIDAK VALID: ' + ','.join(sorted(tidak_valid))))
+
+    # Situs dibaca sebagai pengunjung: shortcode mentah & blok tak terender tidak boleh lolos.
+    gagal = 0
+    for slug in ['beranda'] + [s for s in rencana if s != 'beranda']:
+        url = info['home'] if slug == 'beranda' else (info['semua'].get(slug) or {}).get('url') or f"{info['home']}{slug}/"
+        kode, badan = cek_http(url + ('&' if '?' in url else '?') + 'vfse=cek')
+        mentah = sorted(set(SHORTCODE_LAMA.findall(badan)))
+        belum = 'wp:velocity/' in badan or '<!-- wp:' in badan
+        status = 'ok' if kode == 200 and not mentah and not belum else 'MASALAH'
+        gagal += status != 'ok'
+        print(f"fse: http {slug}={kode} {status}" + (f" shortcode_mentah={','.join(mentah)}" if mentah else '')
+              + (' blok_tidak_terender' if belum else ''))
+    return 1 if gagal else 0
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    mode = next((m for m in ('--deteksi', '--tema', '--isi') if m in sys.argv), '')
+    coba = '--coba' in sys.argv
+    if len(args) != 1 or not mode:
+        print('usage: fse-apply --deteksi|--tema|--isi <manifest> [--coba]', file=sys.stderr)
+        return 2
+    cfg = read_manifest(args[0])
+    cfg['_manifest'] = args[0]
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', cfg.get('domain', '').lower()) \
+            or not re.match(r'^[a-z][a-z0-9]*$', cfg.get('da_user', '')):
+        print('fse: manifest tidak valid')
+        return 2
+    try:
+        situs = Situs(cfg)
+        if mode == '--deteksi':
+            jalur, alasan = deteksi(cfg, situs)
+            print(f'fse: jalur={jalur} ({alasan})', file=sys.stderr)
+            print(jalur)
+            return 0
+        if mode == '--tema':
+            return langkah_tema(cfg, situs, coba)
+        return langkah_isi(cfg, situs, coba)
+    except (RuntimeError, subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+        print(f'fse: gagal:{type(e).__name__}:{e}'[:300])
+        if mode == '--deteksi':
+            print('gagal')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

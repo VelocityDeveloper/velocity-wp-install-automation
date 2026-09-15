@@ -48,13 +48,23 @@ $halaman = array();
 foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
     $halaman[$p->post_name] = array('id' => $p->ID, 'status' => $p->post_status,
                                     'isi' => strlen((string) $p->post_content),
-                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]/', (string) $p->post_content));
+                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]|<!-- wp:velocity\/form-kirim/', (string) $p->post_content));
 }
 $menu_items = array();
 foreach (get_nav_menu_locations() as $lokasi => $term_id) {
     if (!$term_id) { continue; }
     foreach ((array) wp_get_nav_menu_items($term_id) as $item) {
         $menu_items[] = $item->title;
+    }
+}
+if (!$menu_items && function_exists('wp_is_block_theme') && wp_is_block_theme()) {
+    // Block theme: menu = post wp_navigation terbaru (blok navigation tanpa ref memakainya).
+    $nav = get_posts(array('post_type' => 'wp_navigation', 'post_status' => 'publish', 'numberposts' => 1, 'orderby' => 'date', 'order' => 'DESC'));
+    if ($nav && preg_match_all('/<!-- wp:navigation-(?:link|submenu) (\{.*?\}) \/?-->/', $nav[0]->post_content, $m)) {
+        foreach ($m[1] as $j) {
+            $a = json_decode($j, true);
+            if (!empty($a['label'])) { $menu_items[] = $a['label']; }
+        }
     }
 }
 $teks = '';
@@ -65,7 +75,8 @@ global $shortcode_tags;
 $sc_hilang = array();
 foreach (get_pages(array('post_status' => 'publish')) as $p) {
     $teks .= $p->post_content;
-    if (preg_match_all('/\[([a-zA-Z0-9_-]+)[^\]]*\]/', (string) $p->post_content, $m)) {
+    // Komentar blok dibuang dulu: atribut JSON seperti "category":[8] bukan shortcode.
+    if (preg_match_all('/\[([a-zA-Z0-9_-]+)[^\]]*\]/', (string) preg_replace('/<!--.*?-->/s', '', (string) $p->post_content), $m)) {
         foreach (array_unique($m[1]) as $tag) {
             if (!isset($shortcode_tags[$tag]) && !in_array($tag, array('caption', 'embed'), true)) {
                 $sc_hilang[] = $tag . '@' . $p->post_name;
@@ -169,6 +180,25 @@ function velocity_audit_wa_tema($dir)
     return 0;
 }
 
+function velocity_audit_kredit_footer()
+{
+    // Baris hak cipta wajib memuat "Design by Velocity Developer" (keputusan user 2026-09-14).
+    if (function_exists('wp_is_block_theme') && wp_is_block_theme()) {
+        // Termasuk versi DB dari Site Editor yang menimpa parts/footer.html.
+        $part = get_block_template(get_stylesheet() . '//footer', 'wp_template_part');
+        return (int) ($part && stripos((string) $part->content, 'velocitydeveloper.com') !== false);
+    }
+    $footer = locate_template('footer.php');
+    $kode = $footer ? (string) @file_get_contents($footer) : '';
+    if ($kode !== '' && strpos($kode, 'justg_do_footer') === false) {
+        return (int) (stripos($kode, 'velocitydeveloper.com') !== false);
+    }
+    // Footer tema induk: dirender lewat kait, termasuk sisipan mu-plugin installer.
+    ob_start();
+    do_action('justg_do_footer');
+    return (int) (stripos((string) ob_get_clean(), 'velocitydeveloper.com') !== false);
+}
+
 global $wp_registered_sidebars;
 $widget_nyasar = 0;
 foreach ((array) get_option('sidebars_widgets', array()) as $sb => $isi) {
@@ -229,6 +259,7 @@ echo wp_json_encode(array(
     'kontak_publik'   => velocity_audit_kontak_publik(),
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
+    'kredit_footer'   => velocity_audit_kredit_footer(),
     'widget_nyasar'   => $widget_nyasar,
     'widget_bersih'   => (string) get_option('velocity_widget_bersih'),
     'sidebar_aktif'   => count((array) $wp_registered_sidebars),
@@ -340,11 +371,11 @@ def main():
     # --- tema ---
     info['tema'] = situs['tema']
     info['paket'] = paket or '-'
-    if paket_custom:
-        if situs['tema'] != harapan.get('slug'):
-            temuan.append(f"tema_bukan_child_theme:{situs['tema']}")
-        elif not situs['tema_induk']:
-            temuan.append('child_theme_tanpa_induk')
+    # Paket custom hanya FSE (keputusan user 2026-09-15): velocity-fse, atau block
+    # theme buatan tangan yang dicatat `tema_fse=` di manifest.
+    tema_fse = situs['tema'] == 'velocity-fse'
+    if paket_custom and not tema_fse and situs['tema'] != cfg.get('tema_fse'):
+        temuan.append(f"tema_bukan_fse:{situs['tema']}")
 
     # --- tampilan mengikuti company profile & tombol WhatsApp ---
     if paket_custom:
@@ -354,7 +385,9 @@ def main():
         except (OSError, ValueError):
             compro = {}
         prefix = harapan.get('prefix', '')
-        if kode_beranda == 200:
+        if kode_beranda == 200 and tema_fse:
+            info['gaya'] = 'fse'
+        elif kode_beranda == 200:
             info['gaya'] = ('compro' if prefix and f'{prefix}--compro'.encode() in beranda
                             else 'berita' if prefix and f'{prefix}--berita'.encode() in beranda else 'bawaan')
             if compro.get('seksi') and info['gaya'] != 'compro':
@@ -528,8 +561,13 @@ def main():
 
     # --- widget ---
     info['widget_nyasar'] = situs['widget_nyasar']
-    if paket_custom and situs['widget_nyasar']:
+    if paket_custom and situs['widget_nyasar'] and not tema_fse:
         temuan.append(f"widget_bawaan_tersisa:{situs['widget_nyasar']}")
+
+    # --- kredit footer "Design by Velocity Developer" ---
+    info['kredit_footer'] = 'ada' if situs.get('kredit_footer') else 'tidak ada'
+    if not situs.get('kredit_footer'):
+        temuan.append('kredit_footer_tidak_ada')
 
     # --- isi yang belum disunting ---
     sisa = sorted({t for t in TEKS_CONTOH if t in teks})

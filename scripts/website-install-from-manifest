@@ -622,25 +622,36 @@ CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 # warna tema, dan finishing memakainya. Tanpa PDF langkah ini tidak berbuat apa-apa.
 /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/compro-klien" "${cfg[domain]}" >&2 || echo "compro:gagal" >&2
 # Paket desain custom: Paket G dan Paket Portal Berita Custom (keputusan user 2026-09-14).
+PAKET_CUSTOM=0
 if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" =~ ^(paketg|paketportalberitacustom)$ ]]; then
+  PAKET_CUSTOM=1
   /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/paket-g-konten" "$MANIFEST" >&2 || echo "konten:gagal" >&2
 fi
-child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
-  --paket "${cfg[paket]:-}" --nama "${cfg[site_title]:-}" \
-  --prefix "${cfg[velocity_child_prefix]:-}" \
-  --primary "${cfg[velocity_warna_utama]:-}" --accent "${cfg[velocity_warna_aksen]:-}" \
-  --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
-child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
-child_status=$(child_val status)
-echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2
-# generated = scaffold desain custom (Paket G), dipasang seperti child theme API
-# tapi tidak pernah ditimpa apply ulang.
-if [[ "$child_status" == matched || "$child_status" == generated ]]; then
-  CHILD_SLUG=$(child_val slug)
-  CHILD_ZIP=$(child_val zip)
-  # Bukan `[[ ]] && ...`: di bawah `set -e` tes yang gagal menghentikan instalasi.
-  if [[ "$child_status" == generated ]]; then CHILD_GENERATED=1; fi
-  [[ "$CHILD_SLUG" =~ ^[a-z0-9-]+$ && -f "$CHILD_ZIP" ]] || { CHILD_SLUG=""; CHILD_ZIP=""; CHILD_GENERATED=0; }
+if [[ "$PAKET_CUSTOM" == 1 ]]; then
+  # Paket custom HANYA FSE (keputusan user 2026-09-15, "kedepan pakai FSE saja"):
+  # tanpa tema induk klasik & tanpa child theme. Block theme velocity-fse dipasang
+  # installer-runner lewat scripts/fse-apply. Dulu tema induk tetap dipasang dan
+  # DIAKTIFKAN di setiap apply, sehingga situs FSE sempat berganti tema.
+  echo "child_theme:skipped_fse::" >&2
+  if [[ -n "${cfg[velocity_theme_pkg]:-}${cfg[velocity_theme_repo]:-}" ]]; then
+    echo "tema_induk_dilewati:fse" >&2
+  fi
+  cfg[velocity_theme_pkg]=""
+  cfg[velocity_theme_repo]=""
+else
+  child_out=$(/usr/bin/python3 "$(dirname "$(readlink -f "$0")")/velocity-child-theme" "${cfg[domain]}" \
+    --paket "${cfg[paket]:-}" --nama "${cfg[site_title]:-}" \
+    --prefix "${cfg[velocity_child_prefix]:-}" \
+    --primary "${cfg[velocity_warna_utama]:-}" --accent "${cfg[velocity_warna_aksen]:-}" \
+    --override "${cfg[velocity_child_theme]:-}" 2>/dev/null || true)
+  child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
+  child_status=$(child_val status)
+  echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2
+  if [[ "$child_status" == matched ]]; then
+    CHILD_SLUG=$(child_val slug)
+    CHILD_ZIP=$(child_val zip)
+    [[ "$CHILD_SLUG" =~ ^[a-z0-9-]+$ && -f "$CHILD_ZIP" ]] || { CHILD_SLUG=""; CHILD_ZIP=""; }
+  fi
 fi
 
 # substitute placeholders safely

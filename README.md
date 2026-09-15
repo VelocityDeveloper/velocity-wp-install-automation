@@ -186,7 +186,9 @@ Saat apply, installer membaca referensi desain pilihan klien di FORM ISIAN (labe
 - Override manual: tambahkan `velocity_child_theme=<slug>` di manifest. Override selalu menang, termasuk atas pembuatan otomatis di bawah.
 - Log: `child_theme:<status>:<referensi>:<slug>` dan `active_theme:<tema>`; laporan Telegram "Instalasi selesai" memuat baris Tema.
 
-### Paket G: child theme dibuat otomatis bernama project
+### Paket G: child theme dibuat otomatis bernama project (TIDAK DIPAKAI LAGI)
+
+> **Sejak 2026-09-15 paket custom (Paket G & Portal Berita Custom) hanya FSE** — keputusan user "kedepan pakai FSE saja". Installer tidak lagi merender child theme ataupun memasang tema induk `velocity` untuk paket ini (log `child_theme:skipped_fse::`, `tema_induk_dilewati:fse`); lihat [Tema FSE](#tema-fse-untuk-desain-custom-scriptsfse-apply-templatestema-fse). Bagian ini tinggal sebagai catatan situs lama yang child theme klasiknya masih aktif (jasakontraktorindo.com, ptmitraajegselaras.com) — installer melewatinya sampai manifest diberi `tema_desain=fse`. Pencocokan child theme dari API di atas tetap berlaku untuk paket lain.
 
 Paket G tidak memilih template — desainnya custom per project, jadi form klien tidak pernah memuat referensi dan dulu situsnya berhenti di tema induk. Sekarang installer membuat child theme kosong sendiri (`paket=Paket G` di manifest memicunya; dibaca dari CRM saat manifest dibuat).
 
@@ -210,6 +212,43 @@ INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
 
 Untuk paket lain mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`). Untuk Paket G menjalankan [alur Paket G](#alur-paket-g-baku). Keduanya tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
 
+## Tema FSE untuk desain custom (`scripts/fse-apply`, `templates/tema-fse/`)
+
+Keputusan user 2026-09-14: **FSE dulu, tidak pakai child theme.** Child theme klasik dinilai kurang efektif karena isi dinamis terkunci di PHP. Paket G & Portal Berita Custom kini memakai block theme generik `velocity-fse` — kerangka sama untuk semua klien, isi khas klien di database sehingga PM bisa menyunting dari wp-admin:
+
+| Isi | Rumah | Disunting di |
+|---|---|---|
+| nama, slogan, tentang, kontak publik, rubrik/layanan | opsi `velocity_situs` | Tampilan → Data Situs |
+| palet warna klien (penjaga kontras WCAG sama dengan child Paket G) | `wp_global_styles` | Site Editor → Gaya |
+| Beranda (Query Loop per rubrik / seksi perusahaan), Redaksi, Layanan, Produk, Pemesanan, Hubungi Kami | post_content berupa blok | editor halaman |
+| menu utama | `wp_navigation` (header/footer tanpa `ref` memakai yang terbaru) | Site Editor → Navigasi |
+| header, footer, kolom samping, template | `parts/`, `templates/` | Site Editor |
+
+Blok dinamis tema: `velocity/topbar` (tanggal/slogan), `velocity/populer`, `velocity/kontak`, `velocity/form-kirim` (form → email + menu Pesan Masuk, captcha velocity-addons), `velocity/hak-cipta`, `velocity/judul-arsip`.
+
+**Jalur tema** (`fse-apply --deteksi`, dipanggil `installer-runner`): `fse` untuk situs baru, manifest `tema_desain=fse`, atau velocity-fse sudah aktif; `lewati` untuk block theme buatan tangan dan untuk situs lama yang child theme klasik Paket G-nya masih aktif (`child_klasik_belum_dipindah`, tidak dimigrasi otomatis karena desain compro & foto per slot belum ada di velocity-fse). Jalur `child` (`tema_desain=child`, `velocity_child_theme=`) dihapus 2026-09-15. Memindahkan situs lama = tulis `tema_desain=fse` lalu jalankan mode `finish` atau `child-theme`; uji dulu dengan `fse-apply --tema/--isi <manifest> --coba`.
+
+Installer (`website-install-from-manifest`) tidak memasang tema induk `velocity` maupun child theme untuk paket custom; WordPress baru memakai tema bawaan sampai `fse-apply --tema` mengaktifkan velocity-fse (laporan Telegram membaca baris `fse: tema_siap:`), lalu `site-finish --cleanup` menghapus tema twenty* yang tidak aktif.
+
+- `fse-apply --tema` (di `paket_g_tema`, sebelum konten AI): validasi template (`scripts/cek-blok` + `php -l`), pasang zip bila versi `style.css` template lebih baru, aktifkan (logo → opsi `site_logo`, tema lama dicatat di `velocity_fse_tema_sebelumnya` untuk rollback), tulis data situs, palet, rubrik → kategori.
+- `fse-apply --isi` (di `paket_g_isi`, sesudah `site-finish`): susun halaman & menu, validasi markup dengan parser editor WordPress sebelum ditulis (rencana di `/var/lib/velocity/fse-rencana/<domain>/`), buang shortcode child lama yang tercetak mentah, lalu cek HTTP tiap halaman. Portal berita lanjut `paket-g-foto` (foto utama artikel), semua lanjut `paket-g-cek-visual`.
+- **Tidak menimpa kerja orang**: halaman ber-`_velocity_fse_md5`, opsi `velocity_situs_md5`, palet `velocity_fse_warna_md5`, menu ber-md5 — ditimpa hanya kalau masih persis tulisan installer. Generator AI melewati halaman FSE (`page_kept_fse`), Beranda (`_velocity_fse_layout`) tidak pernah.
+- `--coba` menyusun & memvalidasi tanpa menulis ke situs.
+- Validator blok butuh modul node di `/var/lib/velocity/tools/blockval` (`@wordpress/blocks`, `@wordpress/block-library`, `global-jsdom`); tanpa itu validasi dilewati dengan catatan `cek_blok_dilewati`.
+- Menyempurnakan desain semua situs FSE = sunting `templates/tema-fse/` dan naikkan `Version` di `style.css`.
+
+**Desain mengikuti referensi klien** (permintaan user 2026-09-14: "pastikan desain yang dibuat sama dengan referensi yang diminta"). Dulu installer mengabaikan isian "website yang ingin dicontoh" — hanya referensi yang cocok dengan API tema Velocity yang dipakai. Sekarang `fse-apply`:
+- membaca URL + catatan klien dari FORM ISIAN (`referensi_form`; contoh isian template & tautan Velocity diabaikan),
+- membaca ciri HTML halaman referensi (kolom samping, kartu selebar layar, grid dua kolom, font Google) dan meminta AI memilih gaya beranda terdekat dari katalog `GAYA` (cadangan: heuristik); manifest `gaya_beranda=klasik|sorotan` selalu menang,
+- menyimpan hasilnya di `/var/lib/velocity/fse-rencana/<domain>/referensi.json` (tidak diulang tiap run) dan menulis `gaya`, `referensi`, `font_teks`, `font_judul` ke opsi `velocity_situs`,
+- `paket-g-cek-visual` ikut memotret halaman referensi (`referensi-beranda-*.png`) di folder yang sama dengan hasil — **bandingkan keduanya sebelum melapor selesai**.
+
+Gaya yang ada: `klasik` (portal padat + kolom samping) dan `sorotan` (majalah foto: pita judul berikon, kartu foto selebar layar berjudul serif, grid 2 kolom per rubrik, header putih, pita kaki hitam — dari referensi anaksegalabangsa.com, ourgrandfatherstory.com). Font referensi dipakai kalau dibawa tema (`FONT_LOKAL`: Plus Jakarta Sans, Montserrat, PT Serif). Referensi yang tata letaknya tidak cocok dengan gaya mana pun perlu gaya baru di `templates/tema-fse/style.css` + builder di `fse-apply`.
+
+**Email & ikon media sosial wajib** (aturan user 2026-09-14, semua build): footer (`parts/footer.html`) dan halaman Hubungi Kami memuat blok `velocity/kontak` (email publik klien sebagai mailto) dan `core/social-links` ikon saja — Facebook, Instagram, X, YouTube, TikTok dengan tautan bawaan ke beranda platform (PM menggantinya dengan akun klien). Email biodata pemilik tidak pernah ditampilkan otomatis; kalau klien tidak memberi email publik, tanyakan dulu ke user.
+
+Belum ada di jalur FSE (masih milik child Paket G): susunan beranda mengikuti urutan halaman company profile (`inc/compro.php`) dan foto contoh per slot desain perusahaan (`paket-g-foto` hanya dipakai untuk foto utama artikel).
+
 ## Alur Paket G baku
 
 Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nanti seperti itu alurnya"). Di `installer-runner` terbagi dua fungsi: `paket_g_tema` (langkah 1–3, sebelum konten AI) dan `paket_g_isi` (langkah 4–7, sesudah `site-finish`), dipakai mode `apply`, `finish`, dan `child-theme` (yang juga menjalankan generator artikel di antaranya). Berlaku untuk Paket G dan Paket Portal Berita Custom:
@@ -218,11 +257,12 @@ Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nan
 |---|---|---|
 | 1 | `compro-klien <domain>` | Company profile PDF → susunan bagian, prakata, warna, latar, logo, foto (`/var/lib/velocity/compro/<domain>/`). Tanpa PDF: dilewati |
 | 2 | `paket-g-konten <manifest>` | Isi contoh dari form + dokumen; disesuaikan dengan compro (layanan tertulis, slogan, prakata, motto) |
-| 3 | `child-theme-apply --perbarui <manifest>` | Render tema dari data terbaru; pasang baru atau perbarui berkas yang belum disunting |
-| 4 | `paket-g-foto <manifest>` | Foto compro per halaman; tanpa compro: foto klien lalu foto contoh Openverse |
-| 5 | `paket-g-setup <manifest>` | Halaman blok desain + menu (harus sesudah `site-finish`) |
-| 6 | `site-finish --widget <manifest>` | Widget bawaan dibersihkan |
-| 7 | `paket-g-cek-visual <manifest>` | Screenshot desktop & HP ke `/var/lib/velocity/visual/<domain>/<waktu>/` + cek HTTP/layar kosong; `site-audit` membaca temuannya |
+| 3 | `fse-apply --tema <manifest>` | Pasang/aktifkan velocity-fse, data situs, palet, rubrik (sebelum konten AI) |
+| 4 | `fse-apply --isi <manifest>` | Halaman berupa blok + menu `wp_navigation` (harus sesudah `site-finish`) |
+| 5 | `paket-g-foto <manifest>` | Hanya portal berita: foto utama artikel |
+| 6 | `paket-g-cek-visual <manifest>` | Screenshot desktop & HP ke `/var/lib/velocity/visual/<domain>/<waktu>/` + cek HTTP/layar kosong; `site-audit` membaca temuannya |
+
+Sejak 2026-09-15 langkah 3–4 hanya FSE. Langkah lama jalur child (`child-theme-apply --perbarui`, `paket-g-foto` per slot, `paket-g-setup`, `site-finish --widget`) tidak dipanggil lagi untuk paket custom.
 
 Semua langkah boleh gagal tanpa menggagalkan instalasi (kecuali pemasangan tema di mode `child-theme`). Hasilnya tetap dilihat manusia/Claude lewat screenshot sebelum dilaporkan selesai — kesalahan tampilan tidak terlihat dari HTML. Audit terkait: `tema_belum_mengikuti_compro`, `tombol_whatsapp_tanpa_nomor`, `visual:<temuan>`.
 
@@ -244,7 +284,7 @@ Child theme Paket G lahir sudah berbentuk situs perusahaan, bukan folder kosong.
 | Berkas | Isi |
 |---|---|
 | `header.php` | Header sendiri: logo, menu utama, tombol "Hubungi Kami" (langsung membuka WhatsApp, jadi nomornya tidak ditulis lagi di sebelahnya). Di HP jadi panel geser dengan tombol sendiri — **tanpa Bootstrap tema induk** |
-| `footer.php` | Footer 4 kolom (identitas, layanan, halaman, kontak) + baris hak cipta |
+| `footer.php` | Footer 4 kolom (identitas, layanan, halaman, kontak) + baris hak cipta berkredit "Design by Velocity Developer" |
 | `front-page.php` | Beranda 8 seksi: hero, layanan, keunggulan, tentang, galeri, produk, alur kerja, pemesanan, kontak |
 | `inc/theme-data.php` | **Satu-satunya tempat menyunting isi.** Nama, WhatsApp, telepon, email, alamat, dan area diisi otomatis dari FORM ISIAN klien |
 | `inc/shortcodes.php` | `[<prefix>_layanan] [<prefix>_produk] [<prefix>_galeri] [<prefix>_alur] [<prefix>_pemesanan] [<prefix>_kontak]` untuk dipakai di halaman dalam |
@@ -328,6 +368,15 @@ scripts/velocity-map <domain> --alamat "…"        # [--segar] untuk mengabaika
 `site-finish` memanggilnya, menyimpan hasilnya di opsi `velocity_map` (`{status, lat, lon, zoom, label, q}`), dan memakai koordinat itu di iframe — termasuk `z=` yang menyesuaikan ketelitian. Child theme membaca opsi yang sama. Geocodernya Nominatim (OpenStreetMap); hasilnya disimpan per domain di `/var/lib/velocity/geocode/`.
 
 `site-audit` menandai `peta_tidak_spesifik` kalau yang ketemu hanya titik Indonesia — tanda alamat klien perlu diperbaiki.
+
+## Kredit footer "Design by Velocity Developer"
+
+Keputusan user 2026-09-14: semua situs buatan installer menampilkan kredit di baris hak cipta footer, dengan "Velocity Developer" sebagai tautan tab baru ke `https://velocitydeveloper.com` (`target="_blank" rel="noopener"`).
+
+- **Tema induk `velocity`** (dan child theme yang tidak mengganti footer): `site-finish` memasang mu-plugin `wp-content/mu-plugins/velocity-footer-credit.php`. Tema mencetak baris hak cipta langsung di `justg_the_footer_content` tanpa filter, jadi mu-plugin membungkus kait `justg_do_footer` dan menyisipkan kredit ke `.site-info`. Footer yang sudah memuat `velocitydeveloper.com` tidak disentuh. Berkas ini milik installer dan ditimpa setiap finishing.
+- **Paket G / Portal Berita Custom**: ditulis langsung di `templates/child-theme-paket-g/footer.php` (footer biasa & footer gaya compro). Situs terpasang ikut berubah lewat `child-theme-apply --perbarui`, kecuali `footer.php`-nya sudah disunting.
+- **Tema FSE**: tulis kreditnya di `parts/footer.html` (aturan di skill `wp-fse`).
+- **Audit**: `site-audit` menandai `kredit_footer_tidak_ada`.
 
 ## Wajib di setiap situs
 

@@ -557,13 +557,19 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
     php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 60)) as $p) {"
            " if (has_post_thumbnail($p->ID)) { continue; } $k = get_the_category($p->ID);"
            " $o[] = array('id' => $p->ID, 'judul' => $p->post_title, 'rubrik' => $k ? $k[0]->name : ''); }"
-           " echo wp_json_encode($o);")
+           # Sumber foto contoh yang sudah terpasang: dua artikel Ekonomi sempat memakai
+           # foto yang sama karena yang dihindari hanya foto dari run yang sedang jalan.
+           " $pakai = array(); foreach (get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => -1,"
+           " 'meta_key' => '_velocity_foto_contoh', 'fields' => 'ids')) as $m) { $j = json_decode((string) get_post_meta($m, '_velocity_foto_contoh', true), true);"
+           " if (!empty($j['sumber'])) { $pakai[] = $j['sumber']; } }"
+           " echo wp_json_encode(array('artikel' => $o, 'terpakai' => $pakai));")
     run = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
                                 f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
                          capture_output=True, text=True, timeout=120)
     try:
-        artikel = json.loads(run.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
+        keadaan = json.loads(run.stdout.strip().splitlines()[-1])
+        artikel, terpakai = keadaan['artikel'], set(keadaan.get('terpakai') or [])
+    except (ValueError, IndexError, KeyError, TypeError):
         print('foto: daftar artikel tidak terbaca, langkah dilewati')
         return 1
     if not artikel:
@@ -589,7 +595,8 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
         for q in (kunci.get(a['id'], ''), cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])):
             if not q:
                 continue
-            calon = [r for r in ov.cari(q) if layak(r, 1000, sudah)]
+            calon = [r for r in ov.cari(q) if layak(r, 1000, sudah)
+                     and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
             pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8]) if ai and calon else None
             if pilihan is False:
                 continue  # AI menilai tidak ada yang layak: coba kata kunci berikutnya
@@ -600,6 +607,7 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
                 break
         if pilihan:
             sudah.add(pilihan['url'])
+            terpakai.add(pilihan.get('foreign_landing_url') or pilihan['url'])
             rencana.append((a, pilihan, dipakai))
         print(f"foto: {a['id']:>5} {a['judul'][:48]:48} <- "
               + (f"{str(pilihan.get('title') or '')[:36]} [{dipakai}]" if pilihan else '(tidak ada foto layak)'))

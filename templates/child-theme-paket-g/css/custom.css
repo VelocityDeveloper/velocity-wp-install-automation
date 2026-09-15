@@ -894,6 +894,10 @@ body.{{PREFIX}}--compro .{{PREFIX}}-footer__sub { color: var(--{{PREFIX}}-sorot-
 .{{PREFIX}}-pita__isi { position: relative; z-index: 1; display: grid; gap: .7rem; padding-top: 1rem; }
 body.{{PREFIX}} .{{PREFIX}}-pita__slogan { color: var(--{{PREFIX}}-sorot-di-gelap); font-size: 1.15rem; letter-spacing: .02em; margin: 0; }
 body.{{PREFIX}} .{{PREFIX}}-pita__hak { color: rgba(255, 255, 255, .72); font-size: .78rem; margin: .15rem 0 0; }
+/* Kredit "Velocity Developer" di pita hitam: `.footer a` memakai warna di-primary
+   yang gelap bila warna utama terang, jadi tautannya ikut warna baris hak cipta. */
+body.{{PREFIX}} .{{PREFIX}}-pita__hak a,
+body.{{PREFIX}} .{{PREFIX}}-pita__hak a:hover { color: inherit !important; text-decoration: underline; text-underline-offset: 2px; }
 .{{PREFIX}}-pita__kontak { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.4rem; margin-inline: -20px; padding: .9rem 20px; background: var(--{{PREFIX}}-aksen); }
 body.{{PREFIX}} .{{PREFIX}}-pita__kontak a { display: inline-flex; align-items: center; gap: .5rem; color: var(--{{PREFIX}}-di-aksen) !important; text-decoration: underline; text-underline-offset: 3px; }
 .{{PREFIX}}-pita__kontak .{{PREFIX}}-ikon { width: 30px; height: 30px; padding: 5px; border: 2px solid currentColor; border-radius: 50%; }

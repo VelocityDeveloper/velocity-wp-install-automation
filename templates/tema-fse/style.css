@@ -1,0 +1,719 @@
+/*
+Theme Name: Velocity FSE
+Theme URI: https://velocitydeveloper.com/
+Author: Velocity Developer
+Author URI: https://velocitydeveloper.com/
+Description: Block theme (Full Site Editing) bawaan installer Velocity untuk paket desain custom (Paket G & Portal Berita Custom). Kerangka sama untuk semua klien; isi halaman, menu, palet warna, dan data situs tersimpan di database sehingga bisa disunting dari wp-admin tanpa mengubah berkas tema.
+Requires at least: 6.6
+Tested up to: 7.1
+Requires PHP: 7.4
+Version: 1.2.4
+License: GPLv2 or later
+Text Domain: velocity-fse
+*/
+
+/*
+ * Gaya yang belum bisa diungkapkan di theme.json. Warna SELALU lewat preset
+ * (--wp--preset--color--*): palet per klien ditulis installer ke
+ * wp_global_styles, jadi kode hex di berkas ini tidak akan ikut berubah.
+ * Kelas berawalan vf- dipasang di templates/, parts/, dan isi halaman buatan
+ * scripts/fse-apply.
+ */
+
+html { scroll-behavior: smooth; }
+body { overflow-x: hidden; }
+img { height: auto; }
+.screen-reader-text { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Header, isi, dan footer saling menempel: blockGap global tidak boleh menyisakan pita putih. */
+.wp-site-blocks > * + * { margin-block-start: 0; }
+
+/* ---------- baris atas (blok velocity/topbar) ---------- */
+
+.vf-topbar {
+  background: var(--wp--preset--color--primary-gelap);
+  color: var(--wp--preset--color--di-primary);
+  font-size: .8rem;
+}
+.vf-topbar__isi {
+  box-sizing: content-box;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: var(--wp--style--global--wide-size, 1200px);
+  margin-inline: auto;
+  padding: .35rem var(--wp--style--root--padding-right, 1.25rem);
+}
+.vf-topbar__slogan { display: none; }
+
+/* ---------- header ---------- */
+
+.wp-site-blocks > header.wp-block-template-part { position: sticky; top: 0; z-index: 60; }
+.admin-bar .wp-site-blocks > header.wp-block-template-part { top: 32px; }
+@media (max-width: 782px) {
+  .admin-bar .wp-site-blocks > header.wp-block-template-part { top: 0; }
+}
+.vf-header { box-shadow: 0 2px 14px rgba(0, 0, 0, .12); }
+.vf-header__bar { gap: 1.2rem; }
+/* Logo umumnya bertulisan gelap; tanpa alas putih tidak terbaca di header berwarna. */
+.vf-header .wp-block-site-logo a {
+  display: inline-flex;
+  padding: .45rem .8rem;
+  border-radius: 10px;
+  background: var(--wp--preset--color--putih);
+}
+.vf-header .wp-block-site-logo img { max-height: 46px; width: auto; }
+/* Nama situs hanya tampil kalau logo belum dipasang (blok logo tidak mencetak apa pun). */
+.vf-header .wp-block-site-logo + .vf-nama-situs { display: none; }
+.vf-nama-situs { margin: 0; font-size: 1.2rem; font-weight: 800; }
+.vf-nav { margin-left: auto; }
+.vf-nav .current-menu-item > .wp-block-navigation-item__content { color: var(--wp--preset--color--aksen-di-primary); }
+.vf-nav .wp-block-navigation__responsive-container.is-menu-open { padding: 2rem 1.5rem; }
+.vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__container { gap: 1rem; }
+
+@media (max-width: 781px) {
+  /* !important: .wp-block-buttons{display:flex} bawaan core dimuat sesudah tema. */
+  .vf-header__aksi { display: none !important; }
+}
+@media (min-width: 782px) {
+  .vf-topbar__slogan { display: inline; }
+}
+
+/* ---------- judul bar rubrik / seksi ---------- */
+
+.vf-rubrik-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end !important;
+  gap: 1rem;
+  margin-bottom: 1.1rem !important;
+  border-bottom: 3px solid var(--wp--preset--color--primary);
+}
+.vf-rubrik-bar h1,
+.vf-rubrik-bar h2 {
+  margin: 0;
+  padding: .4rem .95rem;
+  border-radius: 6px 6px 0 0;
+  background: var(--wp--preset--color--primary);
+  color: var(--wp--preset--color--di-primary);
+  font-size: .95rem;
+  line-height: 1.4;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.vf-rubrik-bar h1 { font-size: 1.15rem; }
+.vf-rubrik-bar p { margin: 0; padding-bottom: .35rem; font-size: .85rem; font-weight: 700; }
+.vf-rubrik-bar p a { color: var(--wp--preset--color--aksen-teks); text-decoration: none; }
+.vf-rubrik-bar p a:hover { text-decoration: underline; }
+
+/* ---------- label kategori (post-terms) ---------- */
+
+.vf-label { margin: 0 0 .45rem; line-height: 1; }
+.vf-label a {
+  display: inline-block;
+  padding: .22rem .55rem;
+  border-radius: 4px;
+  background: var(--wp--preset--color--aksen);
+  color: var(--wp--preset--color--di-aksen) !important;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-decoration: none !important;
+  text-transform: uppercase;
+}
+/* Satu label cukup: artikel dengan beberapa kategori tidak memanjangkan kartu. */
+.vf-label a ~ a,
+.vf-label .wp-block-post-terms__separator { display: none; }
+
+/* ---------- kartu berita ---------- */
+
+.wp-block-post-date { font-size: .8rem; }
+.vf-kartu .wp-block-post-featured-image,
+.vf-daftar .wp-block-post-featured-image,
+.vf-utama .wp-block-post-featured-image { margin: 0; overflow: hidden; border-radius: 10px; background: var(--wp--preset--color--latar); }
+.vf-kartu .wp-block-post-featured-image img,
+.vf-daftar .wp-block-post-featured-image img,
+.vf-utama .wp-block-post-featured-image img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .3s ease; }
+.vf-kartu li:hover .wp-block-post-featured-image img,
+.vf-daftar li:hover .wp-block-post-featured-image img,
+.vf-utama li:hover .wp-block-post-featured-image img { transform: scale(1.04); }
+.vf-kartu .wp-block-post-featured-image { margin-bottom: .75rem; }
+.vf-kartu .wp-block-post-title { margin: .45rem 0 .3rem; font-size: 1.02rem; line-height: 1.35; }
+.vf-kartu .wp-block-post-date { margin: 0; }
+
+.vf-daftar { display: grid; gap: .95rem; }
+.vf-daftar > li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: .85rem; align-items: start; margin: 0; }
+/* Artikel tanpa foto utama: blok foto tidak mencetak apa pun, teks mengisi penuh. */
+.vf-daftar > li:not(:has(.wp-block-post-featured-image)) { grid-template-columns: minmax(0, 1fr); }
+.vf-daftar .wp-block-post-featured-image { border-radius: 8px; }
+.vf-daftar .wp-block-post-title { margin: 0 0 .3rem; font-size: .93rem; line-height: 1.35; }
+.vf-daftar .wp-block-post-date { margin: 0; }
+.vf-daftar__teks > * { margin-block: 0; }
+
+.vf-utama__kartu {
+  position: relative;
+  min-height: 320px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap));
+}
+.vf-utama .wp-block-post-featured-image { border-radius: 12px; }
+.vf-utama__teks {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 3.5rem 1.2rem 1.1rem;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .86));
+  color: #fff;
+}
+.vf-utama__teks > * { margin-block: 0; }
+.vf-utama__teks .wp-block-post-title { margin: .35rem 0; font-size: clamp(1.2rem, 3.6vw, 1.95rem); line-height: 1.25; }
+.vf-utama__teks .wp-block-post-title a,
+.vf-utama__teks .wp-block-post-date,
+.vf-utama__teks .wp-block-post-excerpt { color: #fff; }
+.vf-utama__teks .wp-block-post-excerpt { margin-top: .4rem; font-size: .92rem; opacity: .9; }
+.vf-utama__teks .wp-block-post-excerpt__excerpt { margin: 0; }
+
+/* ---------- tata letak isi + kolom samping ---------- */
+
+.vf-tata { gap: 2.5rem; }
+.vf-tata > .wp-block-column { min-width: 0; }
+.vf-seksi { margin-block: 0 2.4rem !important; }
+.vf-utama-baris { gap: 1.1rem; margin-bottom: 2rem !important; }
+
+.vf-samping { display: grid; gap: 1.5rem; }
+.vf-samping > * { margin: 0 !important; }
+.vf-kotak {
+  padding: 1rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 10px;
+  background: var(--wp--preset--color--putih);
+}
+.vf-kotak > * + * { margin-block-start: .8rem; }
+.vf-kotak p { font-size: .92rem; }
+
+.vf-populer { display: grid; gap: .85rem; margin: 0; padding: 0; list-style: none; counter-reset: populer; }
+.vf-populer li { display: grid; grid-template-columns: 2rem 1fr; gap: .55rem; align-items: start; counter-increment: populer; }
+.vf-populer li::before { content: counter(populer); color: var(--wp--preset--color--aksen-teks); font-size: 1.45rem; font-weight: 800; line-height: 1; }
+.vf-populer a { color: var(--wp--preset--color--ink); font-size: .9rem; font-weight: 700; line-height: 1.35; text-decoration: none; }
+.vf-populer a:hover { color: var(--wp--preset--color--aksen-teks); }
+
+.vf-daftar-rubrik { margin: 0; padding: 0; list-style: none; }
+.vf-daftar-rubrik li { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--wp--preset--color--garis); }
+.vf-daftar-rubrik a { color: var(--wp--preset--color--ink); font-weight: 600; text-decoration: none; }
+.vf-daftar-rubrik a:hover { color: var(--wp--preset--color--aksen-teks); }
+
+@media (min-width: 782px) {
+  .vf-samping { position: sticky; top: 130px; }
+}
+
+/* ---------- halaman & artikel ---------- */
+
+.vf-judul-halaman .wp-block-post-title { margin: 0; font-size: clamp(1.6rem, 4vw, 2.4rem); }
+.vf-artikel__judul { margin: .5rem 0 .4rem; font-size: clamp(1.5rem, 4.6vw, 2.35rem) !important; line-height: 1.25; }
+.vf-artikel__tanggal { margin: 0 0 1.1rem; }
+.vf-artikel__foto { margin: 0 0 1.3rem; overflow: hidden; border-radius: 12px; }
+.vf-artikel__foto img { display: block; width: 100%; }
+.vf-artikel__isi { font-size: 1.05rem; }
+.vf-terkait { margin-top: 2.6rem !important; }
+.wp-block-query-pagination { margin-top: 2rem; gap: .4rem; }
+.wp-block-query-pagination-numbers .page-numbers {
+  display: inline-block;
+  min-width: 2.2rem;
+  padding: .35rem .5rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 6px;
+  text-align: center;
+  text-decoration: none;
+}
+.wp-block-query-pagination-numbers .page-numbers.current { background: var(--wp--preset--color--primary); border-color: var(--wp--preset--color--primary); color: var(--wp--preset--color--di-primary); }
+
+/* ---------- beranda perusahaan ---------- */
+
+.vf-hero { background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap)); }
+/* Hero menempel ke header: batalkan jarak atas <main> di template front-page. */
+.wp-block-post-content > .vf-hero:first-child { margin-top: calc(-1 * var(--wp--preset--spacing--40)) !important; }
+.vf-hero h1 { color: inherit; }
+.vf-hero p { font-size: 1.1rem; opacity: .92; }
+.vf-hero__poin { padding-left: 1.2rem; }
+.vf-kartu-isi { height: 100%; }
+.vf-kartu-isi h3 { margin-top: 0; font-size: 1.15rem; }
+.vf-langkah { counter-reset: langkah; flex-wrap: wrap !important; }
+/* Lima langkah di kolom konten 760px: judul ukuran h3 tema (1.6rem+) memotong kata
+   di tengah ("Sampaika/n", glcagro.com 2026-09-15). Kolom boleh turun baris. */
+.vf-langkah > .wp-block-column { counter-increment: langkah; flex: 1 1 9rem !important; min-width: 0; }
+.vf-langkah h3 { margin-top: 0; font-size: 1.05rem; line-height: 1.3; overflow-wrap: normal; word-break: normal; hyphens: manual; }
+.vf-langkah > .wp-block-column::before {
+  content: counter(langkah);
+  display: grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  margin-bottom: .6rem;
+  border-radius: 50%;
+  background: var(--wp--preset--color--aksen);
+  color: var(--wp--preset--color--di-aksen);
+  font-weight: 800;
+}
+.vf-ajakan { border-radius: 14px; }
+.vf-ajakan h2 { color: inherit; }
+
+/* ---------- kontak & form (blok velocity/kontak, velocity/form-kirim) ---------- */
+
+.vf-kontak { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.vf-kontak li { margin: 0; }
+.vf-kontak span { display: block; font-size: .75rem; font-weight: 700; letter-spacing: .05em; opacity: .75; text-transform: uppercase; }
+
+.vf-form {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  padding: 1.4rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 12px;
+  background: var(--wp--preset--color--putih);
+}
+.vf-form__baris { display: grid; gap: .35rem; margin: 0; }
+.vf-form label { color: var(--wp--preset--color--ink); font-size: .85rem; font-weight: 700; }
+.vf-form label span { color: #b42318; }
+.vf-form input,
+.vf-form select,
+.vf-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: .7rem .8rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--wp--preset--color--ink);
+  font: inherit;
+}
+.vf-form input:focus,
+.vf-form select:focus,
+.vf-form textarea:focus { outline: 2px solid var(--wp--preset--color--primary); outline-offset: 1px; }
+.vf-form__jebakan { position: absolute !important; left: -9999px; }
+.vf-form__kirim { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; margin: 0; }
+.vf-form__kirim button { cursor: pointer; border: 0; }
+.vf-form__catatan { margin: 0; font-size: .8rem; color: var(--wp--preset--color--abu); }
+.vf-notif { margin: 0; padding: .8rem 1rem; border-radius: 8px; }
+.vf-notif--ok { background: #e8f6ee; color: #14532d; }
+.vf-notif--gagal { background: #fdecec; color: #7f1d1d; }
+@media (min-width: 640px) {
+  .vf-form { grid-template-columns: 1fr 1fr; }
+  .vf-form__penuh { grid-column: 1 / -1; }
+}
+
+/* ---------- footer ---------- */
+
+.vf-footer h1, .vf-footer h2, .vf-footer h3, .vf-footer h4 { color: inherit; }
+.vf-footer__nama { margin: 0 0 .6rem; font-size: 1.25rem; font-weight: 800; }
+.vf-footer__teks { font-size: .92rem; opacity: .88; }
+.vf-footer__judul { margin: 0 0 .8rem; font-size: .95rem !important; letter-spacing: .06em; text-transform: uppercase; }
+.vf-footer__menu .wp-block-navigation__container { gap: .45rem; }
+.vf-footer .vf-kontak { font-size: .92rem; }
+/* Ikon media sosial (aturan user 2026-09-14): ikon saja, ikut warna teks sekitarnya. */
+.vf-sosmed.wp-block-social-links { gap: .9rem; margin-top: 1rem; font-size: 1.35rem; }
+.vf-sosmed .wp-social-link { color: inherit; }
+.vf-sosmed .wp-social-link a { color: inherit !important; padding: 0; }
+.vf-sosmed .wp-social-link:hover { transform: translateY(-2px); opacity: .85; }
+.wp-block-post-content .vf-sosmed { color: var(--wp--preset--color--primary); }
+.vf-footer__bawah {
+  gap: .35em;
+  margin-top: 2rem !important;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  font-size: .85rem;
+}
+.vf-footer__bawah p { margin: 0; }
+.vf-footer a { text-decoration: none; }
+.vf-footer a:hover { text-decoration: underline; }
+
+/* ---------- font dari referensi desain klien (velocity_situs font_teks/font_judul) ---------- */
+
+body { font-family: var(--vf-font-teks, var(--wp--preset--font-family--jakarta)); }
+
+/* ---------- gaya beranda "sorotan" (body.vf-gaya-sorotan) ----------
+   Majalah foto: header putih, pita judul seksi berikon di tengah, kartu foto
+   selebar layar dengan judul serif di tengah, grid 2 kolom per rubrik, pita kaki
+   hitam. Diturunkan dari referensi klien anaksegalabangsa.com
+   (ourgrandfatherstory.com) — ukurannya mengikuti CSS referensi: kartu 37vw,
+   lapisan gelap 40%, ikon cincin 22px/7px, jarak kartu 12px / 1vw. */
+
+.vf-gaya-sorotan .vf-topbar { display: none; }
+.vf-gaya-sorotan .vf-header {
+  background: var(--wp--preset--color--putih) !important;
+  color: var(--wp--preset--color--ink) !important;
+  box-shadow: 0 1px 0 var(--wp--preset--color--garis);
+}
+.vf-gaya-sorotan .vf-header a:where(:not(.wp-element-button)),
+.vf-gaya-sorotan .vf-nav .wp-block-navigation-item__content { color: var(--wp--preset--color--primary); }
+.vf-gaya-sorotan .vf-nav .wp-block-navigation-item__content { font-weight: 700; }
+.vf-gaya-sorotan .vf-nav .current-menu-item > .wp-block-navigation-item__content { color: var(--wp--preset--color--aksen-teks); }
+.vf-gaya-sorotan .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { color: var(--wp--preset--color--di-primary); }
+.vf-gaya-sorotan .vf-header .wp-block-site-logo a { padding: 0; background: transparent; }
+.vf-gaya-sorotan.home main.wp-block-group { padding-top: 0 !important; }
+/* Pita judul & kartu saling menempel seperti referensi; blockGap bawaan menyisakan pita putih. */
+.vf-gaya-sorotan .wp-block-post-content > .vf-masthead + .wp-block-query,
+.vf-gaya-sorotan .wp-block-post-content > .wp-block-query + .vf-masthead { margin-block-start: 0 !important; }
+.vf-gaya-sorotan .wp-block-post-content > .wp-block-query + .vf-masthead { margin-top: 12px !important; }
+
+.vf-masthead {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Hanya atas-bawah: margin kiri-kanan negatif milik alignfull harus tetap ada. */
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding: 40px 30px !important;
+  background: var(--wp--preset--color--primary-gelap);
+  color: var(--wp--preset--color--di-primary);
+  text-align: center;
+  box-shadow: inset 0 15px 30px -15px rgba(0, 0, 0, .6);
+}
+.vf-masthead::before {
+  content: "";
+  position: relative;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  margin: 0 auto 12px;
+  border: 7px solid var(--wp--preset--color--aksen);
+  border-radius: 50%;
+}
+.vf-masthead > * { position: relative; z-index: 1; margin: 0 !important; }
+.vf-masthead h2 {
+  color: inherit;
+  font-family: var(--vf-font-teks, inherit);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.vf-masthead p { max-width: 1140px; margin-top: .7em !important; font-size: .82rem; opacity: .9; }
+.vf-masthead p a { color: inherit; font-weight: 700; }
+/* Pita pembuka: bidang warna aksen melengkung di atas warna utama. */
+.vf-masthead--hot { background: var(--wp--preset--color--primary); color: var(--wp--preset--color--di-aksen); box-shadow: inset -4vw 0 0 var(--wp--preset--color--primary-gelap); }
+.vf-masthead--hot::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  /* Bidang aksen harus menutupi judul di tengah: tulisan yang menyeberang ke
+     warna utama tidak terbaca (percobaan pertama anaksegalabangsa.com). */
+  top: -150%;
+  bottom: 0;
+  left: 28%;
+  right: 3.7%;
+  border-radius: 0 0 50% 50%;
+  background: var(--wp--preset--color--aksen);
+}
+.vf-masthead--hot::before { border-color: var(--wp--preset--color--putih); }
+
+.vf-sampul { display: grid; gap: 12px; margin: 0 !important; padding: 0; list-style: none; }
+.vf-sampul > li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 37vw;
+  margin: 0;
+  padding: 40px 30px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap));
+  color: #fff;
+  text-align: center;
+}
+.vf-sampul > li::before { content: ""; position: absolute; inset: 0; z-index: 1; background: rgba(0, 0, 0, .4); transition: background .3s ease; }
+.vf-sampul > li:hover::before { background: rgba(0, 0, 0, .55); }
+.vf-sampul .wp-block-post-featured-image { position: absolute; inset: 0; margin: 0; }
+.vf-sampul .wp-block-post-featured-image a,
+.vf-sampul .wp-block-post-featured-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vf-sampul__teks { position: relative; z-index: 2; max-width: 1140px; }
+.vf-sampul__teks > * { margin: 0 !important; }
+.vf-sampul .wp-block-post-title {
+  font-family: var(--vf-font-judul, var(--vf-font-teks, inherit));
+  font-size: clamp(1.25rem, 1.9vw, 1.75rem);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.vf-sampul .wp-block-post-title a { color: #fff !important; text-decoration: none; }
+.vf-sampul .wp-block-post-title a:hover { box-shadow: 0 2px 0 #fff; }
+.vf-sampul .wp-block-post-terms { font-size: .95rem; font-weight: 700; }
+.vf-sampul .wp-block-post-terms::before {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: 12px auto;
+  border: 7px solid #fff;
+  border-radius: 50%;
+}
+.vf-sampul .wp-block-post-terms a { color: #fff !important; text-decoration: none; }
+.vf-sampul .wp-block-post-terms a ~ a,
+.vf-sampul .wp-block-post-terms .wp-block-post-terms__separator { display: none; }
+.vf-sampul.vf-sampul--dua { gap: 1vw; }
+.vf-sampul--dua > li { padding-bottom: 55px; }
+/* Rubrik dengan jumlah artikel ganjil: kartu terakhir melebar, tidak menyisakan slot kosong. */
+.vf-sampul--dua > li:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.vf-gaya-sorotan .vf-footer { padding-bottom: 0 !important; }
+.vf-gaya-sorotan .vf-footer__bawah {
+  justify-content: center;
+  max-width: none !important;
+  margin: 2.5rem calc(50% - 50vw) 0 !important;
+  padding: 22px 30px;
+  border-top: 0;
+  background: #141414;
+  color: #fff;
+  font-size: .75rem;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.vf-gaya-sorotan .vf-footer__bawah a { color: #fff; }
+
+/* ---------- ikon pencarian di header (core/search "button-only") ----------
+   Klik ikon membuka kolom cari (perilaku bawaan blok), konsep dari header referensi
+   klien anaksegalabangsa.com. Di HP kolom terbuka melebar di bawah bar header. */
+.vf-header__bar { position: relative; }
+.vf-cari { flex-shrink: 0; margin: 0 !important; }
+.vf-cari .wp-block-search__inside-wrapper { padding: 0 !important; border: 0 !important; background: transparent !important; }
+.vf-cari .wp-block-search__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50%;
+  background: transparent !important;
+  color: inherit !important;
+}
+.vf-cari .wp-block-search__button svg { width: 26px; height: 26px; min-width: 26px; fill: currentColor; }
+.vf-cari .wp-block-search__button:hover,
+.vf-cari .wp-block-search__button:focus-visible { background: rgba(0, 0, 0, .07) !important; }
+.vf-cari .wp-block-search__input {
+  padding: 6px 10px !important;
+  border: 0 !important;
+  border-bottom: 1px solid currentColor !important;
+  border-radius: 0 !important;
+  background: transparent;
+  color: inherit;
+  font-family: var(--vf-font-judul, inherit);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.vf-cari .wp-block-search__input:focus { outline: none; border-bottom-width: 2px !important; }
+.vf-cari .wp-block-search__input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+
+@media (min-width: 782px) {
+  /* Kolom terbuka menimpa menu di kiri ikon, tidak mendorong isi bar (menu sempat turun 2 baris). */
+  .vf-cari .wp-block-search__inside-wrapper { position: relative; }
+  .vf-cari .wp-block-search__input {
+    position: absolute;
+    top: 50%;
+    right: calc(100% + 6px);
+    z-index: 5;
+    transform: translateY(-50%);
+    background: var(--wp--preset--color--putih, #fff) !important;
+    color: var(--wp--preset--color--ink) !important;
+  }
+  .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__input { width: min(340px, 40vw) !important; }
+}
+.vf-gaya-sorotan .vf-cari .wp-block-search__button { color: var(--wp--preset--color--primary) !important; }
+.vf-gaya-sorotan .vf-cari .wp-block-search__input { color: var(--wp--preset--color--ink); }
+
+@media (max-width: 781px) {
+  /* Tombol menu & ikon cari berdampingan di kanan. Bar ber-justify space-between dan margin
+     .vf-nav terhitung 0 (ditimpa layout flex WP), sehingga hamburger jatuh di tengah bar. */
+  .vf-header__bar { gap: .25rem !important; }
+  .vf-header__bar > .vf-nav { margin-left: auto !important; }
+  /* Tanpa margin otomatis: .vf-nav sudah margin-left:auto, dua-duanya membelah ruang kosong. */
+  .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__inside-wrapper {
+    position: absolute;
+    top: calc(100% + .7rem);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    padding: 12px 16px !important;
+    background: var(--wp--preset--color--putih, #fff) !important;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .12);
+  }
+  .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__input { width: 100% !important; color: var(--wp--preset--color--ink); }
+  .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__button { color: var(--wp--preset--color--ink) !important; }
+}
+
+/* Caption foto utama artikel (filter render_block_core/post-featured-image di inc/situs.php). */
+.wp-block-post-featured-image .wp-element-caption {
+  margin: 8px 0 0;
+  color: var(--wp--preset--color--abu, #6b6b6b);
+  font-size: .8rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+/* ---------- arsip rubrik "sorotan" (templates/archive-sorotan.html) ----------
+   Konsep arsip rubrik referensi: pita judul + keterangan rubrik, tulisan terbaru
+   sebagai kartu foto selebar layar, sisanya grid 4 kolom (foto, judul di bawah).
+   Dipilih inc/situs.php untuk situs bergaya sorotan saja. */
+/* Tepi grid dari lebar layar: nilai % di variabel dihitung ulang di tiap elemen pemakainya. */
+.vf-arsip-sorotan { --vf-tepi: max(16px, calc((100vw - var(--wp--style--global--wide-size, 1240px)) / 2)); }
+.vf-gaya-sorotan main.vf-arsip-sorotan { padding-top: 0 !important; }
+.vf-arsip-sorotan > * + * { margin-block-start: 0 !important; }
+.vf-masthead--arsip { padding: 56px 30px !important; }
+.vf-masthead--arsip .vf-rubrik-bar { display: block; margin: 0; padding: 0; border: 0; background: none; }
+.vf-masthead--arsip .vf-rubrik-bar h1 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  font-family: var(--vf-font-judul, var(--vf-font-teks, inherit));
+  font-size: clamp(1.7rem, 3.2vw, 2.6rem);
+  text-transform: none;
+}
+.vf-masthead--arsip .wp-block-term-description { max-width: 720px; margin-top: .8em !important; }
+.vf-masthead--arsip .wp-block-term-description p { margin: 0 !important; font-size: .95rem; line-height: 1.6; opacity: .9; }
+
+.vf-sampul.vf-sampul--arsip { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 32px 20px; padding: 0 var(--vf-tepi); }
+.vf-sampul--arsip > li { min-height: 0; padding: 0; overflow: visible; background: none; color: var(--wp--preset--color--ink); text-align: left; justify-content: flex-start; align-items: stretch; }
+.vf-sampul--arsip > li::before { display: none; }
+.vf-sampul--arsip .wp-block-post-featured-image {
+  position: relative;
+  inset: auto;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap));
+}
+.vf-sampul--arsip .wp-block-post-featured-image img { transition: transform .4s ease; }
+.vf-sampul--arsip > li:hover .wp-block-post-featured-image img { transform: scale(1.04); }
+.vf-sampul--arsip .vf-sampul__teks { padding-top: 12px; }
+.vf-sampul--arsip .wp-block-post-title { font-size: 1.05rem; line-height: 1.35; }
+.vf-sampul--arsip .wp-block-post-title a { color: var(--wp--preset--color--ink) !important; }
+.vf-sampul--arsip .wp-block-post-title a:hover { box-shadow: none; color: var(--wp--preset--color--aksen-teks) !important; }
+.vf-sampul--arsip .wp-block-post-date { margin-top: 6px !important; font-size: .8rem; color: var(--wp--preset--color--abu, #6b6b6b); }
+/* Halaman pertama: tulisan terbaru jadi kartu foto selebar layar, judul di atas foto. */
+body:not(.paged) .vf-sampul--arsip > li:first-child {
+  grid-column: 1 / -1;
+  min-height: 37vw;
+  /* Selebar layar seperti kartu sorotan beranda (list berada di tengah layar). */
+  margin: 0 calc(50% - 50vw) 8px;
+  padding: 40px 30px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap));
+  justify-content: center;
+  align-items: center;
+  color: #fff;
+  text-align: center;
+}
+body:not(.paged) .vf-sampul--arsip > li:first-child::before { display: block; }
+body:not(.paged) .vf-sampul--arsip > li:first-child .wp-block-post-featured-image { position: absolute; inset: 0; aspect-ratio: auto; }
+body:not(.paged) .vf-sampul--arsip > li:first-child:hover .wp-block-post-featured-image img { transform: none; }
+body:not(.paged) .vf-sampul--arsip > li:first-child .vf-sampul__teks { padding-top: 0; }
+body:not(.paged) .vf-sampul--arsip > li:first-child .wp-block-post-title { font-size: clamp(1.5rem, 2.6vw, 2.3rem); }
+body:not(.paged) .vf-sampul--arsip > li:first-child .wp-block-post-title a { color: #fff !important; }
+body:not(.paged) .vf-sampul--arsip > li:first-child .wp-block-post-title a:hover { color: #fff !important; box-shadow: 0 2px 0 #fff; }
+body:not(.paged) .vf-sampul--arsip > li:first-child .wp-block-post-date { color: rgba(255, 255, 255, .85); }
+.vf-arsip-sorotan .wp-block-query-pagination { margin-top: 40px !important; padding: 0 var(--vf-tepi); }
+.vf-arsip-sorotan .wp-block-query-no-results { padding: 40px var(--vf-tepi); }
+
+/* ---------- artikel "sorotan" (templates/single-sorotan.html) ----------
+   Konsep halaman artikel referensi: bidang 1140px di latar abu muda, foto 16:9,
+   kolom isi 60% (judul serif, meta, tombol bagikan selebar kolom, penulis bergaris
+   atas) dan kolom putih 40% berisi kartu foto tulisan lain. */
+body.single.vf-gaya-sorotan { background: #f4f4f4; }
+.vf-single-sorotan { max-width: 1140px; margin: 60px auto 0 !important; padding: 0 !important; }
+.vf-single-sorotan > * + * { margin-block-start: 0 !important; }
+.vf-single-sorotan__foto { margin: 0 !important; background: linear-gradient(135deg, var(--wp--preset--color--primary), var(--wp--preset--color--primary-gelap)); }
+.vf-single-sorotan__foto img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vf-single-sorotan__foto .wp-element-caption { margin: 0; padding: 8px 40px; background: #fff; }
+.vf-single-sorotan__baris { gap: 0 !important; margin: 0 !important; align-items: stretch !important; }
+.vf-single-sorotan__utama { padding: 40px !important; }
+.vf-single-sorotan__samping { padding: 40px !important; background: #fff; }
+.vf-single-sorotan__utama .wp-block-post-title {
+  margin: 0 0 .8rem;
+  font-family: var(--vf-font-judul, var(--vf-font-teks, inherit));
+  font-size: 1.5625rem !important;
+  line-height: 2rem;
+}
+.vf-single-sorotan__meta { gap: 0 1em; margin: 0 0 .8rem !important; font-size: 1rem; }
+.vf-single-sorotan__meta .wp-block-post-terms { font-weight: 700; }
+.vf-single-sorotan__meta .wp-block-post-terms a { color: var(--wp--preset--color--primary); text-decoration: none; }
+.vf-single-sorotan__meta .wp-block-post-date { font-family: var(--vf-font-judul, inherit); font-weight: 600; }
+/* [velocity-sharepost] mencetak gaya inline & label berbahasa Inggris: dirapikan jadi deretan tombol ikon. */
+.vf-single-sorotan .social-share-buttons { margin: 0 0 1.5rem; }
+/* Blok shortcode membungkus tombol dengan <p> (wpautop): hanya label "Share this post" yang disembunyikan. */
+.vf-single-sorotan .social-share-buttons > p.fw-bold { display: none; }
+.vf-single-sorotan .social-share-buttons > p:not(.fw-bold) { display: flex; gap: 10px; margin: 0; }
+.vf-single-sorotan .social-share-buttons > p:not(.fw-bold) br { display: none; }
+.vf-single-sorotan .social-share-buttons .share-button {
+  flex: 1;
+  justify-content: center;
+  margin: 0 !important;
+  padding: 10px !important;
+  border-radius: 0 !important;
+  transition: background-color .4s ease;
+}
+.vf-single-sorotan .social-share-buttons .share-button:hover { background-color: #141414 !important; }
+.vf-single-sorotan .social-share-buttons .share-button span { display: none; }
+.vf-single-sorotan .vf-artikel__isi { font-size: 1rem; line-height: 1.6; }
+/* Subjudul isi: serif sedang seperti referensi, bukan judul tebal besar bawaan tema. */
+.vf-single-sorotan .vf-artikel__isi :where(h2, h3, h4) {
+  margin: 1.8em 0 .6em;
+  font-family: var(--vf-font-judul, inherit);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.vf-single-sorotan .vf-artikel__isi h2 { font-size: 1.3rem !important; }
+.vf-single-sorotan .vf-artikel__isi h3 { font-size: 1.12rem !important; }
+.vf-penulis { margin-top: 2rem !important; }
+.vf-penulis > * { margin: 0 !important; }
+.vf-penulis__label {
+  display: inline-block;
+  padding: .5rem 3rem 0 0;
+  border-top: 1px solid var(--wp--preset--color--ink);
+  font-size: .8rem;
+  text-transform: uppercase;
+}
+.vf-penulis__nama { font-family: var(--vf-font-judul, inherit); font-size: 1.25rem; color: var(--wp--preset--color--primary); }
+.vf-single-sorotan__judul-samping { margin: .7rem 0 1.5rem !important; font-size: 1rem !important; text-align: center; text-transform: uppercase; }
+.vf-sampul.vf-sampul--samping { gap: 12px; }
+.vf-sampul--samping > li { min-height: 210px; padding: 24px 20px; }
+.vf-sampul--samping .wp-block-post-title { font-size: 1.1rem; }
+
+@media (max-width: 1024px) {
+  .vf-sampul.vf-sampul--arsip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1180px) {
+  .vf-single-sorotan { margin-top: 0 !important; }
+}
+
+@media (max-width: 781px) {
+  .vf-single-sorotan__utama,
+  .vf-single-sorotan__samping { padding: 24px 20px !important; }
+  .vf-single-sorotan__foto .wp-element-caption { padding: 8px 20px; }
+}
+
+@media (max-width: 781px) {
+  .vf-sampul > li { min-height: 56vw; }
+  body:not(.paged) .vf-sampul--arsip > li:first-child { min-height: 70vw; padding: 30px 20px; }
+  .vf-masthead--arsip { padding: 40px 20px !important; }
+}
+
+@media (max-width: 600px) {
+  .vf-sampul.vf-sampul--arsip { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .vf-sampul.vf-sampul--dua { grid-template-columns: minmax(0, 1fr) !important; gap: 12px; }
+  .vf-masthead--hot::after { left: 6%; right: 6%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .vf-kartu .wp-block-post-featured-image img,
+  .vf-daftar .wp-block-post-featured-image img,
+  .vf-utama .wp-block-post-featured-image img { transition: none; }
+}

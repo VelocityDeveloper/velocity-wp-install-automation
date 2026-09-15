@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+/*
+ * Potret satu halaman penuh lewat Playwright (viewport normal + digulir supaya
+ * gambar lazy-load ikut termuat). Dipakai paket-g-cek-visual untuk situs
+ * referensi klien: Chromium CLI (--screenshot) menggantung di situs berat seperti
+ * ourgrandfatherstory.com, dan jendela setinggi ribuan px merusak elemen ber-vh.
+ *
+ * Pemakaian: potret-halaman <url> <keluaran.png> [lebar] [tinggi]
+ * Modul dibaca dari VELOCITY_BLOCKVAL (bawaan /var/lib/velocity/tools/blockval).
+ * Kode keluar: 0 berhasil, 1 gagal, 3 playwright-core belum terpasang.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const akar = process.env.VELOCITY_BLOCKVAL || '/var/lib/velocity/tools/blockval';
+const modul = path.join(akar, 'node_modules', 'playwright-core');
+if (!fs.existsSync(modul)) {
+  console.log('potret:playwright_tidak_ada');
+  process.exit(3);
+}
+const { chromium } = require(modul);
+const [url, keluaran, lebar = '1366', tinggi = '900'] = process.argv.slice(2);
+const chrome = process.env.VELOCITY_CHROME
+  || fs.readdirSync('/root/.cache/ms-playwright').filter((d) => d.startsWith('chromium-')).sort().reverse()
+    .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox'] });
+  // Batas keseluruhan: situs yang tidak pernah selesai tidak boleh menahan installer.
+  const berhenti = setTimeout(() => { console.log('potret:timeout'); process.exit(1); }, 150000);
+  try {
+    const page = await browser.newPage({
+      viewport: { width: +lebar, height: +tinggi },
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+    });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+    for (let i = 0; i < 30; i += 1) {
+      await page.mouse.wheel(0, 900);
+      await page.waitForTimeout(250);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: keluaran, fullPage: true, timeout: 60000 });
+    console.log(`potret:ok:${keluaran}`);
+    clearTimeout(berhenti);
+    await browser.close();
+    process.exit(0);
+  } catch (e) {
+    console.log(`potret:gagal:${e.message.split('\n')[0]}`);
+    process.exit(1);
+  }
+})();

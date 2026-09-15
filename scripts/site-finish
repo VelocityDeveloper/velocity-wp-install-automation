@@ -376,9 +376,47 @@ if [[ -n "$TAGLINE" ]]; then
 fi
 
 if [[ -n "$CSS" ]]; then
-  VCSS="$CSS" wp eval '$c = wp_get_custom_css(); if ($c === "" || strpos($c, "velocity-installer-colors") !== false) { $r = wp_update_custom_css_post(getenv("VCSS")); echo is_wp_error($r) ? "colors_failed" : "colors_set"; } else { echo "colors_kept"; }' >&2 || true
+  VCSS="$CSS" wp eval '$c = wp_get_custom_css(); if (get_stylesheet() === "velocity-fse") { echo "colors_skip:palet_tema_fse"; } elseif ($c === "" || strpos($c, "velocity-installer-colors") !== false) { $r = wp_update_custom_css_post(getenv("VCSS")); echo is_wp_error($r) ? "colors_failed" : "colors_set"; } else { echo "colors_kept"; }' >&2 || true
   echo >&2
 fi
+
+# Kredit "Design by Velocity Developer" di baris hak cipta footer (keputusan
+# user 2026-09-14). Tema induk velocity mencetak baris itu langsung di kode
+# (justg_the_footer_content) tanpa filter, jadi kreditnya disisipkan lewat
+# mu-plugin yang membungkus justg_do_footer. Child theme Paket G & tema FSE tidak
+# memanggil kait itu (kreditnya ditulis di footer mereka sendiri) sehingga
+# mu-plugin ini diam di sana; footer yang sudah memuat velocitydeveloper.com
+# juga dibiarkan. Berkas milik installer: ditimpa setiap finishing.
+MU="$DOCROOT/wp-content/mu-plugins"
+mkdir -p "$MU"
+cat > "$MU/velocity-footer-credit.php" <<'PHP'
+<?php
+/**
+ * Plugin Name: Velocity Footer Credit
+ * Description: Menambahkan "Design by Velocity Developer" di baris hak cipta footer tema Velocity. Dipasang installer (site-finish) dan ditimpa setiap finishing.
+ */
+defined('ABSPATH') || exit;
+
+add_action('justg_do_footer', function () {
+    ob_start();
+    $GLOBALS['velocity_footer_credit_ob'] = ob_get_level();
+}, 0);
+
+add_action('justg_do_footer', function () {
+    if (empty($GLOBALS['velocity_footer_credit_ob']) || ob_get_level() !== $GLOBALS['velocity_footer_credit_ob']) {
+        return;
+    }
+    $html = (string) ob_get_clean();
+    if (stripos($html, 'velocitydeveloper.com') === false) {
+        $kredit = '. Design by <a href="https://velocitydeveloper.com" target="_blank" rel="noopener">Velocity Developer</a>';
+        $html = preg_replace('#(<div class="site-info[^"]*">.*?)(</div>)#s', '$1' . $kredit . '$2', $html, 1);
+    }
+    echo $html;
+}, PHP_INT_MAX);
+PHP
+chown --reference="$DOCROOT/wp-content" "$MU" "$MU/velocity-footer-credit.php" 2>/dev/null || true
+chmod 644 "$MU/velocity-footer-credit.php"
+php -l "$MU/velocity-footer-credit.php" >/dev/null 2>&1 && echo "footer_credit_set" >&2 || { rm -f "$MU/velocity-footer-credit.php"; echo "footer_credit_gagal:php_lint" >&2; }
 
 rm -rf "$M"
 echo "finish_done" >&2
