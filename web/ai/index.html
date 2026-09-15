@@ -11,12 +11,11 @@
         --panel: #0d1210;
         --line: #1b2b22;
         --text: #c8d7cc;
-        --muted: #718579;
+        --muted: #8a9e91;
         --green: #55e879;
         --cyan: #68d9e8;
         --yellow: #e9d36b;
         --red: #ff7373;
-        --purple: #c084fc;
       }
       * { box-sizing: border-box; }
       html { background: var(--bg); }
@@ -45,44 +44,77 @@
         background: #111814;
         color: var(--muted);
       }
-      .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #33463a;
-      }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #33463a; }
       .dot:first-child { background: #e46d65; }
       .dot:nth-child(2) { background: #d4b75d; }
       .dot:nth-child(3) { background: #62bd72; }
       .title { margin: auto; font-size: 12px; }
-      .screen { padding: 28px clamp(18px, 4vw, 42px) 34px; }
+      .screen { padding: 28px clamp(16px, 4vw, 42px) 34px; }
       .prompt { color: var(--green); }
       .prompt b { color: var(--cyan); font-weight: 400; }
       .command { margin: 0 0 25px; }
-      .command a, .nav a { color: var(--cyan); text-decoration: none; }
-      .command a:hover, .nav a:hover { color: #fff; text-decoration: underline; }
+      a { color: var(--cyan); text-decoration: none; }
+      a:hover { color: #fff; text-decoration: underline; }
       .heading { margin: 0; color: var(--green); font-size: clamp(1.4rem, 4vw, 2rem); }
-      .meta { margin: 5px 0 25px; color: var(--muted); }
+      .meta { max-width: 760px; margin: 6px 0 26px; color: var(--muted); }
       code { color: var(--yellow); }
-      .panel {
-        overflow: hidden;
+      :focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+
+      .panel { margin-bottom: 22px; border: 1px solid var(--line); background: var(--panel); }
+      .panel-head {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      .panel-head h2 { margin: 0; color: var(--cyan); font-size: 15px; }
+      .panel-head p { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; }
+      .panel-body { padding: 6px 16px 16px; }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+        gap: 8px 20px;
+        align-items: center;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .row:last-child { border-bottom: 0; }
+      .fungsi-nama { color: var(--text); }
+      .fungsi-script { display: block; color: var(--muted); font-size: 12px; }
+      .row select {
+        width: 100%;
+        min-height: 44px;
+        padding: 8px 10px;
         border: 1px solid var(--line);
-        background: var(--panel);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
       }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); }
-      th { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: uppercase; }
-      tr:last-child td { border: 0; }
-      .domain { color: var(--cyan); }
-      .pill {
-        display: inline-block;
-        padding: 2px 8px;
-        border: 1px solid;
-        font-size: 11px;
-        font-weight: 700;
+      .row-status { grid-column: 2; min-height: 1.2em; font-size: 12px; }
+
+      .model {
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
       }
+      .model:last-child { border-bottom: 0; }
+      .model-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+      .model h3 { margin: 0; color: var(--cyan); font-size: 15px; }
+      .tag { padding: 0 6px; border: 1px solid var(--green); color: var(--green); font-size: 11px; }
+      .tag.warn { border-color: var(--yellow); color: var(--yellow); }
+      .model dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 8px 0 0; font-size: 12px; }
+      .model dt { color: var(--muted); }
+      .model dd { margin: 0; overflow-wrap: anywhere; }
+      .model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .model-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+
       .action {
-        padding: 5px 9px;
+        min-height: 36px;
+        padding: 5px 10px;
         border: 1px solid var(--cyan);
         border-radius: 3px;
         background: transparent;
@@ -94,106 +126,47 @@
       .action:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
       .action.danger { border-color: var(--red); color: var(--red); }
       .action.danger:hover { background: #ff737318; }
-      .action + .action { margin-left: 6px; }
-      .ready { border-color: var(--green); color: var(--green); }
-      .missing { border-color: var(--yellow); color: var(--yellow); }
-      .failed { border-color: var(--red); color: var(--red); }
-      .empty { padding: 28px; text-align: center; color: var(--muted); }
-      .nav {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        margin-top: 24px;
-        color: var(--muted);
-      }
-      .refresh {
-        padding: 0;
-        border: 0;
-        background: none;
-        color: var(--cyan);
-        font: inherit;
+      .action:disabled { opacity: .5; cursor: wait; }
+
+      .ok { color: var(--green); }
+      .run { color: var(--cyan); }
+      .err { color: var(--red); }
+      .muted { color: var(--muted); }
+      .empty { margin: 10px 0 0; padding: 18px 0 8px; color: var(--muted); }
+
+      .token-total { margin: 10px 0 12px; font-size: 12px; color: var(--muted); }
+      .token-total b { color: var(--green); font-weight: 400; }
+      .token-domain { border-bottom: 1px solid var(--line); }
+      .token-domain:last-child { border-bottom: 0; }
+      .token-domain summary {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 2px 16px;
+        padding: 12px 0;
         cursor: pointer;
       }
-      .refresh:hover { text-decoration: underline; color: #fff; }
-      .modal {
-        position: fixed;
-        inset: 0;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        background: #0008;
-        z-index: 99;
-      }
+      .token-nama { color: var(--cyan); overflow-wrap: anywhere; }
+      .token-angka { color: var(--green); text-align: right; }
+      .token-sub { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+      .token-tabel-wadah { overflow-x: auto; margin: 0 0 14px; }
+      .token-tabel { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .token-tabel th, .token-tabel td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: top; }
+      .token-tabel th { color: var(--muted); font-weight: 400; }
+      .token-tabel td.n, .token-tabel th.n { text-align: right; }
+
+      .nav { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 16px; color: var(--muted); }
+      .nav button { padding: 0; border: 0; background: none; color: var(--cyan); font: inherit; cursor: pointer; }
+      .nav button:hover { color: #fff; text-decoration: underline; }
+
+      .modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px; background: #000b; z-index: 99; }
       .modal.open { display: flex; }
-      .modal-box {
-        max-width: 520px;
-        max-height: 80vh;
-        margin: 16px;
-        padding: 22px;
-        border: 1px solid var(--yellow);
-        background: var(--panel);
-        color: var(--text);
-        overflow-y: auto;
-      }
-      .modal-box h3 { margin: 0 0 8px; color: var(--yellow); }
-      .modal-box p { margin: 0 0 16px; color: var(--muted); }
-      .modal-actions {
-        display: flex;
-        gap: 10px;
-        justify-content: flex-end;
-      }
-      .mode-choice {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin: 0 0 14px;
-        padding: 12px;
-        border: 1px dashed var(--line);
-        background: #0a0e0c;
-      }
-      .mode-choice label {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        cursor: pointer;
-        font-size: 13px;
-      }
-      .mode-choice input { accent-color: var(--green); }
-      .btn {
-        padding: 8px 14px;
-        border: 1px solid;
-        font: inherit;
-        cursor: pointer;
-        border-radius: 3px;
-      }
-      .btn-cancel {
-        border-color: var(--line);
-        background: transparent;
-        color: var(--muted);
-      }
-      .btn-confirm {
-        border-color: var(--red);
-        background: var(--red);
-        color: #000;
-        font-weight: 700;
-      }
-      .btn-primary {
-        border-color: var(--cyan);
-        background: var(--cyan);
-        color: #000;
-        font-weight: 700;
-      }
-      .form-group {
-        margin-bottom: 14px;
-      }
-      .form-group label {
-        display: block;
-        margin-bottom: 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .form-group input, .form-group select {
+      .modal-box { width: min(520px, 100%); max-height: 90vh; overflow-y: auto; padding: 22px; border: 1px solid var(--yellow); background: var(--panel); }
+      .modal-box h2 { margin: 0 0 14px; color: var(--yellow); font-size: 16px; }
+      .field { margin-bottom: 14px; }
+      .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+      .field input[type=text], .field input[type=password] {
         width: 100%;
+        min-height: 44px;
         padding: 9px 12px;
         border: 1px solid var(--line);
         border-radius: 3px;
@@ -201,386 +174,389 @@
         color: var(--text);
         font: inherit;
       }
-      .form-group input:focus, .form-group select:focus {
-        outline: 1px solid var(--green);
-        border-color: var(--green);
-      }
-      .model-card {
-        padding: 14px;
-        border: 1px solid var(--line);
-        margin-bottom: 10px;
-        background: #0a0e0c;
-      }
-      .model-card.default {
-        border-color: var(--green);
-      }
-      .model-card h4 {
-        margin: 0 0 6px;
-        color: var(--cyan);
-      }
-      .model-card p {
-        margin: 2px 0;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .model-actions {
-        margin-top: 10px;
-        display: flex;
-        gap: 6px;
-      }
-      .status-running { color: var(--cyan); }
-      .status-completed { color: var(--green); }
-      .status-error { color: var(--red); }
-      .status-idle { color: var(--muted); }
-      pre.log-view {
-        margin: 0;
-        padding: 12px;
-        border: 1px solid var(--line);
-        background: #070a08;
-        color: var(--text);
-        font: 12px/1.55 ui-monospace, Consolas, monospace;
-        max-height: 40vh;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      @media (max-width: 600px) {
+      .field input[readonly] { color: var(--muted); }
+      .field small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+      .check { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 8px; cursor: pointer; }
+      .check input { width: 18px; height: 18px; accent-color: var(--green); }
+      .form-error { min-height: 1.2em; margin: 0 0 10px; color: var(--red); font-size: 12px; }
+      .modal-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; }
+      .modal-actions span { display: flex; gap: 10px; }
+      .btn { min-height: 44px; padding: 8px 14px; border: 1px solid; border-radius: 3px; font: inherit; cursor: pointer; }
+      .btn-cancel { border-color: var(--line); background: transparent; color: var(--text); }
+      .btn-primary { border-color: var(--cyan); background: var(--cyan); color: #000; font-weight: 700; }
+      .btn-preset { border-color: var(--line); background: transparent; color: var(--cyan); }
+
+      @media (max-width: 640px) {
         body { padding: 0; }
         .terminal { min-height: 100vh; border: 0; border-radius: 0; }
-        .screen { padding: 22px 15px; }
-        th, td { padding: 11px 9px; }
-        .hide-mobile { display: none; }
+        .row { grid-template-columns: minmax(0, 1fr); }
+        .row-status { grid-column: 1; }
       }
     </style>
   </head>
   <body>
     <main class="terminal">
       <header class="bar">
-        <i class="dot"></i><i class="dot"></i><i class="dot"></i
-        ><span class="title">velocity@server: ~/installer/ai</span>
+        <i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="title">velocity@server: ~/installer/ai</span>
       </header>
       <section class="screen">
         <p class="command">
           <span class="prompt">velocity@server</span>:<b>~/installer</b>$
           <a href="/">cd ..</a>
         </p>
-        <h1 class="heading">AI Content Generator</h1>
+        <h1 class="heading">Model AI Installer</h1>
         <p class="meta">
-          $ ai --manage &nbsp;|&nbsp; generate pages + articles via OpenAI-compatible API
+          Model yang dipanggil auto installer WordPress: tulisan halaman &amp; artikel, isi contoh desain,
+          pemilihan foto contoh, dan FSE builder. Setiap fungsi memakai model pilihannya sendiri, atau model
+          default bila tidak dipilih. Perubahan berlaku di run installer berikutnya.
         </p>
 
-        <!-- AI Models Section -->
-        <section class="panel" style="margin-bottom: 20px;">
-          <div style="padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0; color: var(--cyan);">AI Models</h3>
-            <div style="display: flex; gap: 6px;">
-              <button class="action" onclick="fill9Router()">[ 9router ]</button>
-              <button class="action" onclick="showAddModelModal()">[ + add model ]</button>
-            </div>
+        <section class="panel" aria-labelledby="judul-pemakaian">
+          <div class="panel-head">
+            <h2 id="judul-pemakaian">Pemakaian per fungsi</h2>
+            <p>Pilihan tersimpan begitu diganti.</p>
           </div>
-          <div id="models-list" style="padding: 16px;">
-            <p class="empty">Memuat...</p>
+          <div class="panel-body" id="pemakaian" aria-live="polite">
+            <p class="empty">Memuat pemakaian model...</p>
           </div>
         </section>
 
-        <!-- AI Content Generation Section -->
-        <section class="panel">
-          <div style="padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0; color: var(--cyan);">Content Generation</h3>
+        <section class="panel" aria-labelledby="judul-model">
+          <div class="panel-head">
+            <h2 id="judul-model">Model terdaftar</h2>
+            <button class="action" type="button" id="tombol-tambah">[ + tambah model ]</button>
+            <p>Endpoint yang kompatibel dengan OpenAI chat completions. API key tidak pernah ditampilkan.</p>
           </div>
-          <div style="padding: 16px;">
-            <div class="form-group">
-              <label>Domain</label>
-              <select id="ai-domain-select">
-                <option value="">Pilih domain...</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Mode</label>
-              <select id="ai-mode-select">
-                <option value="dry-run">Dry Run (generate only, not published)</option>
-                <option value="apply">Apply (generate & publish as draft)</option>
-              </select>
-            </div>
-            <button class="btn btn-primary" onclick="runAiContent()">[ generate content ]</button>
-            <div id="ai-status" style="margin-top: 14px;"></div>
+          <div class="panel-body" id="daftar-model" aria-live="polite">
+            <p class="empty">Memuat daftar model...</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="judul-token">
+          <div class="panel-head">
+            <h2 id="judul-token">Pemakaian token per domain</h2>
+            <p>Dijumlah dari setiap panggilan AI installer (<code>usage.jsonl</code>). Klik domain untuk rincian per run.</p>
+          </div>
+          <div class="panel-body" id="token" aria-live="polite">
+            <p class="empty">Memuat pemakaian token...</p>
           </div>
         </section>
 
         <nav class="nav">
-          <span>source: <code>/var/lib/velocity/ai/</code></span
-          ><span
-            ><button class="refresh" onclick="load()">[ refresh ]</button>
+          <span>tersimpan di <code>/var/lib/velocity/ai/models.json</code></span>
+          <span>
+            <button type="button" id="tombol-muat">[ muat ulang ]</button>
             <a href="/installer/">[ installer ]</a>
-            <a href="/">[ home ]</a></span
-          >
+            <a href="/">[ home ]</a>
+          </span>
         </nav>
       </section>
     </main>
 
-    <!-- Add Model Modal -->
-    <div id="model-modal" class="modal" role="dialog" aria-modal="true">
-      <div class="modal-box">
-        <h3 id="model-modal-title">Add AI Model</h3>
-        <div class="form-group">
-          <label>Model ID (unique, alphanumeric)</label>
-          <input type="text" id="model-id" placeholder="my-model">
+    <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-judul">
+      <form class="modal-box" id="form-model" novalidate>
+        <h2 id="modal-judul">Tambah model</h2>
+        <div class="field">
+          <label for="f-id">ID model</label>
+          <input type="text" id="f-id" autocomplete="off" pattern="[A-Za-z0-9_-]+" required>
+          <small>Huruf, angka, garis bawah, atau tanda hubung. Tidak bisa diubah setelah disimpan.</small>
         </div>
-        <div class="form-group">
-          <label>Endpoint URL</label>
-          <input type="text" id="model-endpoint" placeholder="https://9router.com/api/v1">
+        <div class="field">
+          <label for="f-model">Nama model di API</label>
+          <input type="text" id="f-model" autocomplete="off" placeholder="mis. gpt-4o-mini">
+          <small>Dikirim sebagai "model" ke endpoint. Kosong berarti sama dengan ID.</small>
         </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="text" id="model-api-key" placeholder="sk-...">
+        <div class="field">
+          <label for="f-endpoint">Endpoint URL</label>
+          <input type="text" id="f-endpoint" autocomplete="off" placeholder="https://.../v1" required>
         </div>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px; cursor: pointer;">
-          <input type="checkbox" id="model-is-default" /> Set as default model
-        </label>
+        <div class="field">
+          <label for="f-key">API key</label>
+          <input type="password" id="f-key" autocomplete="new-password">
+          <small id="f-key-catatan">Wajib untuk model baru.</small>
+        </div>
+        <label class="check"><input type="checkbox" id="f-default"> Jadikan model default</label>
+        <p class="form-error" id="form-error" role="alert"></p>
         <div class="modal-actions">
-          <button class="btn btn-cancel" onclick="closeModelModal()">Batal</button>
-          <button class="btn btn-primary" onclick="saveModel()">Simpan</button>
+          <button class="btn btn-preset" type="button" id="tombol-preset">isi endpoint 9router</button>
+          <span>
+            <button class="btn btn-cancel" type="button" id="tombol-batal">Batal</button>
+            <button class="btn btn-primary" type="submit" id="tombol-simpan">Simpan</button>
+          </span>
         </div>
-      </div>
+      </form>
     </div>
 
     <script>
-      function esc(s) {
-        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+      let data = { models: [], pemakaian: {}, peran: [] };
+      let pemicuModal = null;
+
+      async function api(path, body) {
+        const opsi = body === undefined ? { cache: 'no-store' }
+          : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+        const r = await fetch(path, opsi);
+        const teks = await r.text();
+        let j;
+        try { j = JSON.parse(teks); } catch (e) { j = { error: 'respon bukan JSON (HTTP ' + r.status + ')' }; }
+        if (!r.ok || j.error) throw new Error(j.error || 'HTTP ' + r.status);
+        return j;
       }
 
-      function fill9Router() {
-        showAddModelModal();
-        document.getElementById('model-id').value = '9router';
-        document.getElementById('model-endpoint').value = 'https://9router.com/api/v1';
-        document.getElementById('model-api-key').value = '';
-        document.getElementById('model-is-default').checked = true;
+      const modelDefault = () => data.models.find((m) => m.is_default) || data.models[0];
+
+      function renderPemakaian() {
+        const wadah = $('pemakaian');
+        if (!data.peran.length) {
+          wadah.innerHTML = '<p class="empty">Daftar fungsi installer tidak terbaca dari API.</p>';
+          return;
+        }
+        if (!data.models.length) {
+          wadah.innerHTML = '<p class="empty">Belum ada model. Tambahkan model di bawah dulu; tanpa model, langkah AI installer dilewati.</p>';
+          return;
+        }
+        const def = modelDefault();
+        wadah.innerHTML = data.peran.map((p) => {
+          const pilih = data.pemakaian[p.kunci] || '';
+          const hilang = pilih && !data.models.some((m) => m.id === pilih);
+          const opsi = ['<option value="">ikut default (' + esc(def ? def.id : '-') + ')</option>']
+            .concat(data.models.map((m) => '<option value="' + esc(m.id) + '"' + (m.id === pilih ? ' selected' : '') + '>' + esc(m.id) + '</option>'));
+          return '<div class="row">'
+            + '<div><span class="fungsi-nama">' + esc(p.label) + '</span><span class="fungsi-script">' + esc(p.script) + '</span></div>'
+            + '<select data-peran="' + esc(p.kunci) + '" aria-label="Model untuk ' + esc(p.label) + '">' + opsi.join('') + '</select>'
+            + '<span class="row-status' + (hilang ? ' err' : '') + '" id="status-' + esc(p.kunci) + '">'
+            + (hilang ? 'Model "' + esc(pilih) + '" sudah dihapus, memakai default.' : '') + '</span>'
+            + '</div>';
+        }).join('');
       }
 
-      async function loadModels() {
+      function dipakaiOleh(m) {
+        const def = modelDefault();
+        return data.peran.filter((p) => {
+          const pilih = data.pemakaian[p.kunci] || '';
+          const ada = data.models.some((x) => x.id === pilih);
+          return ada ? pilih === m.id : (def && def.id === m.id);
+        }).map((p) => p.label);
+      }
+
+      function renderModel() {
+        const wadah = $('daftar-model');
+        if (!data.models.length) {
+          wadah.innerHTML = '<p class="empty">Belum ada model terdaftar.</p>';
+          return;
+        }
+        wadah.innerHTML = data.models.map((m) => {
+          const dipakai = dipakaiOleh(m);
+          return '<div class="model" data-id="' + esc(m.id) + '">'
+            + '<div class="model-top"><h3>' + esc(m.id) + '</h3>'
+            + (m.is_default ? '<span class="tag">default</span>' : '')
+            + (m.api_key_set ? '' : '<span class="tag warn">API key kosong</span>') + '</div>'
+            + '<dl><dt>model API</dt><dd>' + esc(m.model || m.id) + '</dd>'
+            + '<dt>endpoint</dt><dd>' + esc(m.endpoint) + '</dd>'
+            + '<dt>dipakai</dt><dd>' + (dipakai.length ? esc(dipakai.join(', ')) : '<span class="muted">tidak dipakai fungsi mana pun</span>') + '</dd></dl>'
+            + '<div class="model-actions">'
+            + '<button class="action" type="button" data-aksi="test">[ test ]</button>'
+            + '<button class="action" type="button" data-aksi="edit">[ edit ]</button>'
+            + (m.is_default ? '' : '<button class="action" type="button" data-aksi="default">[ jadikan default ]</button>')
+            + '<button class="action danger" type="button" data-aksi="hapus">[ hapus ]</button>'
+            + '</div><p class="model-status" aria-live="polite"></p></div>';
+        }).join('');
+      }
+
+      const angka = (n) => Number(n || 0).toLocaleString('id-ID');
+      const waktu = (ts) => {
+        const d = new Date(ts);
+        return isNaN(d) ? esc(ts) : d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+      };
+      const labelPeran = (k) => (data.peran.find((p) => p.kunci === k) || {}).label || k;
+      const rincianPeran = (per) => Object.entries(per || {}).sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => esc(labelPeran(k)) + ' ' + angka(v)).join(' · ');
+
+      function renderToken(j) {
+        const wadah = $('token');
+        const daftar = j.domains || [];
+        if (!daftar.length) {
+          wadah.innerHTML = '<p class="empty">Belum ada catatan. Pemakaian token tercatat mulai run installer berikutnya.</p>';
+          return;
+        }
+        const t = j.total || {};
+        wadah.innerHTML = '<p class="token-total">total <b>' + angka(t.total_tokens) + '</b> token · '
+          + angka(t.panggilan) + ' panggilan · ' + daftar.length + ' domain'
+          + (t.gagal ? ' · <span class="err">' + angka(t.gagal) + ' gagal</span>' : '') + '</p>'
+          + daftar.map((d) => '<details class="token-domain">'
+            + '<summary><span class="token-nama">' + esc(d.domain) + '</span>'
+            + '<span class="token-angka">' + angka(d.total_tokens) + ' token</span>'
+            + '<span class="token-sub">' + d.runs.length + ' run · ' + angka(d.panggilan) + ' panggilan'
+            + (d.gagal ? ' · <span class="err">' + angka(d.gagal) + ' gagal</span>' : '')
+            + ' · terakhir ' + waktu(d.terakhir) + '</span></summary>'
+            + '<div class="token-tabel-wadah"><table class="token-tabel"><thead><tr>'
+            + '<th>run</th><th>mode</th><th class="n">prompt</th><th class="n">jawaban</th><th class="n">total</th>'
+            + '<th class="n">panggilan</th><th>per fungsi</th><th>model</th></tr></thead><tbody>'
+            + d.runs.map((r) => '<tr><td>' + waktu(r.mulai) + '</td><td>' + esc(r.mode) + '</td>'
+              + '<td class="n">' + angka(r.prompt_tokens) + '</td><td class="n">' + angka(r.completion_tokens) + '</td>'
+              + '<td class="n ok">' + angka(r.total_tokens) + '</td>'
+              + '<td class="n">' + angka(r.panggilan) + (r.gagal ? ' <span class="err">(' + r.gagal + ' gagal)</span>' : '') + '</td>'
+              + '<td>' + rincianPeran(r.per_peran) + '</td><td>' + esc((r.model || []).join(', ')) + '</td></tr>').join('')
+            + '</tbody></table></div></details>').join('');
+      }
+
+      async function muatToken() {
+        $('token').innerHTML = '<p class="empty">Memuat pemakaian token...</p>';
         try {
-          const d = await fetch('/api/ai/models', { cache: 'no-store' }).then(r => {
-            if (!r.ok) throw new Error(r.status);
-            return r.json();
-          });
-          const models = d.models || [];
-          const container = document.getElementById('models-list');
-          if (!models.length) {
-            container.innerHTML = '<p class="empty">Belum ada model AI. Tambahkan model untuk mulai generate konten.</p>';
+          renderToken(await api('/api/ai/usage'));
+        } catch (e) {
+          $('token').innerHTML = '<p class="empty err">Gagal memuat pemakaian token: ' + esc(e.message) + '</p>';
+        }
+      }
+
+      async function muat() {
+        muatToken();
+        $('pemakaian').innerHTML = '<p class="empty">Memuat pemakaian model...</p>';
+        $('daftar-model').innerHTML = '<p class="empty">Memuat daftar model...</p>';
+        try {
+          const j = await api('/api/ai/models');
+          data = { models: j.models || [], pemakaian: j.pemakaian || {}, peran: j.peran || [] };
+          renderPemakaian();
+          renderModel();
+        } catch (e) {
+          const pesan = '<p class="empty err">Gagal memuat dari API: ' + esc(e.message) + '. <button class="action" type="button" onclick="muat()">[ coba lagi ]</button></p>';
+          $('pemakaian').innerHTML = pesan;
+          $('daftar-model').innerHTML = pesan;
+        }
+      }
+
+      $('pemakaian').addEventListener('change', async (ev) => {
+        const sel = ev.target.closest('select[data-peran]');
+        if (!sel) return;
+        const peran = sel.dataset.peran;
+        const status = $('status-' + peran);
+        sel.disabled = true;
+        status.className = 'row-status run';
+        status.textContent = 'Menyimpan...';
+        try {
+          const j = await api('/api/ai/models/pemakaian', { peran, model_id: sel.value });
+          data.pemakaian = j.pemakaian || data.pemakaian;
+          renderModel();
+          status.className = 'row-status ok';
+          status.textContent = 'Tersimpan: ' + (sel.value || 'ikut default') + '.';
+        } catch (e) {
+          status.className = 'row-status err';
+          status.textContent = 'Gagal menyimpan: ' + e.message;
+          sel.value = data.pemakaian[peran] || '';
+        } finally {
+          sel.disabled = false;
+        }
+      });
+
+      $('daftar-model').addEventListener('click', async (ev) => {
+        const tombol = ev.target.closest('button[data-aksi]');
+        if (!tombol) return;
+        const kartu = tombol.closest('.model');
+        const id = kartu.dataset.id;
+        const status = kartu.querySelector('.model-status');
+        const aksi = tombol.dataset.aksi;
+        if (aksi === 'edit') return bukaModal(data.models.find((m) => m.id === id), tombol);
+        if (aksi === 'hapus') {
+          const dipakai = dipakaiOleh(data.models.find((m) => m.id === id));
+          const peringatan = dipakai.length ? '\nSekarang dipakai: ' + dipakai.join(', ') + '. Fungsi itu akan ikut model default.' : '';
+          if (!confirm('Hapus model ' + id + '?' + peringatan)) return;
+        }
+        const semua = kartu.querySelectorAll('button');
+        semua.forEach((b) => { b.disabled = true; });
+        status.className = 'model-status run';
+        status.textContent = aksi === 'test' ? 'Mengirim pesan uji ke endpoint (bisa sampai 60 detik)...' : 'Menyimpan...';
+        try {
+          if (aksi === 'test') {
+            const j = await api('/api/ai/models/test', { model_id: id });
+            status.className = 'model-status ok';
+            status.textContent = 'Model menjawab: ' + String(j.response || '').slice(0, 200);
+          } else if (aksi === 'default') {
+            await api('/api/ai/models/set-default', { model_id: id });
+            await muat();
+            return;
+          } else if (aksi === 'hapus') {
+            await api('/api/ai/models/' + encodeURIComponent(id) + '/delete', {});
+            await muat();
             return;
           }
-          container.innerHTML = models.map(m => `
-            <div class="model-card ${m.is_default ? 'default' : ''}">
-              <h4>${esc(m.id)} ${m.is_default ? '<span style="color: var(--green)">[default]</span>' : ''}</h4>
-              <p><strong>Endpoint:</strong> ${esc(m.endpoint)}</p>
-              <div class="model-actions">
-                <button class="action" onclick="testModel('${esc(m.id)}')">[ test ]</button>
-                ${!m.is_default ? `<button class="action" onclick="setDefaultModel('${esc(m.id)}')">[ set default ]</button>` : ''}
-                <button class="action danger" onclick="deleteModel('${esc(m.id)}')">[ delete ]</button>
-              </div>
-            </div>
-          `).join('');
         } catch (e) {
-          document.getElementById('models-list').innerHTML = '<p class="empty" style="color: var(--red)">Gagal memuat model: ' + esc(e.message) + '</p>';
-        }
-      }
-
-      async function loadDomains() {
-        try {
-          const d = await fetch('/api/installer', { cache: 'no-store' }).then(r => {
-            if (!r.ok) throw new Error(r.status);
-            return r.json();
-          });
-          const domains = d.domains || [];
-          const select = document.getElementById('ai-domain-select');
-          select.innerHTML = '<option value="">Pilih domain...</option>' + 
-            domains.filter(x => x.status === 'READY' || x.status === 'SUCCESS')
-              .map(x => `<option value="${esc(x.domain)}">${esc(x.domain)}</option>`).join('');
-        } catch (e) {
-          // ignore
-        }
-      }
-
-      function showAddModelModal() {
-        document.getElementById('model-modal-title').textContent = 'Add AI Model';
-        document.getElementById('model-id').value = '';
-        document.getElementById('model-endpoint').value = '';
-        document.getElementById('model-api-key').value = '';
-        document.getElementById('model-is-default').checked = false;
-        document.getElementById('model-modal').classList.add('open');
-      }
-
-      function closeModelModal() {
-        document.getElementById('model-modal').classList.remove('open');
-      }
-
-      async function saveModel() {
-        const payload = {
-          id: document.getElementById('model-id').value.trim(),
-          endpoint: document.getElementById('model-endpoint').value.trim(),
-          api_key: document.getElementById('model-api-key').value.trim(),
-          is_default: document.getElementById('model-is-default').checked
-        };
-        if (!payload.id || !payload.endpoint) {
-          alert('Model ID dan Endpoint wajib diisi!');
-          return;
-        }
-        try {
-          const r = await fetch('/api/ai/models', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          const j = await r.json();
-          if (r.ok && j.status === 'ok') {
-            closeModelModal();
-            loadModels();
-          } else {
-            alert('Error: ' + (j.error || r.status));
-          }
-        } catch (e) {
-          alert('Error: ' + e.message);
-        }
-      }
-
-      async function testModel(modelId) {
-        const statusEl = document.getElementById('ai-status');
-        // find card for inline feedback
-        const cards = document.querySelectorAll('.model-card');
-        let cardStatus = null;
-        for (const c of cards) {
-          if (c.innerHTML.includes("testModel('" + modelId + "')") || c.innerHTML.includes('testModel(&#x27;' + modelId)) {
-            cardStatus = c;
-            break;
-          }
-        }
-        let inline = null;
-        if (cardStatus) {
-          inline = document.createElement('p');
-          inline.className = 'status-running';
-          inline.style.marginTop = '8px';
-          inline.textContent = 'Testing ' + modelId + '...';
-          // remove old inline if any
-          const old = cardStatus.querySelector('.inline-test-status');
-          if (old) old.remove();
-          inline.classList.add('inline-test-status');
-          cardStatus.appendChild(inline);
-        }
-        statusEl.innerHTML = '<p class="status-running">Testing model ' + esc(modelId) + '... (mohon tunggu ~30s)</p>';
-        // disable test buttons
-        const btns = document.querySelectorAll('button[onclick*="testModel"]');
-        btns.forEach(b => b.disabled = true);
-        try {
-          const r = await fetch('/api/ai/models/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_id: modelId })
-          });
-          const j = await r.json().catch(() => ({ error: 'invalid_json ' + r.status }));
-          if (r.ok && j.status === 'ok') {
-            statusEl.innerHTML = '<p class="status-completed">✓ Test OK: ' + esc(j.response || 'Connected') + '</p>';
-            if (inline) { inline.className = 'status-completed inline-test-status'; inline.textContent = '✓ OK: ' + (j.response || 'Connected'); }
-          } else {
-            statusEl.innerHTML = '<p class="status-error">✗ Test failed: ' + esc(j.error || r.status) + '</p>';
-            if (inline) { inline.className = 'status-error inline-test-status'; inline.textContent = '✗ ' + (j.error || r.status); }
-          }
-        } catch (e) {
-          statusEl.innerHTML = '<p class="status-error">✗ Error: ' + esc(e.message) + '</p>';
-          if (inline) { inline.className = 'status-error inline-test-status'; inline.textContent = '✗ ' + e.message; }
+          status.className = 'model-status err';
+          status.textContent = (aksi === 'test' ? 'Test gagal: ' : 'Gagal: ') + e.message;
         } finally {
-          btns.forEach(b => b.disabled = false);
+          semua.forEach((b) => { b.disabled = false; });
         }
+      });
+
+      function bukaModal(model, pemicu) {
+        pemicuModal = pemicu || document.activeElement;
+        const edit = Boolean(model);
+        $('modal-judul').textContent = edit ? 'Edit model ' + model.id : 'Tambah model';
+        $('f-id').value = edit ? model.id : '';
+        $('f-id').readOnly = edit;
+        $('f-model').value = edit && model.model !== model.id ? (model.model || '') : '';
+        $('f-endpoint').value = edit ? (model.endpoint || '') : '';
+        $('f-key').value = '';
+        $('f-key-catatan').textContent = edit ? 'Kosongkan untuk tetap memakai API key yang tersimpan.' : 'Wajib untuk model baru.';
+        $('f-default').checked = edit ? Boolean(model.is_default) : !data.models.length;
+        $('form-error').textContent = '';
+        $('modal').classList.add('open');
+        (edit ? $('f-model') : $('f-id')).focus();
       }
 
-      async function setDefaultModel(modelId) {
+      function tutupModal() {
+        $('modal').classList.remove('open');
+        if (pemicuModal && document.body.contains(pemicuModal)) pemicuModal.focus();
+      }
+
+      $('tombol-tambah').addEventListener('click', (ev) => bukaModal(null, ev.currentTarget));
+      $('tombol-batal').addEventListener('click', tutupModal);
+      $('tombol-muat').addEventListener('click', muat);
+      $('tombol-preset').addEventListener('click', () => {
+        $('f-endpoint').value = 'https://9router.com/api/v1';
+        if (!$('f-id').readOnly && !$('f-id').value) $('f-id').value = '9router';
+        $('f-endpoint').focus();
+      });
+      $('modal').addEventListener('click', (ev) => { if (ev.target === $('modal')) tutupModal(); });
+      document.addEventListener('keydown', (ev) => {
+        if (!$('modal').classList.contains('open')) return;
+        if (ev.key === 'Escape') { tutupModal(); return; }
+        if (ev.key === 'Tab') {
+          const fokus = [...$('form-model').querySelectorAll('input:not([readonly]), button')];
+          const awal = fokus[0], akhir = fokus[fokus.length - 1];
+          if (ev.shiftKey && document.activeElement === awal) { ev.preventDefault(); akhir.focus(); }
+          else if (!ev.shiftKey && document.activeElement === akhir) { ev.preventDefault(); awal.focus(); }
+        }
+      });
+
+      $('form-model').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const edit = $('f-id').readOnly;
+        const muatan = {
+          id: $('f-id').value.trim(),
+          model: $('f-model').value.trim(),
+          endpoint: $('f-endpoint').value.trim(),
+          api_key: $('f-key').value.trim(),
+          is_default: $('f-default').checked,
+        };
+        const galat = !/^[A-Za-z0-9_-]+$/.test(muatan.id) ? 'ID model hanya boleh huruf, angka, garis bawah, dan tanda hubung.'
+          : !/^https?:\/\/\S+$/.test(muatan.endpoint) ? 'Endpoint harus URL http(s) lengkap.'
+          : (!edit && !muatan.api_key) ? 'API key wajib untuk model baru.' : '';
+        if (galat) { $('form-error').textContent = galat; return; }
+        $('tombol-simpan').disabled = true;
+        $('form-error').textContent = '';
         try {
-          const r = await fetch('/api/ai/models/set-default', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_id: modelId })
-          });
-          const j = await r.json();
-          if (r.ok && j.status === 'ok') {
-            loadModels();
-          } else {
-            alert('Error: ' + (j.error || r.status));
-          }
+          await api('/api/ai/models', muatan);
+          tutupModal();
+          await muat();
         } catch (e) {
-          alert('Error: ' + e.message);
+          $('form-error').textContent = 'Gagal menyimpan: ' + e.message;
+        } finally {
+          $('tombol-simpan').disabled = false;
         }
-      }
+      });
 
-      async function deleteModel(modelId) {
-        if (!confirm('Hapus model ' + modelId + '?')) return;
-        try {
-          let r = await fetch('/api/ai/models/' + encodeURIComponent(modelId) + '/delete', {
-            method: 'DELETE'
-          });
-          let text = await r.text();
-          let j;
-          try { j = JSON.parse(text); } catch (e) { j = { error: text.slice(0,200) || r.statusText }; }
-          // Fallback: if DELETE not routed (nginx 404 returns HTML), try POST
-          if (!r.ok && (r.status === 404 || r.status === 405) && text.includes('<!DOCTYPE')) {
-            r = await fetch('/api/ai/models/' + encodeURIComponent(modelId) + '/delete', {
-              method: 'POST'
-            });
-            text = await r.text();
-            try { j = JSON.parse(text); } catch (e) { j = { error: text.slice(0,200) }; }
-          }
-          if (r.ok && j.status === 'ok') {
-            loadModels();
-          } else {
-            alert('Error: ' + (j.error || r.status));
-          }
-        } catch (e) {
-          alert('Error: ' + e.message);
-        }
-      }
-
-      async function runAiContent() {
-        const domain = document.getElementById('ai-domain-select').value;
-        const mode = document.getElementById('ai-mode-select').value;
-        const statusEl = document.getElementById('ai-status');
-        if (!domain) {
-          statusEl.innerHTML = '<p class="status-error">Pilih domain terlebih dahulu!</p>';
-          return;
-        }
-        statusEl.innerHTML = '<p class="status-running">Starting AI content generation for ' + esc(domain) + '...</p>';
-        try {
-          const r = await fetch('/api/ai/content/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain, mode })
-          });
-          const j = await r.json();
-          if (r.ok && j.status === 'started') {
-            statusEl.innerHTML = '<p class="status-running">AI generation started (PID ' + j.pid + '). Check status...</p>';
-            // Poll status
-            const pollInterval = setInterval(async () => {
-              const sr = await fetch('/api/ai/content/' + encodeURIComponent(domain), { cache: 'no-store' });
-              const sj = await sr.json();
-              if (sj.status !== 'running') {
-                clearInterval(pollInterval);
-                if (sj.status === 'completed') {
-                  statusEl.innerHTML = '<p class="status-completed">✓ AI generation completed! Pages: ' + (sj.pages_generated ? 'yes' : 'no') + ', Articles: ' + (sj.articles_generated ? 'yes' : 'no') + '</p>';
-                } else {
-                  statusEl.innerHTML = '<p class="status-idle">Status: ' + esc(sj.status) + '</p>';
-                }
-              }
-            }, 5000);
-          } else {
-            statusEl.innerHTML = '<p class="status-error">✗ Failed: ' + esc(j.error || r.status) + '</p>';
-          }
-        } catch (e) {
-          statusEl.innerHTML = '<p class="status-error">✗ Error: ' + esc(e.message) + '</p>';
-        }
-      }
-
-      function load() {
-        loadModels();
-        loadDomains();
-      }
-      load();
+      muat();
     </script>
   </body>
 </html>

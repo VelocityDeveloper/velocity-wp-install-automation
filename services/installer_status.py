@@ -47,6 +47,8 @@ AI_PERAN = (
 )
 AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
 AI_GENERATED = AI_CONFIG_DIR / 'generated'
+# Ditulis catat_token() di ai-content-generator.py, satu baris per panggilan AI.
+AI_USAGE = AI_CONFIG_DIR / 'usage.jsonl'
 AI_SCRIPT = Path(__file__).resolve().parent.parent / 'scripts' / 'ai-content-generator.py'
 AI_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 AI_PROMPTS.mkdir(parents=True, exist_ok=True)
@@ -1061,7 +1063,8 @@ def start_ai_content(domain: str, mode: str = 'dry-run'):
         return None, 'no_ai_models_configured'
     
     STATE.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, INSTALL_MODE=mode)
+    env = dict(os.environ, INSTALL_MODE=mode, VELOCITY_DOMAIN=domain,
+               VELOCITY_RUN_ID=time.strftime('%Y%m%d-%H%M%S') + f'-ai-{mode}')
     if mode == 'apply':
         if not ssh_key_file():
             return None, 'ssh_key_missing'
@@ -1106,6 +1109,57 @@ def get_ai_content_status(domain: str):
         result['articles_file'] = str(articles_file)
     
     return result
+
+
+def ai_token_usage():
+    """Jumlah token AI per domain, dirinci per run installer dan per fungsi."""
+    per_domain = {}
+    try:
+        baris_semua = AI_USAGE.read_text(errors='replace').splitlines()
+    except OSError:
+        baris_semua = []
+    kosong = lambda: {'panggilan': 0, 'gagal': 0, 'prompt_tokens': 0, 'completion_tokens': 0,
+                      'total_tokens': 0, 'per_peran': {}, 'mulai': '', 'terakhir': ''}
+
+    def tambah(t, b):
+        t['panggilan'] += 1
+        t['gagal'] += 0 if b.get('ok') else 1
+        for k in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
+            t[k] += int(b.get(k) or 0)
+        peran = b.get('peran') or '-'
+        t['per_peran'][peran] = t['per_peran'].get(peran, 0) + int(b.get('total_tokens') or 0)
+        ts = str(b.get('ts') or '')
+        t['mulai'] = min(t['mulai'] or ts, ts)
+        t['terakhir'] = max(t['terakhir'], ts)
+
+    for s in baris_semua:
+        try:
+            b = json.loads(s)
+        except ValueError:
+            continue
+        domain = b.get('domain') or '(tanpa domain)'
+        d = per_domain.setdefault(domain, dict(kosong(), domain=domain, runs={}))
+        tambah(d, b)
+        run_id = b.get('run') or '(di luar installer-runner)'
+        r = d['runs'].setdefault(run_id, dict(kosong(), run=run_id, mode=b.get('mode') or '', model=set()))
+        tambah(r, b)
+        if b.get('ok'):
+            r['model'].add(b.get('model') or b.get('model_id') or '-')
+
+    hasil = []
+    total = kosong()
+    for d in per_domain.values():
+        runs = sorted(d.pop('runs').values(), key=lambda r: r['terakhir'], reverse=True)
+        for r in runs:
+            r['model'] = sorted(r['model'])
+        d['runs'] = runs
+        hasil.append(d)
+        for k in ('panggilan', 'gagal', 'prompt_tokens', 'completion_tokens', 'total_tokens'):
+            total[k] += d[k]
+    hasil.sort(key=lambda d: d['terakhir'], reverse=True)
+    for k in ('per_peran', 'mulai', 'terakhir'):
+        total.pop(k)
+    return {'domains': hasil, 'total': total, 'file': str(AI_USAGE)}
 
 
 # --- packages management ---
@@ -1263,6 +1317,12 @@ class Handler(BaseHTTPRequestHandler):
                     mm['api_key_set'] = True
                 safe['models'].append(mm)
             self._send_json(safe)
+            return
+        if path == '/api/ai/usage':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(ai_token_usage())
             return
         if path.startswith('/api/ai/content/'):
             if not _check_auth(self):

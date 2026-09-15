@@ -139,6 +139,15 @@ Terminal-style `/installer/`.
 - polling 10s, pause saat `document.hidden`
 - **Bagan proses** (panel "Proses berjalan" di atas filter + aksi "Bagan proses" per domain): simpul tiap langkah `installer-runner` (validasi, install WordPress, cek HTTP, VD Store, tema FSE, konten AI, finishing, bersih-bersih, foto slot, halaman blok, foto artikel, cek visual, QA, maintenance, selesai) dengan status menunggu/berjalan/selesai/gagal/dilewati dan durasi, dibaca dari penanda log run terakhir (mulai `RUNNING: VALIDATING`). Domain berstatus RUNNING dipantau tiap 3 detik lewat `GET /api/installer?domain=<domain>` (satu baris, log 1500 baris, tetap bisa dibaca setelah domain terpasang dan hilang dari antrean); kartu yang selesai bertahan 10 menit. Menambah langkah di runner = menambah satu entri di `ALUR` pada halaman ini.
 
+## Model AI & pemakaian token (`web/ai/index.html`)
+
+Terminal-style `/ai/`: daftar model (`/var/lib/velocity/ai/models.json`), model per fungsi installer, dan pemakaian token per domain.
+
+- Setiap `ai_call()` (`ai-content-generator.py`, dipakai juga `paket-g-konten`, `paket-g-foto`, `fse-apply`) menulis satu baris ke `/var/lib/velocity/ai/usage.jsonl`: `ts, domain, run, mode, peran, script, model_id, model` (model yang benar-benar menjawab), `prompt_tokens, completion_tokens, total_tokens, ok`. Panggilan gagal tetap tercatat (`ok:false`, token 0).
+- `installer-runner` mengekspor `VELOCITY_DOMAIN` dan `VELOCITY_RUN_ID` (`<tanggal>-<jam>-<mode>`), jadi semua script AI dalam satu run terkumpul di run yang sama. Script yang dijalankan manual memakai nama manifest sebagai domain dan masuk run "(di luar installer-runner)".
+- `GET /api/ai/usage` menjumlah per domain → per run → per fungsi. Angka token berasal dari field `usage` respons endpoint; gateway yang tidak mengirim `usage` tercatat 0.
+- Pencatatan dimulai 2026-09-15; run sebelumnya tidak punya data token.
+
 ## Workflow (`workflows/website-install-workflow.json`)
 
 Import ke n8n. Trigger: Manual Trigger dengan `{"domain":"example.com"}`. Node `Execute Command` pakai wrapper `scripts/installer-runner` (validasi & escape domain, cegah injection, tulis STATE).

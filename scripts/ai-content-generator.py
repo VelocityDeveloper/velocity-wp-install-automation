@@ -45,6 +45,8 @@ AI_CONFIG_DIR = Path('/var/lib/velocity/ai')
 AI_MODELS = AI_CONFIG_DIR / 'models.json'
 GENERATED_DIR = AI_CONFIG_DIR / 'generated'
 LOG_FILE = Path('/var/lib/velocity/installer') / f'ai-{MANIFEST.stem}.log' if MANIFEST else Path('/dev/null')
+# Satu baris JSON per panggilan AI; dijumlah per domain & run di halaman /ai/ (GET /api/ai/usage).
+AI_USAGE = AI_CONFIG_DIR / 'usage.jsonl'
 
 def log(msg):
     ts = subprocess.run(['date', '-Is'], capture_output=True, text=True).stdout.strip()
@@ -117,10 +119,52 @@ def get_model(peran):
     fse (fse-apply). Tanpa pilihan, atau model pilihannya sudah dihapus: model default."""
     data = load_ai_models()
     pilihan = str((data.get('pemakaian') or {}).get(peran) or '')
+    model = None
     for m in data.get('models', []):
         if pilihan and m.get('id') == pilihan:
-            return m
-    return get_default_model()
+            model = m
+    model = model or get_default_model()
+    # peran ikut dibawa ke ai_call supaya token tercatat per fungsi.
+    return dict(model, peran=peran) if model else None
+
+
+def domain_proses():
+    """Domain yang sedang dikerjakan: dari installer-runner (VELOCITY_DOMAIN), atau nama
+    manifest /home/project/<domain>/<domain>.txt kalau script dijalankan sendiri."""
+    if os.environ.get('VELOCITY_DOMAIN'):
+        return os.environ['VELOCITY_DOMAIN']
+    for a in sys.argv[1:]:
+        if a.endswith('.txt'):
+            return Path(a).stem
+    return ''
+
+
+def catat_token(model, usage, model_jawab, ok):
+    """Tulis pemakaian token satu panggilan AI ke usage.jsonl. Tidak boleh menggagalkan run."""
+    import fcntl
+    from datetime import datetime, timezone
+    try:
+        prompt = int(usage.get('prompt_tokens') or 0)
+        jawaban = int(usage.get('completion_tokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'domain': domain_proses(),
+            'run': os.environ.get('VELOCITY_RUN_ID', ''),
+            'mode': MODE,
+            'peran': model.get('peran', ''),
+            'script': Path(sys.argv[0]).name,
+            'model_id': model.get('id', ''),
+            'model': model_jawab or model.get('model', ''),
+            'prompt_tokens': prompt,
+            'completion_tokens': jawaban,
+            'total_tokens': int(usage.get('total_tokens') or prompt + jawaban),
+            'ok': ok,
+        }
+        with open(AI_USAGE, 'a') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+    except Exception as e:
+        log(f'WARNING: pemakaian token tidak tercatat: {e}')
 
 def ai_call(system_prompt, user_prompt, model):
     """Call OpenAI-compatible API"""
@@ -153,9 +197,12 @@ def ai_call(system_prompt, user_prompt, model):
         }
     )
     
+    tercatat = False
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read())
+            catat_token(model, result.get('usage') or {}, result.get('model', ''), True)
+            tercatat = True
             content = result['choices'][0]['message']['content']
             # Strip markdown code fences
             content = content.strip()
@@ -169,6 +216,8 @@ def ai_call(system_prompt, user_prompt, model):
             return content
     except Exception as e:
         log(f'ERROR: AI API call failed: {e}')
+        if not tercatat:
+            catat_token(model, {}, '', False)
         return None
 
 def generate_pages(site_title, domain, client_info, model):

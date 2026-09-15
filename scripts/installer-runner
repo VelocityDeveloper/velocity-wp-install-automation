@@ -13,6 +13,10 @@ MANIFEST="$ROOT/$DOMAIN/$DOMAIN.txt"
 STATE_DIR=/var/lib/velocity/installer
 STATE="$STATE_DIR/$DOMAIN.json"
 LOG="$STATE_DIR/$DOMAIN.log"
+# Pencatatan token AI (/var/lib/velocity/ai/usage.jsonl): semua script AI di run ini
+# tercatat atas domain & run yang sama.
+export VELOCITY_DOMAIN="$DOMAIN"
+export VELOCITY_RUN_ID="${VELOCITY_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$MODE}"
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
