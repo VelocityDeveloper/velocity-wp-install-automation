@@ -1137,8 +1137,11 @@
           wadah.innerHTML = meta + '<p class="empty">Belum ada run installer tercatat untuk domain ini.</p>';
           return;
         }
+        // Dry run tidak memasang apa pun: "Install WordPress selesai" di sini hanya berarti server tujuan siap.
+        const dryRun = /\] SUCCESS: DRY_RUN_OK/.test(a.baris.join('\n'));
         const simpulHtml = a.simpul.map(n => {
-          const sub = n.status === 'selesai' ? 'selesai' + (n.lama !== null ? ', ' + lamanya(n.lama) : '')
+          const sub = dryRun && n.nama === 'Install WordPress' && n.status === 'selesai' ? 'dry run: server tujuan siap'
+            : n.status === 'selesai' ? 'selesai' + (n.lama !== null ? ', ' + lamanya(n.lama) : '')
             : n.status === 'berjalan' ? 'berjalan ' + (n.lama !== null ? lamanya(n.lama) : '')
             : n.status === 'gagal' ? 'gagal' + (row.stage && !a.jalan ? ': ' + row.stage : '')
             : n.status === 'dilewati' ? 'dilewati'
