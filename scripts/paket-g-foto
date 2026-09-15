@@ -381,7 +381,7 @@ def muat_ai(manifest):
         spec = importlib.util.spec_from_file_location('acg', Path(__file__).resolve().parent / 'ai-content-generator.py')
         modul = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(modul)
-        model = modul.get_default_model()
+        model = modul.get_model('foto')
         return (modul, model) if model else None
     except Exception:
         return None

@@ -137,6 +137,7 @@ Terminal-style `/installer/`.
 - tombol `[ install ]` (status READY/SUCCESS) atau `[ retry ]` merah (status FAILED/installer_error) → modal konfirmasi dengan pilihan mode: **Dry run** (validasi saja) atau **Apply** (eksekusi nyata) → `POST /api/installer/run`
 - tombol `[ log ]` → popup detail log 30 baris terakhir
 - polling 10s, pause saat `document.hidden`
+- **Bagan proses** (panel "Proses berjalan" di atas filter + aksi "Bagan proses" per domain): simpul tiap langkah `installer-runner` (validasi, install WordPress, cek HTTP, VD Store, tema FSE, konten AI, finishing, bersih-bersih, foto slot, halaman blok, foto artikel, cek visual, QA, maintenance, selesai) dengan status menunggu/berjalan/selesai/gagal/dilewati dan durasi, dibaca dari penanda log run terakhir (mulai `RUNNING: VALIDATING`). Domain berstatus RUNNING dipantau tiap 3 detik lewat `GET /api/installer?domain=<domain>` (satu baris, log 1500 baris, tetap bisa dibaca setelah domain terpasang dan hilang dari antrean); kartu yang selesai bertahan 10 menit. Menambah langkah di runner = menambah satu entri di `ALUR` pada halaman ini.
 
 ## Workflow (`workflows/website-install-workflow.json`)
 

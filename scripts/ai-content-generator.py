@@ -109,6 +109,19 @@ def get_default_model():
             return m
     return models[0] if models else None
 
+
+def get_model(peran):
+    """Model untuk satu fungsi installer (halaman /ai/ → models.json 'pemakaian').
+
+    peran: konten (halaman & artikel), isi_contoh (paket-g-konten), foto (paket-g-foto),
+    fse (fse-apply). Tanpa pilihan, atau model pilihannya sudah dihapus: model default."""
+    data = load_ai_models()
+    pilihan = str((data.get('pemakaian') or {}).get(peran) or '')
+    for m in data.get('models', []):
+        if pilihan and m.get('id') == pilihan:
+            return m
+    return get_default_model()
+
 def ai_call(system_prompt, user_prompt, model):
     """Call OpenAI-compatible API"""
     api_key = model.get('api_key', '')
@@ -656,7 +669,7 @@ def main():
     client_info = format_for_prompt(client_data, docs)
     
     # Load AI model
-    model = get_default_model()
+    model = get_model('konten')
     if not model:
         log('ERROR: No AI model configured')
         sys.exit(2)

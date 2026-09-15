@@ -37,6 +37,14 @@ PACKAGES_META = PACKAGES_DIR / 'packages.json'
 PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
 AI_CONFIG_DIR = Path('/var/lib/velocity/ai')
 AI_MODELS = AI_CONFIG_DIR / 'models.json'
+# Fungsi installer yang memanggil AI. Model per fungsi disimpan di models.json 'pemakaian'
+# (halaman /ai/); tanpa pilihan, script memakai model default (get_model di ai-content-generator.py).
+AI_PERAN = (
+    ('konten', 'Konten halaman & artikel', 'ai-content-generator.py'),
+    ('isi_contoh', 'Isi contoh desain: layanan, produk, warna', 'paket-g-konten'),
+    ('foto', 'Pemilihan foto contoh', 'paket-g-foto'),
+    ('fse', 'FSE builder: gaya beranda dari referensi', 'fse-apply'),
+)
 AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
 AI_GENERATED = AI_CONFIG_DIR / 'generated'
 AI_SCRIPT = Path(__file__).resolve().parent.parent / 'scripts' / 'ai-content-generator.py'
@@ -864,54 +872,50 @@ def save_ai_models(data):
 
 
 def add_ai_model(model_data):
-    """Add a new AI model."""
-    if not re.match(r'^[a-zA-Z0-9_-]+$', model_data.get('id', '')):
+    """Tambah atau perbarui model AI dari halaman /ai/.
+
+    Saat memperbarui, API key kosong berarti tetap memakai key tersimpan: halaman tidak
+    pernah menerima key asli, jadi form edit mengirim kosong kalau key tidak diganti."""
+    model_id = str(model_data.get('id') or '')
+    if not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
         return None, 'invalid_id'
-    if not model_data.get('endpoint'):
+    endpoint = str(model_data.get('endpoint') or '').strip().rstrip('/')
+    if not re.match(r'^https?://\S+$', endpoint):
         return None, 'endpoint_required'
-    if not model_data.get('api_key'):
-        return None, 'api_key_required'
-    
-    # Use id as model name if not provided
-    if not model_data.get('name'):
-        model_data['name'] = model_data['id']
-    # Use id as model name for API calls if model not specified
-    if not model_data.get('model'):
-        model_data['model'] = model_data['id']
-    
     data = load_ai_models()
     models = data.get('models', [])
-    
-    # Check for duplicate ID
-    for i, m in enumerate(models):
-        if m['id'] == model_data['id']:
-            # Update existing
-            models[i] = model_data
-            data['models'] = models
-            if model_data.get('is_default'):
-                for m in models:
-                    m['is_default'] = (m['id'] == model_data['id'])
-            save_ai_models(data)
-            return model_data, None
-    
-    # Add new
-    models.append(model_data)
-    data['models'] = models
+    lama = next((m for m in models if m.get('id') == model_id), None)
+    api_key = str(model_data.get('api_key') or '').strip() or (lama or {}).get('api_key', '')
+    if not api_key:
+        return None, 'api_key_required'
+    baru = dict(lama or {})
+    baru.update({'id': model_id, 'name': model_id, 'endpoint': endpoint, 'api_key': api_key,
+                 'model': str(model_data.get('model') or '').strip() or model_id,
+                 'is_default': bool((lama or {}).get('is_default'))})
+    if lama:
+        models[models.index(lama)] = baru
+    else:
+        models.append(baru)
     if model_data.get('is_default') or len(models) == 1:
         for m in models:
-            m['is_default'] = (m['id'] == model_data['id'])
+            m['is_default'] = (m['id'] == model_id)
+    data['models'] = models
     save_ai_models(data)
-    return model_data, None
+    return baru, None
 
 
 def remove_ai_model(model_id):
-    """Remove an AI model."""
+    """Hapus model. Fungsi yang memakainya kembali ke model default; kalau yang dihapus
+    model default, default pindah ke model pertama yang tersisa."""
     data = load_ai_models()
     models = data.get('models', [])
-    new_models = [m for m in models if m['id'] != model_id]
-    if len(new_models) == len(models):
+    sisa = [m for m in models if m['id'] != model_id]
+    if len(sisa) == len(models):
         return False
-    data['models'] = new_models
+    if sisa and not any(m.get('is_default') for m in sisa):
+        sisa[0]['is_default'] = True
+    data['models'] = sisa
+    data['pemakaian'] = {k: v for k, v in (data.get('pemakaian') or {}).items() if v and v != model_id}
     save_ai_models(data)
     return True
 
@@ -931,6 +935,24 @@ def set_default_ai_model(model_id):
         return False
     save_ai_models(data)
     return True
+
+
+def set_ai_pemakaian(peran, model_id):
+    """Pilih model untuk satu fungsi installer (AI_PERAN); model_id kosong = ikut model default."""
+    if peran not in {kunci for kunci, _, _ in AI_PERAN}:
+        return None, 'peran_tidak_dikenal'
+    data = load_ai_models()
+    model_id = str(model_id or '')
+    if model_id and not any(m.get('id') == model_id for m in data.get('models', [])):
+        return None, 'model_not_found'
+    pemakaian = {k: v for k, v in (data.get('pemakaian') or {}).items() if v}
+    if model_id:
+        pemakaian[peran] = model_id
+    else:
+        pemakaian.pop(peran, None)
+    data['pemakaian'] = pemakaian
+    save_ai_models(data)
+    return pemakaian, None
 
 
 def test_ai_model(model_id):
@@ -1175,11 +1197,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         ip = client_ip(self) or 'unknown'
-        if not _rate_ok(ip):
-            self._send_json({'error': 'rate_limited'}, 429)
-            return
         parsed = urlparse(self.path)
         path = parsed.path
+        # Bagan proses /installer/ membaca satu domain tiap 2-3 detik selama run berjalan
+        # (satu berkas state + log): dikecualikan dari batas 30 req/60s supaya pantauan
+        # realtime tidak berhenti karena 429. Semua endpoint lain tetap dibatasi.
+        baca_bagan = path == '/api/installer' and 'domain' in parse_qs(parsed.query)
+        if not baca_bagan and not _rate_ok(ip):
+            self._send_json({'error': 'rate_limited'}, 429)
+            return
 
         if path == '/health':
             self._send_json({'status': 'ok'})
@@ -1193,6 +1219,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/installer':
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
+                return
+            # ?domain=<domain>: satu baris untuk bagan proses di halaman /installer/. Domain yang
+            # sudah terpasang hilang dari antrean di bawah, padahal bagan tetap perlu status akhir
+            # run-nya; log lebih panjang supaya awal run apply penuh tidak terpotong.
+            satu = (parse_qs(parsed.query).get('domain') or [''])[0].strip().lower()
+            if satu:
+                if not DOMAIN_RE.match(satu) or '/' in satu or '..' in satu:
+                    self._send_json({'error': 'invalid_domain'}, 400)
+                    return
+                manifest = ROOT / satu / f'{satu}.txt'
+                row = domain_row(satu, manifest if manifest.is_file() else None)
+                try:
+                    row['log'] = (STATE / f'{satu}.log').read_text(errors='replace').splitlines()[-1500:]
+                except OSError:
+                    pass
+                self._send_json({'domain_row': row})
                 return
             self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs(),
                              'local_ips': local_ips(), 'servers': load_servers(),
@@ -1211,7 +1253,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = load_ai_models()
             # mask api_key for listing
-            safe = {'models': [], 'default_provider': data.get('default_provider', 'openai')}
+            safe = {'models': [], 'default_provider': data.get('default_provider', 'openai'),
+                    'pemakaian': {k: v for k, v in (data.get('pemakaian') or {}).items() if v},
+                    'peran': [{'kunci': k, 'label': label, 'script': script} for k, label, script in AI_PERAN]}
             for m in data.get('models', []):
                 mm = dict(m)
                 if mm.get('api_key'):
@@ -1382,6 +1426,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({'status': 'ok', 'default_model': model_id})
             else:
                 self._send_json({'error': 'model_not_found', 'model_id': model_id}, 404)
+            return
+        if path == '/api/ai/models/pemakaian':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            pemakaian, err = set_ai_pemakaian(str(payload.get('peran') or ''), payload.get('model_id'))
+            if pemakaian is None:
+                self._send_json({'error': err}, 404 if err == 'model_not_found' else 400)
+                return
+            self._send_json({'status': 'ok', 'pemakaian': pemakaian})
             return
         if path.startswith('/api/ai/models/') and path.endswith('/delete'):
             model_id = path[len('/api/ai/models/'):-len('/delete')]

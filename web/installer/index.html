@@ -321,6 +321,85 @@
 .check.running{border-color:var(--cyan);color:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.55}}
 
+      /* ---------- bagan proses installer (panel "Proses berjalan" & modal) ----------
+         Simpul = langkah installer-runner, dibaca dari log run terakhir. Garis menuju
+         simpul yang sedang berjalan beranimasi supaya posisi proses terlihat sekilas. */
+      .flow-panel { margin-bottom: 20px; }
+      .flow-head {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 4px 14px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      .flow-head h2 { margin: 0; color: var(--cyan); font-size: 14px; }
+      .flow-head span { color: var(--muted); font-size: 12px; }
+      .flow-body { padding: 14px 16px 18px; }
+      .flow-body .empty { padding: 10px 0; text-align: left; }
+      .flow-card + .flow-card { margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--line); }
+      .flow-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+      .flow-meta strong { color: var(--cyan); font-size: 13px; }
+      .flow-meta .run { color: var(--cyan); }
+      .flow-meta .ok { color: var(--green); }
+      .flow-meta .err, .err-text { color: var(--red); }
+      .flow { position: relative; }
+      .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+      .flow ol {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 28px 34px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .node {
+        min-height: 76px;
+        padding: 9px 10px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #0a0e0c;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .node-top { display: flex; align-items: center; gap: 7px; }
+      .node-ikon {
+        display: grid;
+        place-items: center;
+        flex: none;
+        width: 18px;
+        height: 18px;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .node-nama { color: var(--text); font-weight: 700; }
+      .node-sub { margin-top: 5px; color: var(--muted); }
+      .node-log { margin-top: 5px; color: var(--cyan); overflow-wrap: anywhere; }
+      .node.selesai { border-color: #2f6b40; }
+      .node.selesai .node-ikon { color: var(--green); }
+      .node.berjalan { border-color: var(--cyan); box-shadow: inset 0 0 0 1px var(--cyan); }
+      .node.berjalan .node-ikon { color: var(--cyan); animation: pulse 1.2s ease-in-out infinite; }
+      .node.gagal { border-color: var(--red); }
+      .node.gagal .node-ikon, .node.gagal .node-sub { color: var(--red); }
+      .node.dilewati { border-style: dashed; }
+      .node.dilewati .node-ikon, .node.dilewati .node-nama, .node.menunggu .node-ikon, .node.menunggu .node-nama { color: var(--muted); }
+      .edge { fill: none; stroke: var(--line); stroke-width: 2; }
+      .edge.selesai { stroke: #2f6b40; }
+      .edge.gagal { stroke: var(--red); }
+      .edge.berjalan { stroke: var(--cyan); stroke-dasharray: 6 6; animation: alir .8s linear infinite; }
+      @keyframes alir { to { stroke-dashoffset: -12; } }
+      @media (prefers-reduced-motion: reduce) {
+        .edge.berjalan, .node.berjalan .node-ikon, .spinner, .check.running { animation: none; }
+      }
+      .flow-modal .modal-box { max-width: 1040px; width: min(1040px, 96vw); max-height: 88vh; overflow-y: auto; }
+      @media (max-width: 600px) {
+        .flow ol { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+      }
+
       pre.log-view {
         margin: 0;
         padding: 12px;
@@ -372,6 +451,15 @@
             Pilih server untuk instalasi.
           </div>
           <div id="local-note" class="local-info">Server ini: memuat...</div>
+        </section>
+        <section class="panel flow-panel" aria-labelledby="alur-judul-panel">
+          <div class="flow-head">
+            <h2 id="alur-judul-panel">Proses berjalan</h2>
+            <span>bagan diperbarui tiap 3 detik selama installer jalan</span>
+          </div>
+          <div class="flow-body" id="alur-berjalan" aria-live="polite">
+            <p class="empty">Memuat status installer...</p>
+          </div>
         </section>
         <section class="filters" aria-label="Filter domain">
           <input id="domain-filter" type="search" placeholder="filter domain..." autocomplete="off" />
@@ -436,8 +524,8 @@
         <div id="wizard-step-mode" class="wizard-step" style="display: none">
           <p class="meta" style="margin: 0 0 12px">Step 2: Mode Install</p>
           <div class="mode-choice">
-            <label><input type="radio" name="run-mode" value="dry-run" checked /> Dry run — validasi manifest saja (aman)</label>
-            <label><input type="radio" name="run-mode" value="apply" /> Apply — eksekusi nyata (timpa public_html & tulis DB)</label>
+            <label><input type="radio" name="run-mode" value="dry-run" checked /> Dry run: validasi manifest saja (aman)</label>
+            <label><input type="radio" name="run-mode" value="apply" /> Apply: eksekusi nyata (timpa public_html & tulis DB)</label>
           </div>
           <p class="meta" style="margin: 10px 0 0">Apply destruktif: backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.</p>
         </div>
@@ -463,11 +551,20 @@
     <div id="checklist-modal" class="modal checklist-modal" role="dialog" aria-modal="true">
       <div class="modal-box">
         <h3>Checklist: <span id="checklist-domain"></span></h3>
-        <div id="checklist-loader" class="checklist-loader" style="display:none"><span class="spinner"></span><span id="checklist-loader-text">Sedang berjalan — refresh otomatis...</span></div>
+        <div id="checklist-loader" class="checklist-loader" style="display:none"><span class="spinner"></span><span id="checklist-loader-text">Sedang berjalan, refresh otomatis...</span></div>
         <div id="checklist-summary" class="checklist-summary"></div>
         <ul class="checklist" id="checklist-items"></ul>
         <div class="modal-actions" style="margin-top: 14px">
           <button class="btn btn-cancel" onclick="closeChecklistModal()">Tutup</button>
+        </div>
+      </div>
+    </div>
+    <div id="alur-modal" class="modal flow-modal" role="dialog" aria-modal="true" aria-labelledby="alur-judul">
+      <div class="modal-box">
+        <h3 id="alur-judul">Bagan proses: <span id="alur-domain"></span></h3>
+        <div id="alur-isi" data-alur></div>
+        <div class="modal-actions" style="margin-top: 14px">
+          <button class="btn btn-cancel" type="button" id="alur-tutup">Tutup</button>
         </div>
       </div>
     </div>
@@ -527,7 +624,7 @@
           const servers = d.servers || [];
           serverList = servers;
           serverSelect.innerHTML = servers.length
-            ? servers.map(x => `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} — ${esc(x.host)}:${esc(String(x.port))}</option>`).join('')
+            ? servers.map(x => `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} (${esc(x.host)}:${esc(String(x.port))})</option>`).join('')
             : '<option value="">Belum ada server terhubung</option>';
           serverNote.textContent = servers.length ? 'Server tujuan siap dipilih.' : 'Tambahkan server di config/servers.json.';
         } catch (e) {
@@ -598,6 +695,7 @@
           const ln = document.getElementById('local-note');
           if (ln) ln.textContent = 'Server ini: ' + (localIps.length ? localIps.join(', ') : '(tidak terdeteksi)');
           allDomains = d.domains || [];
+          pantauYangBerjalan(allDomains);
           const q = (domainFilter.value || '').trim().toLowerCase();
           const status = statusFilter.value;
           // Tanggal lokal, bukan toISOString() yang memakai UTC — di WIB itu
@@ -670,6 +768,7 @@
             } else if (x.claim) {
               acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
             }
+            acts.push({ label: 'Bagan proses', run: () => openFlowModal(x.domain) });
             acts.push({ label: 'Checklist', run: () => openChecklistModal(x.domain, allDomains) });
             if (logLines) acts.push({ label: 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
             rowActions[x.domain] = acts;
@@ -685,7 +784,7 @@
               : '';
             const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
             const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
-            const dash = '<span style="color:var(--muted)">—</span>';
+            const dash = '<span style="color:var(--muted)">-</span>';
             const paketCell = x.paket ? esc(x.paket) : dash;
             const deadlineCell = x.deadline ? esc(x.deadline) : dash;
             return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile paket-cell">${paketCell}</td><td class="hide-mobile deadline-cell">${deadlineCell}</td><td class="hide-mobile target-cell">${targetCell}</td><td><span class="stat ${pillClass}" title="${esc(statusFull)}" aria-label="Status: ${esc(statusFull)}">${statusIcon}</span></td><td><button class="action" type="button" data-menu-domain="${esc(x.domain)}">[ aksi ▾ ]</button></td></tr>`;
@@ -830,6 +929,7 @@
           if (r.ok && j.status === 'started') {
             serverNote.textContent = wizardData.mode + ' "' + wizardData.domain + '" dimulai (PID ' + j.pid + ').';
             showDetail({ info: wizardData.mode + ' dimulai', ...j });
+            mulaiPantau(wizardData.domain);
             setTimeout(load, 1500);
           } else {
             serverNote.textContent = 'Gagal memulai: ' + (j.error || r.status);
@@ -896,7 +996,7 @@
           const isActive = isRunning && !done && idx === firstPendingIdx;
           const checkCls = done ? "done" : isActive ? "running" : "pending";
           const icon = done ? "✓" : isActive ? '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>' : "○";
-          return `<li><span class="check ${checkCls}">${icon}</span><span class="task-name ${done ? "done-text" : isActive ? "" : "pending-text"}" style="${isActive ? "color:var(--cyan)" : ""}">${esc(t.label)}${isActive ? " — berjalan..." : ""}</span></li>`;
+          return `<li><span class="check ${checkCls}">${icon}</span><span class="task-name ${done ? "done-text" : isActive ? "" : "pending-text"}" style="${isActive ? "color:var(--cyan)" : ""}">${esc(t.label)}${isActive ? ", berjalan..." : ""}</span></li>`;
         }).join("");
         const statusColor = isRunning ? "var(--cyan)" : (row && row.status === "FAILED" ? "var(--red)" : "var(--green)");
         checklistSummaryEl.innerHTML = `<div class="stat"><div class="stat-num">${doneCount}/${_checklistTasks.length}</div><div class="stat-label">Tasks</div></div><div class="stat"><div class="stat-num" style="color:${statusColor}">${row && row.status ? esc(row.status) : "-"}${row && row.stage ? "/" + esc(row.stage) : ""}</div><div class="stat-label">Status</div></div>`;
@@ -905,7 +1005,7 @@
         const loaderText = document.getElementById("checklist-loader-text");
         if (isRunning) {
           loader.style.display = "flex";
-          if (loaderText) loaderText.textContent = `Sedang berjalan ${doneCount}/${_checklistTasks.length} — auto-refresh 2s (refresh tidak hentikan proses)`;
+          if (loaderText) loaderText.textContent = `Sedang berjalan ${doneCount}/${_checklistTasks.length}, auto-refresh 2s (refresh tidak hentikan proses)`;
         } else {
           loader.style.display = "none";
         }
@@ -934,6 +1034,257 @@
       }
       function closeChecklistModal() { checklistModal.classList.remove("open"); if (checklistPoll) { clearInterval(checklistPoll); checklistPoll = null; } }
       checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
+
+      // ---------- bagan proses installer (realtime) ----------
+      // Simpul dibaca dari penanda yang ditulis scripts/installer-runner ke <domain>.log,
+      // hanya dari run terakhir (dimulai "RUNNING: VALIDATING"). Langkah yang tidak dijalankan
+      // mode atau paket situs itu (mis. tema FSE di paket biasa, install di mode finish) tampil
+      // "dilewati". Menambah langkah di runner = menambah satu baris di ALUR.
+      const ALUR = [
+        { nama: 'Validasi manifest', mulai: /\] RUNNING: VALIDATING/, selesai: /\] RUNNING: RUNNING_INSTALLER/, gagal: /\] FAILED: manifest_missing/ },
+        { nama: 'Install WordPress', ket: 'SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+          selesai: /install_complete|\] SUCCESS: DRY_RUN_OK|http_check:/,
+          lewati: (t) => /http_check:/.test(t) && !/install_complete|WordPress|Transferring package/.test(t) },
+        { nama: 'Cek HTTP situs', mulai: /http_check:/, selesai: /http_check: 200/, gagal: /http_check: (?!200)\d+/ },
+        { nama: 'VD Store', ket: 'plugin & pengaturan toko', mulai: /\] VD Store$/ },
+        { nama: 'Tema desain FSE', ket: 'company profile, isi contoh, velocity-fse', mulai: /\] Jalur tema:/,
+          selesai: /fse: tema_siap|tema dilewati/, lewati: /Jalur tema: (lewati|gagal)|tema dilewati/ },
+        { nama: 'Konten AI', ket: 'halaman & artikel', mulai: /Starting AI content generation/, selesai: /AI content generation completed/ },
+        { nama: 'Finishing', ket: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/, selesai: /finish_done/ },
+        { nama: 'Bersih-bersih', ket: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/, selesai: /cleanup_done/ },
+        { nama: 'Foto slot desain', ket: 'hero, tentang, layanan, galeri', mulai: /Paket custom: foto per slot desain/ },
+        { nama: 'Halaman blok & menu', ket: 'beranda FSE', mulai: /Paket custom: halaman blok & menu/ },
+        { nama: 'Foto utama artikel', mulai: /Paket custom: foto utama artikel/ },
+        { nama: 'Cek visual', ket: 'screenshot desktop & HP', mulai: /Paket custom: cek visual/, selesai: /visual: folder=/ },
+        { nama: 'Pemeriksaan akhir', ket: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/ },
+        { nama: 'Maintenance mode', mulai: /\] (maintenance: |Maintenance mode)/, selesai: /maintenance: (maintenance_|ditandai)/ },
+        { nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: / },
+      ];
+      const IKON_ALUR = { selesai: '✓', berjalan: '●', gagal: '✗', dilewati: '-', menunggu: '○' };
+      const WAKTU_LOG = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d)\]/;
+
+      function segmenRun(row) {
+        const log = (row && row.log) || [];
+        for (let i = log.length - 1; i >= 0; i--) {
+          if (/\] RUNNING: VALIDATING/.test(log[i])) return log.slice(i);
+        }
+        return row && row.status === 'RUNNING' ? log : [];
+      }
+      function waktuDi(baris, i) {
+        for (let j = Math.min(i, baris.length - 1); j >= 0; j--) {
+          const m = WAKTU_LOG.exec(baris[j]);
+          if (m) return new Date(m[1]);
+        }
+        return null;
+      }
+      function lamanya(ms) {
+        const s = Math.max(0, Math.round(ms / 1000));
+        if (s < 60) return s + ' dtk';
+        const m = Math.floor(s / 60);
+        return m < 60 ? m + ' mnt ' + (s % 60) + ' dtk' : Math.floor(m / 60) + ' j ' + (m % 60) + ' mnt';
+      }
+
+      function hitungAlur(row) {
+        const baris = segmenRun(row);
+        const teks = baris.join('\n');
+        const jalan = row.status === 'RUNNING';
+        const gagalRun = /FAILED|error/i.test(row.status || '');
+        const cari = (re, dari) => { if (!re) return -1; for (let i = dari; i < baris.length; i++) if (re.test(baris[i])) return i; return -1; };
+        const simpul = ALUR.map(n => ({ ...n, iMulai: cari(n.mulai, 0) }));
+        const terakhir = simpul.reduce((t, n, i) => (n.iMulai >= 0 ? i : t), -1);
+        simpul.forEach((n, i) => {
+          const berikut = simpul.slice(i + 1).find(x => x.iMulai >= 0);
+          if (n.iMulai < 0) {
+            n.status = baris.length && (!jalan || berikut) ? 'dilewati' : 'menunggu';
+            return;
+          }
+          const iSelesai = cari(n.selesai, n.iMulai);
+          const lewati = typeof n.lewati === 'function' ? n.lewati(teks) : (n.lewati ? n.lewati.test(teks) : false);
+          if (n.gagal && cari(n.gagal, n.iMulai) >= 0) n.status = 'gagal';
+          else if (lewati) n.status = 'dilewati';
+          else if (iSelesai >= 0 || berikut) n.status = 'selesai';
+          else if (jalan) n.status = 'berjalan';
+          else n.status = gagalRun && i === terakhir ? 'gagal' : 'selesai';
+          // Durasi = sampai langkah berikutnya mulai. Penanda selesai sering tanpa cap waktu
+          // ("fse: tema_siap", "qa_result"), jadi cap waktunya sama dengan saat mulai (0 dtk).
+          const tMulai = waktuDi(baris, n.iMulai);
+          const tAkhir = n.status === 'berjalan' ? new Date()
+            : waktuDi(baris, berikut ? berikut.iMulai : baris.length - 1);
+          const lama = tMulai && tAkhir ? tAkhir - tMulai : null;
+          n.lama = i === ALUR.length - 1 || lama === null || lama < 1000 ? null : lama;
+        });
+        const tAwal = waktuDi(baris, 0);
+        const tUjung = jalan ? new Date() : waktuDi(baris, baris.length - 1);
+        const terakhirLog = [...baris].reverse().find(b => b.trim()) || '';
+        return { simpul, baris, jalan, gagalRun, lama: tAwal && tUjung ? tUjung - tAwal : null,
+                 logTerakhir: terakhirLog.replace(WAKTU_LOG, '').trim() };
+      }
+
+      function renderAlur(wadah, row, opsi = {}) {
+        wadah._row = row;
+        const a = hitungAlur(row);
+        const kelasStatus = a.jalan ? 'run' : a.gagalRun ? 'err' : 'ok';
+        const relevan = a.simpul.filter(n => n.status !== 'dilewati');
+        const beres = relevan.filter(n => n.status === 'selesai').length;
+        const meta = `<div class="flow-meta"><strong>${esc(row.domain)}</strong>`
+          + `<span class="${kelasStatus}">${esc(row.status || '-')}${row.stage ? ' / ' + esc(row.stage) : ''}</span>`
+          + (a.baris.length ? `<span>${beres}/${relevan.length} langkah</span>` : '')
+          + (a.lama !== null ? `<span>${a.jalan ? 'berjalan' : 'durasi'} ${lamanya(a.lama)}</span>` : '')
+          + (opsi.galat ? `<span class="err">gagal memperbarui: ${esc(opsi.galat)}</span>` : '')
+          + (opsi.tutup ? `<button class="action" type="button" data-tutup="${esc(row.domain)}">[ tutup ]</button>` : '')
+          + '</div>';
+        if (!a.baris.length) {
+          wadah.innerHTML = meta + '<p class="empty">Belum ada run installer tercatat untuk domain ini.</p>';
+          return;
+        }
+        const simpulHtml = a.simpul.map(n => {
+          const sub = n.status === 'selesai' ? 'selesai' + (n.lama !== null ? ', ' + lamanya(n.lama) : '')
+            : n.status === 'berjalan' ? 'berjalan ' + (n.lama !== null ? lamanya(n.lama) : '')
+            : n.status === 'gagal' ? 'gagal' + (row.stage && !a.jalan ? ': ' + row.stage : '')
+            : n.status === 'dilewati' ? 'dilewati'
+            : (n.ket || 'menunggu');
+          const log = n.status === 'berjalan' && a.logTerakhir ? `<div class="node-log">${esc(a.logTerakhir.slice(0, 90))}</div>` : '';
+          return `<li class="node ${n.status}" aria-label="${esc(n.nama)}: ${n.status}"><div class="node-top">`
+            + `<span class="node-ikon" aria-hidden="true">${IKON_ALUR[n.status]}</span><span class="node-nama">${esc(n.nama)}</span></div>`
+            + `<div class="node-sub">${esc(sub)}</div>${log}</li>`;
+        }).join('');
+        wadah.innerHTML = meta + `<div class="flow"><svg aria-hidden="true"></svg><ol>${simpulHtml}</ol></div>`;
+        wadah._simpul = a.simpul;
+        requestAnimationFrame(() => gambarGaris(wadah));
+      }
+
+      function gambarGaris(wadah) {
+        const flow = wadah.querySelector('.flow');
+        if (!flow) return;
+        const kotak = flow.getBoundingClientRect();
+        const simpul = [...flow.querySelectorAll('.node')];
+        const status = (wadah._simpul || []).map(n => n.status);
+        let garis = '';
+        for (let i = 0; i < simpul.length - 1; i++) {
+          const a = simpul[i].getBoundingClientRect(), b = simpul[i + 1].getBoundingClientRect();
+          let p;
+          if (Math.abs(a.top - b.top) < 4) {
+            const x1 = a.right - kotak.left, y1 = a.top - kotak.top + a.height / 2;
+            const x2 = b.left - kotak.left, y2 = b.top - kotak.top + b.height / 2, c = (x2 - x1) / 2;
+            p = `M${x1} ${y1} C${x1 + c} ${y1} ${x2 - c} ${y2} ${x2} ${y2}`;
+          } else {
+            const x1 = a.left - kotak.left + a.width / 2, y1 = a.bottom - kotak.top;
+            const x2 = b.left - kotak.left + b.width / 2, y2 = b.top - kotak.top, c = (y2 - y1) / 2;
+            p = `M${x1} ${y1} C${x1} ${y1 + c} ${x2} ${y2 - c} ${x2} ${y2}`;
+          }
+          const sa = status[i], sb = status[i + 1];
+          const kelas = sb === 'berjalan' ? 'berjalan' : sb === 'gagal' ? 'gagal'
+            : sa !== 'menunggu' && (sb === 'selesai' || sb === 'dilewati') ? 'selesai' : '';
+          garis += `<path class="edge ${kelas}" d="${p}"/>`;
+        }
+        flow.querySelector('svg').innerHTML = garis;
+      }
+      window.addEventListener('resize', () => document.querySelectorAll('[data-alur]').forEach(gambarGaris));
+
+      async function ambilDomain(domain) {
+        const r = await fetch('/api/installer?domain=' + encodeURIComponent(domain), { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.domain_row) throw new Error(d.error || 'HTTP ' + r.status);
+        return d.domain_row;
+      }
+
+      // Panel "Proses berjalan": domain berstatus RUNNING dipantau lewat API satu domain
+      // (log lebih panjang, tanpa memuat ulang semua antrean). Domain yang sudah selesai
+      // hilang dari antrean /api/installer, jadi kartunya disimpan 10 menit di sini.
+      const pantau = new Map();
+      const panelAlur = document.getElementById('alur-berjalan');
+      let pantauTimer = null;
+
+      function renderPanel() {
+        if (!pantau.size) {
+          panelAlur.innerHTML = '<p class="empty">Tidak ada installer yang sedang berjalan. Bagan muncul di sini begitu install, finish, atau dry run dijalankan.</p>';
+          return;
+        }
+        panelAlur.innerHTML = [...pantau.keys()].map(d => `<div class="flow-card" data-alur data-domain="${esc(d)}"></div>`).join('');
+        panelAlur.querySelectorAll('.flow-card').forEach(el => {
+          const v = pantau.get(el.dataset.domain);
+          renderAlur(el, v.row, { tutup: Boolean(v.selesaiPada), galat: v.galat });
+        });
+      }
+      function pantauYangBerjalan(domains) {
+        let baru = false;
+        for (const x of domains) {
+          if (x.status === 'RUNNING' && !pantau.has(x.domain)) {
+            pantau.set(x.domain, { row: x, selesaiPada: 0, galat: '' });
+            baru = true;
+          }
+        }
+        if (baru || !panelAlur.querySelector('.flow-card')) renderPanel();
+        jadwalPantau();
+      }
+      function mulaiPantau(domain) {
+        pantau.set(domain, { row: { domain, status: 'RUNNING', stage: 'dimulai', log: [] }, selesaiPada: 0, galat: '' });
+        renderPanel();
+        jadwalPantau();
+        detakPantau();
+      }
+      async function detakPantau() {
+        const aktif = [...pantau.entries()].filter(([, v]) => !v.selesaiPada);
+        await Promise.all(aktif.map(async ([domain, v]) => {
+          try {
+            v.row = await ambilDomain(domain);
+            v.galat = '';
+            if (v.row.status !== 'RUNNING') { v.selesaiPada = Date.now(); load(); }
+          } catch (e) {
+            v.galat = e.message;
+          }
+        }));
+        for (const [domain, v] of pantau) {
+          if (v.selesaiPada && Date.now() - v.selesaiPada > 600000) pantau.delete(domain);
+        }
+        renderPanel();
+      }
+      function jadwalPantau() {
+        if (pantauTimer || ![...pantau.values()].some(v => !v.selesaiPada)) return;
+        pantauTimer = setInterval(() => {
+          if (![...pantau.values()].some(v => !v.selesaiPada)) { clearInterval(pantauTimer); pantauTimer = null; return; }
+          if (!document.hidden) detakPantau();
+        }, 3000);
+      }
+      panelAlur.addEventListener('click', e => {
+        const b = e.target.closest('[data-tutup]');
+        if (!b) return;
+        pantau.delete(b.dataset.tutup);
+        renderPanel();
+      });
+
+      const alurModal = document.getElementById('alur-modal'),
+        alurIsi = document.getElementById('alur-isi');
+      let alurPoll = null, alurDomainAktif = null, alurPemicu = null;
+
+      async function segarkanAlurModal() {
+        try {
+          const row = await ambilDomain(alurDomainAktif);
+          if (!alurModal.classList.contains('open')) return;
+          renderAlur(alurIsi, row);
+          if (row.status === 'RUNNING' && !alurPoll) alurPoll = setInterval(segarkanAlurModal, 2000);
+          if (row.status !== 'RUNNING' && alurPoll) { clearInterval(alurPoll); alurPoll = null; }
+        } catch (e) {
+          alurIsi.innerHTML = `<p class="empty err-text">Gagal memuat log: ${esc(e.message)}</p>`;
+        }
+      }
+      function openFlowModal(domain) {
+        alurPemicu = document.querySelector(`[data-menu-domain="${CSS.escape(domain)}"]`);
+        alurDomainAktif = domain;
+        document.getElementById('alur-domain').textContent = domain;
+        alurIsi.innerHTML = '<p class="empty">Memuat log run terakhir...</p>';
+        alurModal.classList.add('open');
+        document.getElementById('alur-tutup').focus();
+        segarkanAlurModal();
+      }
+      function closeFlowModal() {
+        alurModal.classList.remove('open');
+        if (alurPoll) { clearInterval(alurPoll); alurPoll = null; }
+        if (alurPemicu && document.body.contains(alurPemicu)) alurPemicu.focus();
+      }
+      document.getElementById('alur-tutup').addEventListener('click', closeFlowModal);
+      alurModal.addEventListener('click', e => { if (e.target === alurModal) closeFlowModal(); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && alurModal.classList.contains('open')) closeFlowModal(); });
 
       domainFilter.addEventListener('input', () => { currentPage = 1; load(); });
       statusFilter.addEventListener('change', () => { currentPage = 1; load(); });

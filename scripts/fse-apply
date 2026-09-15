@@ -178,7 +178,7 @@ def ciri_referensi(url):
 def muat_ai(manifest):
     try:
         gen = muat_modul('ai_content_generator', HERE / 'ai-content-generator.py')
-        model = gen.get_default_model()
+        model = gen.get_model('fse')
         return (gen, model) if model else None
     except Exception:
         return None
