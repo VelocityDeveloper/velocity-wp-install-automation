@@ -478,8 +478,12 @@ def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, art
         log('ERROR: SSH key not found')
         return False
     
-    docroot = f'/home/{da_user}/domains/{domain}/public_html'
-    
+    # Situs di lokasi tidak baku (staging velocitydeveloper.co): pengganti ssh + docroot
+    # lewat VELOCITY_LOKAL_*, sama seperti scripts/fse-apply & scripts/site-finish.
+    lokal_ssh = os.environ.get('VELOCITY_LOKAL_SSH', '')
+    lokal_docroot = os.environ.get('VELOCITY_LOKAL_DOCROOT', '')
+    docroot = lokal_docroot or f'/home/{da_user}/domains/{domain}/public_html'
+
     def wp_remote(cmd_script):
         """Run WP-CLI command on remote server"""
         full_cmd = f'''set -e
@@ -491,9 +495,9 @@ DOCROOT="{docroot}"
 '''
         try:
             result = subprocess.run(
-                ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-                 '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}',
-                 'bash', '-s'],
+                ([lokal_ssh] if lokal_ssh and lokal_docroot else
+                 ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+                  '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}']) + ['bash', '-s'],
                 input=full_cmd, capture_output=True, text=True, timeout=120
             )
             return result.stdout.strip(), result.returncode

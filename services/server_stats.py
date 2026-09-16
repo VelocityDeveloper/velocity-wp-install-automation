@@ -3,10 +3,12 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 LAN_NETWORKS = tuple(map(ip_network, ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')))
 
@@ -115,6 +117,100 @@ def drive_status():
     return out
 
 
+# ---------------------------------------------------------------------------
+# Riwayat pemakaian CPU & RAM (grafik di dashboard).
+# Mesin ini tidak punya sysstat/sar, jadi perekamnya di sini: satu contoh per
+# menit ke JSONL supaya riwayat selamat dari restart service. Retensi 30 hari =
+# rentang terpanjang di halaman; berkasnya ditulis ulang berkala agar tidak
+# tumbuh selamanya.
+METRICS_DIR = '/var/lib/velocity/metrics'
+METRICS_FILE = os.path.join(METRICS_DIR, 'system.jsonl')
+SAMPLE_EVERY = 60
+RETENSI = 30 * 24 * 3600
+TULIS_ULANG_TIAP = 1440
+RENTANG = {'1h': 3600, '1d': 86400, '7d': 7 * 86400, '30d': 30 * 86400}
+# Titik lebih rapat dari ini tidak terlihat di lebar grafik, hanya memberatkan.
+TITIK_MAKS = 180
+
+_samples = deque()
+_samples_lock = threading.Lock()
+
+
+def _muat_riwayat():
+    batas = time.time() - RETENSI
+    try:
+        with open(METRICS_FILE) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                    t = float(row['t'])
+                    if t >= batas:
+                        _samples.append((t, float(row['c']), float(row['m'])))
+                except (ValueError, TypeError, KeyError):
+                    continue  # baris rusak (mis. tulis terpotong) dilewati
+    except OSError:
+        pass
+
+
+def _tulis(rows, append):
+    os.makedirs(METRICS_DIR, exist_ok=True)
+    teks = ''.join(json.dumps({'t': round(t), 'c': c, 'm': m}) + '\n' for t, c, m in rows)
+    if append:
+        with open(METRICS_FILE, 'a') as f:
+            f.write(teks)
+        return
+    tmp = METRICS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(teks)
+    os.replace(tmp, METRICS_FILE)
+
+
+def _rekam():
+    """Thread perekam. Kegagalan menulis tidak boleh mematikan API stats."""
+    sejak_tulis_ulang = 0
+    while True:
+        try:
+            row = (time.time(), cpu_percent(), memory()['percent'])
+            with _samples_lock:
+                _samples.append(row)
+                batas = row[0] - RETENSI
+                while _samples and _samples[0][0] < batas:
+                    _samples.popleft()
+                sejak_tulis_ulang += 1
+                padat = sejak_tulis_ulang >= TULIS_ULANG_TIAP
+                rows = list(_samples) if padat else [row]
+            _tulis(rows, append=not padat)
+            if padat:
+                sejak_tulis_ulang = 0
+        except (OSError, ValueError, KeyError):
+            pass
+        time.sleep(SAMPLE_EVERY)
+
+
+def history(rentang):
+    """Deret CPU & RAM yang sudah diringkas ke <= TITIK_MAKS titik."""
+    nama = rentang if rentang in RENTANG else '1h'
+    span = RENTANG[nama]
+    batas = time.time() - span
+    with _samples_lock:
+        data = [s for s in _samples if s[0] >= batas]
+        mulai = _samples[0][0] if _samples else None
+    lebar = max(SAMPLE_EVERY, span // TITIK_MAKS)
+    ember = {}
+    for t, c, m in data:
+        e = ember.setdefault(int(t // lebar), [0, 0.0, 0.0, 0.0])
+        e[0] += 1
+        e[1] += c
+        e[2] += m
+        e[3] = max(e[3], c)
+    titik = [{'t': int(k * lebar), 'cpu': round(ember[k][1] / ember[k][0], 1),
+              'mem': round(ember[k][2] / ember[k][0], 1), 'cpu_max': round(ember[k][3], 1)}
+             for k in sorted(ember)]
+    return {'range': nama, 'interval': lebar, 'points': titik, 'samples': len(data),
+            'sample_every': SAMPLE_EVERY,
+            'recording_since': int(mulai) if mulai else None}
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, status, data):
         body = json.dumps(data, separators=(',', ':')).encode()
@@ -126,10 +222,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == '/api/drive':
+        path, _, query = self.path.partition('?')
+        if path == '/api/drive':
             self.json_response(200, drive_status())
             return
-        if self.path != '/api/stats':
+        if path == '/api/stats/history':
+            self.json_response(200, history((parse_qs(query).get('range') or ['1h'])[0]))
+            return
+        if path != '/api/stats':
             self.send_error(404)
             return
         self.json_response(200, payload())
@@ -162,4 +262,6 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+_muat_riwayat()
+threading.Thread(target=_rekam, daemon=True).start()
 ThreadingHTTPServer(('127.0.0.1', 9120), Handler).serve_forever()

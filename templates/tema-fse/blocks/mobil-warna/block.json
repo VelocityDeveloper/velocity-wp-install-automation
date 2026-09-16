@@ -1,0 +1,13 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/mobil-warna",
+	"title": "Pilihan Warna Unit",
+	"category": "widgets",
+	"icon": "art",
+	"description": "Deretan pilihan warna unit mobil dari Data Unit.",
+	"usesContext": [ "postId" ],
+	"supports": { "html": false },
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

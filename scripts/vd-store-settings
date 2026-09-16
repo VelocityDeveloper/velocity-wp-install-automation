@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Apply VD Store settings from client form during full installer only.
+
+Runs after vd-store activation. Blank form fields stay blank; shipping origin
+requires provider API already configured in VD Store.
+"""
+import base64
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from client_form import read_client_form
+
+ROOT = Path('/home/project')
+ON_PROGRESS = Path('/home/On Progress')
+
+def manifest(path):
+    out = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        k, sep, v = line.partition('=')
+        if sep:
+            out[k.strip()] = v.strip()
+    return out
+
+def field(fields, pattern):
+    return next((v.strip() for k, v in fields.items() if re.search(pattern, k, re.I)), '')
+
+def list_value(fields, pattern):
+    value = field(fields, pattern)
+    return [x.strip().strip('.,;') for x in re.split(r',|/|;|\n', value) if x.strip().strip('.,;')]
+
+def main():
+    if len(sys.argv) != 2:
+        print('usage: vd-store-settings <manifest>')
+        return 2
+    cfg = manifest(sys.argv[1])
+    paket = re.sub(r'\s+', '', cfg.get('paket', '').lower())
+    if 'tokoonline' not in paket:
+        print('vd_store_settings: dilewati:paket_bukan_toko_online')
+        return 0
+    domain = cfg.get('domain', '').lower()
+    da_user = cfg.get('da_user', '')
+    folder = ON_PROGRESS / domain
+    if not folder.is_dir():
+        folder = ROOT / domain
+    form = read_client_form(folder) if folder.is_dir() else {'fields': {}}
+    f = form['fields']
+    text = form.get('text', '')
+    banks = list_value(f, r'bank')
+    couriers = list_value(f, r'ekspedisi|kurir|courier')
+    if not couriers:
+        m = re.search(r'\b(jne\s*,\s*tiki\s*,\s*sicepat\s*,\s*j[& ]t)\b', text, re.I)
+        couriers = [x.strip() for x in re.split(r',|\s+dan\s+', m.group(1), flags=re.I)] if m else []
+    categories = list_value(f, r'kategori.*produk|kategori produk')
+    if len(categories) == 1:
+        categories = [x.strip() for x in re.split(r'\s+dan\s+', categories[0], flags=re.I) if x.strip()]
+    origin = field(f, r'asal.*pengiriman|asal.*daerah|kecamatan.*pengiriman')
+    if not origin:
+        m = re.search(r'Pengiriman barang dari kota mana\?Kecamatan apa\?\s*([^\n]+)', text, re.I)
+        origin = m.group(1).strip() if m else ''
+    data = {
+        'address': field(f, r'^alamat( lengkap)?$'),
+        'email': field(f, r'^email$'),
+        'phone': field(f, r'^(telepon|telp|no[. ]?telp|nomor telepon)$'),
+        'wa': field(f, r'whatsapp|wa'),
+        'banks': banks,
+        'couriers': couriers,
+        'categories': categories,
+        'origin_text': origin,
+        'province_id': cfg.get('shipping_origin_province_id', ''),
+        'city_id': cfg.get('shipping_origin_city_id', ''),
+        'subdistrict_id': cfg.get('shipping_origin_district_id', '') or cfg.get('shipping_origin_subdistrict_id', ''),
+    }
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not key or not Path(key).is_file():
+        print('vd_store_settings: kunci SSH tidak ada')
+        return 2
+    encoded = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode()
+    remote = r'''set -u
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp_cli_missing"; exit 10; }
+php -d memory_limit=512M "$WP_BIN" eval '
+$d=json_decode(base64_decode("__DATA__"),true); $s=(array)get_option("wp_store_settings",[]);
+foreach (["address"=>"store_address","email"=>"store_email","phone"=>"store_phone","wa"=>"store_wa"] as $a=>$b) { if (array_key_exists($a,$d)) $s[$b]=(string)$d[$a]; }
+if (!empty($d["banks"])) { $a=[]; foreach($d["banks"] as $n) $a[]=["bank_name"=>(string)$n,"bank_account"=>"","bank_holder"=>""]; $s["payment_methods"]=["bank_transfer"]; $s["store_bank_accounts"]=$a; }
+if (!empty($d["couriers"])) { $map=["jne"=>"JNE","tiki"=>"TIKI","sicepat"=>"SiCepat","j&t"=>"J&T","jnt"=>"J&T"]; $c=[]; foreach($d["couriers"] as $n){$k=strtolower(trim($n)); if(isset($map[$k]))$c[$k=="j&t"||$k=="jnt"?"jnt":$k]=$map[$k];} if($c)$s["shipping_couriers"]=$c; }
+if ($d["province_id"]!=="" && $d["city_id"]!=="" && $d["subdistrict_id"]!=="") { $s["shipping_origin_province"]=(string)$d["province_id"]; $s["shipping_origin_city"]=(string)$d["city_id"]; $s["shipping_origin_subdistrict"]=(string)$d["subdistrict_id"]; echo "origin:manifest_ids\n"; }
+elseif ($d["origin_text"]!=="" && !empty($s["rajaongkir_api_key"])) {
+  $base=rtrim((string)($s["rajaongkir_base_url"]??"https://ongkir.velocitydeveloper.co/api/v3"),"/"); $h=["headers"=>["key"=>$s["rajaongkir_api_key"]],"timeout"=>20];
+  $get=function($u)use($h){$r=wp_remote_get($u,$h);if(is_wp_error($r))return []; $j=json_decode(wp_remote_retrieve_body($r),true);return is_array($j["data"]??null)?$j["data"]:($j["rajaongkir"]["results"]??[]);};
+  $norm=function($v){return strtolower(preg_replace("/[^a-z0-9]+/i","",$v));}; $q=$norm($d["origin_text"]); $pick=function($rows,$need,$name)use($norm){foreach($rows as $x){$label=(string)($x["name"]??$x["province"]??$x["city_name"]??$x["subdistrict_name"]??"");if($label!==""&&($norm($label)===$need||strpos($norm($label),$need)!==false))return $x;}return null;};
+  $provs=$get($base."/destination/province"); $tokens=preg_split("/[^a-z0-9]+/i",strtolower($d["origin_text"]),-1,PREG_SPLIT_NO_EMPTY); $match=function($label)use($norm,$tokens){$n=$norm($label);foreach($tokens as $t){$t=$norm($t);if(strlen($t)>=4&&strpos($n,$t)!==false)return true;}return false;}; $p=null;
+  foreach($provs as $x){if($match((string)($x["name"]??$x["province"]??""))){$p=$x;break;}}
+  if($p){$pid=(string)($p["id"]??$p["province_id"]??"");$cities=$get($base."/destination/city/".$pid);foreach($cities as $x){$cid=(string)($x["id"]??$x["city_id"]??"");$ds=$get($base."/destination/district/".$cid);foreach($ds as $dist){if($match((string)($dist["name"]??$dist["subdistrict_name"]??""))){$s["shipping_origin_province"]=$pid;$s["shipping_origin_city"]=$cid;$s["shipping_origin_subdistrict"]=(string)($dist["id"]??$dist["subdistrict_id"]??"");echo "origin:api_lookup\n";break 2;}}}}
+}
+update_option("wp_store_settings",$s);
+foreach($d["categories"] as $n){$n=trim($n);if($n!==""){ $slug=sanitize_title($n); if(!term_exists($slug,"store_product_cat")) wp_insert_term($n,"store_product_cat",["slug"=>$slug]); }}
+echo wp_json_encode(["address"=>$s["store_address"]??"","email"=>$s["store_email"]??"","phone"=>$s["store_phone"]??"","wa"=>$s["store_wa"]??"","banks"=>$s["store_bank_accounts"]??[],"couriers"=>$s["shipping_couriers"]??[],"origin"=>[$s["shipping_origin_province"]??"",$s["shipping_origin_city"]??"",$s["shipping_origin_subdistrict"]??""]]);
+' --path="$DOCROOT" --allow-root
+'''
+    header = '\n'.join([
+        f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+        f'DATA={shlex.quote(encoded)}',
+    ])
+    # DATA substituted locally only after JSON was base64 encoded.
+    remote = header + '\n' + remote.replace('__DATA__', encoded)
+    port = str(cfg.get('ssh_port') or 22)
+    target = f"{cfg.get('ssh_user') or 'root'}@{cfg.get('target_host')}"
+    opts = ['-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15']
+    run = subprocess.run(['ssh', *opts, '-p', port, target, 'bash', '-s'], input=remote, text=True, capture_output=True, timeout=300)
+    for line in (run.stdout + '\n' + run.stderr).splitlines():
+        if line.strip() and not line.startswith('Warning:'):
+            print('vd_store_settings: ' + line[:300])
+    return run.returncode
+
+if __name__ == '__main__':
+    raise SystemExit(main())

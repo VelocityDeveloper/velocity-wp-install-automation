@@ -590,6 +590,26 @@ def domain_row(domain, manifest):
     return row
 
 
+def run_terakhir():
+    """Domain dengan state installer paling baru: bagan alur halaman /installer/ menampilkannya
+    saat tidak ada installer yang berjalan. None kalau belum pernah ada run."""
+    calon = []
+    for f in STATE.glob('*.json'):
+        if DOMAIN_RE.match(f.stem):
+            try:
+                calon.append((f.stat().st_mtime, f))
+            except OSError:
+                pass
+    for _, f in sorted(calon, reverse=True):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get('status'):
+            return {'domain': f.stem, 'status': str(data['status']), 'updated_at': str(data.get('updated_at', ''))}
+    return None
+
+
 def _write_secret(name: str, content: str, perms: int = 0o600):
     SECRETS.mkdir(parents=True, exist_ok=True)
     os.chmod(SECRETS, 0o700)
@@ -1288,11 +1308,17 @@ class Handler(BaseHTTPRequestHandler):
                     row['log'] = (STATE / f'{satu}.log').read_text(errors='replace').splitlines()[-1500:]
                 except OSError:
                     pass
+                # Paket menentukan cabang bagan (Paket G / F / Toko Online / lainnya).
+                try:
+                    row['paket'] = next((l.partition('=')[2].strip() for l in manifest.read_text(errors='replace').splitlines()
+                                         if l.startswith('paket=')), '')
+                except OSError:
+                    row['paket'] = ''
                 self._send_json({'domain_row': row})
                 return
             self._send_json({'root': str(ROOT), 'domains': domains(), 'cronjobs': cronjobs(),
                              'local_ips': local_ips(), 'servers': load_servers(),
-                             'default_target': default_target()})
+                             'default_target': default_target(), 'terakhir': run_terakhir()})
             return
         if path == '/api/packages':
             if not _check_auth(self):

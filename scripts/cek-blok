@@ -32,8 +32,15 @@ global.requestAnimationFrame = global.requestAnimationFrame || ((cb) => setTimeo
 
 const blocks = modul('@wordpress/blocks');
 modul('@wordpress/block-library').registerCoreBlocks();
-// Blok dinamis tema (render.php): markupnya selalu self-closing.
-for (const nama of ['velocity/topbar', 'velocity/populer', 'velocity/kontak', 'velocity/form-kirim', 'velocity/hak-cipta', 'velocity/judul-arsip']) {
+// Blok dinamis tema (render.php): markupnya selalu self-closing. Daftarnya dibaca dari
+// templates/tema-fse/blocks/*/block.json supaya blok baru tidak perlu ditulis dua kali.
+const blokTema = path.join(__dirname, '..', 'templates', 'tema-fse', 'blocks');
+const namaBlok = (fs.existsSync(blokTema) ? fs.readdirSync(blokTema) : [])
+  .map((d) => path.join(blokTema, d, 'block.json'))
+  .filter((f) => fs.existsSync(f))
+  .map((f) => JSON.parse(fs.readFileSync(f, 'utf8')).name)
+  .filter(Boolean);
+for (const nama of namaBlok.length ? namaBlok : ['velocity/topbar', 'velocity/populer', 'velocity/kontak', 'velocity/form-kirim', 'velocity/hak-cipta', 'velocity/judul-arsip']) {
   blocks.registerBlockType(nama, { apiVersion: 3, title: nama, category: 'theme', edit: () => null, save: () => null });
 }
 

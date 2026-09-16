@@ -16,6 +16,10 @@
 		'velocity/form-kirim',
 		'velocity/hak-cipta',
 		'velocity/judul-arsip',
+		'velocity/mobil-kartu',
+		'velocity/mobil-warna',
+		'velocity/mobil-spesifikasi',
+		'velocity/simulasi-kredit',
 	].forEach( function ( nama ) {
 		if ( wp.blocks.getBlockType( nama ) ) {
 			return;

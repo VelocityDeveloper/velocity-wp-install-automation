@@ -9,6 +9,9 @@ Referensi itu dicocokkan dengan daftar tema di api.velocitydeveloper.co; kalau
 ada, zip-nya diunduh (disimpan per slug + versi) untuk dipasang installer.
 `--override` (dari manifest `velocity_child_theme=`) memilih slug secara langsung.
 
+Paket E tidak memilih template juga: child theme-nya sudah baku (`velocity-pakete`),
+jadi slug itu langsung dicari di API tanpa membaca referensi di form.
+
 Paket G tidak memilih template: desainnya dibuat khusus per project, jadi
 form-nya tidak pernah memuat referensi. Untuk paket itu child theme kosong
 bernama project dibuat di sini (`velocity-<label domain>`) supaya desainer
@@ -52,6 +55,10 @@ UA = {'User-Agent': 'velocity-installer/1.0'}
 # memakai template yang sama dengan varian berita (keputusan user 2026-09-14).
 SCAFFOLD_PAKET = {'paketg', 'paketportalberitacustom'}
 SCAFFOLD_VERSION = '1.1.0'
+# Paket yang child theme-nya sudah baku: paketnya sendiri yang menentukan tema,
+# bukan referensi desain di form (keputusan user 2026-09-16). Slug diambil apa
+# adanya dari API tema Velocity, jadi versi barunya ikut tanpa mengubah kode.
+PAKET_SLUG = {'pakete': 'velocity-pakete'}
 # Kerangka desain Paket G: berkas tema lengkap dengan placeholder {{KUNCI}}.
 TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
 PREFIX_RE = re.compile(r'^[a-z][a-z0-9]{1,11}$')
@@ -114,6 +121,14 @@ def theme_keys(theme):
     slug = str(theme.get('slug') or '').lower()
     name = re.sub(r'\b(velocity|child)\b', '', str(theme.get('name') or ''), flags=re.I)
     return {norm(re.sub(r'^velocity-|-child$', '', slug)), norm(name)} - {''}
+
+
+def zip_tembolok(slug):
+    """Zip tema yang pernah diunduh, versi terbaru (mtime). Kosong = belum pernah."""
+    if not CACHE.is_dir():
+        return None
+    zips = sorted(CACHE.glob(f'{slug}-*.zip'), key=lambda f: f.stat().st_mtime)
+    return zips[-1] if zips else None
 
 
 def download(theme):
@@ -706,7 +721,13 @@ def main():
     # Override manual selalu menang: kalau PM menyebut slug, itu yang dipakai.
     paket = args.paket.strip() or paket_from_folder(domain)
     custom_paket = norm(paket) in SCAFFOLD_PAKET and not override
-    if not override:
+    # Paket dengan child theme baku (Paket E): slug ditentukan paketnya, form tidak dibaca.
+    paket_slug = '' if override else PAKET_SLUG.get(norm(paket), '')
+    if paket_slug:
+        # Log installer berformat child_theme:<status>:<ref>:<slug> — ref tidak boleh
+        # memuat titik dua, jadi "Paket E" ditulis "paket-e".
+        out['ref'] = re.sub(r'[^a-z0-9]+', '-', paket.strip().lower()).strip('-')
+    elif not override:
         out['ref'] = design_ref(read_client_form(ON_PROGRESS / domain)['text'])
         if not out['ref']:
             # Paket G memang tidak pernah memuat referensi — bukan kegagalan.
@@ -723,8 +744,9 @@ def main():
         return emit()
     children = [t for t in themes if t.get('type') == 'wp_theme_child'
                 and SLUG_RE.match(str(t.get('slug') or ''))]
-    if override:
-        match = next((t for t in children if t['slug'] == override), None)
+    slug_diminta = override or paket_slug
+    if slug_diminta:
+        match = next((t for t in children if t['slug'] == slug_diminta), None)
     else:
         match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
     if not match:
@@ -741,7 +763,14 @@ def main():
     try:
         out.update(status='matched', zip=str(download(match)))
     except Exception as e:
-        out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
+        # Unduhan gagal (mis. rilis GitHub-nya privat) tidak perlu menjatuhkan situs
+        # ke tema induk kalau zip versi lama tema yang sama masih ada di tembolok.
+        cache_zip = zip_tembolok(match['slug'])
+        if cache_zip:
+            out.update(status='matched', zip=str(cache_zip),
+                       error=f'unduhan_gagal_pakai_tembolok:{type(e).__name__}')
+        else:
+            out.update(status='download_failed', error=f'{type(e).__name__}: {e}'[:120])
     return emit()
 
 

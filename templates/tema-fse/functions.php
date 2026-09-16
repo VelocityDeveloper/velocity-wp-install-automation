@@ -25,6 +25,7 @@ define('VELOCITY_FSE_VERSI', (string) wp_get_theme('velocity-fse')->get('Version
 require get_theme_file_path('inc/situs.php');
 require get_theme_file_path('inc/form.php');
 require get_theme_file_path('inc/pengaturan.php');
+require get_theme_file_path('inc/dealer.php');
 
 add_action('after_setup_theme', function () {
     add_theme_support('wp-block-styles');
@@ -46,7 +47,46 @@ add_action('wp_enqueue_scripts', function () {
     if ($css !== '') {
         wp_add_inline_style('velocity-fse', 'body{' . $css . '}');
     }
+    // Desain mengikuti referensi web klien (keputusan user 2026-09-15; opsi velocity_fse_desain
+    // ditulis scripts/fse-apply): font referensi dari Google Fonts, radius tombol & kartu,
+    // ketebalan judul. Warna tetap dari palet klien.
+    $desain = velocity_fse_desain();
+    if ($desain) {
+        $keluarga = array();
+        foreach ((array) ($desain['font_google'] ?? array()) as $nama) {
+            $nama = velocity_fse_nama_font($nama);
+            if ($nama !== '') {
+                $keluarga[] = 'family=' . str_replace(' ', '+', $nama) . ':wght@400;500;600;700;800';
+            }
+        }
+        if ($keluarga) {
+            wp_enqueue_style('velocity-fse-font-referensi', 'https://fonts.googleapis.com/css2?' . implode('&', array_unique($keluarga)) . '&display=swap', array(), null);
+        }
+        $var = '';
+        $teks = velocity_fse_nama_font($desain['font_teks'] ?? '');
+        $judul = velocity_fse_nama_font($desain['font_judul'] ?? '');
+        if ($teks !== '') {
+            $var .= "--vf-font-teks:'" . $teks . "',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;";
+        }
+        if ($judul !== '') {
+            $var .= "--vf-font-judul:'" . $judul . "'," . (!empty($desain['serif_judul']) ? 'Georgia,serif' : "-apple-system,'Segoe UI',Arial,sans-serif") . ';';
+        }
+        $var .= '--vf-tombol-radius:' . min(999, max(0, (int) ($desain['tombol_radius'] ?? 6))) . 'px;';
+        $var .= '--vf-kartu-radius:' . min(40, max(0, (int) ($desain['kartu_radius'] ?? 12))) . 'px;';
+        $var .= '--vf-judul-tebal:' . min(900, max(300, (int) ($desain['judul_tebal'] ?? 700))) . ';';
+        wp_add_inline_style('velocity-fse', 'body.vf-ref{' . $var . '}');
+    }
 });
+
+/** Token desain referensi klien, atau array kosong kalau situs tanpa referensi. */
+function velocity_fse_desain() {
+    $desain = get_option('velocity_fse_desain', array());
+    return (is_array($desain) && !empty($desain['url'])) ? $desain : array();
+}
+
+function velocity_fse_nama_font($nama) {
+    return trim(preg_replace('/[^A-Za-z0-9 ]/', '', (string) $nama));
+}
 
 add_action('init', function () {
     // Blok dinamis tema dirender PHP; skrip editor ini hanya menampilkan
@@ -82,5 +122,25 @@ add_filter('body_class', function ($kelas) {
     // Gaya tampilan dari referensi desain klien: klasik | sorotan (lihat style.css).
     $gaya = (string) velocity_fse_situs('gaya');
     $kelas[] = 'vf-gaya-' . sanitize_html_class($gaya !== '' ? $gaya : 'klasik');
+    // Header, footer, tombol & kartu mengikuti referensi web klien (lihat style.css "vf-ref").
+    $desain = velocity_fse_desain();
+    if ($desain) {
+        $kelas[] = 'vf-ref';
+        if (!empty($desain['terapkan_header'])) {
+            $kelas[] = !empty($desain['header_gelap']) ? 'vf-header-gelap' : 'vf-header-terang';
+            $kelas[] = 'vf-logo-' . (($desain['logo_posisi'] ?? '') === 'tengah' ? 'tengah' : 'kiri');
+            $menu = (string) ($desain['menu_posisi'] ?? '');
+            $kelas[] = 'vf-menu-' . (in_array($menu, array('kiri', 'tengah', 'kanan'), true) ? $menu : 'kanan');
+            $kelas[] = !empty($desain['footer_gelap']) ? 'vf-footer-gelap' : 'vf-footer-terang';
+            foreach (array('header_lengket' => 'vf-header-lengket', 'menu_kapital' => 'vf-menu-kapital') as $k => $c) {
+                if (!empty($desain[$k])) { $kelas[] = $c; }
+            }
+            if (empty($desain['header_ajakan'])) { $kelas[] = 'vf-tanpa-ajakan'; }
+            if (empty($desain['topbar'])) { $kelas[] = 'vf-tanpa-topbar'; }
+        }
+        foreach (array('tombol_kapital' => 'vf-tombol-kapital', 'judul_kapital' => 'vf-judul-kapital', 'kartu_bayangan' => 'vf-kartu-bayangan') as $k => $c) {
+            if (!empty($desain[$k])) { $kelas[] = $c; }
+        }
+    }
     return $kelas;
 });

@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""Isi situs dealer mobil: unit mobil (CPT `mobil`) + foto seksi beranda.
+
+Dipakai untuk situs bergaya `dealer` (manifest `gaya_beranda=dealer`), dijalankan
+installer-runner SEBELUM `fse-apply --isi` karena beranda memuat URL foto slot.
+
+  fse-dealer <manifest> [--coba]
+
+Sumber isi: /var/lib/velocity/fse-dealer/<domain>.json (bagian `unit` & `foto`).
+Foto diambil dari Wikimedia Commons dengan lisensi bebas — CC0/PD didahulukan,
+CC BY-SA dipakai dengan kredit di keterangan gambar (caption tampil di halaman
+unit lewat filter render_block_core/post-featured-image di tema).
+
+Aturan menimpa (docs/pelajaran-automasi.md): unit yang isinya sudah disunting
+orang tidak ditimpa (penanda `_velocity_fse_md5`), meta hanya diisi kalau masih
+kosong, dan slot foto yang sudah berisi foto lain dibiarkan.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DEALER_DIR = Path(os.environ.get('VELOCITY_FSE_DEALER') or '/var/lib/velocity/fse-dealer')
+UA = {'User-Agent': 'velocity-installer/1.0 (+https://velocitydeveloper.com)'}
+COMMONS = 'https://commons.wikimedia.org/w/api.php'
+# Lisensi yang boleh dipasang di situs klien. CC0/PD tanpa syarat; CC BY(-SA) wajib kredit.
+BEBAS = re.compile(r'^(cc0|public domain|pd|cc by 4\.0|cc by-sa 4\.0|cc by 3\.0|cc by-sa 3\.0)$', re.I)
+TANPA_KREDIT = re.compile(r'^(cc0|public domain|pd)', re.I)
+
+
+def muat_fse_apply():
+    """fse-apply sebagai modul: Situs (SSH + WP-CLI) & pembaca manifest dipakai bersama."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader('fse_apply', str(HERE / 'fse-apply'))
+    spec = importlib.util.spec_from_loader('fse_apply', loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def commons_cari(kata, jumlah=14):
+    """Kandidat foto Commons: judul, URL besar, lebar, lisensi, pembuat."""
+    url = COMMONS + '?' + urllib.parse.urlencode({
+        'action': 'query', 'format': 'json', 'generator': 'search', 'gsrsearch': f'{kata} filetype:bitmap',
+        'gsrlimit': jumlah, 'gsrnamespace': 6, 'prop': 'imageinfo',
+        'iiprop': 'url|size|extmetadata', 'iiurlwidth': 1800,
+    })
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
+            data = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f'dealer: commons_gagal:{kata}:{type(e).__name__}')
+        return []
+    # Pencarian Commons bebas: "XPeng charging" pernah mengembalikan foto perpustakaan Paris.
+    # Kata khas kata kunci (mis. merek) wajib ada di nama berkasnya.
+    khas = [k.lower() for k in re.findall(r'[A-Za-z]{4,}', kata) if k.lower() not in
+            ('interior', 'showroom', 'charging', 'station', 'electric', 'display')]
+    hasil = []
+    for hal in (data.get('query', {}).get('pages') or {}).values():
+        ii = (hal.get('imageinfo') or [{}])[0]
+        em = ii.get('extmetadata') or {}
+        nilai = lambda k: re.sub(r'<[^>]+>', '', str((em.get(k) or {}).get('value') or '')).strip()
+        lisensi = nilai('LicenseShortName')
+        if not BEBAS.match(lisensi):
+            continue
+        lebar, tinggi = int(ii.get('width') or 0), int(ii.get('height') or 1)
+        if lebar < 1200 or not 1.15 <= lebar / max(tinggi, 1) <= 2.4:
+            continue
+        judul_berkas = hal.get('title', '').lower()
+        if khas and not any(k in judul_berkas for k in khas):
+            continue
+        hasil.append({
+            'berkas': hal.get('title', '').replace('File:', ''),
+            'url': ii.get('thumburl') or ii.get('url'),
+            'lebar': lebar,
+            'lisensi': lisensi,
+            # Kolom Artist sering berisi nama + kalimat permintaan kredit; ambil namanya saja.
+            'pembuat': re.split(r'[,;(]', nilai('Artist'))[0].strip()[:60],
+        })
+    return hasil
+
+
+def kredit(foto):
+    """Keterangan gambar: kredit foto wajib untuk CC BY/BY-SA, tetap informatif untuk CC0."""
+    if TANPA_KREDIT.match(foto['lisensi']):
+        return f"Foto ilustrasi: Wikimedia Commons ({foto['lisensi']})"
+    pembuat = foto['pembuat'] or 'Wikimedia Commons'
+    return f"Foto ilustrasi: {pembuat} / Wikimedia Commons ({foto['lisensi']})"
+
+
+def unduh(url, tujuan):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r:
+            isi = r.read()
+    except (urllib.error.URLError, OSError) as e:
+        print(f'dealer: unduh_gagal:{type(e).__name__}')
+        return False
+    if len(isi) < 20000:
+        return False
+    tujuan.write_bytes(isi)
+    return True
+
+
+def kumpulkan_foto(data, tmp):
+    """{kunci slot / unit-slug: {berkas lokal, judul, caption}} untuk diunggah ke situs."""
+    perlu = [(f'slot:{kunci}', kata) for kunci, kata in (data.get('foto') or {}).items() if kata]
+    perlu += [(f"unit:{u['slug']}", u.get('cari_foto') or u['nama']) for u in data.get('unit') or [] if u.get('slug')]
+    dipakai, hasil = set(), {}
+    for kunci, kata in perlu:
+        for foto in commons_cari(kata):
+            if foto['berkas'] in dipakai:
+                continue
+            nama = re.sub(r'[^A-Za-z0-9._-]+', '-', foto['berkas'])[-90:]
+            if not unduh(foto['url'], tmp / nama):
+                continue
+            dipakai.add(foto['berkas'])
+            hasil[kunci] = {'berkas': nama, 'judul': kata, 'caption': kredit(foto),
+                            'sumber': 'commons:' + foto['berkas']}
+            break
+        else:
+            print(f'dealer: foto_tidak_ada:{kunci} (kata kunci "{kata}")')
+    return hasil
+
+
+PHP_ISI = r'''
+$hasil = array();
+
+// 1. Peta foto slot beranda (opsi vfse_images, dibaca fse-apply --isi).
+$peta = get_option('vfse_images', array());
+$peta = is_array($peta) ? $peta : array();
+foreach ((array) $d['slot'] as $kunci => $id) {
+    $id = (int) $id;
+    if (!$id) { continue; }
+    if (!empty($peta[$kunci]) && (int) $peta[$kunci] !== $id
+        && !get_post_meta((int) $peta[$kunci], '_velocity_foto_contoh', true)) {
+        $hasil[] = 'slot_dibiarkan:' . $kunci;   // foto yang dipasang orang tidak ditimpa
+        continue;
+    }
+    $peta[$kunci] = $id;
+    update_post_meta($id, '_velocity_foto_contoh', '1');
+    $hasil[] = 'slot:' . $kunci . '=' . $id;
+}
+update_option('vfse_images', $peta);
+
+// 2. Unit mobil: satu post CPT `mobil` per unit, meta hanya diisi kalau kosong.
+foreach ((array) $d['unit'] as $u) {
+    // JEBAKAN: get_page_by_path() selalu ikut mencari di post_type `attachment`, sehingga
+    // slug unit bisa "cocok" dengan foto yang baru diimpor (mis. lampiran berjudul "XPeng G6").
+    $cocok = get_posts(array('post_type' => 'mobil', 'name' => $u['slug'], 'post_status' => 'any',
+        'numberposts' => 1, 'suppress_filters' => false));
+    $post = $cocok ? $cocok[0] : null;
+    $isi = (string) $u['isi'];
+    if (!$post) {
+        $id = wp_insert_post(array(
+            'post_type' => 'mobil', 'post_status' => 'publish', 'post_title' => $u['nama'],
+            'post_name' => $u['slug'], 'post_content' => wp_slash($isi),
+            'post_excerpt' => wp_slash((string) $u['ringkas']), 'menu_order' => (int) $u['urut'],
+        ), true);
+        if (is_wp_error($id) || !$id) { $hasil[] = 'unit_gagal:' . $u['slug']; continue; }
+        update_post_meta($id, '_velocity_fse_md5', md5((string) get_post_field('post_content', $id, 'raw')));
+        $hasil[] = 'unit_dibuat:' . $u['slug'] . ':' . $id;
+    } else {
+        $id = (int) $post->ID;
+        $md5 = (string) get_post_meta($id, '_velocity_fse_md5', true);
+        if ($isi !== '' && ($md5 === '' || $md5 === md5($post->post_content) || trim($post->post_content) === '')) {
+            wp_update_post(array('ID' => $id, 'post_content' => wp_slash($isi)));
+            update_post_meta($id, '_velocity_fse_md5', md5((string) get_post_field('post_content', $id, 'raw')));
+            $hasil[] = 'unit_diisi:' . $u['slug'] . ':' . $id;
+        } else {
+            $hasil[] = 'unit_dibiarkan:' . $u['slug'] . ':' . $id;
+        }
+        if (trim((string) $post->post_excerpt) === '' && $u['ringkas'] !== '') {
+            wp_update_post(array('ID' => $id, 'post_excerpt' => wp_slash((string) $u['ringkas'])));
+        }
+    }
+    foreach ((array) $u['meta'] as $kunci => $nilai) {
+        if ($nilai === '' || $nilai === null) { continue; }
+        $lama = get_post_meta($id, $kunci, true);
+        if ($lama === '' || $lama === array() || $lama === null) {
+            update_post_meta($id, $kunci, $nilai);
+        }
+    }
+    if (!empty($u['foto']) && !get_post_thumbnail_id($id)) {
+        set_post_thumbnail($id, (int) $u['foto']);
+        $hasil[] = 'unit_foto:' . $u['slug'] . '=' . (int) $u['foto'];
+    }
+}
+
+// 3. Aturan permalink CPT baru harus ditulis ulang, kalau tidak /model-unit/ 404.
+flush_rewrite_rules(false);
+$hasil[] = 'permalink_ditulis_ulang';
+vfse_keluar(array('hasil' => $hasil, 'jumlah' => count(get_posts(array(
+    'post_type' => 'mobil', 'post_status' => 'publish', 'numberposts' => 50, 'fields' => 'ids')))));
+'''
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: fse-dealer <manifest> [--coba]', file=sys.stderr)
+        return 2
+    fse = muat_fse_apply()
+    cfg = fse.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    berkas = DEALER_DIR / f'{domain}.json'
+    if not berkas.is_file():
+        print(f'dealer: data_tidak_ada:{berkas}')
+        return 0
+    data = json.loads(berkas.read_text())
+    unit = [u for u in data.get('unit') or [] if u.get('nama') and u.get('slug')]
+    print(f"dealer: {domain} unit={len(unit)} slot_foto={len(data.get('foto') or {})}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        foto = kumpulkan_foto(data, Path(tmp))
+        print(f"dealer: foto_terunduh={len(foto)}/{len(data.get('foto') or {}) + len(unit)}")
+        if coba:
+            for kunci, f in sorted(foto.items()):
+                print(f"dealer: coba {kunci} -> {f['berkas']} | {f['caption']}")
+            return 0
+        situs = fse.Situs(cfg)
+        ids = unggah(situs, Path(tmp), foto)
+
+    kirim = {
+        'slot': {k.split(':', 1)[1]: ids[k] for k in ids if k.startswith('slot:')},
+        'unit': [{
+            'nama': u['nama'], 'slug': u['slug'], 'ringkas': u.get('ringkas', ''),
+            'urut': i + 1, 'isi': isi_unit(u), 'foto': ids.get(f"unit:{u['slug']}", 0),
+            'meta': {
+                'vfse_mobil_daya': u.get('daya', ''), 'vfse_mobil_torsi': u.get('torsi', ''),
+                'vfse_mobil_jarak': u.get('jarak', ''), 'vfse_mobil_harga': u.get('harga') or '',
+                'vfse_mobil_harga_catatan': u.get('harga_catatan', ''),
+                'vfse_mobil_warna': [{'nama': w.get('nama', ''), 'hex': w.get('hex', '')} for w in u.get('warna') or []],
+                'vfse_mobil_spek': [{'label': s.get('label', ''), 'nilai': s.get('nilai', '')} for s in u.get('spek') or []],
+            },
+        } for i, u in enumerate(unit)],
+    }
+    jawab = situs.php(PHP_ISI, kirim)
+    for baris in jawab['hasil']:
+        print(f'dealer: {baris}')
+    print(f"dealer: unit_terbit={jawab['jumlah']}")
+    return 0 if jawab['jumlah'] else 1
+
+
+def isi_unit(u):
+    """Isi halaman unit dibiarkan kosong kecuali klien punya keterangan tambahan:
+    ringkasannya sudah tampil dari excerpt dan angkanya dari Data Unit, jadi menyalinnya
+    ke isi halaman membuat kalimat yang sama tercetak dua kali."""
+    return str(u.get('isi') or '').strip()
+
+
+def unggah(situs, tmp, foto):
+    """Impor berkas foto ke Media Library lewat WP-CLI; idempoten lewat meta _velocity_source."""
+    if not foto:
+        return {}
+    folder = f'/tmp/velocity-dealer-{os.getpid()}'
+    tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(tmp), '.'], stdout=subprocess.PIPE)
+    kirim = subprocess.run(situs.ssh + [f'rm -rf {folder} && mkdir -p {folder} && tar -xzf - -C {folder}'],
+                           stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+    tar.wait()
+    if kirim.returncode != 0:
+        print(f'dealer: gagal_mengirim_foto:{kirim.stderr.strip()[:120]}')
+        return {}
+    perintah = ['set -e', f'D={shlex.quote(situs.docroot)}',
+                'wp() { php -d memory_limit=512M /usr/local/bin/wp "$@" --path="$D" --allow-root 2>/dev/null; }']
+    for kunci, f in foto.items():
+        perintah.append(
+            f'id=$(wp post list --post_type=attachment --post_status=inherit --meta_key=_velocity_source '
+            f"--meta_value={shlex.quote(f['sumber'])} --field=ID | head -1); "
+            f'[ -n "$id" ] || id=$(wp media import {folder}/{shlex.quote(f["berkas"])} '
+            f'--title={shlex.quote(f["judul"])} --alt={shlex.quote(f["judul"])} '
+            f'--caption={shlex.quote(f["caption"])} --porcelain) && '
+            f'wp post meta update "$id" _velocity_source {shlex.quote(f["sumber"])} >/dev/null && '
+            f'echo "{kunci}=$id"')
+    perintah.append(f'rm -rf {folder}')
+    run = subprocess.run(situs.ssh + ['bash', '-s'], input='\n'.join(perintah), capture_output=True, text=True, timeout=1200)
+    ids = {}
+    for baris in run.stdout.splitlines():
+        kunci, sep, nilai = baris.partition('=')
+        if sep and nilai.strip().isdigit():
+            ids[kunci.strip()] = int(nilai)
+    kurang = [k for k in foto if k not in ids]
+    if kurang:
+        print(f'dealer: foto_gagal_impor={kurang}')
+    print(f'dealer: foto_di_media={len(ids)}')
+    return ids
+
+
+if __name__ == '__main__':
+    sys.exit(main())

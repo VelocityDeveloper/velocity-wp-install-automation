@@ -239,10 +239,17 @@ def data_compro(domain):
         return {}
 
 
+# Subfolder berisi acuan desain, bukan foto klien: isinya tangkapan layar situs/warna
+# contoh (xpengjakartaindonesia.com mengirim folder "contoh warna" berisi tangkapan
+# layar Pinterest) — tidak boleh terbit di galeri situs klien.
+BUKAN_FOTO_KLIEN = re.compile(r'contoh\s*warna|contoh\s*desain|referensi|screenshot|tangkapan\s*layar', re.I)
+
+
 def client_assets(folder):
     if not folder.is_dir():
         return None, []
-    files = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in IMG_EXT)
+    files = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in IMG_EXT
+                   and not any(BUKAN_FOTO_KLIEN.search(bagian) for bagian in p.relative_to(folder).parts))
     logos = [p for p in files if re.search(r'logo', p.name, re.I) and p.stat().st_size >= 1000]
     logo = max(logos, key=lambda p: (p.suffix.lower() == '.png', p.stat().st_size)) if logos else None
     photos = [p for p in files if p not in logos and MIN_BYTES <= p.stat().st_size <= MAX_BYTES]
@@ -435,6 +442,32 @@ if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; t
   wp option update whatsapp_message "$WA_MESSAGE" >/dev/null && echo "whatsapp_set" >&2
 fi
 
+# Halaman kebijakan privasi wajib ada & terbit (keputusan user 2026-09-14). WordPress
+# membuat draf "Privacy Policy" saat instalasi; installer menerbitkannya dengan judul
+# Indonesia. Halaman yang sudah disunting/diterbitkan orang tidak disentuh.
+wp eval '
+$id = (int) get_option("wp_page_for_privacy_policy");
+if (!$id) {
+    $draf = get_posts(array("post_type" => "page", "post_status" => array("draft", "publish"), "numberposts" => 1,
+        "name" => "privacy-policy"));
+    $id = $draf ? (int) $draf[0]->ID : 0;
+}
+if (!$id) { echo "privasi_tidak_ada"; return; }
+$hal = get_post($id);
+if ($hal->post_status !== "publish") {
+    $data = array("ID" => $id, "post_status" => "publish");
+    if (in_array($hal->post_title, array("Privacy Policy", "Kebijakan Privasi"), true)) {
+        $data["post_title"] = "Kebijakan Privasi";
+    }
+    wp_update_post($data);
+    echo "privasi_diterbitkan:" . $id;
+} else {
+    echo "privasi_sudah_terbit:" . $id;
+}
+update_option("wp_page_for_privacy_policy", $id);
+' >&2 || true
+echo >&2
+
 if [[ -n "$TAGLINE" ]]; then
   cur=$(wp option get blogdescription 2>/dev/null || true)
   mine=$(wp option get velocity_installer_tagline 2>/dev/null || true)
@@ -597,7 +630,7 @@ fi
 
 def bersihkan_widget(domain, da_user, ssh):
     """Buang widget bawaan WordPress yang tidak dipakai desain custom."""
-    header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+    header = f'DOCROOT={shlex.quote(docroot(domain, da_user))}'
     run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_WIDGET,
                          capture_output=True, text=True, timeout=180)
     for line in (run.stdout + '\n' + run.stderr).splitlines():
@@ -608,7 +641,7 @@ def bersihkan_widget(domain, da_user, ssh):
 
 def cleanup_defaults(domain, da_user, ssh):
     """Hapus tema & plugin bawaan WordPress yang tidak dipakai (instalasi baru saja)."""
-    header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+    header = f'DOCROOT={shlex.quote(docroot(domain, da_user))}'
     run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_CLEANUP,
                          capture_output=True, text=True, timeout=300)
     for line in (run.stdout + '\n' + run.stderr).splitlines():
@@ -674,9 +707,17 @@ def buat_logo_contoh(domain, nama, warna):
 
 
 def ssh_command(cfg, key):
+    # Uji/perapian situs di lokasi tidak baku (staging velocitydeveloper.co): pengganti
+    # ssh + docroot lewat VELOCITY_LOKAL_*, sama seperti scripts/fse-apply.
+    if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
+        return [os.environ['VELOCITY_LOKAL_SSH']]
     return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
             f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+
+
+def docroot(domain, da_user):
+    return os.environ.get('VELOCITY_LOKAL_DOCROOT') or f'/home/{da_user}/domains/{domain}/public_html'
 
 
 def enable_maintenance(cfg, domain, da_user, ssh):
@@ -686,7 +727,7 @@ def enable_maintenance(cfg, domain, da_user, ssh):
     data = {'header': 'Website Sedang Disiapkan',
             'body': f'{title} sedang dalam tahap pengerjaan. Silakan kunjungi kembali dalam waktu dekat.',
             'background': 0}
-    header = '\n'.join([f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+    header = '\n'.join([f'DOCROOT={shlex.quote(docroot(domain, da_user))}',
                         f'MAINT_DATA={shlex.quote(json.dumps(data))}'])
     run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE_MAINT,
                          capture_output=True, text=True, timeout=180)
@@ -743,7 +784,7 @@ def main():
         run = subprocess.run(ssh + ['php -d memory_limit=512M /usr/local/bin/wp option update '
                                     'velocity_maintenance_paket_g '
                                     + shlex.quote('dimatikan untuk pemantauan (masa pembelajaran Paket G)')
-                                    + f' --path={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+                                    + f' --path={shlex.quote(docroot(domain, da_user))}'
                                     ' --allow-root >/dev/null 2>&1 && echo ok'],
                              capture_output=True, text=True, timeout=120)
         print('maintenance: ' + ('ditandai_tanpa_maintenance' if 'ok' in run.stdout else 'penanda_gagal'))
@@ -808,7 +849,7 @@ def main():
             photo_keys.append(f'{photo.relative_to(folder)}:{photo.stat().st_size}')
         remote_dir = f'/tmp/velocity-finish-{domain}'
         header = '\n'.join([
-            f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+            f'DOCROOT={shlex.quote(docroot(domain, da_user))}',
             f'M={shlex.quote(remote_dir)}',
             f'DOMAIN={shlex.quote(domain)}',
             f'ADMIN={shlex.quote(cfg.get("admin_user") or da_user)}',

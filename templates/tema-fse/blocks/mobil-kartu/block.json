@@ -1,0 +1,16 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/mobil-kartu",
+	"title": "Kartu Model Unit",
+	"category": "widgets",
+	"icon": "car",
+	"description": "Satu unit mobil: nama, ringkasan tenaga/torsi/jarak tempuh, pilihan warna, harga OTR, tombol spesifikasi & test drive, foto unit.",
+	"usesContext": [ "postId" ],
+	"attributes": {
+		"tombolTestDrive": { "type": "string", "default": "" }
+	},
+	"supports": { "html": false, "spacing": { "margin": true } },
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

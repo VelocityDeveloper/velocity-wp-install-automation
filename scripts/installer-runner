@@ -43,8 +43,14 @@ paket_desain_custom() {
   local paket
   paket=$(sed -n 's/^paket=//p' "$MANIFEST" | head -1 | tr '[:upper:]' '[:lower:]' | tr -d ' ')
   # Paket Portal Berita Custom juga desain custom (keputusan user 2026-09-14);
-  # tampilannya varian berita dari template yang sama.
-  [[ "$paket" == "paketg" || "$paket" == "paketportalberitacustom" ]]
+  # tampilannya varian berita dari template yang sama. Paket Toko Online Custom ikut
+  # jalur FSE sejak 2026-09-15 (produk dari VD Store).
+  [[ "$paket" == "paketg" || "$paket" == "paketportalberitacustom" || "$paket" == "pakettokoonlinecustom" ]]
+}
+# Masa pembelajaran tanpa maintenance hanya Paket G & Portal Berita Custom (keputusan
+# user 2026-09-13/14). Toko Online Custom tetap ditutup maintenance seperti paket toko lain.
+paket_masa_pembelajaran() {
+  paket_desain_custom && ! grep -qiE '^paket=.*toko *online' "$MANIFEST"
 }
 
 # Jalur tema paket desain custom. Keputusan user 2026-09-15: HANYA FSE — block
@@ -61,19 +67,26 @@ portal_berita() {
   grep -q '"jenis": *"berita"' "/var/lib/velocity/ai/generated/$DOMAIN-tema.json" 2>/dev/null
 }
 
-# Alur paket desain custom (Paket G & Portal Berita Custom), disepakati user
-# 2026-09-13/14. Urutan adalah bagian dari kebenaran:
-#   paket_g_tema  1. compro-klien       baca company profile PDF
+# Alur paket desain custom (Paket G, Portal Berita Custom, Toko Online Custom), disepakati
+# user 2026-09-13/14/15. Urutan adalah bagian dari kebenaran:
+#   paket_g_tema  0. referensi_desain   cek isian website referensi di FORM ISIAN; kalau ada,
+#                                       tata letak & gaya referensi diukur = acuan utama FSE
+#                 1. compro-klien       baca company profile PDF
 #                 2. paket-g-konten     isi contoh (perusahaan atau portal berita)
 #                 3. fse-apply --tema   pasang tema FSE, data situs, palet, rubrik
 #   (konten AI & site-finish di mode apply/finish berjalan DI ANTARA keduanya:
 #    generator artikel membaca layanan/rubrik dari tema yang sudah terpasang —
 #    di situs lama tanpa tema desain, urutan terbalik membuat artikel tetap "Blog")
 #   paket_g_isi   4. paket-g-foto       foto per slot desain perusahaan (hero, tentang, layanan, galeri)
+#                 4b. fse-dealer        situs dealer mobil: unit CPT mobil + foto seksi (gaya_beranda=dealer)
 #                 5. fse-apply --isi    halaman berupa blok + menu (SESUDAH site-finish)
 #                 6. paket-g-foto       foto utama artikel portal berita
 #                 7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
 paket_g_tema() {
+  # Keputusan user 2026-09-15: setelah paket dicek, periksa desain referensi di form. Hasilnya
+  # (fse-rencana/<domain>/desain-referensi.json) dibaca fse-apply --tema & --isi.
+  printf '[%s] Paket custom: cek referensi desain di form\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/referensi_desain.py" "$MANIFEST" >> "$LOG" 2>&1 || true
   printf '[%s] Paket custom: company profile & isi contoh\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
   /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
@@ -90,6 +103,12 @@ paket_g_isi() {
     # Beranda perusahaan bergaya referensi memuat URL foto slot: foto harus ada SEBELUM halaman disusun.
     printf '[%s] Paket custom: foto per slot desain\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
+  # Situs dealer mobil: unit (CPT mobil) + foto seksinya harus ada SEBELUM beranda disusun,
+  # karena kartu model unit dibaca dari CPT dan seksi beranda memuat URL foto slot.
+  if grep -q '^gaya_beranda=dealer' "$MANIFEST" 2>/dev/null; then
+    printf '[%s] Paket custom: unit mobil & foto dealer\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-dealer" "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
   printf '[%s] Paket custom: halaman blok & menu (FSE)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
@@ -143,6 +162,9 @@ fi
 
 trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
+# Dibaca bagan alur halaman /installer/: cabang mode run & paket tanpa menebak dari penanda log.
+printf '[%s] Mode run: %s | paket: %s\n' "$(date -Is)" "$MODE" \
+  "$(sed -n 's/^paket=//p' "$MANIFEST" 2>/dev/null | head -1 || true)" >> "$LOG"
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
 state RUNNING RUNNING_INSTALLER
 # Awal log run ini: dipakai untuk tahu apakah run ini memasang WordPress dari awal.
@@ -168,11 +190,21 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
   refresh=0
   [[ "$MODE" == "finish" ]] && refresh=1
-  # Paket desain custom: tema dipasang/diperbarui dulu (lihat paket_g_tema).
+  # Paket desain custom: referensi desain dibaca & diukur dulu, baru tema FSE (lihat paket_g_tema).
   if paket_desain_custom; then
     jalur_tema
     paket_g_tema || true
   fi
+  # Paket toko online: plugin VD Store SESUDAH tema (keputusan user 2026-09-16). Toko Online Custom
+  # memakai tema FSE yang disusun dari referensi desain, jadi urutannya referensi -> tema -> plugin
+  # toko; toko online biasa tidak punya langkah tema di sini sehingga urutannya tidak berubah.
+  # Aman dibalik: fse-apply tidak memanggil WP-CLI dan membaca jenis paket dari manifest, bukan
+  # dari produk/plugin di database. WordPress awal tetap hanya memasang core; setting toko bukan
+  # bagian website-install-from-manifest.
+  echo "[$(date -Is)] VD Store" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/vd-store" "$MANIFEST" >> "$LOG" 2>&1 || true
+  echo "[$(date -Is)] VD Store settings (sesudah plugin/API)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/vd-store-settings" "$MANIFEST" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
   INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Tembolok compro: murah kalau sudah pernah dibaca, perlu untuk situs lama (mode finish).
@@ -207,7 +239,7 @@ if [[ "$MODE" == "apply" || "$MODE" == "maintenance" ]]; then
   # Paket G sedang dalam masa pembelajaran (keputusan user 2026-09-13): situsnya
   # dibiarkan terbuka supaya hasil otomatisasi mudah dipantau langsung. Nyalakan
   # lagi dengan PAKET_G_MAINTENANCE=1 (mis. di /etc/velocity/installer-autopilot.env).
-  if paket_desain_custom && [[ "${PAKET_G_MAINTENANCE:-0}" != 1 ]]; then
+  if paket_masa_pembelajaran && [[ "${PAKET_G_MAINTENANCE:-0}" != 1 ]]; then
     echo "[$(date -Is)] maintenance: maintenance_dilewati:paket_g_masa_pembelajaran" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/site-finish" --tandai-tanpa-maintenance "$MANIFEST" >> "$LOG" 2>&1 || true
   else

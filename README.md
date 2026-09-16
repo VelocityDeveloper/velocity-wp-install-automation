@@ -137,7 +137,9 @@ Terminal-style `/installer/`.
 - tombol `[ install ]` (status READY/SUCCESS) atau `[ retry ]` merah (status FAILED/installer_error) → modal konfirmasi dengan pilihan mode: **Dry run** (validasi saja) atau **Apply** (eksekusi nyata) → `POST /api/installer/run`
 - tombol `[ log ]` → popup detail log 30 baris terakhir
 - polling 10s, pause saat `document.hidden`
-- **Bagan proses** (panel "Proses berjalan" di atas filter + aksi "Bagan proses" per domain): simpul tiap langkah `installer-runner` (validasi, install WordPress, cek HTTP, VD Store, tema FSE, konten AI, finishing, bersih-bersih, foto slot, halaman blok, foto artikel, cek visual, QA, maintenance, selesai) dengan status menunggu/berjalan/selesai/gagal/dilewati dan durasi, dibaca dari penanda log run terakhir (mulai `RUNNING: VALIDATING`). Domain berstatus RUNNING dipantau tiap 3 detik lewat `GET /api/installer?domain=<domain>` (satu baris, log 1500 baris, tetap bisa dibaca setelah domain terpasang dan hilang dari antrean); kartu yang selesai bertahan 10 menit. Menambah langkah di runner = menambah satu entri di `ALUR` pada halaman ini.
+- **Bagan proses** (panel "Proses berjalan" di atas filter + aksi "Bagan proses" per domain): simpul tiap langkah `installer-runner` (validasi, install WordPress, cek HTTP, baca referensi desain, tema FSE, VD Store, konten AI, finishing, bersih-bersih, foto slot, halaman blok, foto artikel, cek visual, QA, maintenance, selesai) dengan status menunggu/berjalan/selesai/gagal/dilewati dan durasi, dibaca dari penanda log run terakhir (mulai `RUNNING: VALIDATING`). Domain berstatus RUNNING dipantau tiap 3 detik lewat `GET /api/installer?domain=<domain>` (satu baris, log 1500 baris, tetap bisa dibaca setelah domain terpasang dan hilang dari antrean); kartu yang selesai bertahan 10 menit. Cabang paket yang ada: desain custom (G / Portal Berita Custom / Toko Online Custom) → referensi desain + tema FSE, **Paket E → child theme baku `velocity-pakete`**, Paket F & paket lain → child theme dari referensi form, toko online biasa → child theme lalu VD Store.
+
+  **Aturan tetap (permintaan user 2026-09-16): setiap penambahan atau perubahan alur di `installer-runner` wajib langsung disusulkan ke bagan ini dalam perubahan yang sama** — simpul baru di `SIMPUL`, garisnya di `GARIS`, dan cabang paket baru di `konteksRun` (`web/installer/index.html`). Bagan inilah yang dibaca PM & webmaster; alur yang tidak tergambar sama saja dengan alur yang tidak terlihat. Setelah menyunting halaman, pasang ke web root (`./deploy.sh`, atau `install -m 644 web/installer/index.html /usr/share/nginx/html/installer/index.html`) dan cek hasilnya di `http://192.168.88.211/installer/` — menyunting berkas repo saja tidak mengubah halaman yang dilihat orang.
 
 ## Model AI & pemakaian token (`web/ai/index.html`)
 
@@ -156,7 +158,7 @@ Timeouts: dry-run 30s, apply 300s. Dry-run retry 2x.
 
 ## Alur apply lengkap
 
-`installer-runner` (mode `apply`): install WordPress → cek HTTP → konten AI (`ai-content-generator.py`) → finishing (`site-finish`) → hapus tema & plugin bawaan yang tidak dipakai (`site-finish --cleanup`) → [alur Paket G](#alur-paket-g-baku) bila `paket=Paket G` → pemeriksaan akhir (`site-qa`) → maintenance mode (`site-finish --maintenance`) → laporan Telegram ✅ selesai, atau 🟡 "perlu dicek" beserta daftar masalah.
+`installer-runner` (mode `apply`): install WordPress (termasuk child theme: referensi form, atau `velocity-pakete` untuk [Paket E](#paket-e-child-theme-baku-velocity-pakete)) → cek HTTP → konten AI (`ai-content-generator.py`) → finishing (`site-finish`) → hapus tema & plugin bawaan yang tidak dipakai (`site-finish --cleanup`) → [alur Paket G](#alur-paket-g-baku) bila `paket=Paket G` → pemeriksaan akhir (`site-qa`) → maintenance mode (`site-finish --maintenance`) → laporan Telegram ✅ selesai, atau 🟡 "perlu dicek" beserta daftar masalah.
 
 - **Pembersihan** hanya pada run yang memasang WordPress dari awal (bukan apply ulang situs lama, bukan mode finish/maintenance): tema `twenty*` dan plugin `akismet`/`hello` yang tidak aktif. Tema aktif dan induknya tidak pernah dihapus; tema/plugin non-bawaan tidak disentuh.
 
@@ -195,6 +197,18 @@ Saat apply, installer membaca referensi desain pilihan klien di FORM ISIAN (labe
 - Tidak cocok / API gagal → tema induk tetap dipakai; child theme yang sudah aktif di situs tidak dimatikan saat apply ulang.
 - Override manual: tambahkan `velocity_child_theme=<slug>` di manifest. Override selalu menang, termasuk atas pembuatan otomatis di bawah.
 - Log: `child_theme:<status>:<referensi>:<slug>` dan `active_theme:<tema>`; laporan Telegram "Instalasi selesai" memuat baris Tema.
+
+### Paket E: child theme baku `velocity-pakete`
+
+Keputusan user 2026-09-16: **kalau `paket=Paket E`, child theme-nya sudah pasti `velocity-pakete`** — form kliennya tidak perlu memuat referensi desain, dan referensi yang kebetulan ada di form diabaikan.
+
+- Urutannya sama dengan paket lain yang bertema induk: paket dicek → `velocity-child-theme` mengambil `velocity-pakete` dari API tema (`type: wp_theme_child`, versi ikut API) → zip dikirim & diaktifkan di `website-install-from-manifest` **sebelum 1-Click Setup** → **baru konten AI** (`ai-content-generator.py`) menulis halaman & artikel di atas tema itu.
+- Log: `child_theme:matched:paket-e:velocity-pakete`. Bagan proses halaman installer punya cabang sendiri "Child theme Paket E".
+- Override manual `velocity_child_theme=<slug>` di manifest tetap menang.
+- Situs Paket E yang sudah terpasang: `INSTALL_MODE=child-theme scripts/installer-runner <domain>` (tanpa install ulang, tanpa notifikasi).
+- Kalau unduhan zip gagal tapi versi lama tema yang sama masih ada di `/var/lib/velocity/packages/child-themes/`, zip tembolok itu dipakai (`error=unduhan_gagal_pakai_tembolok:…`) — kalau tidak ada, status `download_failed` dan situs tetap di tema induk `velocity`.
+
+> **Belum bisa diunduh otomatis (16 Sep 2026):** API tema mencantumkan `velocity-pakete` 2.1.0 dengan `package_external_url` ke rilis GitHub `VelocityDeveloper/velocity-pakete`, tetapi repo/rilis itu **privat** — unduhan anonim dari server installer menjawab 404 (bandingkan `velocity-beritab1`, yang publik dan berhasil). Perbaikannya salah satu: rilis GitHub dibuat publik, zip-nya diunggah ke storage API (`package_file_url`, seperti `velocity-sekolah`), atau server installer diberi token GitHub (butuh jalur unduhan lewat API aset GitHub — belum dibuat).
 
 ### Paket G: child theme dibuat otomatis bernama project (TIDAK DIPAKAI LAGI)
 

@@ -349,7 +349,7 @@ def main():
 
     harapan = info_tema(domain, cfg)
     paket = cfg.get('paket', '')
-    paket_custom = re.sub(r'[^a-z]', '', paket.lower()) in ('paketg', 'paketportalberitacustom')
+    paket_custom = re.sub(r'[^a-z]', '', paket.lower()) in ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
     paket_berita = 'berita' in paket.lower()
 
     ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',

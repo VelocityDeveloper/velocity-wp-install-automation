@@ -580,8 +580,8 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
     if not key or not Path(key).is_file():
         print('foto: kunci SSH tidak ada')
         return 2
-    docroot = f"/home/{cfg.get('da_user', '')}/domains/{domain}/public_html"
-    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+    docroot = lokal_docroot() or f"/home/{cfg.get('da_user', '')}/domains/{domain}/public_html"
+    ssh = lokal_ssh() or ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
     if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
@@ -686,6 +686,16 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
     return 0
 
 
+def lokal_ssh():
+    """Pengganti perintah ssh untuk situs di lokasi tidak baku (staging velocitydeveloper.co)."""
+    perintah = os.environ.get('VELOCITY_LOKAL_SSH', '')
+    return [perintah] if perintah and os.environ.get('VELOCITY_LOKAL_DOCROOT') else None
+
+
+def lokal_docroot():
+    return os.environ.get('VELOCITY_LOKAL_DOCROOT', '') if os.environ.get('VELOCITY_LOKAL_SSH') else ''
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     coba = '--coba' in sys.argv
@@ -716,8 +726,8 @@ def main():
         print('foto: kunci SSH tidak ada')
         return 2
 
-    docroot = f'/home/{da_user}/domains/{domain}/public_html'
-    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+    docroot = lokal_docroot() or f'/home/{da_user}/domains/{domain}/public_html'
+    ssh = lokal_ssh() or ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
            f"{cfg.get('ssh_user') or 'root'}@{cfg.get('target_host', '')}"]
     # Uji desain di WordPress lokal (sama dengan scripts/fse-apply).

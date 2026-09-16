@@ -613,6 +613,9 @@ REMOTE_EOF
 # Diselesaikan di sisi installer (butuh API tema + folder Drive), lalu zip-nya
 # dikirim ke server tujuan bersama paket lain. Kegagalan di sini tidak
 # menggagalkan instalasi: situs tetap memakai tema induk.
+# Paket E tidak membaca referensi form: child theme-nya baku (velocity-pakete,
+# keputusan user 2026-09-16). Pemilihannya ada di scripts/velocity-child-theme,
+# jadi tema sudah aktif sebelum konten AI ditulis installer-runner.
 CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 # Paket G: isi contoh (layanan, produk, alur, kata kunci foto, warna) ditulis dari
 # data klien SEBELUM child theme dirender, karena theme-data.php dibuat dari isi
@@ -621,9 +624,10 @@ CHILD_SLUG="" CHILD_ZIP="" CHILD_GENERATED=0
 # Company profile PDF (warna, logo, foto, slogan) dibaca lebih dulu: isi contoh,
 # warna tema, dan finishing memakainya. Tanpa PDF langkah ini tidak berbuat apa-apa.
 /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/compro-klien" "${cfg[domain]}" >&2 || echo "compro:gagal" >&2
-# Paket desain custom: Paket G dan Paket Portal Berita Custom (keputusan user 2026-09-14).
+# Paket desain custom: Paket G, Paket Portal Berita Custom (keputusan user 2026-09-14), dan
+# Paket Toko Online Custom (2026-09-15, FSE + VD Store).
 PAKET_CUSTOM=0
-if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" =~ ^(paketg|paketportalberitacustom)$ ]]; then
+if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${cfg[paket]:-}" | tr -d ' ')" =~ ^(paketg|paketportalberitacustom|pakettokoonlinecustom)$ ]]; then
   PAKET_CUSTOM=1
   /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/paket-g-konten" "$MANIFEST" >&2 || echo "konten:gagal" >&2
 fi

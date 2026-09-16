@@ -14,6 +14,37 @@
 
 defined('ABSPATH') || exit;
 
+/**
+ * Captcha velocity-addons.
+ *
+ * JEBAKAN: plugin versi 1.6.x hanya mendaftarkan shortcode `[velocity_recaptcha]`
+ * (untuk form login), bukan `[velocity_captcha]`. `do_shortcode()` mengembalikan
+ * teks aslinya ketika tag tidak terdaftar, sehingga "[velocity_captcha]" sempat
+ * tercetak mentah di halaman Hubungi Kami. Jadi: pakai shortcode hanya kalau
+ * benar-benar terdaftar, lalu kelas captcha plugin (dibuat baru — plugin memuat
+ * kelasnya di dalam method sehingga tidak pernah jadi global), lalu menyerah.
+ */
+function velocity_fse_captcha()
+{
+    if (shortcode_exists('velocity_captcha')) {
+        return do_shortcode('[velocity_captcha]');
+    }
+    if (!class_exists('Velocity_Addons_Captcha')) {
+        return '';
+    }
+    $captcha = new Velocity_Addons_Captcha();
+    if (method_exists($captcha, 'isActive') && !$captcha->isActive()) {
+        return '';
+    }
+    if (!method_exists($captcha, 'display')) {
+        return '';
+    }
+    ob_start();
+    $captcha->display();
+    return (string) ob_get_clean();
+}
+
+
 function velocity_fse_form_kolom()
 {
     $berita = velocity_fse_jenis_berita();
@@ -191,7 +222,7 @@ function velocity_fse_form_render()
         <?php
         // Captcha milik velocity-addons (penyedia & pengaturannya di wp-admin);
         // kosong kalau dimatikan, dan form tetap dijaga honeypot + nonce + batas kirim.
-        $captcha = do_shortcode('[velocity_captcha]');
+        $captcha = velocity_fse_captcha();
         if (trim($captcha) !== '') : ?>
             <div class="vf-form__penuh"><?php echo $captcha; ?></div>
         <?php endif; ?>
@@ -201,7 +232,7 @@ function velocity_fse_form_render()
         </p>
         <?php wp_nonce_field('velocity_fse_form', 'vf_nonce'); ?>
         <p class="vf-form__kirim vf-form__penuh">
-            <button type="submit" name="vf_form_kirim" value="1" class="wp-element-button"><?php echo velocity_fse_jenis_berita() ? 'Kirim Pesan' : 'Kirim Pemesanan'; ?></button>
+            <button type="submit" name="vf_form_kirim" value="1" class="wp-element-button"><?php echo (velocity_fse_jenis_berita() || velocity_fse_dealer()) ? 'Kirim Pesan' : 'Kirim Pemesanan'; ?></button>
             <?php if ($wa) : ?>
                 <a href="<?php echo esc_url($wa); ?>" target="_blank" rel="noopener nofollow">Atau chat WhatsApp</a>
             <?php endif; ?>

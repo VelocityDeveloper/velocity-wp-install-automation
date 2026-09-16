@@ -344,26 +344,59 @@
       .flow-meta .run { color: var(--cyan); }
       .flow-meta .ok { color: var(--green); }
       .flow-meta .err, .err-text { color: var(--red); }
-      .flow { position: relative; }
-      .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-      .flow ol {
-        position: relative;
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        gap: 28px 34px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
+      .flow-meta .chip { padding: 0 6px; border: 1px solid var(--line); color: var(--text); }
+      .flow-log { margin: -6px 0 10px; color: var(--cyan); font-size: 12px; overflow-wrap: anywhere; }
+      .flow-catatan { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+      .flow-legenda { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+      /* Kanvas ala n8n (permintaan user: bagan seperti n8n). Titik halus di latar menandai
+         bidang yang bisa digeser ke samping, bukan hiasan. */
+      .alur-kanvas {
+        overflow-x: auto;
+        overflow-y: hidden;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #070a08 radial-gradient(circle, #1b2b22 1px, transparent 1.5px) 0 0 / 22px 22px;
+        cursor: grab;
+        scrollbar-color: #2f6b40 #070a08;
       }
+      .alur-kanvas.geser { cursor: grabbing; user-select: none; }
+      .alur-kanvas:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+      .alur-isi { position: relative; }
+      .alur-isi svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+      .alur-simpul { margin: 0; padding: 0; list-style: none; }
       .node {
-        min-height: 76px;
+        position: absolute;
+        height: 74px;
         padding: 9px 10px 8px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: #0a0e0c;
         font-size: 12px;
-        line-height: 1.35;
+        line-height: 1.3;
       }
+      .node-cek {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        text-align: center;
+        font-size: 11px;
+        line-height: 1.25;
+      }
+      .ketupat {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        margin: 8px 0 12px;
+        border: 1px solid var(--line);
+        background: #0a0e0c;
+        transform: rotate(45deg);
+      }
+      .ketupat .node-ikon { border: 0; transform: rotate(-45deg); }
+      .cek-nama { color: var(--text); font-weight: 700; }
+      .cek-ket { max-width: 100%; color: var(--muted); overflow-wrap: anywhere; }
       .node-top { display: flex; align-items: center; gap: 7px; }
       .node-ikon {
         display: grid;
@@ -376,29 +409,39 @@
         font-size: 10px;
         font-weight: 700;
       }
-      .node-nama { color: var(--text); font-weight: 700; }
-      .node-sub { margin-top: 5px; color: var(--muted); }
-      .node-log { margin-top: 5px; color: var(--cyan); overflow-wrap: anywhere; }
-      .node.selesai { border-color: #2f6b40; }
-      .node.selesai .node-ikon { color: var(--green); }
+      .node-nama { color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* Keterangan hasil (mis. "referensi property1 tidak ada di API") boleh dua baris. */
+      .node-sub {
+        display: -webkit-box;
+        margin-top: 5px;
+        overflow: hidden;
+        color: var(--muted);
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .node.selesai, .node-cek.selesai .ketupat { border-color: #2f6b40; }
+      .node.selesai .node-ikon, .node-cek.selesai .node-ikon { color: var(--green); }
       .node.berjalan { border-color: var(--cyan); box-shadow: inset 0 0 0 1px var(--cyan); }
       .node.berjalan .node-ikon { color: var(--cyan); animation: pulse 1.2s ease-in-out infinite; }
-      .node.gagal { border-color: var(--red); }
+      .node.gagal, .node-cek.gagal .ketupat { border-color: var(--red); }
       .node.gagal .node-ikon, .node.gagal .node-sub { color: var(--red); }
       .node.dilewati { border-style: dashed; }
-      .node.dilewati .node-ikon, .node.dilewati .node-nama, .node.menunggu .node-ikon, .node.menunggu .node-nama { color: var(--muted); }
-      .edge { fill: none; stroke: var(--line); stroke-width: 2; }
-      .edge.selesai { stroke: #2f6b40; }
+      .node.cabang, .node-cek.cabang .ketupat { border-style: dashed; background: transparent; }
+      .node.dilewati .node-ikon, .node.dilewati .node-nama, .node.menunggu .node-ikon, .node.menunggu .node-nama,
+      .node.cabang .node-ikon, .node.cabang .node-nama, .node-cek.cabang .node-ikon, .node-cek.cabang .cek-nama,
+      .node-cek.menunggu .node-ikon, .node-cek.menunggu .cek-nama { color: var(--muted); }
+      .edge { fill: none; stroke: #2a3d31; stroke-width: 2; }
+      .edge.selesai { stroke: #2f8a4f; }
       .edge.gagal { stroke: var(--red); }
+      .edge.cabang { stroke: #1b2b22; stroke-dasharray: 3 5; }
       .edge.berjalan { stroke: var(--cyan); stroke-dasharray: 6 6; animation: alir .8s linear infinite; }
+      .edge-label { fill: var(--muted); font: 10px ui-monospace, Consolas, monospace; }
+      .edge-label.aktif { fill: var(--text); }
       @keyframes alir { to { stroke-dashoffset: -12; } }
       @media (prefers-reduced-motion: reduce) {
         .edge.berjalan, .node.berjalan .node-ikon, .spinner, .check.running { animation: none; }
       }
       .flow-modal .modal-box { max-width: 1040px; width: min(1040px, 96vw); max-height: 88vh; overflow-y: auto; }
-      @media (max-width: 600px) {
-        .flow ol { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-      }
 
       pre.log-view {
         margin: 0;
@@ -454,8 +497,8 @@
         </section>
         <section class="panel flow-panel" aria-labelledby="alur-judul-panel">
           <div class="flow-head">
-            <h2 id="alur-judul-panel">Proses berjalan</h2>
-            <span>bagan diperbarui tiap 3 detik selama installer jalan</span>
+            <h2 id="alur-judul-panel">Alur installer</h2>
+            <span>run yang berjalan diperbarui tiap 3 detik; saat installer diam tampil run terakhir</span>
           </div>
           <div class="flow-body" id="alur-berjalan" aria-live="polite">
             <p class="empty">Memuat status installer...</p>
@@ -695,7 +738,7 @@
           const ln = document.getElementById('local-note');
           if (ln) ln.textContent = 'Server ini: ' + (localIps.length ? localIps.join(', ') : '(tidak terdeteksi)');
           allDomains = d.domains || [];
-          pantauYangBerjalan(allDomains);
+          pantauYangBerjalan(allDomains, d.terakhir);
           const q = (domainFilter.value || '').trim().toLowerCase();
           const status = statusFilter.value;
           // Tanggal lokal, bukan toISOString() yang memakai UTC — di WIB itu
@@ -974,6 +1017,7 @@
           { id: "reading_home", label: "1-Click: Set Reading → Home/Beranda", patterns: ["reading_home_set", "home_set", "page_on_front", "show_on_front"] },
           { id: "ai_content", label: "AI: Generate Pages & Articles", patterns: ["ai_content", "pages_created", "articles_created", "AI generation completed", "article_created"] },
           { id: "rename_index", label: "Rename index.html DA", patterns: ["renamed index.html"] },
+          { id: "referensi_desain", label: "Baca & ukur referensi desain dari form (sebelum tema FSE)", patterns: ["referensi: ada:", "referensi: tidak_ada", "referensi: gagal:"] },
           { id: "child_theme", label: "Tema desain (child theme referensi; paket custom: FSE velocity-fse)", patterns: ["child_theme_installed", "child_theme_kept", "child_theme:matched", "child_theme:generated", "child_theme:not_found", "child_theme:no_ref", "child_theme:skipped_fse", "fse: tema_siap"] },
           { id: "content_clean", label: "Konten AI bersih terpasang (tanpa gambar/placeholder palsu)", patterns: ["page_filled", "page_created", "page_kept", "Artikel terbit", "article_exists"] },
           { id: "client_assets", label: "Finishing: logo, galeri, tagline, warna, WhatsApp, peta", patterns: ["finish_done"] },
@@ -1035,32 +1079,135 @@
       function closeChecklistModal() { checklistModal.classList.remove("open"); if (checklistPoll) { clearInterval(checklistPoll); checklistPoll = null; } }
       checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
 
-      // ---------- bagan proses installer (realtime) ----------
-      // Simpul dibaca dari penanda yang ditulis scripts/installer-runner ke <domain>.log,
-      // hanya dari run terakhir (dimulai "RUNNING: VALIDATING"). Langkah yang tidak dijalankan
-      // mode atau paket situs itu (mis. tema FSE di paket biasa, install di mode finish) tampil
-      // "dilewati". Menambah langkah di runner = menambah satu baris di ALUR.
-      const ALUR = [
-        { nama: 'Validasi manifest', mulai: /\] RUNNING: VALIDATING/, selesai: /\] RUNNING: RUNNING_INSTALLER/, gagal: /\] FAILED: manifest_missing/ },
-        { nama: 'Install WordPress', ket: 'SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
-          selesai: /install_complete|\] SUCCESS: DRY_RUN_OK|http_check:/,
-          lewati: (t) => /http_check:/.test(t) && !/install_complete|WordPress|Transferring package/.test(t) },
-        { nama: 'Cek HTTP situs', mulai: /http_check:/, selesai: /http_check: 200/, gagal: /http_check: (?!200)\d+/ },
-        { nama: 'VD Store', ket: 'plugin & pengaturan toko', mulai: /\] VD Store$/ },
-        { nama: 'Tema desain FSE', ket: 'company profile, isi contoh, velocity-fse', mulai: /\] Jalur tema:/,
-          selesai: /fse: tema_siap|tema dilewati/, lewati: /Jalur tema: (lewati|gagal)|tema dilewati/ },
-        { nama: 'Konten AI', ket: 'halaman & artikel', mulai: /Starting AI content generation/, selesai: /AI content generation completed/ },
-        { nama: 'Finishing', ket: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/, selesai: /finish_done/ },
-        { nama: 'Bersih-bersih', ket: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/, selesai: /cleanup_done/ },
-        { nama: 'Foto slot desain', ket: 'hero, tentang, layanan, galeri', mulai: /Paket custom: foto per slot desain/ },
-        { nama: 'Halaman blok & menu', ket: 'beranda FSE', mulai: /Paket custom: halaman blok & menu/ },
-        { nama: 'Foto utama artikel', mulai: /Paket custom: foto utama artikel/ },
-        { nama: 'Cek visual', ket: 'screenshot desktop & HP', mulai: /Paket custom: cek visual/, selesai: /visual: folder=/ },
-        { nama: 'Pemeriksaan akhir', ket: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/ },
-        { nama: 'Maintenance mode', mulai: /\] (maintenance: |Maintenance mode)/, selesai: /maintenance: (maintenance_|ditandai)/ },
-        { nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: / },
+      // ---------- bagan alur installer ala n8n ----------
+      // Kanvas simpul langkah (kotak) dan simpul pengecekan (belah ketupat) dengan garis bercabang
+      // berlabel, mengikuti percabangan scripts/installer-runner: mode run (dry run / apply / finish),
+      // cek paket (Paket G, Portal Berita Custom & Toko Online Custom ke referensi desain + tema FSE,
+      // toko custom lanjut ke VD Store; Paket E ke child theme baku velocity-pakete; Paket F dan paket
+      // lain ke child theme referensi form; toko online biasa ke child theme lalu VD Store), WordPress
+      // baru, paket custom, dan masa pembelajaran maintenance. Status dibaca dari penanda log run
+      // terakhir; cabang dari mode run & paket manifest.
+      //
+      // ATURAN TETAP (permintaan user 2026-09-16): setiap penambahan atau perubahan alur di
+      // scripts/installer-runner — langkah baru, cabang paket baru, urutan yang bergeser — WAJIB
+      // langsung disusulkan ke SIMPUL + GARIS + konteksRun di bawah, dalam perubahan yang sama.
+      // Bagan ini yang dibaca PM/webmaster; alur yang tidak tergambar = alur yang tidak terlihat.
+      function tanpaDry(c) { return c.mode === null ? null : c.mode !== 'dry-run'; }
+      function hanyaMode(m) { return c => (c.mode === null ? null : c.mode === m); }
+      function dan(...nilai) { return nilai.some(x => x === false) ? false : nilai.some(x => x === null) ? null : true; }
+      const CHILD_THEME = /child_theme:(?!skipped_fse)/;
+      function hasilChild(teks) {
+        const m = /child_theme:(matched|generated|not_found|no_ref|api_error|download_failed|error):([^:\n]*)/.exec(teks);
+        if (!m) return null;
+        return {
+          matched: 'referensi ' + m[2] + ' terpasang', generated: 'child theme digenerate',
+          not_found: 'referensi ' + (m[2] || '-') + ' tidak ada di API', no_ref: 'form tanpa referensi desain',
+          api_error: 'API tema gagal', download_failed: 'unduhan tema gagal', error: 'pencocokan gagal',
+        }[m[1]];
+      }
+      // Langkah "baca referensi desain" (scripts/referensi_desain.py) menutup keluarannya dengan
+      // `referensi: ada:<url> (diukur|tembolok)` | `referensi: tidak_ada` | `referensi: gagal:<alasan>`.
+      function hasilReferensi(teks) {
+        const m = /referensi: (?:ada:(\S+) \(([a-z]+)\)|(tidak_ada)|gagal:(\S+))/.exec(teks);
+        if (!m) return null;
+        if (m[1]) return (m[2] === 'tembolok' ? 'sudah diukur: ' : 'diukur: ') + m[1].replace(/^https?:\/\//, '').replace(/\/$/, '');
+        return m[3] ? 'form tanpa website contoh' : 'pengukuran gagal: ' + m[4];
+      }
+      // Paket F saat ini diperlakukan sama dengan paket lain (child theme dari referensi form);
+      // child theme khusus per website Paket F belum diotomatiskan.
+      const SIMPUL = [
+        { id: 'validasi', kol: 0, jalur: 1, nama: 'Validasi manifest', mulai: /\] RUNNING: VALIDATING/, selesai: /\] RUNNING: RUNNING_INSTALLER/,
+          gagal: /\] FAILED: manifest_missing/, aktif: () => true },
+        { id: 'mode', kol: 1, jalur: 1, cek: true, nama: 'Mode run?', mulai: /\] RUNNING: VALIDATING/, aktif: () => true,
+          ket: c => ({ 'dry-run': 'dry run', apply: 'apply', finish: 'finish' }[c.mode] || 'menunggu') },
+        { id: 'terpasang', kol: 2, jalur: 0, nama: 'WordPress sudah ada', ket0: 'mode finish, tanpa install', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+          selesai: /http_check:/, aktif: hanyaMode('finish') },
+        { id: 'install', kol: 2, jalur: 1, nama: 'Install WordPress', ket0: 'SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+          selesai: /install_complete|http_check:/, gagal: /remote_failed/, aktif: hanyaMode('apply') },
+        { id: 'server', kol: 2, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+          selesai: /"dry_run":"ok"|\] SUCCESS: DRY_RUN_OK/, gagal: /remote_not_ready|"status":"error"/,
+          ketHasil: t => (/"dry_run":"ok"/.test(t) ? 'server tujuan siap' : null), aktif: hanyaMode('dry-run') },
+        { id: 'dryselesai', kol: 3, jalur: 3, nama: 'Selesai dry run', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: DRY_RUN_OK/,
+          gagal: /\] FAILED: /, aktif: hanyaMode('dry-run') },
+        { id: 'http', kol: 3, jalur: 1, nama: 'Cek HTTP situs', ket0: 'aset inti WordPress', mulai: /http_check:/, selesai: /http_check: 200/,
+          gagal: /http_check: (?!200)\d+/, aktif: tanpaDry },
+        { id: 'paket', kol: 4, jalur: 1, cek: true, nama: 'Cek paket', mulai: /http_check: 200/, aktif: tanpaDry,
+          ket: (c, row) => row.paket || 'paket tidak terbaca' },
+        // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
+        // di installer-runner): hasilnya (fse-rencana/<domain>/desain-referensi.json) jadi acuan utama
+        // tata letak & gaya beranda, jadi langkah ini berdiri sendiri di bagan.
+        { id: 'referensi', kol: 5, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM website contoh di form',
+          mulai: /Paket custom: cek referensi desain di form/, selesai: /referensi: (ada:|tidak_ada|gagal:)/,
+          gagal: /referensi: gagal:/, ketHasil: hasilReferensi, aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'fse', kol: 6, jalur: 0, nama: 'Tema FSE', ket0: 'compro, isi contoh, velocity-fse',
+          mulai: /Paket custom: (tema FSE|tema dilewati)/,
+          selesai: /fse: tema_siap|tema dilewati/, lewati: /Paket custom: tema dilewati/, aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'childF', kol: 5, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form lewat API tema', mulai: CHILD_THEME,
+          selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
+        { id: 'childToko', kol: 5, jalur: 2, nama: 'Child theme toko', ket0: 'toko biasa: referensi form via API', mulai: CHILD_THEME,
+          selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
+        // Paket E: temanya ditentukan paketnya sendiri (velocity-pakete), bukan referensi di form,
+        // dan sudah aktif sebelum konten AI ditulis (keputusan user 2026-09-16).
+        { id: 'childE', kol: 5, jalur: 4, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
+          selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.e) },
+        { id: 'childLain', kol: 5, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi cocok', mulai: CHILD_THEME,
+          selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko)) },
+        // Plugin toko dipasang SESUDAH tema: di Toko Online Custom tema FSE dibangun dari referensi
+        // desain lebih dulu (keputusan user 2026-09-16), toko biasa masuk dari cabang child theme.
+        { id: 'vdstore', kol: 7, jalur: 2, nama: 'VD Store', ket0: 'plugin & pengaturan toko', mulai: /\] VD Store$/,
+          selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
+          ketHasil: t => (/vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.toko) },
+        { id: 'konten', kol: 8, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
+          selesai: /AI content generation completed/, aktif: tanpaDry },
+        { id: 'finishing', kol: 9, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/,
+          selesai: /finish_done/, aktif: tanpaDry },
+        { id: 'baru', kol: 10, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
+          ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
+        { id: 'bersih', kol: 11, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
+          selesai: /cleanup_done/, aktif: c => dan(tanpaDry(c), c.installBaru) },
+        { id: 'isi', kol: 12, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
+          ket: c => (c.custom === null ? 'paket tidak terbaca' : c.custom ? 'ya: G / Portal / Toko Custom' : 'tidak') },
+        { id: 'fotoSlot', kol: 13, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
+          mulai: /Paket custom: foto per slot desain/, aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'halaman', kol: 14, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda FSE', mulai: /Paket custom: halaman blok & menu/,
+          aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'fotoArtikel', kol: 15, jalur: 0, nama: 'Foto utama artikel', ket0: 'ber-caption kredit foto', mulai: /Paket custom: foto utama artikel/,
+          aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'visual', kol: 16, jalur: 0, nama: 'Cek visual', ket0: 'screenshot desktop & HP', mulai: /Paket custom: cek visual/,
+          selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'qa', kol: 17, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
+        { id: 'maint', kol: 18, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
+          ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
+            : c.maintLewat !== null ? (c.maintLewat ? 'ya' : 'tidak') : c.custom === null ? 'menunggu' : c.custom ? 'ya: paket custom' : 'tidak') },
+        { id: 'maintLewat', kol: 19, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
+          selesai: /maintenance_dilewati/, aktif: c => dan(hanyaMode('apply')(c), c.maintLewat ?? c.custom) },
+        { id: 'maintOn', kol: 19, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
+          selesai: /maintenance: maintenance_(enabled|active|skip)/,
+          aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
+        { id: 'selesai', kol: 20, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
       ];
-      const IKON_ALUR = { selesai: '✓', berjalan: '●', gagal: '✗', dilewati: '-', menunggu: '○' };
+      // [dari, ke, label, syarat]. Tanpa syarat: garis dari simpul pengecekan aktif kalau tujuannya
+      // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
+      const GARIS = [
+        ['validasi', 'mode'],
+        ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'server', 'dry run'],
+        ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
+        ['http', 'paket'],
+        ['paket', 'referensi', 'G / Portal / Toko Custom'], ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
+        ['paket', 'childToko', 'Toko Online'], ['paket', 'childLain', 'lainnya'],
+        ['referensi', 'fse'],
+        // Toko Online Custom: tema FSE dulu, plugin VD Store sesudahnya. Paket custom lain langsung ke konten.
+        ['fse', 'vdstore', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
+        ['fse', 'konten', '', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
+        ['childF', 'konten'], ['childE', 'konten'], ['childToko', 'vdstore'], ['vdstore', 'konten'], ['childLain', 'konten'],
+        ['konten', 'finishing'], ['finishing', 'baru'],
+        ['baru', 'bersih', 'ya'], ['bersih', 'isi'], ['baru', 'isi', 'tidak', c => dan(tanpaDry(c), c.installBaru === null ? null : !c.installBaru)],
+        ['isi', 'fotoSlot', 'ya'], ['fotoSlot', 'halaman'], ['halaman', 'fotoArtikel'], ['fotoArtikel', 'visual'], ['visual', 'qa'],
+        ['isi', 'qa', 'tidak', c => dan(tanpaDry(c), c.custom === null ? null : !c.custom)],
+        ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
+        ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
+      ];
+      const IKON_ALUR = { selesai: '✓', berjalan: '●', gagal: '✗', dilewati: '-', menunggu: '○', cabang: '·' };
       const WAKTU_LOG = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d)\]/;
 
       function segmenRun(row) {
@@ -1084,105 +1231,197 @@
         return m < 60 ? m + ' mnt ' + (s % 60) + ' dtk' : Math.floor(m / 60) + ' j ' + (m % 60) + ' mnt';
       }
 
+      // Mode & paket menentukan cabang. Log baru memuat baris "Mode run: <mode> | paket: <paket>"
+      // (installer-runner); log lama ditebak dari penandanya. null = belum diketahui.
+      function konteksRun(row, teks) {
+        const paket = String(row.paket || (/\] Mode run: [a-z-]+ \| paket: (.*)$/m.exec(teks) || [])[1] || '').toLowerCase().replace(/\s+/g, '');
+        let mode = (/\] Mode run: ([a-z-]+)/.exec(teks) || [])[1] || null;
+        if (!mode) {
+          // remote_not_ready hanya keluar dari pengecekan server dry run (log lama tanpa "Mode run").
+          if (/"status":"dry-run"|\] SUCCESS: DRY_RUN_OK|remote_not_ready|"remote_check"/.test(teks)) mode = 'dry-run';
+          else if (/install_complete|Transferring package|child_theme:|WordPress downloaded/.test(teks)) mode = 'apply';
+          else if (/http_check:/.test(teks)) mode = 'finish';
+        }
+        const lewatFinishing = /cleanup_done|Paket custom: foto per slot|qa_result:|\] (SUCCESS|FAILED): /.test(teks);
+        const custom = paket ? ['paketg', 'paketportalberitacustom', 'pakettokoonlinecustom'].includes(paket) : null;
+        const toko = paket ? paket.includes('tokoonline') : null;
+        return {
+          mode,
+          custom,
+          f: paket ? paket === 'paketf' : null,
+          // Paket E punya child theme baku (velocity-pakete), tidak lewat referensi form.
+          e: paket ? paket === 'pakete' : null,
+          toko,
+          // Toko Online Custom ikut jalur FSE: referensi desain diukur, tema FSE dipasang, baru
+          // plugin VD Store. Toko online biasa tetap child theme dari referensi form, lalu VD Store.
+          tokoCustom: paket ? custom && toko : null,
+          tokoBiasa: paket ? toko && !custom : null,
+          installBaru: /\] Bersihkan tema & plugin bawaan/.test(teks) ? true : lewatFinishing ? false : null,
+          maintLewat: /maintenance_dilewati/.test(teks) ? true : /\] Maintenance mode/.test(teks) ? false : null,
+        };
+      }
+
       function hitungAlur(row) {
         const baris = segmenRun(row);
         const teks = baris.join('\n');
+        const c = konteksRun(row, teks);
         const jalan = row.status === 'RUNNING';
         const gagalRun = /FAILED|error/i.test(row.status || '');
-        const cari = (re, dari) => { if (!re) return -1; for (let i = dari; i < baris.length; i++) if (re.test(baris[i])) return i; return -1; };
-        const simpul = ALUR.map(n => ({ ...n, iMulai: cari(n.mulai, 0) }));
-        const terakhir = simpul.reduce((t, n, i) => (n.iMulai >= 0 ? i : t), -1);
-        simpul.forEach((n, i) => {
-          const berikut = simpul.slice(i + 1).find(x => x.iMulai >= 0);
-          if (n.iMulai < 0) {
-            n.status = baris.length && (!jalan || berikut) ? 'dilewati' : 'menunggu';
+        const cari = (re, dari = 0) => { if (!re) return -1; for (let i = dari; i < baris.length; i++) if (re.test(baris[i])) return i; return -1; };
+        const simpul = SIMPUL.map(s => ({ ...s, aktifNilai: s.aktif(c), iMulai: cari(s.mulai) }));
+        const dilalui = simpul.filter(s => s.aktifNilai !== false && s.iMulai >= 0);
+        const iTerakhir = Math.max(-1, ...dilalui.map(s => s.iMulai));
+        simpul.forEach(s => {
+          s.lama = null;
+          if (s.aktifNilai === false) { s.status = 'cabang'; return; }
+          if (s.iMulai < 0) {
+            const terlewati = !jalan || dilalui.some(x => x.kol > s.kol);
+            s.status = baris.length && terlewati ? 'dilewati' : 'menunggu';
             return;
           }
-          const iSelesai = cari(n.selesai, n.iMulai);
-          const lewati = typeof n.lewati === 'function' ? n.lewati(teks) : (n.lewati ? n.lewati.test(teks) : false);
-          if (n.gagal && cari(n.gagal, n.iMulai) >= 0) n.status = 'gagal';
-          else if (lewati) n.status = 'dilewati';
-          else if (iSelesai >= 0 || berikut) n.status = 'selesai';
-          else if (jalan) n.status = 'berjalan';
-          else n.status = gagalRun && i === terakhir ? 'gagal' : 'selesai';
+          const berikut = dilalui.filter(x => x.iMulai > s.iMulai).sort((p, q) => p.iMulai - q.iMulai)[0];
+          const iSelesai = cari(s.selesai, s.iMulai);
+          if (s.gagal && cari(s.gagal, s.iMulai) >= 0) s.status = 'gagal';
+          else if (s.lewati && s.lewati.test(teks)) s.status = 'dilewati';
+          else if (s.cek || iSelesai >= 0 || berikut) s.status = 'selesai';
+          else if (jalan) s.status = 'berjalan';
+          else s.status = gagalRun && s.iMulai === iTerakhir ? 'gagal' : 'selesai';
           // Durasi = sampai langkah berikutnya mulai. Penanda selesai sering tanpa cap waktu
-          // ("fse: tema_siap", "qa_result"), jadi cap waktunya sama dengan saat mulai (0 dtk).
-          const tMulai = waktuDi(baris, n.iMulai);
-          const tAkhir = n.status === 'berjalan' ? new Date()
-            : waktuDi(baris, berikut ? berikut.iMulai : baris.length - 1);
-          const lama = tMulai && tAkhir ? tAkhir - tMulai : null;
-          n.lama = i === ALUR.length - 1 || lama === null || lama < 1000 ? null : lama;
+          // ("fse: tema_siap", "qa_result"), jadi cap waktunya sama dengan saat mulai.
+          if (!s.cek && s.id !== 'selesai') {
+            const tMulai = waktuDi(baris, s.iMulai);
+            const tAkhir = s.status === 'berjalan' ? new Date() : waktuDi(baris, berikut ? berikut.iMulai : baris.length - 1);
+            const lama = tMulai && tAkhir ? tAkhir - tMulai : null;
+            s.lama = lama === null || lama < 1000 ? null : lama;
+          }
         });
         const tAwal = waktuDi(baris, 0);
         const tUjung = jalan ? new Date() : waktuDi(baris, baris.length - 1);
         const terakhirLog = [...baris].reverse().find(b => b.trim()) || '';
-        return { simpul, baris, jalan, gagalRun, lama: tAwal && tUjung ? tUjung - tAwal : null,
+        return { simpul, baris, teks, c, jalan, gagalRun, lama: tAwal && tUjung ? tUjung - tAwal : null,
                  logTerakhir: terakhirLog.replace(WAKTU_LOG, '').trim() };
       }
 
+      function teksSub(s, a, row) {
+        if (s.status === 'cabang') return 'tidak dilalui';
+        if (s.cek) return s.ket(a.c, row);
+        if (s.status === 'menunggu') return s.ket0 || 'menunggu';
+        if (s.status === 'dilewati') return 'dilewati';
+        // Alasan langkah itu sendiri (mis. "pengukuran gagal: ...") lebih tepat daripada stage run,
+        // yang bisa berbunyi COMPLETE padahal langkah ini yang gagal.
+        if (s.status === 'gagal') return (s.ketHasil && s.ketHasil(a.teks)) || 'gagal' + (row.stage && !a.jalan ? ': ' + row.stage : '');
+        if (s.status === 'berjalan') return 'berjalan ' + (s.lama !== null ? lamanya(s.lama) : '');
+        const hasil = s.ketHasil ? s.ketHasil(a.teks) : null;
+        return hasil || 'selesai' + (s.lama !== null ? ', ' + lamanya(s.lama) : '');
+      }
+
+      const UKURAN = { lebar: 188, tinggi: 74, cek: 96, jarak: 44, jalur: 108, tepi: 22, ketupat: 38 };
+      function tataLetak() {
+        const kolom = Math.max(...SIMPUL.map(s => s.kol)) + 1;
+        const lebarKol = Array.from({ length: kolom }, (_, k) => (SIMPUL.some(s => s.kol === k && !s.cek) ? UKURAN.lebar : UKURAN.cek));
+        const x = [];
+        let pos = UKURAN.tepi;
+        lebarKol.forEach((l, k) => { x[k] = pos; pos += l + UKURAN.jarak; });
+        const jalurMaks = Math.max(...SIMPUL.map(s => s.jalur));
+        return { x, lebarKol, lebar: pos - UKURAN.jarak + UKURAN.tepi, tinggi: UKURAN.tepi * 2 + jalurMaks * UKURAN.jalur + UKURAN.tinggi + 20 };
+      }
+      function jangkar(s, t) {
+        const cy = UKURAN.tepi + s.jalur * UKURAN.jalur + UKURAN.tinggi / 2;
+        const x0 = t.x[s.kol], w = t.lebarKol[s.kol];
+        if (!s.cek) return { cy, masuk: [x0, cy], keluar: [x0 + w, cy] };
+        const r = UKURAN.ketupat * Math.SQRT2 / 2;
+        return { cy, masuk: [x0 + w / 2 - r, cy], keluar: [x0 + w / 2 + r, cy] };
+      }
+      function titikKurva(p, t) {
+        const u = 1 - t;
+        return [0, 1].map(i => u * u * u * p[0][i] + 3 * u * u * t * p[1][i] + 3 * u * t * t * p[2][i] + t * t * t * p[3][i]);
+      }
+
       function renderAlur(wadah, row, opsi = {}) {
+        const kanvasLama = wadah.querySelector('.alur-kanvas');
+        const gulirLama = kanvasLama ? kanvasLama.scrollLeft : null;
         wadah._row = row;
         const a = hitungAlur(row);
-        const kelasStatus = a.jalan ? 'run' : a.gagalRun ? 'err' : 'ok';
-        const relevan = a.simpul.filter(n => n.status !== 'dilewati');
-        const beres = relevan.filter(n => n.status === 'selesai').length;
-        const meta = `<div class="flow-meta"><strong>${esc(row.domain)}</strong>`
-          + `<span class="${kelasStatus}">${esc(row.status || '-')}${row.stage ? ' / ' + esc(row.stage) : ''}</span>`
-          + (a.baris.length ? `<span>${beres}/${relevan.length} langkah</span>` : '')
+        const t = tataLetak();
+        const peta = Object.fromEntries(a.simpul.map(s => [s.id, s]));
+        const langkah = a.simpul.filter(s => !s.cek && s.status !== 'cabang' && s.status !== 'dilewati');
+        const beres = langkah.filter(s => s.status === 'selesai').length;
+        const kelasStatus = !a.baris.length ? '' : a.jalan ? 'run' : a.gagalRun ? 'err' : 'ok';
+        const namaMode = { 'dry-run': 'dry run', apply: 'apply', finish: 'finish' }[a.c.mode];
+        const meta = `<div class="flow-meta"><strong>${esc(row.domain || '-')}</strong>`
+          + (row.status ? `<span class="${kelasStatus}">${esc(row.status)}${row.stage ? ' / ' + esc(row.stage) : ''}</span>` : '')
+          + (namaMode ? `<span class="chip">mode ${esc(namaMode)}</span>` : '')
+          + (row.paket ? `<span class="chip">${esc(row.paket)}</span>` : '')
+          + (a.baris.length ? `<span>${beres}/${langkah.length} langkah</span>` : '')
           + (a.lama !== null ? `<span>${a.jalan ? 'berjalan' : 'durasi'} ${lamanya(a.lama)}</span>` : '')
           + (opsi.galat ? `<span class="err">gagal memperbarui: ${esc(opsi.galat)}</span>` : '')
           + (opsi.tutup ? `<button class="action" type="button" data-tutup="${esc(row.domain)}">[ tutup ]</button>` : '')
           + '</div>';
-        if (!a.baris.length) {
-          wadah.innerHTML = meta + '<p class="empty">Belum ada run installer tercatat untuk domain ini.</p>';
-          return;
+        const logBaris = a.jalan && a.logTerakhir ? `<p class="flow-log">log terakhir: ${esc(a.logTerakhir.slice(0, 160))}</p>` : '';
+        const catatan = a.baris.length ? ''
+          : `<p class="flow-catatan">${opsi.templat ? 'Belum ada run installer tercatat. Bagan menampilkan seluruh alur installer.'
+            : 'Belum ada run installer tercatat untuk domain ini. Cabang paket dibaca dari manifest.'}</p>`;
+
+        let garis = '';
+        for (const [dari, ke, label, syarat] of GARIS) {
+          const s = peta[dari], u = peta[ke];
+          const aktif = syarat ? syarat(a.c) : s.cek ? u.aktifNilai : dan(s.aktifNilai, u.aktifNilai);
+          const kelas = aktif === false || u.status === 'cabang' ? 'cabang'
+            : u.status === 'berjalan' ? 'berjalan' : u.status === 'gagal' ? 'gagal'
+            : s.status === 'selesai' && (u.status === 'selesai' || u.status === 'dilewati') ? 'selesai' : '';
+          const p1 = jangkar(s, t).keluar, p2 = jangkar(u, t).masuk, dx = Math.max(22, (p2[0] - p1[0]) / 2);
+          const kurva = [p1, [p1[0] + dx, p1[1]], [p2[0] - dx, p2[1]], p2];
+          garis += `<path class="edge ${kelas}" d="M${kurva[0]} C${kurva[1]} ${kurva[2]} ${kurva[3]}"/>`;
+          if (label) {
+            // 62% panjang garis: di celah antar kolom, tidak menimpa nama simpul pengecekan di bawah ketupat.
+            const q = titikKurva(kurva, 0.62);
+            garis += `<text class="edge-label${kelas === 'cabang' ? '' : ' aktif'}" x="${q[0].toFixed(1)}" y="${(q[1] - 6).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
+          }
         }
-        // Dry run tidak memasang apa pun: "Install WordPress selesai" di sini hanya berarti server tujuan siap.
-        const dryRun = /\] SUCCESS: DRY_RUN_OK/.test(a.baris.join('\n'));
-        const simpulHtml = a.simpul.map(n => {
-          const sub = dryRun && n.nama === 'Install WordPress' && n.status === 'selesai' ? 'dry run: server tujuan siap'
-            : n.status === 'selesai' ? 'selesai' + (n.lama !== null ? ', ' + lamanya(n.lama) : '')
-            : n.status === 'berjalan' ? 'berjalan ' + (n.lama !== null ? lamanya(n.lama) : '')
-            : n.status === 'gagal' ? 'gagal' + (row.stage && !a.jalan ? ': ' + row.stage : '')
-            : n.status === 'dilewati' ? 'dilewati'
-            : (n.ket || 'menunggu');
-          const log = n.status === 'berjalan' && a.logTerakhir ? `<div class="node-log">${esc(a.logTerakhir.slice(0, 90))}</div>` : '';
-          return `<li class="node ${n.status}" aria-label="${esc(n.nama)}: ${n.status}"><div class="node-top">`
-            + `<span class="node-ikon" aria-hidden="true">${IKON_ALUR[n.status]}</span><span class="node-nama">${esc(n.nama)}</span></div>`
-            + `<div class="node-sub">${esc(sub)}</div>${log}</li>`;
+        const simpulHtml = a.simpul.map(s => {
+          const j = jangkar(s, t), w = t.lebarKol[s.kol];
+          const sub = teksSub(s, a, row);
+          const label = `${s.nama}: ${s.status === 'cabang' ? 'tidak dilalui' : s.status}${sub ? ', ' + sub : ''}`;
+          if (s.cek) {
+            return `<li class="node-cek ${s.status}" data-simpul="${s.id}" style="left:${t.x[s.kol]}px;top:${j.cy - UKURAN.ketupat / 2 - 8}px;width:${w}px" aria-label="${esc(label)}">`
+              + `<span class="ketupat"><span class="node-ikon" aria-hidden="true">${IKON_ALUR[s.status]}</span></span>`
+              + `<span class="cek-nama">${esc(s.nama)}</span><span class="cek-ket">${esc(sub)}</span></li>`;
+          }
+          return `<li class="node ${s.status}" data-simpul="${s.id}" style="left:${t.x[s.kol]}px;top:${j.cy - UKURAN.tinggi / 2}px;width:${w}px" aria-label="${esc(label)}">`
+            + `<div class="node-top"><span class="node-ikon" aria-hidden="true">${IKON_ALUR[s.status]}</span><span class="node-nama">${esc(s.nama)}</span></div>`
+            + `<div class="node-sub" title="${esc(sub)}">${esc(sub)}</div></li>`;
         }).join('');
-        wadah.innerHTML = meta + `<div class="flow"><svg aria-hidden="true"></svg><ol>${simpulHtml}</ol></div>`;
-        wadah._simpul = a.simpul;
-        requestAnimationFrame(() => gambarGaris(wadah));
+
+        wadah.innerHTML = meta + logBaris + catatan
+          + `<div class="alur-kanvas" tabindex="0" role="group" aria-label="Bagan alur installer ${esc(row.domain || '')}. Geser ke samping untuk melihat semua langkah.">`
+          + `<div class="alur-isi" style="width:${t.lebar}px;height:${t.tinggi}px"><svg width="${t.lebar}" height="${t.tinggi}" aria-hidden="true">${garis}</svg>`
+          + `<ol class="alur-simpul">${simpulHtml}</ol></div></div>`
+          + '<p class="flow-legenda"><span>✓ selesai</span><span>● berjalan</span><span>✗ gagal</span><span>- dilewati</span>'
+          + '<span>· tidak dilalui (cabang lain)</span><span>geser bagan ke samping untuk langkah berikutnya</span></p>';
+        const kanvas = wadah.querySelector('.alur-kanvas');
+        pasangGeser(kanvas);
+        // Gulir ke langkah yang sedang aktif; posisi geser pengguna dipertahankan selama langkah aktifnya sama.
+        const fokus = a.simpul.find(s => s.status === 'berjalan') || a.simpul.find(s => s.status === 'gagal')
+          || a.simpul.filter(s => s.status === 'selesai' && !s.cek).sort((p, q) => q.kol - p.kol)[0] || a.simpul[0];
+        if (gulirLama !== null && wadah._fokus === fokus.id) kanvas.scrollLeft = gulirLama;
+        else kanvas.scrollLeft = Math.max(0, t.x[fokus.kol] + t.lebarKol[fokus.kol] / 2 - kanvas.clientWidth / 2);
+        wadah._fokus = fokus.id;
       }
 
-      function gambarGaris(wadah) {
-        const flow = wadah.querySelector('.flow');
-        if (!flow) return;
-        const kotak = flow.getBoundingClientRect();
-        const simpul = [...flow.querySelectorAll('.node')];
-        const status = (wadah._simpul || []).map(n => n.status);
-        let garis = '';
-        for (let i = 0; i < simpul.length - 1; i++) {
-          const a = simpul[i].getBoundingClientRect(), b = simpul[i + 1].getBoundingClientRect();
-          let p;
-          if (Math.abs(a.top - b.top) < 4) {
-            const x1 = a.right - kotak.left, y1 = a.top - kotak.top + a.height / 2;
-            const x2 = b.left - kotak.left, y2 = b.top - kotak.top + b.height / 2, c = (x2 - x1) / 2;
-            p = `M${x1} ${y1} C${x1 + c} ${y1} ${x2 - c} ${y2} ${x2} ${y2}`;
-          } else {
-            const x1 = a.left - kotak.left + a.width / 2, y1 = a.bottom - kotak.top;
-            const x2 = b.left - kotak.left + b.width / 2, y2 = b.top - kotak.top, c = (y2 - y1) / 2;
-            p = `M${x1} ${y1} C${x1} ${y1 + c} ${x2} ${y2 - c} ${x2} ${y2}`;
-          }
-          const sa = status[i], sb = status[i + 1];
-          const kelas = sb === 'berjalan' ? 'berjalan' : sb === 'gagal' ? 'gagal'
-            : sa !== 'menunggu' && (sb === 'selesai' || sb === 'dilewati') ? 'selesai' : '';
-          garis += `<path class="edge ${kelas}" d="${p}"/>`;
-        }
-        flow.querySelector('svg').innerHTML = garis;
+      // Geser kanvas dengan mouse seperti n8n; sentuhan & tombol panah memakai gulir bawaan.
+      function pasangGeser(kanvas) {
+        let awal = null;
+        kanvas.addEventListener('pointerdown', e => {
+          if (e.pointerType !== 'mouse' || e.button !== 0) return;
+          awal = { x: e.clientX, gulir: kanvas.scrollLeft };
+          kanvas.classList.add('geser');
+          kanvas.setPointerCapture(e.pointerId);
+        });
+        kanvas.addEventListener('pointermove', e => { if (awal) kanvas.scrollLeft = awal.gulir - (e.clientX - awal.x); });
+        const lepas = () => { awal = null; kanvas.classList.remove('geser'); };
+        kanvas.addEventListener('pointerup', lepas);
+        kanvas.addEventListener('pointercancel', lepas);
       }
-      window.addEventListener('resize', () => document.querySelectorAll('[data-alur]').forEach(gambarGaris));
 
       async function ambilDomain(domain) {
         const r = await fetch('/api/installer?domain=' + encodeURIComponent(domain), { cache: 'no-store' });
@@ -1198,18 +1437,40 @@
       const panelAlur = document.getElementById('alur-berjalan');
       let pantauTimer = null;
 
+      // Bagan tetap tampil saat installer diam: run terakhir (field `terakhir` dari /api/installer),
+      // atau templat alur kalau belum ada run sama sekali.
+      let rowTerakhir = null, kunciTerakhir = '';
       function renderPanel() {
-        if (!pantau.size) {
-          panelAlur.innerHTML = '<p class="empty">Tidak ada installer yang sedang berjalan. Bagan muncul di sini begitu install, finish, atau dry run dijalankan.</p>';
+        if (pantau.size) {
+          panelAlur.innerHTML = [...pantau.keys()].map(d => `<div class="flow-card" data-alur data-domain="${esc(d)}"></div>`).join('');
+          panelAlur.querySelectorAll('.flow-card').forEach(el => {
+            const v = pantau.get(el.dataset.domain);
+            renderAlur(el, v.row, { tutup: Boolean(v.selesaiPada), galat: v.galat });
+          });
           return;
         }
-        panelAlur.innerHTML = [...pantau.keys()].map(d => `<div class="flow-card" data-alur data-domain="${esc(d)}"></div>`).join('');
-        panelAlur.querySelectorAll('.flow-card').forEach(el => {
-          const v = pantau.get(el.dataset.domain);
-          renderAlur(el, v.row, { tutup: Boolean(v.selesaiPada), galat: v.galat });
-        });
+        if (rowTerakhir) {
+          panelAlur.innerHTML = '<p class="flow-catatan">Tidak ada installer yang sedang berjalan. Di bawah ini run terakhir.</p>'
+            + `<div class="flow-card" data-alur data-domain="${esc(rowTerakhir.domain)}"></div>`;
+          renderAlur(panelAlur.querySelector('.flow-card'), rowTerakhir);
+          return;
+        }
+        panelAlur.innerHTML = '<div class="flow-card" data-alur></div>';
+        renderAlur(panelAlur.querySelector('.flow-card'), { domain: 'Alur installer', status: '', log: [] }, { templat: true });
       }
-      function pantauYangBerjalan(domains) {
+      async function perbaruiRunTerakhir(terakhir) {
+        const kunci = terakhir && terakhir.domain ? terakhir.domain + '|' + (terakhir.updated_at || '') : '';
+        if (!kunci || kunci === kunciTerakhir) return;
+        kunciTerakhir = kunci;
+        try {
+          rowTerakhir = await ambilDomain(terakhir.domain);
+        } catch (e) {
+          kunciTerakhir = '';
+          return;
+        }
+        if (!pantau.size) renderPanel();
+      }
+      function pantauYangBerjalan(domains, terakhir) {
         let baru = false;
         for (const x of domains) {
           if (x.status === 'RUNNING' && !pantau.has(x.domain)) {
@@ -1219,6 +1480,7 @@
         }
         if (baru || !panelAlur.querySelector('.flow-card')) renderPanel();
         jadwalPantau();
+        perbaruiRunTerakhir(terakhir);
       }
       function mulaiPantau(domain) {
         pantau.set(domain, { row: { domain, status: 'RUNNING', stage: 'dimulai', log: [] }, selesaiPada: 0, galat: '' });

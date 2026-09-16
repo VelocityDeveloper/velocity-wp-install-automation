@@ -90,6 +90,35 @@ def theme_note(domain):
     return active
 
 
+def wp_login(domain):
+    """(username, password) admin WordPress, dengan urutan sumber yang sama persis
+    dengan website-install-from-manifest: manifest `password=` → `da_password_file`
+    → secret acak per domain. Keputusan user 2026-09-15: login ikut dikirim di
+    laporan instalasi selesai. Nilainya hanya masuk ke teks pesan — tidak pernah
+    dicetak ke log instalasi atau telegram-sent.jsonl."""
+    if not domain or '/' in domain or '..' in domain:
+        return '', ''
+    cfg = {}
+    try:
+        for line in (MANIFEST_ROOT / domain / f'{domain}.txt').read_text().splitlines():
+            key, sep, value = line.partition('=')
+            if sep:
+                cfg[key.strip()] = value.strip()
+    except OSError:
+        return '', ''
+    user = cfg.get('admin_user') or cfg.get('da_user', '')
+    password = cfg.get('password', '')
+    if not password:
+        for path in (cfg.get('da_password_file', ''), f'/etc/velocity/secrets/admin_password_{domain}.txt'):
+            try:
+                password = Path(path).read_text().replace('\r', '').replace('\n', '') if path else ''
+            except OSError:
+                password = ''
+            if password:
+                break
+    return user, password
+
+
 def maintenance_note(domain):
     """'aktif' kalau langkah maintenance di instalasi terakhir berhasil menyala."""
     if not domain or '/' in domain or '..' in domain:
@@ -106,7 +135,7 @@ def maintenance_note(domain):
     return ''
 
 
-def build_message(domain, status, stage, paket='', theme='', maintenance=''):
+def build_message(domain, status, stage, paket='', theme='', maintenance='', login=('', '')):
     status = status.upper()
     stage = html.escape(stage or '-')
     head = f'Domain: <code>{domain}</code>\n'
@@ -122,6 +151,11 @@ def build_message(domain, status, stage, paket='', theme='', maintenance=''):
         if maintenance:
             head += f'Maintenance: <b>{html.escape(maintenance)}</b>\n'
         links = f'Situs: https://{domain}\nAdmin: https://{domain}/wp-admin'
+        user, password = login
+        if user:
+            links += f'\nUsername: <code>{html.escape(user)}</code>'
+        if password:
+            links += f'\nPassword: <code>{html.escape(password)}</code>'
         if status == 'CHECK':
             # Terpasang, tapi pemeriksaan akhir (scripts/site-qa) menemukan masalah.
             return (f'🟡 <b>Instalasi selesai, perlu dicek</b>\n{head}{links}\n'
@@ -175,7 +209,8 @@ def main():
         return 1
     done = status.upper() in ('SUCCESS', 'CHECK')
     text = build_message(domain, status, stage, manifest_paket(domain),
-                         theme_note(domain) if done else '', maintenance_note(domain) if done else '')
+                         theme_note(domain) if done else '', maintenance_note(domain) if done else '',
+                         wp_login(domain) if done else ('', ''))
     failed = 0
     for chat in chats:
         try:

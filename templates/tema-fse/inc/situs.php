@@ -10,6 +10,25 @@
 
 defined('ABSPATH') || exit;
 
+// Product katalog custom: bukan WooCommerce, supaya data produk terpisah dari post berita.
+add_action('init', function () {
+    register_post_type('product', array(
+        'labels' => array(
+            'name' => 'Produk', 'singular_name' => 'Produk', 'add_new_item' => 'Tambah Produk',
+            'edit_item' => 'Edit Produk', 'new_item' => 'Produk Baru', 'view_item' => 'Lihat Produk',
+        ),
+        'public' => true, 'show_in_rest' => true, 'has_archive' => true,
+        'rewrite' => array('slug' => 'products', 'with_front' => false),
+        'menu_icon' => 'dashicons-products',
+        'supports' => array('title', 'editor', 'thumbnail', 'excerpt'),
+    ));
+    register_taxonomy('category-product', array('product'), array(
+        'labels' => array('name' => 'Kategori Produk', 'singular_name' => 'Kategori Produk'),
+        'public' => true, 'show_in_rest' => true, 'hierarchical' => true,
+        'rewrite' => array('slug' => 'category-product', 'with_front' => false),
+    ));
+});
+
 /** Kunci yang boleh tampil ke pengunjung (Block Bindings `velocity/situs`). */
 function velocity_fse_kunci_publik()
 {

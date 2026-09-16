@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Pasang plugin VD Store di situs paket toko online.
+
+Keputusan user 2026-09-15: setiap paket toko online (Toko Online Custom maupun
+Toko Online biasa) wajib memakai VD Store sejak instalasi WordPress.
+
+  vd-store <manifest>
+
+Paket lain dilewati. Paket zip diambil dari API plugin Velocity
+(api.velocitydeveloper.co/api/v1/plugins, slug vd-store) dan disimpan di
+/var/lib/velocity/packages/vd-store-<versi>.zip; kalau API tidak terjangkau,
+zip terbaru di tembolok dipakai. Idempoten: plugin yang sudah ada di situs tidak
+ditimpa (pengaturan toko & versi yang sudah dipakai PM dibiarkan), hanya
+dipastikan aktif. Butuh WP_INSTALL_SSH_KEY_FILE.
+"""
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import urllib.request
+import zipfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+SLUG = 'vd-store'
+API_URL = 'https://api.velocitydeveloper.co/api/v1/plugins'
+PACKAGES = Path('/var/lib/velocity/packages')
+UA = 'velocity-installer/1.0'
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def paket_toko_online(paket):
+    return 'tokoonline' in re.sub(r'\s+', '', (paket or '').lower())
+
+
+def zip_valid(path):
+    """Zip harus berisi folder vd-store/ dengan header plugin di dalamnya."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return f'{SLUG}/{SLUG}.php' in z.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def versi_key(path):
+    m = re.search(r'-(\d+(?:\.\d+)*)\.zip$', path.name)
+    return tuple(int(p) for p in m.group(1).split('.')) if m else ()
+
+
+def ambil_paket():
+    """Kembalikan (path zip, versi). Unduh versi terbaru dari API bila belum ada."""
+    PACKAGES.mkdir(parents=True, exist_ok=True)
+    try:
+        tanggal = datetime.now(timezone(timedelta(hours=7))).strftime('%d%m%Y')
+        req = urllib.request.Request(API_URL, headers={
+            'User-Agent': UA, 'Accept': 'application/json',
+            'signature': hashlib.md5(tanggal.encode()).hexdigest()})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.load(resp).get('data') or []
+        item = next(p for p in data if p.get('slug') == SLUG)
+        versi = str(item.get('version') or '').strip()
+        url = item.get('package_file_url') or item.get('package_external_url')
+        if not re.match(r'^\d+(\.\d+)*$', versi) or not url:
+            raise ValueError('data_api_tidak_lengkap')
+        tujuan = PACKAGES / f'{SLUG}-{versi}.zip'
+        if not zip_valid(tujuan):
+            sementara = tujuan.with_suffix('.part')
+            req = urllib.request.Request(url, headers={'User-Agent': UA})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                sementara.write_bytes(resp.read())
+            if not zip_valid(sementara):
+                sementara.unlink(missing_ok=True)
+                raise ValueError('zip_tidak_valid')
+            os.replace(sementara, tujuan)
+            print(f'vd_store: paket_diunduh:{versi}')
+        return tujuan, versi
+    except Exception as e:  # API/unduhan gagal → pakai tembolok
+        tembolok = sorted((p for p in PACKAGES.glob(f'{SLUG}-*.zip') if zip_valid(p)), key=versi_key)
+        if not tembolok:
+            print(f'vd_store: paket_tidak_tersedia:{type(e).__name__}')
+            return None, ''
+        pilih = tembolok[-1]
+        versi = '.'.join(map(str, versi_key(pilih)))
+        print(f'vd_store: pakai_tembolok:{versi}:{type(e).__name__}')
+        return pilih, versi
+
+
+REMOTE = r'''
+set -u
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }
+wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }
+if [[ -d "$DOCROOT/wp-content/plugins/vd-store" ]]; then
+  rm -f "$ZIP"
+  echo "vd_store_kept:$(wp plugin get vd-store --field=version 2>/dev/null)"
+else
+  [[ -f "$ZIP" ]] || { echo "zip_tidak_terkirim"; exit 11; }
+  wp plugin install "$ZIP" 2>&1 | grep -v '^Warning:' | tail -2
+  rm -f "$ZIP"
+  chown -R "$DA_USER:$DA_USER" "$DOCROOT/wp-content/plugins/vd-store" 2>/dev/null || true
+fi
+wp plugin is-active vd-store 2>/dev/null || wp plugin activate vd-store 2>&1 | grep -v '^Warning:' | tail -1
+if wp plugin is-active vd-store 2>/dev/null; then
+  echo "vd_store_aktif:$(wp plugin get vd-store --field=version 2>/dev/null)"
+else
+  echo "vd_store_tidak_aktif"; exit 12
+fi
+'''
+
+
+def main():
+    if len(sys.argv) != 2:
+        print('usage: vd-store <manifest>', file=sys.stderr)
+        return 2
+    cfg = read_manifest(sys.argv[1])
+    domain = cfg.get('domain', '').lower()
+    da_user = cfg.get('da_user', '')
+    if not paket_toko_online(cfg.get('paket')):
+        print(f'vd_store: dilewati:paket_bukan_toko_online:{cfg.get("paket", "")}')
+        return 0
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain) or not re.match(r'^[a-z][a-z0-9]*$', da_user):
+        print('vd_store: manifest tidak valid')
+        return 2
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not key or not Path(key).is_file():
+        print('vd_store: kunci SSH tidak ada')
+        return 2
+    zip_path, versi = ambil_paket()
+    if not zip_path:
+        return 1
+    port = str(cfg.get('ssh_port') or 22)
+    tujuan = f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"
+    opsi = ['-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15']
+    remote_zip = f'/tmp/pkg-{SLUG}.zip'
+    scp = subprocess.run(['scp', *opsi, '-P', port, str(zip_path), f'{tujuan}:{remote_zip}'],
+                         capture_output=True, text=True, timeout=180)
+    if scp.returncode != 0:
+        print(f'vd_store: scp_gagal:{scp.stderr.strip()[-160:]}')
+        return 1
+    header = '\n'.join([f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+                        f'DA_USER={shlex.quote(da_user)}', f'ZIP={shlex.quote(remote_zip)}'])
+    run = subprocess.run(['ssh', *opsi, '-p', port, tujuan, 'bash', '-s'], input=header + '\n' + REMOTE,
+                         capture_output=True, text=True, timeout=300)
+    for line in (run.stdout + '\n' + run.stderr).splitlines():
+        if line.strip() and not line.startswith('Warning:'):
+            print(f'vd_store: {line.strip()[:200]}')
+    # Kode keluar bisa 0 walau WP-CLI gagal diam-diam: yang dipercaya penanda aktif.
+    ok = re.search(r'^vd_store_aktif:', run.stdout, re.M)
+    print(f'vd_store: {"selesai" if ok else "gagal"} (paket {versi})')
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
