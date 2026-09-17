@@ -258,8 +258,8 @@
         <h2 id="modal-judul">Tambah model</h2>
         <div class="field">
           <label for="f-id">ID model</label>
-          <input type="text" id="f-id" autocomplete="off" pattern="[A-Za-z0-9_-]+" required>
-          <small>Huruf, angka, garis bawah, atau tanda hubung. Tidak bisa diubah setelah disimpan.</small>
+          <input type="text" id="f-id" autocomplete="off" pattern="[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*" required>
+          <small>Huruf, angka, titik, garis bawah, tanda hubung, dan garis miring (mis. <code>meta-llama/llama-3-70b</code>). Tidak bisa diubah setelah disimpan.</small>
         </div>
         <div class="field">
           <label for="f-model">Nama model di API</label>
@@ -539,7 +539,8 @@
           api_key: $('f-key').value.trim(),
           is_default: $('f-default').checked,
         };
-        const galat = !/^[A-Za-z0-9_-]+$/.test(muatan.id) ? 'ID model hanya boleh huruf, angka, garis bawah, dan tanda hubung.'
+        const galat = (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(muatan.id) || muatan.id.includes('..'))
+          ? 'ID model boleh huruf, angka, titik, garis bawah, tanda hubung, dan garis miring (mis. meta-llama/llama-3-70b).'
           : !/^https?:\/\/\S+$/.test(muatan.endpoint) ? 'Endpoint harus URL http(s) lengkap.'
           : (!edit && !muatan.api_key) ? 'API key wajib untuk model baru.' : '';
         if (galat) { $('form-error').textContent = galat; return; }

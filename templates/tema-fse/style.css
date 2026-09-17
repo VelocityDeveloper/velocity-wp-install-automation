@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.6.5
+Version: 1.10.35
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -40,7 +40,7 @@ img { height: auto; }
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  max-width: var(--wp--style--global--wide-size, 1200px);
+  max-width: var(--wp--style--global--wide-size, 1400px);
   margin-inline: auto;
   padding: .35rem var(--wp--style--root--padding-right, 1.25rem);
 }
@@ -275,6 +275,7 @@ img { height: auto; }
 .vf-form__baris { display: grid; gap: .35rem; margin: 0; }
 .vf-form label { color: var(--wp--preset--color--ink); font-size: .85rem; font-weight: 700; }
 .vf-form label span { color: #b42318; }
+.vf-form__bantuan { color: var(--wp--preset--color--abu); font-size: .8rem; margin-top: -.2rem; }
 .vf-form input,
 .vf-form select,
 .vf-form textarea {
@@ -327,74 +328,64 @@ img { height: auto; }
 .vf-footer a { text-decoration: none; }
 .vf-footer a:hover { text-decoration: underline; }
 
-/* ---------- statistik pengunjung di footer (aturan user 2026-09-15, semua build) ----------
-   Markup [velocity-statistics style="list"] memakai kelas Bootstrap (d-flex, fw-bold)
-   yang tidak dimuat tema: ditata ulang jadi kotak berikon, angka menonjol. */
+/* ---------- statistik pengunjung di footer (aturan user 2026-09-15 & 2026-09-16) ----------
+   Letaknya SATU KOLOM footer sejajar kolom Menu, judul memakai gaya judul kolom footer,
+   dan isinya CUKUP LIST saja (label + angka) — tanpa ikon, kotak, atau pita selebar footer.
+   Markup [velocity-statistics style="list"] memakai kelas Bootstrap (list-group, d-flex,
+   fw-bold) yang tidak dimuat tema blok, jadi daftarnya ditata di sini. Versi plugin lama
+   mencetak <div> per baris, versi baru <li>. */
 
-.vf-statistik {
-  margin-top: 2rem !important;
-  padding: 1rem 1.1rem !important;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  border-radius: 12px;
-}
 .vf-statistik > * { margin-block: 0 !important; }
+.vf-statistik .wp-block-shortcode { margin-top: .9rem !important; }
+/* Blok shortcode tercetak tanpa pembungkus, jadi jarak judul → daftar diberi di judulnya (sama dengan kolom Kontak). */
+.vf-statistik > .vf-footer__judul { margin-bottom: .8rem !important; }
 .vf-statistik:not(:has(.velocity-list-stats)) { display: none; }
-.vf-statistik__judul { margin-bottom: .75rem !important; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; opacity: .75; }
-.vf-statistik .velocity-list-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
-.vf-statistik .velocity-list-stats { list-style: none; padding-left: 0; }
+.vf-statistik .velocity-list-stats { list-style: none; display: grid; gap: .5rem; margin: 0; padding-left: 0; }
 .vf-statistik .velocity-list-stats > li,
 .vf-statistik .velocity-list-stats > div {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  column-gap: .6rem;
-  align-items: center;
-  padding: .45rem .5rem;
-  border-radius: 10px;
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: .9rem;
 }
-.vf-statistik .velocity-list-stats > li::before,
-.vf-statistik .velocity-list-stats > div::before {
-  content: "";
-  grid-row: 1 / span 2;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--wp--preset--color--aksen-di-primary) 20%, transparent);
-}
-.vf-statistik .velocity-list-stats > li::after,
-.vf-statistik .velocity-list-stats > div::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: calc(.5rem + 8px);
-  width: 18px;
-  height: 18px;
-  margin-top: -9px;
-  background: var(--wp--preset--color--aksen-di-primary);
-  -webkit-mask: var(--vf-ikon-stat) center / contain no-repeat;
-  mask: var(--vf-ikon-stat) center / contain no-repeat;
-}
-.vf-statistik .velocity-list-stats .fw-bold {
-  justify-self: start; grid-column: 2; grid-row: 1; font-size: 1.25rem; font-weight: 800; line-height: 1.1; }
 .vf-statistik .velocity-list-stats > li > span:first-child,
-.vf-statistik .velocity-list-stats > div > span:first-child { grid-column: 2; grid-row: 2; font-size: .76rem; line-height: 1.3; opacity: .8; }
-.vf-statistik .velocity-list-stats > li:nth-child(1),
-.vf-statistik .velocity-list-stats > div:nth-child(1) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z'/><circle cx='12' cy='12' r='3'/></svg>"); }
-.vf-statistik .velocity-list-stats > li:nth-child(2),
-.vf-statistik .velocity-list-stats > div:nth-child(2) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='4'/><path d='M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'/></svg>"); }
-.vf-statistik .velocity-list-stats > li:nth-child(3),
-.vf-statistik .velocity-list-stats > div:nth-child(3) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 3v18h18'/><path d='m7 15 4-4 3 3 5-6'/></svg>"); }
-.vf-statistik .velocity-list-stats > li:nth-child(4),
-.vf-statistik .velocity-list-stats > div:nth-child(4) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'/></svg>"); }
-.vf-statistik .velocity-list-stats > li:nth-child(5),
-.vf-statistik .velocity-list-stats > div:nth-child(5) { --vf-ikon-stat: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M5.6 5.6a9 9 0 0 0 0 12.8M18.4 18.4a9 9 0 0 0 0-12.8'/></svg>"); }
-@media (max-width: 781px) {
-  .vf-statistik .velocity-list-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .vf-statistik .velocity-list-stats > li { margin: 0; }
-  .vf-statistik .velocity-list-stats > li:nth-child(5),
-  .vf-statistik .velocity-list-stats > div:nth-child(5) { grid-column: 1 / -1; }
+.vf-statistik .velocity-list-stats > div > span:first-child { opacity: .85; }
+.vf-statistik .velocity-list-stats .fw-bold { font-weight: 800; color: var(--wp--preset--color--aksen-di-primary); }
+
+/* Statistik versi tampilan 2 (manifest `velocity_palet_versi=2`, permintaan user
+   2026-09-16): tetap shortcode [velocity-statistics style="list"], tapi tampilannya
+   ikut token desain referensi klien — font judul untuk angka, garis pemisah dari palet
+   (kelas Bootstrap `border-bottom` milik plugin tidak pernah aktif di tema blok), dan
+   sudut mengikuti --vf-kartu-radius. Situs lama tanpa kelas vf-tampilan-2 tidak berubah. */
+.vf-tampilan-2 .vf-statistik .velocity-list-stats {
+  gap: 0;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: var(--vf-kartu-radius, 12px);
+  overflow: hidden;
 }
+.vf-tampilan-2 .vf-statistik .velocity-list-stats > li,
+.vf-tampilan-2 .vf-statistik .velocity-list-stats > div {
+  padding: .5rem .8rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  font-size: .88rem;
+}
+.vf-tampilan-2 .vf-statistik .velocity-list-stats > :last-child { border-bottom: 0; }
+.vf-tampilan-2 .vf-statistik .velocity-list-stats > :nth-child(odd) {
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+.vf-tampilan-2 .vf-statistik .velocity-list-stats .fw-bold {
+  font-family: var(--vf-font-judul, var(--vf-font-teks, inherit));
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--vf-judul-tebal, 800);
+}
+/* Footer terang: angka memakai aksen versi teks supaya tetap 4.5:1 di atas latar terang. */
+.vf-tampilan-2.vf-footer-terang .vf-statistik .velocity-list-stats .fw-bold { color: var(--wp--preset--color--aksen-teks); }
+.vf-tampilan-2.vf-footer-gelap .vf-statistik .velocity-list-stats .fw-bold { color: var(--wp--preset--color--aksen-di-primary); }
 
 /* ---------- gaya beranda perusahaan "korporat" & "terbelah" ----------
    Dipilih scripts/fse-apply dari screenshot beranda referensi klien: hero berfoto
@@ -424,15 +415,21 @@ img { height: auto; }
 .vf-pita { margin-block: var(--wp--preset--spacing--60) !important; }
 .vf-pita :is(h2, h3) { color: inherit; }
 .vf-pita .vf-kepala-seksi p:not(.vf-label-seksi) { color: inherit; opacity: .85; }
+/* Pita berfoto bukan .vf-pita: subjudulnya sempat tetap abu (#5f6570) di atas foto. */
+.vf-pita-foto .vf-kepala-seksi p:not(.vf-label-seksi) { color: var(--wp--preset--color--di-primary); opacity: .9; }
+.vf-pita-foto .vf-kepala-seksi h2 { color: var(--wp--preset--color--di-primary); }
 .vf-seksi { margin-block: var(--wp--preset--spacing--60) !important; }
 
 /* hero berfoto (korporat) */
 .wp-block-post-content > :is(.vf-hero-foto, .vf-hero-terang):first-child { margin-top: calc(-1 * var(--wp--preset--spacing--40)) !important; }
 .vf-hero-foto { margin-bottom: 0 !important; padding: var(--wp--preset--spacing--60) 1.25rem !important; }
-.vf-hero-foto > .wp-block-cover__inner-container { width: 100%; max-width: var(--wp--style--global--wide-size, 1200px); margin-inline: auto; }
+.vf-hero-foto > .wp-block-cover__inner-container { width: 100%; max-width: var(--wp--style--global--wide-size, 1400px); margin-inline: auto; }
 .vf-hero-foto > .wp-block-cover__inner-container > * { max-width: 680px; }
-.vf-hero-foto h1 { margin: .2rem 0 1rem; color: var(--wp--preset--color--putih); font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; }
-.vf-hero-foto p { color: var(--wp--preset--color--putih); font-size: 1.1rem; }
+/* Teks di atas foto memakai di-primary (selalu #fff), bukan putih: di palet gelap
+   slug "putih" jadi latar halaman #0d0f12, sehingga judul hero pernah tampil hitam
+   di atas foto gelap (bumiairchemitech.com 2026-09-16). */
+.vf-hero-foto h1 { margin: .2rem 0 1rem; color: var(--wp--preset--color--di-primary); font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; }
+.vf-hero-foto p { color: var(--wp--preset--color--di-primary); font-size: 1.1rem; }
 .vf-hero-foto .vf-label-seksi { color: var(--wp--preset--color--aksen-di-primary); }
 .vf-hero-foto .wp-block-buttons { margin-top: 1.6rem; }
 
@@ -515,13 +512,13 @@ img { height: auto; }
 .vf-galeri .wp-block-image:hover img { transform: scale(1.05); }
 .vf-seksi--galeri > .wp-block-buttons { justify-content: center; margin-top: 1.5rem; }
 .vf-ajakan-foto { margin-block: var(--wp--preset--spacing--60) 0 !important; padding: var(--wp--preset--spacing--60) 1.25rem !important; text-align: center; }
-.vf-ajakan-foto h2 { margin-top: 0; color: var(--wp--preset--color--putih); }
-.vf-ajakan-foto p { max-width: 640px; margin-inline: auto; color: var(--wp--preset--color--putih); }
+.vf-ajakan-foto h2 { margin-top: 0; color: var(--wp--preset--color--di-primary); }
+.vf-ajakan-foto p { max-width: 640px; margin-inline: auto; color: var(--wp--preset--color--di-primary); }
 .vf-ajakan-foto .wp-block-buttons { justify-content: center; }
 :is(.vf-gaya-korporat, .vf-gaya-terbelah) .vf-ajakan { margin-bottom: var(--wp--preset--spacing--60) !important; }
 
 /* ---------- katalog produk gaya reference ---------- */
-.vf-product-archive { max-width: 1200px; }
+.vf-product-archive { max-width: var(--wp--style--global--wide-size, 1400px); }
 .vf-product-archive__title, .vf-product-single__title { color: var(--wp--preset--color--ink); font-weight: 800; }
 .vf-product-archive__intro { color: var(--wp--preset--color--abu); margin-bottom: 2.5rem !important; }
 .vf-product-grid { gap: 1.5rem !important; }
@@ -669,6 +666,11 @@ body { font-family: var(--vf-font-teks, var(--wp--preset--font-family--jakarta))
    lapisan gelap 40%, ikon cincin 22px/7px, jarak kartu 12px / 1vw. */
 
 .vf-gaya-sorotan .vf-topbar { display: none; }
+.vf-gaya-klinik .vf-topbar { display: none; }  /* mockup klinik: header putih tanpa baris atas */
+/* Beranda klinik: hero menempel ke header, pita CTA menempel ke footer (permintaan user 2026-09-16).
+   Padding <main> front-page.html ditulis inline, jadi perlu !important. */
+body.vf-gaya-klinik.home > .wp-site-blocks > main.wp-block-group,
+body.vf-gaya-klinik.home main#wp--skip-link--target.is-layout-flow { padding-top: 0 !important; padding-bottom: 0 !important; }
 .vf-gaya-sorotan .vf-header {
   background: var(--wp--preset--color--putih) !important;
   color: var(--wp--preset--color--ink) !important;
@@ -1144,7 +1146,6 @@ body.vf-gaya-dealer .vf-rata-tengah .vf-kepala-seksi p { max-width: 680px; margi
 
 /* hero */
 .vf-dealer-hero { align-items: center; }
-.vf-dealer-hero .wp-block-cover__inner-container,
 .vf-dealer-hero.vf-dealer-hero--polos > * { width: 100%; }
 .vf-dealer-hero__baris { align-items: center; gap: 2rem; }
 .vf-dealer-hero h1 { font-size: clamp(2.1rem, 5.4vw, 3.6rem); line-height: 1.08; margin-bottom: .9rem; }
@@ -1343,40 +1344,148 @@ body.vf-gaya-dealer .vf-dealer-info > .wp-block-buttons { justify-content: cente
 .vf-spek th { width: 38%; color: var(--wp--preset--color--abu); font-weight: 600; }
 .vf-spek td { color: var(--wp--preset--color--ink); }
 
-/* simulasi kredit (blok velocity/simulasi-kredit) */
+/* simulasi kredit (blok velocity/simulasi-kredit) — bentuk mengikuti halaman simulasi
+   kredit referensi klien: kolom pilihan di kiri (tipe mobil, slider DP, slider bunga,
+   tenor berupa tombol pil) dan panel hasil di kanan (cicilan besar + rincian + ajukan). */
 .vf-kredit {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 0;
   margin-block: 1.5rem;
-  padding: clamp(1.3rem, 3vw, 2rem);
+  overflow: hidden;
   border: 1px solid var(--wp--preset--color--garis);
-  border-radius: var(--vf-dealer-radius);
-  background: var(--vf-dealer-kartu);
+  border-radius: var(--vf-dealer-radius, 20px);
+  background: var(--vf-dealer-kartu, var(--wp--preset--color--latar));
 }
-.vf-kredit__form { display: grid; gap: .9rem; align-content: start; min-width: 0; }
-.vf-kredit__baris { display: grid; gap: .35rem; margin: 0; min-width: 0; }
-.vf-kredit__baris label { font-size: .85rem; color: var(--wp--preset--color--abu); }
-.vf-kredit :is(input, select) {
+.vf-kredit__form {
+  display: grid;
+  gap: 1.35rem;
+  align-content: start;
+  min-width: 0;
+  padding: clamp(1.3rem, 3vw, 2.2rem);
+  border-right: 1px solid var(--wp--preset--color--garis);
+}
+.vf-kredit__baris { display: grid; gap: .4rem; margin: 0; min-width: 0; }
+.vf-kredit__baris[hidden] { display: none; }
+.vf-kredit__baris label,
+.vf-kredit__geser label,
+.vf-kredit__tenor-label { font-size: .85rem; font-weight: 700; color: var(--wp--preset--color--teks); }
+.vf-kredit :is(input[type="number"], select) {
+  /* Tanpa border-box, padding + border menambah lebar di atas 100% sehingga kolom
+     isian menembus tepi kartu di layar HP (kartu ber-overflow:hidden, jadi terpotong). */
+  box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  padding: .7rem .9rem;
+  padding: .85rem 1rem;
   border: 1px solid var(--wp--preset--color--garis);
   border-radius: 12px;
   background: var(--wp--preset--color--putih);
   color: var(--wp--preset--color--ink);
   font: inherit;
 }
-.vf-kredit__hasil { padding: 1.3rem; border-radius: 18px; background: var(--vf-dealer-kartu-dalam); align-content: start; }
-.vf-kredit__cicilan { padding-bottom: 1rem; border-bottom: 1px solid var(--wp--preset--color--garis); }
-.vf-kredit__label { display: block; font-size: .85rem; color: var(--wp--preset--color--abu); }
-.vf-kredit__cicilan strong { font-size: clamp(1.5rem, 4vw, 2.1rem); color: var(--wp--preset--color--aksen); }
-.vf-kredit__rincian { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .55rem; font-size: .92rem; }
-.vf-kredit__rincian li { display: flex; justify-content: space-between; gap: 1rem; margin: 0; }
+.vf-kredit__catatan-harga {
+  margin: 0 !important;
+  font-size: .82rem;
+  color: var(--wp--preset--color--aksen-teks);
+}
+.vf-kredit__catatan-harga:empty { display: none; }
+
+/* slider DP & bunga */
+.vf-kredit__geser { display: grid; gap: .55rem; }
+.vf-kredit__geser-kepala { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.vf-kredit__geser-kepala strong { font-size: 1.05rem; font-weight: 800; color: var(--wp--preset--color--aksen-di-primary); }
+.vf-kredit input[type="range"] {
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  margin: 0;
+  padding: 0 .5rem;
+  border-radius: 999px;
+  background: var(--wp--preset--color--putih);
+  border: 1px solid var(--wp--preset--color--garis);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.vf-kredit input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--wp--preset--color--aksen);
+  border-radius: 50%;
+  background: var(--wp--preset--color--ink);
+}
+.vf-kredit input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--wp--preset--color--aksen);
+  border-radius: 50%;
+  background: var(--wp--preset--color--ink);
+}
+.vf-kredit input[type="range"]:focus-visible { outline: 2px solid var(--wp--preset--color--aksen); outline-offset: 2px; }
+.vf-kredit__petunjuk { font-size: .78rem; color: var(--wp--preset--color--abu); }
+
+/* tenor berupa tombol pil */
+.vf-kredit__tenor { display: grid; gap: .55rem; }
+.vf-kredit__tenor-pil { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .5rem; }
+.vf-kredit__pil { margin: 0; }
+.vf-kredit__pil input { position: absolute; opacity: 0; width: 0; height: 0; }
+.vf-kredit__pil span {
+  display: block;
+  padding: .7rem .4rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 10px;
+  background: var(--wp--preset--color--putih);
+  color: var(--wp--preset--color--teks);
+  font-size: .9rem;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+.vf-kredit__pil input:checked + span {
+  border-color: var(--wp--preset--color--aksen);
+  background: var(--wp--preset--color--aksen);
+  color: var(--wp--preset--color--di-aksen);
+}
+.vf-kredit__pil input:focus-visible + span { outline: 2px solid var(--wp--preset--color--aksen); outline-offset: 2px; }
+
+/* panel hasil */
+.vf-kredit__hasil {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  padding: clamp(1.3rem, 3vw, 2.2rem);
+  background: var(--vf-dealer-kartu-dalam, var(--wp--preset--color--latar));
+}
+.vf-kredit__label { font-size: .78rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--wp--preset--color--abu); }
+.vf-kredit__cicilan { margin-top: .35rem; font-size: clamp(1.8rem, 4.5vw, 2.9rem); line-height: 1.1; color: var(--wp--preset--color--aksen-di-primary); }
+.vf-kredit__ringkas { margin-top: .35rem; font-size: .85rem; color: var(--wp--preset--color--abu); }
+.vf-kredit__bar { margin-top: 1.4rem; height: 6px; border-radius: 999px; background: color-mix(in srgb, currentColor 14%, transparent); overflow: hidden; }
+.vf-kredit__bar span { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--wp--preset--color--aksen); transition: width .2s ease; }
+.vf-kredit__bar-ket { display: flex; justify-content: space-between; gap: 1rem; margin-top: .5rem; font-size: .78rem; color: var(--wp--preset--color--abu); }
+.vf-kredit__rincian { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; }
+.vf-kredit__rincian li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0;
+  padding: .7rem 0;
+  border-bottom: 1px solid var(--wp--preset--color--garis);
+  font-size: .92rem;
+}
 .vf-kredit__rincian span { color: var(--wp--preset--color--abu); }
-.vf-kredit__rincian strong { color: var(--wp--preset--color--ink); }
-.vf-kredit__catatan { margin-top: 1rem; font-size: .8rem; color: var(--wp--preset--color--abu); }
+.vf-kredit__rincian strong { color: var(--wp--preset--color--ink); font-weight: 700; }
+.vf-kredit__ajukan { display: block; margin-top: 1.5rem; padding: .95rem 1.25rem; border-radius: 12px; text-align: center; text-decoration: none; }
+.vf-kredit__catatan { margin: .9rem 0 0 !important; font-size: .78rem; color: var(--wp--preset--color--abu); }
+
+@media (max-width: 860px) {
+  .vf-kredit { grid-template-columns: minmax(0, 1fr); }
+  .vf-kredit__form { border-right: 0; border-bottom: 1px solid var(--wp--preset--color--garis); }
+  .vf-kredit__tenor-pil { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 /* ikon seksi dealer */
 .vf-ikon--mobil { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 17h14M4 17l1.6-5.2A2 2 0 0 1 7.5 10h9a2 2 0 0 1 1.9 1.4L20 17'/><circle cx='7.5' cy='17.5' r='1.5'/><circle cx='16.5' cy='17.5' r='1.5'/></svg>"); }
@@ -1390,6 +1499,12 @@ body.vf-gaya-dealer .vf-dealer-info > .wp-block-buttons { justify-content: cente
 .vf-ikon--otak { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='6' width='12' height='12' rx='3'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>"); }
 .vf-ikon--kalkulator { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='5' y='3' width='14' height='18' rx='2'/><path d='M8 7h8M8 12h2M12 12h2M16 12h0M8 16h2M12 16h2M16 16h0'/></svg>"); }
 .vf-ikon--sertifikat { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='9' r='5'/><path d='m9 14-1 7 4-2 4 2-1-7'/></svg>"); }
+/* Ikon yang bisa muncul dari data situs & nilai cadangan generator (kotak_ikon memakai
+   "satu", beranda dealer memakai "kilat"/"bintang", data keunggulan memakai "orang").
+   Tanpa definisinya, --vf-ikon kosong dan kotak ikon tampil sebagai kotak polos. */
+.vf-ikon--orang { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='7' r='3.5'/><path d='M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3A5.5 5.5 0 0 1 19 19.5V21'/></svg>"); }
+.vf-ikon--kilat { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 3 6 13h5l-1 8 7-10h-5l1-8Z'/></svg>"); }
+.vf-ikon--bintang { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8L12 4Z'/></svg>"); }
 .vf-ikon--daun { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 4C10 4 5 9 5 16v4'/><path d='M5 14c8 0 13-3 15-10'/></svg>"); }
 
 @media (max-width: 900px) {
@@ -1447,6 +1562,22 @@ body.vf-gaya-dealer .vf-dealer-info > .wp-block-buttons { justify-content: cente
   box-shadow: 0 10px 24px rgba(0, 0, 0, .35);
 }
 .floating-footer .scroll-to-top svg { width: 20px; height: 20px; }
+/* Plugin 2.2.x: tombol fixed sendiri (kanan/bawah .5rem) dan padding .375rem .75rem ikut
+   ditambahkan ke 44px → lonjong 68x56. Dikunci jadi lingkaran setinggi tombol WA. */
+.floating-footer .floating-button.scroll-to-top {
+  box-sizing: border-box;
+  width: 50px;
+  height: 50px;
+  min-width: 50px;
+  padding: 0;
+  aspect-ratio: 1;
+  line-height: 1;
+  border-radius: 50%;
+}
+/* Saat scroll-to-top tampil di sisi yang sama, plugin memberi WA kelas wa-shift-scrolltop;
+   `margin: 0` di atas sempat membatalkan geserannya sehingga keduanya bertumpuk. */
+.floating-footer .floating-button.whatsapp-floating.wa-shift-scrolltop { margin-right: calc(50px + .6rem); }
+.floating-footer .floating-button.whatsapp-floating.left.wa-shift-scrolltop { margin-right: 0; margin-left: calc(50px + .6rem); }
 @media (max-width: 600px) {
   .floating-footer .whatsapp-floating a { padding: .75rem; }
   .floating-footer .whatsapp-floating .d-none { display: none; }
@@ -1466,3 +1597,1182 @@ body.vf-gaya-dealer .vf-form :is(input, select, textarea)::placeholder { color: 
 body.vf-gaya-dealer .vf-form :is(input, select, textarea):focus { outline-color: var(--wp--preset--color--aksen); }
 body.vf-gaya-dealer .vf-kontak li span { color: var(--wp--preset--color--abu); }
 body.vf-gaya-dealer iframe[title="Peta lokasi"] { border-radius: var(--vf-dealer-radius); display: block; }
+
+/* ---------- isi core/cover mengikuti lebar container situs ----------
+   Cover selebar layar (hero, pita promo, pita ajakan) memakai layout "default", jadi isinya
+   melebar sampai tepi layar dan judulnya tidak sejajar logo/menu header maupun seksi lain
+   (terukur: isi cover mulai di 16px, seksi lain di 83px pada layar 1366px). Lebarnya dibatasi
+   wide-size + padding tepi, lalu dipusatkan — bukan lebar penuh.
+   Jebakan: core punya aturan `.has-custom-content-position.is-position-* .wp-block-cover__inner-container
+   { width: auto }` yang lebih spesifik, karena itu `width` di sini pakai !important. */
+
+.wp-block-cover:is(.vf-dealer-hero, .vf-dealer-promo, .vf-hero-foto, .vf-pita-foto, .vf-ref-hero) > .wp-block-cover__inner-container {
+  --vf-tepi: var(--wp--style--root--padding-left, 1.25rem);
+  width: 100% !important;
+  max-width: calc(var(--wp--style--global--wide-size, 1400px) + var(--vf-tepi) * 2);
+  margin-inline: auto;
+  padding-inline: var(--vf-tepi);
+  box-sizing: border-box;
+}
+/* Isi di dalamnya sudah selebar container: alignwide/alignfull tidak perlu melebar lagi. */
+.wp-block-cover:is(.vf-dealer-hero, .vf-dealer-promo, .vf-hero-foto, .vf-pita-foto, .vf-ref-hero) > .wp-block-cover__inner-container > :is(.alignwide, .alignfull) {
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* ---------- arsip tulisan & kategori situs dealer (templates/archive-dealer.html) ----------
+   Mengikuti halaman artikel referensi klien: pita judul gelap (judul besar rata kiri +
+   satu baris pengantar + tombol ajakan), kepala seksi di tengah, lalu grid tiga kartu
+   artikel — foto ber-badge tanggal, judul, ringkasan dua baris, tautan "Baca Selengkapnya". */
+
+.vf-dealer-arsip .vf-dealer-kepala, .vf-dealer-halaman .vf-dealer-kepala { padding-block: clamp(3rem, 8vw, 6rem) !important; }
+.vf-dealer-kepala .vf-rubrik-bar { margin: 0; padding: 0; border: 0; background: none; }
+.vf-dealer-halaman .vf-dealer-kepala .wp-block-post-title,
+.vf-dealer-kepala .vf-rubrik-bar h1 {
+  max-width: 18em;
+  margin: 0;
+  /* Pita rubrik bawaan memberi padding kiri pada judulnya: di sini judul harus rata
+     dengan pengantar & tombol di bawahnya. */
+  padding: 0;
+  /* Pita judul rubrik biasa memakai huruf kapital & spasi huruf; judul arsip dealer
+     mengikuti referensi: huruf normal, ukuran besar. */
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  line-height: 1.1;
+  letter-spacing: -.01em;
+  text-transform: none;
+  color: var(--wp--preset--color--di-primary);
+}
+/* Isi pita judul dibungkus satu grup (layout default) supaya teks ber-max-width rata kiri:
+   layout constrained memberi margin auto pada tiap anaknya sehingga teks sempit jadi terpusat. */
+.vf-dealer-kepala__teks > * { margin-inline: 0 !important; }
+.vf-dealer-kepala__sub { margin: .9rem 0 0 !important; max-width: 34em; opacity: .82; }
+.vf-dealer-kepala__sub:empty { display: none; }
+.vf-dealer-kepala .wp-block-term-description { margin: .6rem 0 0 !important; max-width: 40em; opacity: .82; }
+.vf-dealer-kepala__aksi { margin: 2rem 0 0 !important; }
+.vf-dealer-arsip__pengantar { padding-bottom: 0 !important; }
+.vf-dealer-arsip__pengantar h2 { max-width: 24em; margin-inline: auto; }
+.vf-dealer-arsip__pengantar p { max-width: 46em; margin-inline: auto; color: var(--wp--preset--color--abu); }
+
+.vf-artikel-kartu { list-style: none; margin: 0; padding: 0; gap: 1.5rem !important; }
+/* Grid responsif bawaan WP 7 mengabaikan columnCount dan berhenti di dua kolom pada
+   lebar container; referensi memakai tiga kartu sebaris, jadi kolomnya ditetapkan di sini. */
+.vf-artikel-kartu.is-layout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+@media (max-width: 960px) {
+  .vf-artikel-kartu.is-layout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+@media (max-width: 640px) {
+  .vf-artikel-kartu.is-layout-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}
+.vf-artikel-kartu > li {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: var(--vf-dealer-radius, 20px);
+  background: var(--vf-dealer-kartu, var(--wp--preset--color--latar));
+}
+.vf-artikel-kartu__foto { position: relative; margin: 0 !important; }
+.vf-artikel-kartu__foto .wp-block-post-featured-image { margin: 0; overflow: hidden; border-radius: 14px; }
+.vf-artikel-kartu__foto .wp-block-post-featured-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vf-artikel-kartu__tanggal {
+  position: absolute;
+  top: .7rem;
+  left: .7rem;
+  margin: 0 !important;
+  padding: .3rem .7rem;
+  border-radius: 6px;
+  background: var(--wp--preset--color--aksen);
+  color: var(--wp--preset--color--di-aksen);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.vf-artikel-kartu .wp-block-post-title { margin: 1rem 0 0; font-size: 1.15rem; line-height: 1.3; }
+.vf-artikel-kartu .wp-block-post-title a { color: var(--wp--preset--color--ink) !important; text-decoration: none; }
+.vf-artikel-kartu .wp-block-post-title a:hover { color: var(--wp--preset--color--aksen-teks) !important; }
+.vf-artikel-kartu .wp-block-post-excerpt { margin: .6rem 0 0; }
+.vf-artikel-kartu .wp-block-post-excerpt__excerpt { margin: 0; font-size: .92rem; color: var(--wp--preset--color--teks); }
+.vf-artikel-kartu .wp-block-post-excerpt__more-text { display: none; }
+.vf-artikel-kartu__lanjut { margin: 1.1rem 0 0 !important; }
+.vf-artikel-kartu__lanjut.wp-block-read-more {
+  align-self: flex-start;
+  margin-top: auto !important;
+  padding-top: 1.1rem;
+  color: var(--wp--preset--color--aksen-teks) !important;
+  font-size: .92rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.vf-artikel-kartu__lanjut.wp-block-read-more::after { content: " ›"; }
+.vf-dealer-arsip .wp-block-query-pagination { margin-top: 2.5rem; }
+
+@media (max-width: 781px) {
+  .vf-dealer-kepala .vf-rubrik-bar h1 { font-size: clamp(1.7rem, 8vw, 2.2rem); }
+  .vf-artikel-kartu { gap: 1.1rem !important; }
+}
+
+/* ---------- halaman Tentang Kami situs dealer ----------
+   Mengikuti halaman "tentang kami" referensi klien: foto & teks berdampingan, keunggulan
+   berikon di tengah, lalu pita ajakan menghubungi. */
+
+.vf-dealer-tentang { align-items: center; gap: 2.5rem !important; }
+.vf-dealer-tentang__foto img { border-radius: var(--vf-dealer-radius, 20px); }
+.vf-dealer-tentang h2 { font-size: clamp(1.6rem, 3.4vw, 2.5rem); line-height: 1.15; }
+.vf-dealer-tentang p { color: var(--wp--preset--color--teks); }
+.vf-dealer-cta h2 { max-width: 22em; margin-inline: auto; font-size: clamp(1.7rem, 4vw, 2.8rem); line-height: 1.15; }
+.vf-dealer-cta p { max-width: 44em; margin-inline: auto; color: var(--wp--preset--color--abu); }
+.vf-dealer-cta .wp-block-buttons { margin-top: 1.75rem; justify-content: center; }
+body.vf-gaya-dealer .vf-dealer-halaman .wp-block-post-content > .vf-seksi:first-child { padding-top: clamp(2.5rem, 5vw, 4rem); }
+
+/* ---------- gaya beranda klinik (manifest gaya_beranda=klinik) ----------
+   Mengikuti mockup desain klien medikaklinikteknologi.com (2026-09-16): lebar isi 1180px,
+   judul navy tebal, label seksi biru-abu kapital, tombol pil, hero foto berpudar putih di kiri,
+   poin berikon garis tanpa kotak, kartu solusi putih bergaris, pita muda kebiruan, pita ajakan
+   navy bergradasi. Warna tetap dari palet (primary/aksen), bukan hex tetap. */
+
+body.vf-gaya-klinik {
+  --wp--style--global--wide-size: 1180px;
+  --vf-klinik-muda: color-mix(in srgb, var(--wp--preset--color--aksen) 9%, #fff);
+  --vf-klinik-muda-2: color-mix(in srgb, var(--wp--preset--color--aksen) 14%, #fff);
+  --vf-klinik-redup: color-mix(in srgb, var(--wp--preset--color--primary) 45%, #fff);
+  --vf-klinik-bayang: 0 20px 40px -22px color-mix(in srgb, var(--wp--preset--color--primary) 45%, transparent);
+}
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita) :is(h1, h2) {
+  color: var(--wp--preset--color--primary);
+  font-weight: 800;
+  letter-spacing: -.01em;
+}
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita) h2 { font-size: clamp(1.55rem, 3vw, 2.05rem); line-height: 1.22; margin: 0; }
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita, .vf-klinik-cta) .vf-label-seksi {
+  margin: 0 0 .7rem !important;
+  color: var(--vf-klinik-redup);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita) p:not(.vf-label-seksi, .vf-klinik-sub, .vf-klinik-tautan) {
+  color: var(--wp--preset--color--abu);
+  font-size: .93rem;
+  line-height: 1.7;
+}
+.vf-klinik-sub { margin: 0 0 .8rem !important; color: var(--wp--preset--color--primary); font-size: clamp(1.05rem, 1.8vw, 1.3rem); font-weight: 600; line-height: 1.45; }
+.vf-klinik-tautan { margin: 1.1rem 0 0 !important; }
+.vf-klinik-tautan a {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding-bottom: 2px;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--wp--preset--color--primary) !important;
+  font-size: .85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.vf-klinik-tautan a::after { content: "→"; transition: transform .2s ease; }
+.vf-klinik-tautan a:hover::after { transform: translateX(3px); }
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita, .vf-klinik-cta) .wp-block-buttons { margin-top: 1.6rem; gap: .85rem; }
+/* tombol isi navy bertulisan putih seperti mockup (bawaan tema: aksen) */
+body.vf-gaya-klinik :is(.vf-header, .vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita, .vf-hal-seksi) .wp-block-button:not(.is-style-outline) .wp-block-button__link {
+  background: var(--wp--preset--color--primary) !important;
+  color: var(--wp--preset--color--di-primary) !important;
+}
+body.vf-gaya-klinik :is(.vf-header, .vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita, .vf-hal-seksi) .wp-block-button:not(.is-style-outline) .wp-block-button__link:hover {
+  background: var(--wp--preset--color--primary-gelap) !important;
+}
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita) .wp-block-button__link {
+  padding: .8rem 1.5rem;
+  font-size: .88rem;
+  font-weight: 600;
+}
+.vf-gaya-klinik :is(.vf-klinik-hero, .vf-klinik-seksi, .vf-klinik-pita) .wp-block-button:not(.is-style-outline) .wp-block-button__link::after,
+.vf-gaya-klinik .vf-klinik-cta .wp-block-button__link::after { content: " →"; }
+.vf-gaya-klinik .vf-klinik-hero .is-style-outline .wp-block-button__link {
+  border: 1.5px solid var(--wp--preset--color--primary);
+  background: rgba(255, 255, 255, .6);
+  color: var(--wp--preset--color--primary);
+}
+
+/* foto seksi: sudut membulat + bayangan navy lembut */
+.vf-klinik-foto { margin: 0 !important; height: 100%; }
+.vf-klinik-foto img { display: block; width: 100%; height: 100% !important; border-radius: 16px; box-shadow: var(--vf-klinik-bayang); }
+
+/* 1. hero */
+.wp-block-cover.vf-klinik-hero { min-height: 560px; margin-block: 0 !important; padding: 0 !important; align-items: center; }
+.vf-klinik-hero > .wp-block-cover__background {
+  opacity: 1 !important;
+  background: linear-gradient(90deg, #fff 0%, rgba(255, 255, 255, .96) 26%, rgba(255, 255, 255, .72) 40%, rgba(255, 255, 255, 0) 58%) !important;
+}
+.wp-block-cover.vf-klinik-hero > .wp-block-cover__inner-container {
+  --vf-tepi: var(--wp--style--root--padding-left, 1.25rem);
+  width: 100% !important;
+  max-width: calc(var(--wp--style--global--wide-size) + var(--vf-tepi) * 2);
+  margin-inline: auto;
+  padding: clamp(3rem, 7vw, 5rem) var(--vf-tepi);
+  box-sizing: border-box;
+  color: var(--wp--preset--color--teks);
+}
+.vf-klinik-hero--polos { background: linear-gradient(135deg, #fff, var(--vf-klinik-muda)); }
+.vf-klinik-hero__teks { max-width: 470px; margin-inline: 0 !important; }
+.vf-klinik-hero__teks > * { margin-inline: 0 !important; }
+.vf-klinik-hero h1 { margin: 0 0 1rem !important; font-size: clamp(2.3rem, 5vw, 3.55rem); line-height: 1.08; }
+@media (max-width: 781px) {
+  .wp-block-cover.vf-klinik-hero { min-height: 0; align-items: flex-end; }
+  .vf-klinik-hero > .wp-block-cover__background {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .55) 0%, rgba(255, 255, 255, .94) 38%, #fff 62%) !important;
+  }
+  .wp-block-cover.vf-klinik-hero > .wp-block-cover__inner-container { padding-top: 12rem; }
+}
+
+/* 2 & 6. poin berikon garis (who we are, keunggulan) */
+.vf-klinik-seksi { padding-block: clamp(3rem, 7vw, 5.25rem) !important; margin-block: 0 !important; }
+.vf-klinik-tentang { align-items: center !important; gap: clamp(1.5rem, 3vw, 2.5rem) !important; margin-block: 0 !important; }
+.vf-klinik-tentang > .wp-block-column:last-child:has(.vf-klinik-foto) { align-self: stretch; }
+.vf-klinik-poin__grid { gap: 1.25rem !important; margin-top: 0 !important; }
+.vf-klinik-poin { position: relative; margin: 0 !important; }
+.vf-klinik-poin > * { margin-block: 0 !important; }
+.vf-klinik-poin::before {
+  content: "";
+  display: block;
+  width: 34px;
+  height: 34px;
+  margin-bottom: .9rem;
+  background: var(--wp--preset--color--primary);
+  -webkit-mask: var(--vf-ikon) center / contain no-repeat;
+  mask: var(--vf-ikon) center / contain no-repeat;
+}
+.vf-gaya-klinik .vf-klinik-poin h3 { color: var(--wp--preset--color--primary); font-size: .9rem; font-weight: 700; line-height: 1.3; }
+.vf-gaya-klinik .vf-klinik-poin p { margin-top: .45rem !important; font-size: .78rem !important; line-height: 1.5 !important; }
+
+/* pita selebar layar */
+.vf-klinik-pita { margin-block: 0 !important; padding-block: clamp(3rem, 7vw, 5.25rem) !important; background: var(--vf-klinik-muda); }
+.vf-klinik-pita--muda { padding-block: clamp(2.5rem, 5vw, 3.75rem) !important; background: var(--vf-klinik-muda-2); }
+.vf-klinik-kepala-baris { gap: 1.25rem !important; margin-bottom: 2.4rem !important; }
+.vf-klinik-kepala { max-width: 460px; }
+.vf-klinik-kepala > * { margin-inline: 0 !important; }
+.vf-klinik-kepala p:not(.vf-label-seksi) { margin-top: .9rem !important; }
+.vf-klinik-kepala-baris > .vf-klinik-tautan { margin: 0 !important; }
+
+/* 3. kartu solusi */
+.vf-klinik-kartu__grid { gap: 1rem !important; }
+.vf-klinik-kartu__grid.is-layout-grid { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+@media (max-width: 1080px) { .vf-klinik-kartu__grid.is-layout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; } }
+@media (max-width: 760px) { .vf-klinik-kartu__grid.is-layout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+@media (max-width: 480px) { .vf-klinik-kartu__grid.is-layout-grid { grid-template-columns: minmax(0, 1fr) !important; } }
+.vf-klinik-kartu {
+  height: 100%;
+  margin: 0 !important;
+  padding: 1.6rem 1.35rem !important;
+  border: 1px solid color-mix(in srgb, var(--wp--preset--color--aksen) 16%, #fff);
+  border-radius: var(--vf-kartu-radius, 14px);
+  background: #fff;
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.vf-klinik-kartu:hover { transform: translateY(-4px); box-shadow: var(--vf-klinik-bayang); }
+.vf-klinik-kartu > * { margin-block: 0 !important; }
+.vf-klinik-kartu::before {
+  content: "";
+  display: block;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 1.1rem;
+  background: var(--wp--preset--color--primary);
+  -webkit-mask: var(--vf-ikon) center / contain no-repeat;
+  mask: var(--vf-ikon) center / contain no-repeat;
+}
+.vf-gaya-klinik .vf-klinik-kartu h3 { color: var(--wp--preset--color--primary); font-size: .92rem; font-weight: 700; line-height: 1.3; }
+.vf-gaya-klinik .vf-klinik-kartu p { margin-top: .5rem !important; font-size: .8rem !important; line-height: 1.55 !important; }
+
+/* 4, 5, 6. foto + teks berdampingan */
+/* margin-block saja: margin-inline:auto dari layout constrained yang memusatkan kolom alignwide di pita selebar layar */
+.vf-klinik-dua { align-items: center !important; gap: clamp(1.75rem, 4vw, 3.25rem) !important; margin-block: 0 !important; }
+.vf-klinik-dua p:not(.vf-label-seksi) { max-width: 30em; margin-top: .9rem !important; }
+.vf-klinik-unggul .vf-klinik-poin__grid { margin-top: 2rem !important; }
+.vf-klinik-unggul .vf-klinik-foto img { aspect-ratio: 1 / 1 !important; }
+.vf-klinik-poin__grid.is-layout-grid { grid-template-columns: repeat(var(--vf-klinik-kolom, 3), minmax(0, 1fr)) !important; }
+.vf-klinik-unggul .vf-klinik-poin__grid.is-layout-grid { --vf-klinik-kolom: 4; }
+/* Poin bertulisan panjang (misi dari company profile) tidak muat 4 kolom di samping foto. */
+.vf-klinik-unggul .vf-klinik-poin__grid--panjang.is-layout-grid { --vf-klinik-kolom: 2; }
+@media (max-width: 1080px) { .vf-klinik-unggul .vf-klinik-poin__grid.is-layout-grid { --vf-klinik-kolom: 2; } }
+@media (max-width: 600px) { .vf-klinik-poin__grid.is-layout-grid { --vf-klinik-kolom: 2; } }
+
+/* 7. kartu artikel */
+.vf-klinik-artikel { gap: 1.4rem !important; }
+.vf-klinik-artikel.is-layout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+@media (max-width: 860px) { .vf-klinik-artikel.is-layout-grid { grid-template-columns: minmax(0, 1fr) !important; } }
+.vf-klinik-artikel > li {
+  overflow: hidden;
+  padding: 0 0 1.35rem !important;
+  border: 1px solid color-mix(in srgb, var(--wp--preset--color--aksen) 14%, #fff);
+  border-radius: var(--vf-kartu-radius, 14px);
+  background: #fff;
+  box-shadow: 0 10px 26px -18px color-mix(in srgb, var(--wp--preset--color--primary) 40%, transparent);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.vf-klinik-artikel > li:hover { transform: translateY(-4px); box-shadow: var(--vf-klinik-bayang); }
+.vf-klinik-artikel > li > :not(.wp-block-post-featured-image) { margin-inline: 1.15rem !important; }
+.vf-klinik-artikel .wp-block-post-featured-image { margin: 0 0 -.9rem !important; border-radius: 0 !important; }
+.vf-klinik-artikel .wp-block-post-featured-image img { border-radius: 0 !important; }
+.vf-klinik-artikel .vf-label { position: relative; display: inline-block; margin-top: 0 !important; margin-bottom: .75rem !important; }
+.vf-klinik-artikel .vf-label a {
+  display: inline-block;
+  padding: .28rem .7rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wp--preset--color--aksen) 24%, #fff);
+  color: var(--wp--preset--color--primary) !important;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: none;
+}
+.vf-klinik-artikel .wp-block-post-title { margin-top: 0 !important; font-size: .95rem !important; font-weight: 600; line-height: 1.4; }
+.vf-klinik-artikel .wp-block-post-title a { color: var(--wp--preset--color--primary); }
+.vf-klinik-artikel .wp-block-post-date { margin-top: .55rem !important; color: var(--wp--preset--color--abu); font-size: .74rem; }
+
+/* 8. pita ajakan navy */
+.vf-klinik-cta {
+  position: relative;
+  margin-block: 0 !important;
+  background: linear-gradient(120deg, var(--wp--preset--color--primary-gelap), var(--wp--preset--color--primary) 55%,
+    color-mix(in srgb, var(--wp--preset--color--primary) 85%, var(--wp--preset--color--aksen))) !important;
+}
+.vf-klinik-cta__baris { align-items: center !important; gap: 1.5rem !important; margin-block: 0 !important; }
+.vf-klinik-cta h2 { margin: 0; color: inherit; font-size: clamp(1.35rem, 2.6vw, 1.7rem); font-weight: 800; }
+.vf-klinik-cta p:not(.vf-label-seksi) { margin-top: .5rem !important; opacity: .82; font-size: .9rem; }
+.vf-gaya-klinik .vf-klinik-cta .vf-label-seksi { color: color-mix(in srgb, var(--wp--preset--color--aksen) 55%, #fff); }
+.vf-klinik-cta .wp-block-buttons { margin-top: 0 !important; }
+.vf-klinik-cta .wp-block-button__link { padding: .75rem 1.4rem; background: #fff !important; color: var(--wp--preset--color--primary) !important; font-size: .88rem; font-weight: 600; }
+.vf-klinik-kontak { display: flex; flex-wrap: wrap; gap: .6rem 1.6rem; margin-top: 1.1rem !important; font-size: .86rem; }
+.vf-klinik-kontak a { display: inline-flex; align-items: center; gap: .45rem; color: inherit !important; text-decoration: none; }
+.vf-klinik-kontak a::before { content: ""; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--vf-ikon) center / contain no-repeat; mask: var(--vf-ikon) center / contain no-repeat; }
+.vf-klinik-kontak__wa, .vf-klinik-kontak__telp { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4 2h3a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.7a2 2 0 0 1-.4 2.1L8 9.9a16 16 0 0 0 6 6l1.4-1.2a2 2 0 0 1 2.1-.4c.9.3 1.8.5 2.7.6a2 2 0 0 1 1.8 2Z'/></svg>"); }
+.vf-klinik-kontak__email { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m4 6 8 7 8-7'/></svg>"); }
+@media (min-width: 782px) { .vf-klinik-cta__baris > .wp-block-column:last-child { display: flex; flex-direction: column; align-items: flex-start; } }
+
+/* halaman biasa (templates/page.html) selebar beranda: pita judul (contentSize 1400px) dan isi
+   (content-size 760px) mengikuti wide-size gaya klinik 1180px — permintaan user 2026-09-16 */
+body.vf-gaya-klinik.page:not(.home) .vf-judul-halaman > *,
+body.vf-gaya-klinik.page:not(.home) main > .wp-block-post-content,
+body.vf-gaya-klinik.page:not(.home) main > .wp-block-post-content > :where(:not(.alignleft, .alignright, .alignfull)) {
+  max-width: var(--wp--style--global--wide-size) !important;
+}
+
+/* submenu navigasi (menu bertingkat medikaklinikteknologi.com 2026-09-16) */
+@media (min-width: 600px) {
+  .vf-nav .wp-block-navigation__submenu-container {
+    min-width: 230px !important;
+    padding: .45rem !important;
+    border: 1px solid color-mix(in srgb, var(--wp--preset--color--primary) 10%, #fff) !important;
+    border-radius: 12px;
+    background: #fff !important;
+    box-shadow: 0 18px 40px -20px color-mix(in srgb, var(--wp--preset--color--primary) 45%, transparent);
+  }
+  .vf-nav .wp-block-navigation__submenu-container .wp-block-navigation-item__content {
+    padding: .55rem .8rem !important;
+    border-radius: 8px;
+    color: var(--wp--preset--color--ink) !important;
+    font-size: .9rem;
+    white-space: nowrap;
+  }
+  .vf-nav .wp-block-navigation__submenu-container .wp-block-navigation-item__content:hover {
+    background: color-mix(in srgb, var(--wp--preset--color--aksen) 12%, #fff);
+    color: var(--wp--preset--color--primary) !important;
+  }
+}
+/* footer: hanya menu tingkat atas; submenu tidak bisa dibuka rapi di kolom vertikal */
+.vf-footer__menu .wp-block-navigation__submenu-container,
+.vf-footer__menu .wp-block-navigation__submenu-icon { display: none !important; }
+
+/* halaman dalam gaya klinik: seksi, grid kartu, langkah, kotak ajakan */
+.vf-hal-seksi { margin-block: 0 clamp(2.5rem, 5vw, 3.75rem) !important; }
+.vf-hal-seksi > * { margin-inline: 0 !important; }
+.vf-gaya-klinik .vf-hal-seksi h2 { margin: 0 0 .9rem; color: var(--wp--preset--color--primary); font-size: clamp(1.45rem, 2.6vw, 1.9rem); line-height: 1.25; }
+.vf-hal-seksi p { max-width: 46em; }
+.vf-hal-seksi .vf-label-seksi { margin: 0 0 .5rem !important; color: var(--vf-klinik-redup, #6b7a8c); font-size: .74rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.vf-hal-seksi .vf-klinik-foto img { aspect-ratio: 16 / 10; object-fit: cover; }
+.vf-hal-grid { gap: 1rem !important; margin-top: 1.4rem !important; }
+.vf-hal-grid.is-layout-grid { grid-template-columns: repeat(var(--vf-hal-kolom, 3), minmax(0, 1fr)) !important; }
+.vf-hal-grid--4.is-layout-grid { --vf-hal-kolom: 4; }
+.vf-hal-grid--2.is-layout-grid { --vf-hal-kolom: 2; }
+.vf-hal-grid--5.is-layout-grid { --vf-hal-kolom: 5; }
+@media (max-width: 1080px) { .vf-hal-grid--5.is-layout-grid { --vf-hal-kolom: 3; } }
+@media (max-width: 960px) { .vf-hal-grid.is-layout-grid { --vf-hal-kolom: 2 !important; } }
+@media (max-width: 560px) { .vf-hal-grid.is-layout-grid { --vf-hal-kolom: 1 !important; } }
+.vf-hal-grid .vf-klinik-kartu { height: 100%; }
+.vf-hal-grid .vf-klinik-kartu h3 a { color: inherit; text-decoration: none; }
+.vf-hal-grid .vf-klinik-kartu .vf-klinik-tautan { margin-top: .9rem !important; }
+.vf-hal-langkah { color: var(--wp--preset--color--aksen-teks); font-size: .74rem !important; font-weight: 800 !important; letter-spacing: .1em; }
+.vf-hal-daftar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem 2rem; margin: 1.2rem 0 0 !important; padding: 0 !important; list-style: none; }
+@media (max-width: 560px) { .vf-hal-daftar { grid-template-columns: minmax(0, 1fr); } }
+.vf-hal-daftar li { position: relative; padding-left: 1.7rem; line-height: 1.5; }
+.vf-hal-daftar li::before {
+  content: ""; position: absolute; left: 0; top: .15em; width: 1.1rem; height: 1.1rem;
+  background: var(--wp--preset--color--aksen-teks);
+  -webkit-mask: var(--vf-ikon-centang) center / contain no-repeat; mask: var(--vf-ikon-centang) center / contain no-repeat;
+}
+:root { --vf-ikon-centang: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='m8 12 3 3 5-6'/></svg>"); }
+.vf-ikon--centang { --vf-ikon: var(--vf-ikon-centang); }
+.vf-klinik-kartu--polos::before { display: none !important; }
+body.vf-gaya-klinik button[name="vf_form_kirim"] { background: var(--wp--preset--color--primary) !important; color: var(--wp--preset--color--di-primary) !important; }
+body.vf-gaya-klinik button[name="vf_form_kirim"]:hover { background: var(--wp--preset--color--primary-gelap) !important; }
+.vf-hal-ajakan {
+  margin-block: 0 !important;
+  padding: clamp(1.75rem, 4vw, 2.75rem) !important;
+  border-radius: 18px;
+  background: linear-gradient(120deg, var(--wp--preset--color--primary-gelap), var(--wp--preset--color--primary)) !important;
+  color: var(--wp--preset--color--di-primary);
+}
+.vf-hal-ajakan > * { margin-inline: 0 !important; }
+.vf-gaya-klinik .vf-hal-ajakan h2 { margin: 0 0 .6rem; color: inherit; font-size: clamp(1.35rem, 2.4vw, 1.75rem); }
+.vf-hal-ajakan p { opacity: .88; }
+.vf-hal-ajakan .wp-block-buttons { margin-top: 1.3rem; }
+body.vf-gaya-klinik .vf-hal-ajakan .wp-block-button__link { background: #fff !important; color: var(--wp--preset--color--primary) !important; font-weight: 600; }
+body.vf-gaya-klinik .vf-hal-ajakan .wp-block-button__link::after { content: " →"; }
+.vf-hal-kontak { margin-top: 1rem !important; }
+.vf-hal-kontak p { margin: .3rem 0 !important; }
+
+/* ikon garis gaya klinik (dipakai data fse-klinik) */
+.vf-ikon--dukungan { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10Z'/><path d='M9.5 11.5h5M12 9v5'/></svg>"); }
+.vf-ikon--ahli { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M6 3v5a4 4 0 0 0 8 0V3'/><path d='M10 12v2a5 5 0 0 0 10 0v-2'/><circle cx='20' cy='10' r='2'/></svg>"); }
+.vf-ikon--mitra { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='9' cy='7' r='3.2'/><path d='M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6'/><path d='m15 12 2 2 4-4'/></svg>"); }
+.vf-ikon--gedung { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M4 21V8l8-5 8 5v13'/><path d='M9 21v-6h6v6M9 11h.01M15 11h.01M3 21h18'/></svg>"); }
+.vf-ikon--gerigi { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1'/><circle cx='12' cy='12' r='7'/></svg>"); }
+.vf-ikon--lampu { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M9 18h6M10 21h4'/><path d='M12 3a6 6 0 0 0-3 11.2c.6.5 1 1.1 1 1.8h4c0-.7.4-1.3 1-1.8A6 6 0 0 0 12 3Z'/></svg>"); }
+.vf-ikon--monitor { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='13' rx='2'/><path d='M8 21h8M12 17v4M8 10.5h2l1.5-2.5 2 5 1.5-2.5h1'/></svg>"); }
+.vf-ikon--dokumen { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><rect x='5' y='3' width='14' height='18' rx='2'/><path d='M9 8h6M9 12h6M9 16h3'/></svg>"); }
+.vf-ikon--tim { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='8' cy='8' r='3'/><circle cx='17' cy='9' r='2.4'/><path d='M2.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5M15.5 14.7c2.4.3 4 2.2 4 5.3'/></svg>"); }
+.vf-ikon--tumbuh { --vf-ikon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='m3 20 6-7 4 4 8-10'/><path d='M15 6h6v6'/></svg>"); }
+
+/* ---------- pencarian gaya klinik (permintaan user 2026-09-16: "sesuai dengan tema web") ----------
+   Header: ikon tetap di bar, kolom muncul sebagai kapsul putih di bawah header (tidak menimpa menu).
+   Halaman hasil: kerangka seksi beranda — label kecil, judul navy, form pil, kartu putih bersudut. */
+body.vf-gaya-klinik .vf-cari .wp-block-search__button { color: var(--wp--preset--color--primary) !important; }
+body.vf-gaya-klinik .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__button {
+  background: var(--wp--preset--color--primary) !important;
+  color: var(--wp--preset--color--di-primary) !important;
+}
+body.vf-gaya-klinik .vf-cari .wp-block-search__button svg { width: 22px; height: 22px; min-width: 22px; }
+body.vf-gaya-klinik .vf-cari .wp-block-search__inside-wrapper { position: static !important; }
+body.vf-gaya-klinik .vf-cari .wp-block-search__input {
+  position: absolute !important;
+  top: calc(100% + 1.1rem) !important;
+  right: 0 !important;
+  left: auto !important;
+  z-index: 60;
+  transform: none !important;
+  box-sizing: border-box;
+  height: 52px;
+  padding: 0 1.4rem !important;
+  border: 1px solid var(--wp--preset--color--garis) !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  box-shadow: var(--vf-klinik-bayang);
+  color: var(--wp--preset--color--ink) !important;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+}
+body.vf-gaya-klinik .vf-cari .wp-block-search__input:focus { border-color: var(--wp--preset--color--aksen) !important; border-bottom-width: 1px !important; }
+body.vf-gaya-klinik .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__input { width: min(420px, calc(100vw - 2.5rem)) !important; }
+@media (max-width: 781px) {
+  body.vf-gaya-klinik .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__inside-wrapper {
+    position: static !important; padding: 0 !important; background: transparent !important; box-shadow: none !important;
+  }
+  body.vf-gaya-klinik .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__input { top: calc(100% + .9rem) !important; width: 100% !important; }
+  body.vf-gaya-klinik .vf-cari:not(.wp-block-search__searchfield-hidden) .wp-block-search__button { color: var(--wp--preset--color--di-primary) !important; }
+}
+
+body.vf-gaya-klinik.search .vf-tata { gap: 3rem; }
+body.vf-gaya-klinik .vf-cari-judul {
+  margin: 0 0 1.5rem;
+  padding: 1rem 0 0;
+}
+body.vf-gaya-klinik .vf-cari-judul h1 {
+  margin: 0;
+  color: var(--wp--preset--color--primary);
+  font-size: clamp(1.7rem, 3.4vw, 2.3rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+body.vf-gaya-klinik .vf-cari-judul__jumlah { margin: .5rem 0 0; color: var(--wp--preset--color--abu); font-size: .95rem; }
+
+/* Form di halaman hasil */
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) { margin: 0 0 2rem; }
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__inside-wrapper {
+  gap: .4rem;
+  padding: 6px !important;
+  border: 1px solid var(--wp--preset--color--garis) !important;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 12px 28px -22px color-mix(in srgb, var(--wp--preset--color--primary) 60%, transparent);
+}
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__input {
+  padding: 0 1.1rem !important;
+  border: 0 !important;
+  background: transparent;
+  color: var(--wp--preset--color--ink);
+  font-size: 1rem;
+}
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__input:focus { outline: none; }
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari):focus-within .wp-block-search__inside-wrapper { border-color: var(--wp--preset--color--aksen) !important; }
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__button {
+  margin: 0;
+  padding: .75rem 1.6rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wp--preset--color--primary) !important;
+  color: var(--wp--preset--color--di-primary) !important;
+  font-weight: 700;
+}
+body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__button:hover { background: var(--wp--preset--color--primary-gelap) !important; }
+
+/* Kartu hasil */
+body.vf-gaya-klinik.search .vf-kartu { gap: 1.25rem !important; }
+body.vf-gaya-klinik.search .vf-kartu > li {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 0;
+  padding: 0 0 1.2rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 16px;
+  background: #fff;
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+body.vf-gaya-klinik.search .vf-kartu > li:hover { transform: translateY(-3px); box-shadow: var(--vf-klinik-bayang); }
+body.vf-gaya-klinik.search .vf-kartu > li > * { margin-inline: 1.15rem; }
+body.vf-gaya-klinik.search .vf-kartu .wp-block-post-featured-image { margin: 0 0 1rem; border-radius: 0; }
+body.vf-gaya-klinik.search .vf-kartu > li:not(:has(.wp-block-post-featured-image))::before {
+  content: "";
+  display: block;
+  aspect-ratio: 16 / 10;
+  margin-bottom: 1rem;
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234aa8e6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/><path d='M14 3v5h5M9 13h6M9 17h4'/></svg>") center / 56px no-repeat,
+    var(--vf-klinik-muda);
+}
+body.vf-gaya-klinik.search .vf-kartu .vf-label { margin-top: 0; }
+body.vf-gaya-klinik.search .vf-kartu .vf-label a,
+body.vf-gaya-klinik.search .vf-kartu .vf-label span {
+  display: inline-block;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  background: var(--vf-klinik-muda-2);
+  color: var(--wp--preset--color--primary);
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+body.vf-gaya-klinik.search .vf-kartu .wp-block-post-title { margin: .55rem 1.15rem .35rem; font-size: 1.05rem; }
+body.vf-gaya-klinik.search .vf-kartu .wp-block-post-title a { color: var(--wp--preset--color--primary); text-decoration: none; }
+body.vf-gaya-klinik.search .vf-kartu .wp-block-post-title a:hover { color: var(--wp--preset--color--aksen-teks); }
+body.vf-gaya-klinik.search .vf-kartu .wp-block-post-date { margin-top: auto; color: var(--wp--preset--color--abu); }
+
+/* Pagination bulat */
+body.vf-gaya-klinik.search .wp-block-query-pagination { align-items: center; margin-top: 2.5rem; gap: .5rem; }
+body.vf-gaya-klinik.search .wp-block-query-pagination-numbers { display: flex; gap: .4rem; }
+body.vf-gaya-klinik.search .wp-block-query-pagination-numbers .page-numbers {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--wp--preset--color--primary);
+  font-weight: 700;
+}
+body.vf-gaya-klinik.search .wp-block-query-pagination-numbers .page-numbers.current { background: var(--wp--preset--color--primary); color: var(--wp--preset--color--di-primary); }
+body.vf-gaya-klinik.search :is(.wp-block-query-pagination-next, .wp-block-query-pagination-previous) {
+  padding: .6rem 1.2rem;
+  border: 1px solid var(--wp--preset--color--primary);
+  border-radius: 999px;
+  color: var(--wp--preset--color--primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+body.vf-gaya-klinik.search :is(.wp-block-query-pagination-next, .wp-block-query-pagination-previous):hover { background: var(--wp--preset--color--primary); color: var(--wp--preset--color--di-primary); }
+
+/* Hasil kosong */
+body.vf-gaya-klinik.search .wp-block-query-no-results {
+  padding: 3rem 1.5rem;
+  border: 1px dashed color-mix(in srgb, var(--wp--preset--color--aksen) 45%, #fff);
+  border-radius: 16px;
+  background: var(--vf-klinik-muda);
+  text-align: center;
+}
+body.vf-gaya-klinik.search .wp-block-query-no-results::before {
+  content: "";
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 1rem;
+  border-radius: 50%;
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='m20 20-4.2-4.2'/></svg>") center / 28px no-repeat,
+    var(--wp--preset--color--primary);
+}
+body.vf-gaya-klinik.search .wp-block-query-no-results p { margin: 0; color: var(--wp--preset--color--primary); font-weight: 600; }
+
+/* Kolom samping di halaman hasil: judul kotak jadi label seksi, kotak kartu putih bersudut. */
+body.vf-gaya-klinik.search .vf-samping .vf-kotak {
+  padding: 1.4rem 1.4rem 1.5rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 16px;
+  background: #fff;
+}
+body.vf-gaya-klinik.search .vf-samping .vf-rubrik-bar { margin-bottom: .9rem !important; border: 0; }
+body.vf-gaya-klinik.search .vf-samping .vf-rubrik-bar h2 {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--wp--preset--color--aksen-teks);
+  font-size: .78rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+body.vf-gaya-klinik.search .vf-samping .vf-populer a { color: var(--wp--preset--color--primary); }
+body.vf-gaya-klinik.search .vf-samping .vf-populer li::before { color: var(--wp--preset--color--aksen); }
+@media (max-width: 781px) {
+  body.vf-gaya-klinik .vf-cari-judul { padding-top: .6rem; }
+  body.vf-gaya-klinik.search .vf-kartu > li:not(:has(.wp-block-post-featured-image))::before { aspect-ratio: auto; height: 88px; background-size: 40px, auto; }
+  body.vf-gaya-klinik.search main .wp-block-search:not(.vf-cari) .wp-block-search__button { padding: .7rem 1.2rem; }
+}
+
+/* Logo bertulisan melebar (medikaklinikteknologi.com, 804x182): tinggi dikunci, bukan lebar 170px. */
+body.vf-gaya-klinik .vf-header .wp-block-site-logo { flex-shrink: 0; }
+body.vf-gaya-klinik .vf-header .wp-block-site-logo a { padding: 0; background: transparent; }
+body.vf-gaya-klinik .vf-header .wp-block-site-logo img { width: auto !important; height: 44px; max-height: none; max-width: 210px; object-fit: contain; }
+@media (max-width: 781px) {
+  body.vf-gaya-klinik .vf-header .wp-block-site-logo img { height: 36px; max-width: 170px; }
+}
+
+/* Logo footer (Data Situs logo_footer): tanpa alas, gambar dijadikan putih polos supaya
+   tulisan navy terbaca di footer gelap (permintaan user 2026-09-16). */
+.vf-footer__logo { margin: 0 0 1rem; }
+.vf-footer__logo a { display: inline-flex; }
+.vf-footer__logo-img { display: block; width: auto; height: 46px; max-width: 230px; object-fit: contain; filter: brightness(0) invert(1); }
+
+/* Baris bawah footer + tautan legal (Data Situs tautan_legal): kiri hak cipta, kanan tautan;
+   di HP urutan dibalik (tautan di atas). */
+.vf-footer__bawah:has(.vf-footer__legal) { justify-content: space-between; align-items: center; }
+.vf-footer__kiri { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.vf-footer__kiri > * { margin: 0; }
+.vf-footer__legal { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 0; }
+.vf-footer__legal a { text-decoration: none; }
+.vf-footer__legal a:hover { text-decoration: underline; }
+.vf-footer__legal span { opacity: .5; }
+@media (max-width: 781px) {
+  .vf-footer__bawah:has(.vf-footer__legal) { flex-direction: column-reverse; align-items: flex-start; gap: .8rem; }
+}
+/* Tombol WA + scroll-to-top (tinggi 50px, jarak .5rem) menutupi ujung kanan baris bawah
+   ketika halaman sampai dasar → beri ruang di bawah footer. */
+body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: calc(var(--wp--preset--spacing--40) + 58px) !important; }
+
+/* Menu HP (overlay) rata kiri — navigasi header ber-justify kanan, dan WP memakai setelan itu
+   juga untuk overlay (permintaan user 2026-09-16). Submenu menjorok dari kiri. */
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content,
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__container,
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item,
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
+  align-items: flex-start !important;
+  text-align: left !important;
+}
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content { width: 100%; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
+  padding-left: 1.1rem !important;
+  padding-right: 0 !important;
+}
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { justify-content: flex-start; }
+
+/* Menu HP gaya klinik & toko referensi (vf-header-keranjang, 2026-09-17): submenu tertutup, dibuka lewat tombol panah (assets/js/menu-hp.js). */
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation__container > .wp-block-navigation-item { width: 100%; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  align-items: center !important;
+}
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-item__content { flex: 1 1 auto; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-submenu__toggle {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: -12px -10px -12px auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-submenu__toggle svg { width: 14px; height: 14px; stroke: currentColor; transform: none !important; transition: transform .2s ease; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .vf-sub-buka > .wp-block-navigation-submenu__toggle svg { transform: rotate(180deg) !important; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open :is(.wp-block-navigation__responsive-close, .wp-block-navigation__responsive-dialog, .wp-block-navigation__responsive-container-content, .wp-block-navigation__container) { width: 100% !important; max-width: none; }
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation__submenu-container {
+  display: none !important;
+  flex-basis: 100%;
+  margin-top: .8rem;
+}
+:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child.vf-sub-buka > .wp-block-navigation__submenu-container { display: flex !important; }
+
+/* ---------- referensi: token rencana VERSI 3 (yukpergimancing.com, 2026-09-17) ----------
+   Topbar gelap + kolom cari, menu berwarna, keranjang VD Store di header, slider hero,
+   kartu kategori VD Store, kartu banner 2 kolom, kartu artikel ringkas, footer 5 kolom +
+   pita hak cipta. Semua di balik kelas token (functions.php) atau kelas seksi baru, jadi
+   situs berreferensi lama tidak berubah. */
+
+/* topbar gelap */
+.vf-ref.vf-topbar-gelap .vf-topbar { display: block; background: #050505; color: #d7d9de; font-size: .78rem; }
+.vf-topbar--cari .vf-topbar__isi { align-items: center; padding-block: .3rem; }
+.vf-topbar__kiri { opacity: .85; }
+.vf-topbar__cari { display: flex; align-items: center; margin: 0 0 0 auto; background: #fff; border-radius: 999px; overflow: hidden; }
+.vf-topbar__cari input[type="search"] {
+  box-sizing: border-box; width: 190px; height: 28px; padding: 0 .4rem 0 .9rem;
+  border: 0; outline: 0; background: transparent; color: #14171f; font: inherit; font-size: .78rem;
+}
+.vf-topbar__cari button {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px;
+  padding: 0; border: 0; background: transparent; color: #14171f; cursor: pointer;
+}
+@media (max-width: 600px) {
+  .vf-topbar__kiri { display: none; }
+  .vf-topbar__cari { margin-inline: auto; }
+  .vf-topbar__cari input[type="search"] { width: 60vw; }
+}
+
+/* menu berwarna (referensi: menu kapital tebal berwarna merek) */
+.vf-ref.vf-menu-berwarna .vf-nav .wp-block-navigation-item__content { color: var(--wp--preset--color--primary); font-weight: 700; }
+.vf-ref.vf-menu-berwarna .vf-nav .wp-block-navigation-item__content:hover,
+.vf-ref.vf-menu-berwarna .vf-nav .current-menu-item > .wp-block-navigation-item__content { color: var(--wp--preset--color--aksen-teks); }
+.vf-ref.vf-menu-berwarna .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { color: var(--wp--preset--color--di-primary); }
+.vf-ref.vf-menu-berwarna .vf-nav .wp-block-navigation__responsive-container-open { color: var(--wp--preset--color--primary); }
+
+/* tombol berwarna utama (aksen klien netral) */
+.vf-ref.vf-tombol-primary .wp-block-button:not(.is-style-outline) > .wp-block-button__link,
+.vf-ref.vf-tombol-primary .wp-element-button:not(.wp-block-search__button):not(.is-style-outline .wp-element-button) {
+  background-color: var(--wp--preset--color--primary);
+  color: var(--wp--preset--color--di-primary);
+}
+.vf-ref.vf-tombol-primary .wp-block-button:not(.is-style-outline) > .wp-block-button__link:hover { background-color: var(--wp--preset--color--primary-gelap); }
+.vf-ref.vf-tombol-primary .vf-ref-hero .wp-block-button:not(.is-style-outline) > .wp-block-button__link {
+  background-color: var(--wp--preset--color--putih); color: var(--wp--preset--color--primary);
+}
+
+/* keranjang VD Store di header */
+.vf-keranjang { display: flex; align-items: center; margin-left: .4rem; color: var(--wp--preset--color--primary); }
+.vf-keranjang svg { display: block; }
+.vf-keranjang button, .vf-keranjang a { color: inherit; }
+.vf-ref.vf-header-keranjang .vf-cari { display: none; }
+@media (max-width: 781px) {
+  .vf-keranjang { order: 2; margin-left: 0; }
+}
+
+/* slider hero */
+.vf-ref-slider { position: relative; overflow: hidden; }
+.vf-ref-slider > .wp-block-cover { margin: 0 !important; }
+/* Slider = seksi pertama beranda: menempel ke header seperti hero tunggal (tanpa celah padding <main>). */
+.wp-block-post-content > .vf-ref-slider:first-child { margin-top: calc(-1 * var(--wp--preset--spacing--40)) !important; }
+.vf-ref-slider:not(.is-js) > .wp-block-cover:not(:first-child) { display: none; }
+.vf-ref-slider.is-js { display: grid; }
+.vf-ref-slider.is-js > .wp-block-cover {
+  grid-area: 1 / 1; opacity: 0; visibility: hidden; transition: opacity .7s ease, visibility .7s;
+}
+.vf-ref-slider.is-js > .wp-block-cover.is-aktif { opacity: 1; visibility: visible; }
+.vf-ref-slider__judul { font-size: clamp(1.8rem, 4vw, 3rem) !important; }
+/* Banner produk (teks kiri, produk kanan): di layar sempit foto digeser ke produk dan dilapis gelap agar teks terbaca. */
+.vf-ref-slider .wp-block-cover__inner-container > * { max-width: 560px; }
+@media (max-width: 781px) {
+  .vf-ref-slider .wp-block-cover__image-background { object-position: 78% center !important; }
+  .vf-ref-slider .wp-block-cover__background { opacity: .62 !important; }
+}
+.vf-ref-slider__titik {
+  grid-area: 1 / 1; align-self: end; justify-self: center; z-index: 3;
+  display: flex; gap: .5rem; margin-bottom: 1.1rem;
+}
+.vf-ref-slider__titik button {
+  width: 11px; height: 11px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .5); cursor: pointer;
+}
+.vf-ref-slider__titik button.is-aktif { background: var(--wp--preset--color--putih); transform: scale(1.15); }
+
+/* kategori produk VD Store: ubin foto berlabel */
+.vf-ref-produk .wps-taxonomy-carousel { max-width: 1040px; margin-inline: auto; }
+/* Satu baris ubin per halaman slider (kolom dari shortcode; referensi: 4 ubin + panah). */
+.vf-ref-produk .wps-taxonomy-carousel__grid {
+  grid-template-columns: repeat(var(--wps-taxonomy-columns, 4), minmax(0, 1fr)) !important; gap: 1rem !important;
+  border: 0 !important; padding: .4rem .2rem 1rem;
+}
+.vf-ref-produk .wps-taxonomy-carousel .flickity-viewport { overflow: hidden; }
+.vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button { width: 42px; height: 42px; }
+.vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button.previous { left: -58px; }
+.vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button.next { right: -58px; }
+@media (max-width: 1180px) {
+  .vf-ref-produk .wps-taxonomy-carousel { max-width: calc(100% - 100px) !important; }
+}
+@media (max-width: 768px) {
+  .vf-ref-produk .wps-taxonomy-carousel__grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: .7rem !important; }
+  .vf-ref-produk .wps-taxonomy-carousel { max-width: calc(100% - 70px) !important; }
+  .vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button { width: 34px; height: 34px; }
+  .vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button.previous { left: -40px; }
+  .vf-ref-produk .wps-taxonomy-carousel .flickity-prev-next-button.next { right: -40px; }
+  .vf-ref-produk .wps-taxonomy-carousel__name { font-size: .82rem; top: .5rem; right: .6rem; }
+}
+.vf-ref-produk .wps-taxonomy-carousel__item {
+  position: relative; display: block; overflow: hidden; text-decoration: none; padding: 0 !important;
+  border: 0 !important; box-shadow: 0 4px 14px rgba(15, 23, 42, .12);
+  border-radius: var(--vf-kartu-radius, 12px); background: var(--wp--preset--color--primary);
+}
+.vf-ref-produk .wps-taxonomy-carousel__item { aspect-ratio: 16 / 9; height: auto !important; min-height: 0 !important; }
+.vf-ref-produk .wps-taxonomy-carousel__image { position: absolute; inset: 0; display: block; width: 100%; height: 100% !important; margin: 0; border-radius: 0; }
+.vf-ref-produk .wps-taxonomy-carousel__image-file { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .4s ease; }
+.vf-ref-produk .wps-taxonomy-carousel__item:hover .wps-taxonomy-carousel__image-file { transform: scale(1.05); }
+.vf-ref-produk .wps-taxonomy-carousel__item::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(200deg, color-mix(in srgb, var(--wp--preset--color--primary) 85%, transparent) 0%, transparent 55%);
+}
+.vf-ref-produk .wps-taxonomy-carousel__name {
+  position: absolute; top: .8rem; right: 1rem; z-index: 1; margin: 0;
+  color: #fff; font-family: var(--vf-font-judul, inherit); font-weight: 700; font-size: 1.05rem;
+  text-transform: uppercase; letter-spacing: .03em; text-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+}
+
+/* seksi terakhir berlatar (artikel) menempel ke footer, tanpa pita putih */
+.vf-ref .wp-block-post-content > .vf-pita:last-child:has(.vf-kartu-ringkas) { margin-bottom: 0 !important; }
+.vf-ref-artikel:has(.vf-kartu-ringkas) > * { max-width: 1040px; margin-inline: auto !important; }
+
+/* kartu banner 2 kolom */
+.vf-grid-banner { gap: 1.1rem !important; max-width: 1040px; margin-inline: auto !important; }
+.vf-kartu-banner {
+  position: relative; overflow: hidden; margin: 0 !important; min-height: 260px;
+  border-radius: var(--vf-kartu-radius, 16px); background: var(--wp--preset--color--latar);
+  box-shadow: 0 6px 22px rgba(15, 23, 42, .12);
+}
+.vf-kartu-banner__foto { position: absolute !important; inset: 0; margin: 0 !important; }
+.vf-kartu-banner__foto img { width: 100% !important; height: 100% !important; aspect-ratio: auto !important; object-fit: cover; transition: transform .5s ease; }
+.vf-kartu-banner:hover .vf-kartu-banner__foto img { transform: scale(1.04); }
+.vf-kartu-banner__isi {
+  position: relative; z-index: 1; box-sizing: border-box; height: 100%; min-height: 260px; margin: 0 !important;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; padding: 1.4rem 1.2rem 1.1rem;
+  background: linear-gradient(90deg, rgba(255, 255, 255, .96) 0%, rgba(255, 255, 255, .82) 38%, rgba(255, 255, 255, 0) 70%);
+}
+.vf-kartu-banner--tanpa .vf-kartu-banner__isi { background: none; }
+.vf-kartu-banner__teks { max-width: 55%; }
+.vf-kartu-banner__teks > * { margin-block: 0 .4rem !important; }
+.vf-kartu-banner__teks h3 { font-size: 1.35rem; color: var(--wp--preset--color--primary); }
+.vf-kartu-banner__teks p { font-size: .9rem; color: var(--wp--preset--color--ink); }
+.vf-kartu-banner .wp-block-buttons { justify-content: flex-end; margin: 0 !important; }
+.vf-kartu-banner .wp-block-button__link {
+  padding: .45rem 1.6rem !important; border-radius: 999px !important; font-size: .88rem !important;
+  letter-spacing: .08em; background: rgba(10, 12, 18, .88) !important; color: #fff !important;
+}
+@media (max-width: 600px) {
+  .vf-kartu-banner__teks { max-width: 75%; }
+}
+
+/* kartu artikel ringkas */
+.vf-ref-artikel .vf-kepala-baris { align-items: baseline; margin-bottom: 1.4rem !important; }
+.vf-ref-artikel .vf-kepala-baris > * { margin: 0 !important; }
+.vf-ref-artikel .vf-kepala-baris h2 { color: var(--wp--preset--color--ink); }
+.vf-ref-artikel .vf-kepala-baris a { font-size: .9rem; font-weight: 600; text-decoration: none; }
+.vf-kartu-ringkas { gap: 1.6rem !important; }
+.vf-kartu-ringkas .wp-block-post-featured-image img { border-radius: var(--vf-kartu-radius, 12px); }
+.vf-kartu-ringkas .wp-block-post-title { font-size: .98rem; font-weight: 700; }
+.vf-kartu-ringkas .wp-block-post-excerpt { margin-top: .4rem; font-size: .88rem; color: var(--wp--preset--color--teks); }
+.vf-kartu-ringkas .wp-block-post-excerpt__more-text { margin-top: .7rem; }
+.vf-kartu-ringkas .wp-block-post-excerpt__more-link { color: var(--wp--preset--color--ink); font-weight: 600; text-decoration: none; }
+@media (min-width: 782px) {
+  .vf-kartu-ringkas.wp-block-post-template { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+}
+
+/* footer 5 kolom + pita hak cipta */
+.vf-footer__daftar { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; font-size: .92rem; }
+.vf-ref.vf-footer-5 .vf-footer__kolom { gap: 1.8rem; }
+.vf-ref.vf-footer-5 .vf-footer__kolom > .wp-block-column:first-child { flex-basis: 24% !important; }
+.vf-ref.vf-footer-5 .vf-footer__judul { text-transform: none; letter-spacing: 0; font-size: 1.1rem !important; }
+.vf-ref.vf-footer-pita .vf-footer__bawah {
+  justify-content: center; margin-top: 2.5rem !important;
+  margin-bottom: calc(-1 * var(--wp--preset--spacing--40)) !important;
+  padding: .85rem 0; border-top: 0;
+  background: rgba(0, 0, 0, .35); box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35); clip-path: inset(0 -100vmax);
+}
+
+/* ---------- halaman plugin lewat get_header() (VD Store) ---------- */
+.vf-halaman-plugin__isi {
+  box-sizing: border-box; width: 100%; max-width: calc(var(--wp--style--global--wide-size, 1400px) + 2 * var(--wp--style--root--padding-right, 1.25rem));
+  margin-inline: auto; padding: var(--wp--preset--spacing--50) var(--wp--style--root--padding-right, 1.25rem) var(--wp--preset--spacing--60);
+}
+.vf-halaman-plugin__isi .wps-container { max-width: none; }
+
+/* ---------- referensi: token rencana VERSI 4 (2026-09-17, centralimpex.com) ----------
+   Desain kiriman klien (folder desain/) sebagai acuan: kotak cari, judul seksi rata kiri,
+   logo & baris hak cipta footer, banner judul halaman dalam. Kelas body dari functions.php;
+   situs tanpa token ini tidak berubah. */
+.vf-ref.vf-tanpa-cari .vf-header .vf-cari { display: none !important; }
+.vf-topbar__kanan { margin-left: auto; letter-spacing: .08em; text-transform: uppercase; font-size: .75rem; opacity: .85; }
+@media (max-width: 781px) { .vf-topbar__kanan { display: none; } }
+
+/* judul seksi beranda rata kiri seperti referensi */
+.vf-ref-seksi.vf-rata-kiri .vf-kepala-seksi { max-width: 760px; margin-inline: 0 !important; text-align: left; }
+.vf-ref-seksi.vf-rata-kiri > .vf-kepala-seksi,
+.vf-ref-seksi.vf-rata-kiri.vf-pita > .vf-kepala-seksi { margin-left: max(0px, calc((100% - var(--wp--style--global--wide-size, 1200px)) / 2)) !important; }
+.vf-ref-seksi.vf-rata-kiri.vf-ref-ajakan { text-align: left; }
+.vf-ref-seksi.vf-rata-kiri.vf-ref-ajakan .wp-block-buttons { justify-content: flex-start; }
+
+/* footer: logo di kolom pertama, judul kolom biasa, baris hak cipta */
+.vf-ref.vf-footer-logo .vf-footer__logo { display: inline-block; margin-bottom: .9rem; line-height: 0; }
+.vf-ref.vf-footer-logo .vf-footer__logo-img { width: auto; max-width: 220px; max-height: 64px; height: auto; }
+/* Logo berwarna gelap tetap terbaca di footer gelap. */
+.vf-ref.vf-footer-logo.vf-footer-gelap .vf-footer__logo { padding: .45rem .7rem; border-radius: var(--vf-kartu-radius, 6px); background: var(--wp--preset--color--putih); }
+.vf-ref.vf-footer-judul-biasa .vf-footer__judul { text-transform: none; letter-spacing: 0; }
+.vf-ref.vf-hak-cipta-terbelah .vf-footer__bawah { justify-content: space-between !important; }
+.vf-ref.vf-hak-cipta-tengah .vf-footer__bawah { justify-content: center !important; text-align: center; }
+
+/* banner judul halaman dalam */
+.vf-ref:is(.vf-banner-gelap, .vf-banner-aksen, .vf-banner-foto) .vf-judul-halaman.has-background,
+.vf-ref:is(.vf-banner-gelap, .vf-banner-aksen, .vf-banner-foto) .vf-judul-halaman :is(h1, .wp-block-post-title, .vf-remah, .vf-remah a) {
+  color: var(--wp--preset--color--di-primary) !important;
+}
+.vf-ref.vf-banner-gelap .vf-judul-halaman.has-background { background: var(--wp--preset--color--primary-gelap) !important; }
+.vf-ref.vf-banner-aksen .vf-judul-halaman.has-background { background: var(--wp--preset--color--primary) !important; }
+.vf-ref.vf-banner-foto .vf-judul-halaman.has-background {
+  background: linear-gradient(rgba(10, 16, 30, .62), rgba(10, 16, 30, .62)), var(--vf-banner-foto, none) center / cover,
+    var(--wp--preset--color--primary-gelap) !important;
+}
+.vf-ref.vf-banner-terang .vf-judul-halaman.has-background { background: var(--wp--preset--color--putih) !important; border-bottom: 1px solid var(--wp--preset--color--garis); }
+.vf-ref.vf-banner-tengah .vf-judul-halaman { text-align: center; }
+.vf-ref.vf-banner-kiri .vf-judul-halaman { text-align: left; }
+.vf-ref.vf-banner-tinggi .vf-judul-halaman { padding-block: clamp(3rem, 8vw, 5.5rem) !important; }
+.vf-ref.vf-banner-sedang .vf-judul-halaman { padding-block: clamp(2.2rem, 5vw, 3.5rem) !important; }
+.vf-remah { margin-top: .6rem; font-size: .85rem; opacity: .85; }
+.vf-remah a { color: inherit; text-decoration: none; }
+.vf-remah a:hover { text-decoration: underline; }
+
+
+/* ---------- header referensi toko (vf-header-keranjang, yukpergimancing.com 2026-09-17) ----------
+   kreditmotor.rmg.asia: isi header & topbar dalam container ±1160px, logo besar, menu tebal ±17px
+   rata kanan dekat ikon keranjang, header datar lebih tinggi, lencana keranjang merah. */
+.vf-ref.vf-header-keranjang { --vf-header-lebar: 1160px; }
+.vf-ref.vf-header-keranjang .vf-header__bar,
+.vf-ref.vf-header-keranjang.vf-topbar-gelap .vf-topbar__isi { max-width: var(--vf-header-lebar) !important; }
+.vf-ref.vf-header-keranjang .vf-header { box-shadow: none; border-bottom: 1px solid var(--wp--preset--color--garis); }
+.vf-ref.vf-header-keranjang .vf-header.has-background { padding-top: .8rem !important; padding-bottom: .8rem !important; }
+/* Blok logo membawa width="170": tinggi dipaksa supaya logo sebesar referensi. */
+.vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { height: 58px !important; max-height: none; width: auto !important; max-width: 260px; object-fit: contain; }
+.vf-ref.vf-header-keranjang .vf-nav { margin-left: auto !important; }
+.vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__container { gap: 1.25rem; flex-wrap: nowrap; }
+.vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation-item__content { white-space: nowrap; }
+.vf-ref.vf-header-keranjang.vf-menu-kapital .vf-nav .wp-block-navigation-item__content {
+  font-size: 1rem; font-weight: 700; letter-spacing: .02em; font-family: var(--vf-font-judul, inherit);
+}
+.vf-ref.vf-header-keranjang.vf-menu-berwarna .vf-nav .current-menu-item > .wp-block-navigation-item__content,
+.vf-ref.vf-header-keranjang.vf-menu-berwarna .vf-nav .wp-block-navigation-item__content:hover {
+  color: var(--wp--preset--color--primary);
+  text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 7px;
+}
+.vf-ref.vf-header-keranjang .vf-keranjang { margin-left: 1.8rem; color: var(--wp--preset--color--ink); }
+.vf-ref.vf-header-keranjang .vf-keranjang .wps-cart-button { padding: .3rem; }
+.vf-ref.vf-header-keranjang .vf-keranjang [x-text] {
+  background: #dc3545 !important; box-sizing: border-box; min-width: 1.1rem; height: 1.1rem; padding: 0 .25rem !important;
+  border-radius: 999px; font-size: .68rem; line-height: 1.1rem; text-align: center; font-weight: 700;
+  top: -.35rem !important; right: -.45rem !important;
+}
+.vf-ref.vf-header-keranjang.vf-topbar-gelap .vf-topbar__cari input[type="search"] { width: 210px; }
+@media (max-width: 781px) {
+  .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { height: 44px !important; }
+  .vf-ref.vf-header-keranjang .vf-keranjang { margin-left: .6rem; }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__responsive-container-open { color: var(--wp--preset--color--primary); }
+}
+@media (min-width: 782px) and (max-width: 1200px) {
+  .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { height: 48px !important; }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__container { gap: .8rem; }
+  .vf-ref.vf-header-keranjang.vf-menu-kapital .vf-nav .wp-block-navigation-item__content { font-size: .84rem; letter-spacing: 0; }
+  .vf-ref.vf-header-keranjang .vf-keranjang { margin-left: 1rem; }
+}
+
+/* ---------- ubin kategori jajargenjang (user 2026-09-17, yukpergimancing.com) ----------
+   Referensi kreditmotor.rmg.asia: ubin kategori miring berjajar. Ubin di-skew, foto & label
+   di-skew balik supaya tetap tegak; jarak antar-ubin sejajar kemiringan. Hanya gaya toko
+   referensi (vf-header-keranjang). */
+.vf-ref.vf-header-keranjang .vf-ref-produk { --vf-miring: -14deg; }
+.vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__grid {
+  gap: .55rem !important; padding: .6rem 1.6rem 1.2rem !important;
+}
+.vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__item {
+  transform: skewX(var(--vf-miring)); border-radius: 6px !important;
+  box-shadow: 0 3px 8px rgba(15, 23, 42, .18);
+}
+.vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__image {
+  inset: 0 -22%; width: auto; transform: skewX(calc(-1 * var(--vf-miring)));
+}
+.vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__item::after {
+  background: linear-gradient(90deg, transparent 35%, color-mix(in srgb, var(--wp--preset--color--primary) 88%, transparent) 100%);
+}
+.vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__name {
+  transform: skewX(calc(-1 * var(--vf-miring))); top: .75rem; right: 1.3rem; font-style: italic; letter-spacing: .04em;
+}
+@media (max-width: 768px) {
+  .vf-ref.vf-header-keranjang .vf-ref-produk { --vf-miring: -10deg; }
+  .vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__grid { gap: .45rem !important; padding: .5rem .9rem 1rem !important; }
+  .vf-ref.vf-header-keranjang .vf-ref-produk .wps-taxonomy-carousel__name {
+    top: .45rem; right: .8rem; left: .8rem; font-size: .7rem; line-height: 1.2; text-align: right; letter-spacing: .02em;
+  }
+}
+
+/* ---------- carousel kategori slide per ubin + berulang (inc/vd-store/taxonomy-carousel.php) ----------
+   Viewport dipotong berbentuk jajargenjang sejajar ubin (skewX): sudut miring ubin paling kiri/kanan
+   tetap utuh, ubin sebelum/sesudahnya (mode berulang) tidak mengintip. Tinggi ubin = lebar x 9/16,
+   jadi geseran potongan dihitung dari lebar container (cqw). */
+.vf-ref.vf-header-keranjang .vf-ref-produk .vf-kategori-slide {
+  container-type: inline-size;
+  --k: var(--wps-taxonomy-columns, 4); --t: 0.2493; --px: .3rem; --py: .9rem;
+}
+.vf-kategori-slide__sel { box-sizing: border-box; width: calc(100% / var(--wps-taxonomy-columns, 4)); padding: var(--py, .9rem) var(--px, .3rem); }
+.vf-kategori-slide .main-carousel:not(.flickity-enabled) { display: flex; justify-content: center; }
+.vf-ref.vf-header-keranjang .vf-ref-produk .vf-kategori-slide__sel .wps-taxonomy-carousel__item { width: 100%; }
+.vf-ref.vf-header-keranjang .vf-ref-produk .vf-kategori-slide .flickity-viewport {
+  --o: calc(var(--t) * ((100cqw / var(--k) - 2 * var(--px)) * 0.5625 / 2 + var(--py)));
+  overflow: visible !important;
+  clip-path: polygon(var(--o) 0, calc(100% + var(--o)) 0, calc(100% - var(--o)) 100%, calc(0px - var(--o)) 100%);
+}
+@media (max-width: 768px) {
+  .vf-ref.vf-header-keranjang .vf-ref-produk .vf-kategori-slide { --k: 2; --t: 0.1763; --px: .25rem; --py: .7rem; }
+  .vf-kategori-slide__sel { width: 50%; }
+}
+
+/* ---------- halaman dalam toko referensi (yukpergimancing.com 2026-09-17) ---------- */
+/* Berita & arsip tulisan (templates/archive-toko.html): kartu sama dengan seksi artikel beranda. */
+.vf-arsip-toko > .wp-block-query { max-width: 1040px !important; margin-inline: auto !important; }
+.vf-arsip-toko .wp-block-query-pagination { margin-top: 2.5rem; gap: .4rem; }
+.vf-ref .vf-judul-halaman .vf-rubrik-bar { margin: 0; padding: 0; border: 0; background: none; }
+.vf-ref .vf-judul-halaman .vf-rubrik-bar h1 {
+  display: block; margin: 0; padding: 0; background: none; color: var(--wp--preset--color--ink);
+  font-size: clamp(1.6rem, 4vw, 2.4rem); text-transform: none; letter-spacing: 0;
+}
+.vf-ref .vf-judul-halaman .vf-rubrik-bar h1::after { display: none; }
+
+/* Hubungi Kami dua kolom (fse-apply kontak_kolom=2). */
+.vf-kontak-dua { gap: 2.5rem !important; align-items: flex-start !important; }
+.vf-kontak-dua h3 { margin: 1.6rem 0 .6rem; font-size: 1.25rem; }
+.vf-kontak-dua > .wp-block-column > h3:first-child { margin-top: 0; }
+.vf-kontak-dua .vf-kontak-intro > :first-child { margin-top: 0; }
+.vf-kontak-dua iframe { display: block; width: 100%; height: 440px; border-radius: var(--vf-kartu-radius, 12px); }
+.wp-block-post-content:has(> .vf-kontak-dua) { max-width: none; }
+
+/* Detail produk VD Store selebar layar (bukan kotak 1400px). */
+.vf-ref.vf-header-keranjang.single-store_product .vf-halaman-plugin__isi { max-width: none; padding-inline: clamp(1.25rem, 3vw, 3rem); }
+
+/* Pita judul halaman toko VD Store (header.php, jalur klasik). */
+.vf-judul-halaman--plugin { padding: var(--wp--preset--spacing--50) var(--wp--style--root--padding-right, 1.25rem); }
+.vf-judul-halaman--plugin > h1 { box-sizing: border-box; max-width: 1400px; margin: 0 auto; }
+.vf-halaman-toko > :first-child { margin-top: 0; }
+
+/* ---------- detail produk & halaman biasa toko referensi (user 2026-09-17) ---------- */
+/* Gambar galeri produk VD Store: width & height 100% dalam bingkai 4:5 (bawaan plugin 320px contain). */
+.vf-ref.vf-header-keranjang.single-store_product .wps-product-gallery .carousel-cell,
+.vf-ref.vf-header-keranjang.single-store_product .wps-product-gallery-open { aspect-ratio: 4 / 5; height: auto !important; }
+.vf-ref.vf-header-keranjang.single-store_product .wps-product-gallery-open img,
+.vf-ref.vf-header-keranjang.single-store_product .wps-product-gallery .wps-img-320 {
+  display: block; width: 100% !important; height: 100% !important; max-height: none; object-fit: cover;
+}
+/* Halaman biasa: isi selebar container situs, bukan kolom teks 760px. */
+.vf-ref.vf-header-keranjang.page:not(.home) main.wp-block-group { --wp--style--global--content-size: var(--wp--style--global--wide-size, 1400px); }
+
+/* ---------- header toko: link profil & menu Produk bertingkat (user 2026-09-17) ---------- */
+.vf-profil-toko { display: flex; align-items: center; margin-left: 1rem; }
+.vf-profil-toko .wps-link-profile img { display: block; border-color: var(--wp--preset--color--garis) !important; transition: box-shadow .2s ease; }
+.vf-profil-toko .wps-link-profile:hover img { box-shadow: 0 0 0 2px var(--wp--preset--color--primary); }
+@media (max-width: 781px) {
+  .vf-profil-toko { order: 3; margin-left: .5rem; }
+}
+@media (min-width: 782px) {
+  /* Sub-submenu (subkategori) membuka ke kanan, sejajar item induknya. */
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__submenu-container .wp-block-navigation__submenu-container {
+    top: -.45rem !important; left: 100% !important; margin-left: .35rem;
+  }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__submenu-container .wp-block-navigation-item__content {
+    font-size: .9rem; font-weight: 600; text-transform: none; letter-spacing: 0;
+  }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__submenu-container .wp-block-navigation-submenu__toggle { color: var(--wp--preset--color--ink); }
+}
+
+/* Menu HP toko: item rata kiri penuh, profil tidak mepet tepi. */
+@media (max-width: 781px) {
+  .vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation__container { gap: .9rem !important; }
+  .vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation__submenu-container .wp-block-navigation-item__content { font-size: .9rem; text-transform: none; }
+  .vf-ref.vf-header-keranjang .vf-profil-toko .wps-link-profile img { width: 26px !important; height: 26px !important; }
+}
+/* Overlay menu HP berlatar warna utama: semua tautan (termasuk aktif/hover) berwarna teks-di-primary. */
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation-item__content,
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation-item__content:hover,
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .current-menu-item > .wp-block-navigation-item__content {
+  color: var(--wp--preset--color--di-primary) !important; background: transparent !important;
+}
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation-submenu__toggle { color: var(--wp--preset--color--di-primary) !important; }
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation__submenu-container .wp-block-navigation-item { width: 100%; }
+.vf-ref.vf-header-keranjang .vf-nav .is-menu-open .wp-block-navigation__submenu-container { width: 100%; box-sizing: border-box; background: transparent !important; border: 0 !important; box-shadow: none !important; }
+
+/* Footer toko 5 kolom (inc/referensi.php velocity_fse_footer_toko). */
+@media (min-width: 782px) {
+  .vf-ref.vf-footer-5 .vf-footer__kolom--toko {
+    display: grid !important; grid-template-columns: 1.25fr .8fr .8fr 1.15fr 1.25fr; gap: 2rem !important;
+  }
+  .vf-ref.vf-footer-5 .vf-footer__kolom--toko > .wp-block-column { flex-basis: auto !important; min-width: 0; }
+}
+.vf-footer__kolom--toko .vf-sosmed.wp-block-social-links { margin-top: 1rem; }
+@media (max-width: 781px) {
+  .vf-ref.vf-footer-5 .vf-footer__kolom--toko { flex-wrap: wrap !important; }
+  .vf-ref.vf-footer-5 .vf-footer__kolom--toko > .wp-block-column { flex-basis: 100% !important; }
+}
+
+/* ---------- lebar tetap toko referensi (manifest lebar_wadah, yukpergimancing.com 2026-09-17) ----------
+   Semua wadah gaya toko mengikuti lebar global (--wp--style--global--wide-size, = wadah_px bila
+   ditetapkan): header, topbar, seksi beranda, pita judul, halaman biasa, halaman toko & detail produk. */
+.vf-ref.vf-header-keranjang.vf-ref-lebar { --vf-header-lebar: var(--wp--style--global--wide-size); }
+.vf-ref.vf-header-keranjang.vf-ref-lebar :is(.vf-grid-banner, .vf-arsip-toko > .wp-block-query) {
+  max-width: var(--wp--style--global--wide-size) !important;
+}
+/* Carousel kategori menyisakan ruang panah kiri-kanan di semua lebar. */
+.vf-ref.vf-header-keranjang.vf-ref-lebar .vf-ref-produk .wps-taxonomy-carousel {
+  max-width: min(var(--wp--style--global--wide-size), calc(100% - 120px)) !important;
+}
+@media (max-width: 768px) {
+  .vf-ref.vf-header-keranjang.vf-ref-lebar .vf-ref-produk .wps-taxonomy-carousel { max-width: calc(100% - 84px) !important; }
+}
+.vf-ref.vf-header-keranjang.vf-ref-lebar .vf-ref-artikel:has(.vf-kartu-ringkas) > * { max-width: var(--wp--style--global--wide-size); }
+.vf-ref.vf-header-keranjang.vf-ref-lebar .vf-judul-halaman > *,
+.vf-ref.vf-header-keranjang.vf-ref-lebar .vf-judul-halaman--plugin > h1 { max-width: var(--wp--style--global--wide-size) !important; margin-inline: auto !important; }
+.vf-ref.vf-header-keranjang.vf-ref-lebar .vf-halaman-plugin__isi,
+.vf-ref.vf-header-keranjang.vf-ref-lebar.single-store_product .vf-halaman-plugin__isi {
+  max-width: calc(var(--wp--style--global--wide-size) + 2 * var(--wp--style--root--padding-right, 1.25rem));
+  padding-inline: var(--wp--style--root--padding-right, 1.25rem);
+}
+
+/* ---------- header toko responsif (user 2026-09-17) ----------
+   Menu lengkap + keranjang + profil butuh ±780px: di bawah 782px selalu pakai tombol menu
+   (bawaan core baru di bawah 600px, sehingga di 600-781px menu, keranjang & profil terpotong). */
+@media (min-width: 600px) and (max-width: 781px) {
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__responsive-container-open:not(.always-shown) { display: flex !important; }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__responsive-container:not(.hidden-by-default):not(.is-menu-open) { display: none !important; }
+  .vf-ref.vf-header-keranjang .vf-nav .wp-block-navigation__responsive-container.is-menu-open { display: flex !important; }
+}
+@media (max-width: 781px) {
+  .vf-ref.vf-header-keranjang .vf-header__bar { gap: .6rem !important; }
+  .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo { flex: 0 1 auto; min-width: 0; }
+  .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { max-width: 100%; object-fit: contain; object-position: left center; }
+  .vf-ref.vf-header-keranjang .vf-nav { flex: 0 0 auto; }
+  .vf-ref.vf-header-keranjang .vf-keranjang { flex: 0 0 auto; margin-left: .2rem; }
+  .vf-ref.vf-header-keranjang .vf-profil-toko { flex: 0 0 auto; margin-left: .75rem; }
+}
+@media (max-width: 359px) {
+  .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { height: 36px !important; }
+  .vf-ref.vf-header-keranjang .vf-topbar__cari input[type="search"] { width: 58vw; }
+}

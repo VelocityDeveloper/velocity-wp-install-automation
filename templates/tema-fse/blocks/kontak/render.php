@@ -25,6 +25,15 @@ if ($wa !== '') {
 if ($email !== '') {
     $baris[] = array('Email', sprintf('<a href="mailto:%1$s">%1$s</a>', esc_html($email)));
 }
+if (!$baris && function_exists('velocity_fse_toko') && velocity_fse_toko()) {
+    // Toko tanpa kontak publik dan tanpa formulir di Hubungi Kami (yukpergimancing.com):
+    // arahkan ke katalog, bukan ke formulir yang tidak ada.
+    $kontak_hal = get_page_by_path('hubungi-kami');
+    $arsip = get_post_type_archive_link('store_product');
+    if ($arsip && (!$kontak_hal || !has_block('velocity/form-kirim', $kontak_hal))) {
+        $baris[] = array('Belanja', sprintf('<a href="%s">Pesan langsung lewat katalog produk</a>', esc_url($arsip)));
+    }
+}
 if (!$baris) {
     // Tanpa kontak publik: arahkan ke formulir, jangan menampilkan kotak kosong.
     $halaman = get_page_by_path('hubungi-kami');

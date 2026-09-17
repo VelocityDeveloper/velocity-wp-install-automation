@@ -1,0 +1,747 @@
+#!/usr/bin/env python3
+"""Tampilan situs child theme klasik (paket non-custom) dari isi contoh & data klien.
+
+Pemakaian: tema-klasik <manifest> [--coba]      (butuh WP_INSTALL_SSH_KEY_FILE)
+           tema-klasik --foto-artikel <manifest>  foto utama artikel yang masih kosong sesudah
+                                                   paket-g-foto: foto klien bergilir, atau sampul
+                                                   bertuliskan kategori bila klien tak punya foto
+
+Permintaan user 2026-09-17: jalur installer paket biasa (Paket E, Paket F, dll.) harus
+menghasilkan tampilan sebaik situs yang dirapikan manual (sobirin-advokat.com). Sebelumnya
+beranda child theme tidak memakai template berandanya, sidebar berisi widget bawaan
+WordPress, footer kosong, dan Hubungi Kami tanpa email/ikon sosial.
+
+Yang dikerjakan (satu koneksi SSH, dijalankan sesudah site-finish):
+- beranda: template "Home Template" child theme + pengaturan temanya (adaptor per tema:
+  velocity-pakete, velocity-perusahaan2) dari <domain>-tema.json (scripts/paket-g-konten)
+- halaman Layanan (dibuat bila belum ada) + menu
+- blok kontak di Hubungi Kami: alamat, telepon, WhatsApp, email publik, ikon media sosial
+- widget: sidebar (konsultasi, layanan, artikel terbaru) dan footer (tentang + email +
+  ikon sosial, kontak, statistik pengunjung) menggantikan widget bawaan WordPress
+- CSS rapi (kartu, ikon sosial, galeri seragam, statistik footer) di antara penanda
+  /* velocity-tampilan-klasik */ pada Custom CSS
+- statistik velocity-addons dinyalakan sekali (opsi statistik_velocity)
+
+Tidak menimpa kerja orang: pengaturan tema, widget, halaman Layanan, dan blok kontak hanya
+ditulis kalau masih kosong/bawaan atau masih persis tulisan langkah ini (opsi
+velocity_tampilan_klasik menyimpan sidiknya). --coba menyiapkan data & gambar tanpa SSH.
+"""
+import hashlib
+import html
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageOps
+
+HERE = Path(__file__).resolve().parent
+SEMENTARA = []  # folder kerja yang dihapus di akhir run (bukan --coba)
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+# Gambar yang sudah disiapkan per domain: run ulang (mode finish) memakai berkas yang sama,
+# jadi foto bank tidak dipilih ulang dan media situs tidak menumpuk.
+TEMBOLOK = Path('/var/lib/velocity/tampilan')
+ON_PROGRESS = Path('/home/On Progress')
+PAKET_CUSTOM = ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
+SOSMED = (('facebook', 'https://www.facebook.com/', 'Facebook'), ('instagram', 'https://www.instagram.com/', 'Instagram'),
+          ('twitter-x', 'https://x.com/', 'X'), ('youtube', 'https://www.youtube.com/', 'YouTube'),
+          ('tiktok', 'https://www.tiktok.com/', 'TikTok'))
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def read_manifest(path):
+    cfg = {}
+    for baris in Path(path).read_text(errors='replace').splitlines():
+        baris = baris.strip()
+        if baris and not baris.startswith('#') and '=' in baris:
+            k, v = baris.split('=', 1)
+            cfg[re.sub(r'\s', '', k)] = v.strip()
+    return cfg
+
+
+e = lambda s: html.escape(str(s or ''), quote=True)
+
+
+def pendek(teks, batas):
+    """Potong di batas kalimat/kata tanpa memotong kata."""
+    teks = re.sub(r'\s+', ' ', str(teks or '')).strip()
+    if len(teks) <= batas:
+        return teks
+    kalimat = re.match(r'^(.{40,%d}?[.!?])\s' % batas, teks + ' ')
+    if kalimat:
+        return kalimat.group(1)
+    return teks[:batas].rsplit(' ', 1)[0].rstrip(',;:') + '…'
+
+
+# ---------- gambar ----------
+
+def potong(sumber, lebar, tinggi, tujuan):
+    im = ImageOps.exif_transpose(Image.open(sumber)).convert('RGB')
+    ImageOps.fit(im, (lebar, tinggi), Image.LANCZOS, centering=(0.5, 0.45)).save(tujuan, quality=85, optimize=True)
+    return tujuan
+
+
+def banner_polos(nama, warna, tujuan, lebar=1800, tinggi=800):
+    """Cadangan terakhir bila tidak ada foto klien maupun foto contoh: gradasi warna utama."""
+    try:
+        r, g, b = (int(warna[i:i + 2], 16) for i in (1, 3, 5))
+    except (TypeError, ValueError):
+        r, g, b = (30, 64, 124)
+    gelap = (max(r // 3, 0), max(g // 3, 0), max(b // 3, 0))
+    im = Image.new('RGB', (lebar, tinggi))
+    d = ImageDraw.Draw(im)
+    for x in range(lebar):
+        t = x / (lebar - 1)
+        d.line([(x, 0), (x, tinggi)], fill=tuple(int(gelap[i] + ((r, g, b)[i] - gelap[i]) * t) for i in range(3)))
+    lapis = Image.new('RGBA', (lebar, tinggi), (0, 0, 0, 0))
+    dl = ImageDraw.Draw(lapis)
+    for k in range(-tinggi, lebar, 46):
+        dl.line([(k, tinggi), (k + tinggi, 0)], fill=(255, 255, 255, 12), width=2)
+    Image.alpha_composite(im.convert('RGBA'), lapis).convert('RGB').save(tujuan, quality=86)
+    return tujuan
+
+
+def sampul_kategori(judul, nama, warna, tujuan):
+    """Sampul artikel bertuliskan kategori & nama situs di atas gradasi warna utama."""
+    from PIL import ImageFont
+    banner_polos(nama, warna, tujuan, 1200, 800)
+    im = Image.open(tujuan).convert('RGB')
+    d = ImageDraw.Draw(im)
+    def huruf(nama_berkas, besar):
+        for f in (f'/usr/share/fonts/urw-base35/{nama_berkas}', '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf'):
+            try:
+                return ImageFont.truetype(f, besar)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+    fb, fs = huruf('C059-Bold.otf', 70), huruf('C059-Roman.otf', 30)
+    kata, baris, kini = judul.split(), [], ''
+    for k in kata:
+        uji = (kini + ' ' + k).strip()
+        if d.textlength(uji, font=fb) > 980 and kini:
+            baris.append(kini)
+            kini = k
+        else:
+            kini = uji
+    baris.append(kini)
+    y = 400 - (len(baris) * 86 + 70) // 2
+    for b in baris:
+        d.text(((1200 - d.textlength(b, font=fb)) / 2, y), b, font=fb, fill=(255, 255, 255))
+        y += 86
+    d.line([(540, y + 14), (660, y + 14)], fill=(255, 255, 255), width=3)
+    d.text(((1200 - d.textlength(nama, font=fs)) / 2, y + 34), nama, font=fs, fill=(235, 240, 250))
+    im.save(tujuan, quality=86)
+    return tujuan
+
+
+def foto_klien(domain):
+    finish = muat('site_finish', HERE / 'site-finish')
+    _, foto = finish.client_assets(ON_PROGRESS / domain)
+    hasil = []
+    for p in foto:
+        try:
+            with Image.open(p) as im:
+                w, h = ImageOps.exif_transpose(im).size
+        except Exception:
+            continue
+        if min(w, h) >= 500:
+            hasil.append((p, w, h))
+    # Lanskap besar dulu untuk banner.
+    return sorted(hasil, key=lambda x: (x[1] / x[2] < 1.2, -(x[1] * x[2])))
+
+
+def foto_contoh(manifest, isi, slot):
+    """Foto bank bebas lisensi (CC0/PDM) lewat pemilih paket-g-foto; {kunci: berkas lokal}."""
+    if not slot:
+        return {}
+    try:
+        pgf = muat('paket_g_foto', HERE / 'paket-g-foto')
+        ai = pgf.muat_ai(manifest)
+        pilihan = pgf.pilih_foto(slot, isi, pgf.Openverse(), ai)
+    except Exception as e:
+        print(f'tampilan: foto_contoh_gagal:{type(e).__name__}')
+        return {}
+    hasil = {}
+    folder = Path(tempfile.mkdtemp(prefix='tema-klasik-foto-'))
+    SEMENTARA.append(folder)
+    for kunci, (r, _) in pilihan.items():
+        berkas = folder / f'{kunci}.img'
+        try:
+            pgf.unduh(r['url'], berkas)
+            hasil[kunci] = berkas
+            print(f"tampilan: foto_contoh:{kunci}: {pgf.judul_foto(r)[:60]}")
+        except Exception as e:
+            print(f'tampilan: foto_contoh_gagal_unduh:{kunci}:{type(e).__name__}')
+    return hasil
+
+
+# ---------- isi ----------
+
+def ikon_sosial():
+    return ('<ul class="vk-sosmed">' + ''.join(
+        f'<li><a href="{u}" target="_blank" rel="noopener" aria-label="{n}"><i class="bi bi-{i}" aria-hidden="true"></i></a></li>'
+        for i, u, n in SOSMED) + '</ul>')
+
+
+def tautan_email(email):
+    # <wbr> sebelum @: kolom sempit (sidebar) memotong di situ, bukan di tengah kata.
+    user, _, dom = email.partition('@')
+    return f'<a href="mailto:{e(email)}">{e(user)}<wbr>@{e(dom)}</a>'
+
+
+def daftar_kontak(k, alamat=True):
+    baris = []
+    if alamat and k['alamat']:
+        baris.append(f'<li><i class="bi bi-geo-alt" aria-hidden="true"></i> <span>{e(k["alamat"])}</span></li>')
+    if k['telp']:
+        digit = re.sub(r'\D', '', k['telp'])
+        tel = '+62' + digit[1:] if digit.startswith('0') else '+' + digit
+        baris.append(f'<li><i class="bi bi-telephone" aria-hidden="true"></i> <a href="tel:{tel}">{e(k["telp"])}</a></li>')
+    if k['wa']:
+        baris.append(f'<li><i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{k["wa"]}" target="_blank" rel="noopener">WhatsApp {e(k["wa_tampil"])}</a></li>')
+    if k['email']:
+        baris.append(f'<li><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(k["email"])}</li>')
+    return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
+
+
+def susun(domain, cfg, isi, kontak):
+    nama = cfg.get('site_title') or domain
+    layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
+    js = isi.get('judul_seksi') or {}
+    halaman_layanan = ''
+    if layanan:
+        halaman_layanan = (f'<p>{e(js.get("layanan_sub") or "Layanan yang kami sediakan untuk kebutuhan Anda.")}</p>\n'
+            + '\n'.join(f'''<section class="vk-layanan" id="{e(l["slug"])}">
+<h2>{e(l["judul"])}</h2>
+<p>{e(l.get("teks"))}</p>''' + ('<ul>' + ''.join(f'<li>{e(r)}</li>' for r in l.get('rincian') or []) + '</ul>' if l.get('rincian') else '')
+                        + '\n</section>' for l in layanan)
+            + f'\n<p class="vk-ajakan">Butuh informasi lebih lanjut? <a href="/hubungi-kami/">Hubungi {e(nama)}</a>.</p>')
+    blok_kontak = (f'<div class="vk-kartu vk-kontak-utama">\n<h2>Informasi Kontak</h2>\n{daftar_kontak(kontak)}\n{ikon_sosial()}\n</div>')
+    tentang = pendek(isi.get('profil') or isi.get('hero_teks'), 170)
+    widget = {
+        'konsultasi': ('Hubungi Kami', daftar_kontak(kontak, alamat=False)
+                       + (f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{kontak["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>' if kontak['wa'] else '')),
+        'layanan': (js.get('layanan') or 'Layanan Kami',
+                    '<ul>' + ''.join(f'<li><a href="/layanan/#{e(l["slug"])}">{e(l["judul"])}</a></li>' for l in layanan) + '</ul>') if layanan else None,
+        'footer_tentang': (nama, f'<p>{e(tentang)}</p>'
+                           + (f'<p class="vk-email"><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(kontak["email"])}</p>'
+                              if kontak['email'] else '')
+                           + ikon_sosial()),
+        'footer_kontak': ('Kontak', daftar_kontak({**kontak, 'email': ''})),
+        'footer_statistik': ('Statistik Pengunjung', '[velocity-statistics style="list"]'),
+    }
+    widget = {k: v for k, v in widget.items() if v}
+    mods = {
+        'velocity-pakete': {
+            'banner_image': '{{url:hero}}',
+            'banner_title': pendek(isi.get('hero_judul') or nama, 60),
+            'banner_desc': pendek(isi.get('hero_teks'), 110),
+            'judul_layanan': js.get('layanan') or 'Layanan Kami',
+            'services_list': [{'service_title': l['judul'], 'service_desc': pendek(l.get('teks'), 110),
+                               'service_text_link': 'Selengkapnya', 'service_link': f'/layanan/#{l["slug"]}'} for l in layanan],
+        },
+        'velocity-perusahaan2': {
+            'home_banner': '{{id:hero}}',
+            'subtitle_banner': 'Selamat Datang di',
+            'title_banner': e(nama),
+            'content_banner': e(pendek(isi.get('hero_teks'), 130)),  # teks rata kanan-kiri renggang di HP bila panjang
+            'button1_banner': 'Hubungi Kami', 'link1_banner': '/hubungi-kami/',
+            'button2_banner': 'Layanan' if layanan else '', 'link2_banner': '/layanan/' if layanan else '',
+            'sambutan': (f'<h2>{e(js.get("tentang") or "Tentang " + nama)}</h2><p>{e(isi.get("profil") or isi.get("hero_teks"))}</p>'
+                         + ('<ul class="vk-poin">' + ''.join(f'<li><strong>{e(k["judul"])}</strong> &mdash; {e(k.get("teks"))}</li>'
+                                                             for k in (isi.get('keunggulan') or [])[:4]) + '</ul>' if isi.get('keunggulan') else '')),
+            'sambutan_image': '{{id:tentang}}',
+            'layanan_repeater': [{'layanan_image': '{{id:layanan-%s}}' % l['slug'], 'layanan_title': l['judul'],
+                                  'layanan_content': e(pendek(l.get('teks'), 150)), 'layanan_linktext': 'Selengkapnya',
+                                  'layanan_link': f'/layanan/#{l["slug"]}'} for l in layanan],
+            'title_homelogo': '',
+            'logo_repeater': [],
+        },
+    }
+    # Nilai yang disimpan tema sendiri saat diaktifkan: dianggap belum diisi orang.
+    bawaan = {
+        'velocity-pakete': {'banner_image': '', 'banner_title': '', 'banner_desc': '', 'judul_layanan': 'Layanan Kami',
+                            'services_list': []},
+        'velocity-perusahaan2': {'home_banner': 0, 'subtitle_banner': 'Selamat Datang di',
+                                 'title_banner': 'Perusahaan 2<br>Velocity Developer', 'content_banner': '',
+                                 'button1_banner': 'Hubungi Kami', 'link1_banner': '#', 'button2_banner': 'Layanan',
+                                 'link2_banner': '#', 'sambutan': '', 'sambutan_image': 0, 'layanan_repeater': [],
+                                 'title_homelogo': 'Klien Kami', 'logo_repeater': []},
+    }
+    return {
+        'domain': domain, 'nama': nama, 'bawaan': bawaan,
+        'halaman_layanan': halaman_layanan,
+        'blok_kontak': blok_kontak,
+        'widget': widget,
+        'mods': mods,
+        'css': CSS,
+    }
+
+
+CSS = '''/* velocity-tampilan-klasik */
+.vk-kartu{border:1px solid var(--bs-border-color-translucent);border-top:3px solid var(--bs-primary);border-radius:var(--bs-border-radius);padding:1rem;background:#fff;margin:1rem 0}
+.vk-kartu h2{font-size:1.1rem;margin:0 0 .6rem}
+.entry-content ul.vk-kontak,.widget ul.vk-kontak{list-style:none;padding-left:0!important;margin:0 0 .5rem}
+.entry-content ul.vk-kontak>li,.widget ul.vk-kontak>li{display:flex;align-items:baseline;gap:.45rem;padding-left:0;margin-bottom:.35rem}
+.entry-content ul.vk-kontak>li::before,.widget ul.vk-kontak>li::before{content:none}
+.vk-kontak .bi,.vk-email .bi{color:var(--bs-primary);flex:none}
+.site-footer .vk-kontak .bi,.site-footer .vk-email .bi,.footer-widget .vk-kontak .bi,.footer-widget .vk-email .bi{color:inherit;opacity:.85}
+.vk-kontak a{min-width:0}
+ul.vk-sosmed{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0!important;margin:.75rem 0 0}
+ul.vk-sosmed>li{padding-left:0!important;margin:0}
+ul.vk-sosmed>li::before{content:none!important}
+.vk-sosmed a{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;border-radius:50%;background:var(--bs-primary);color:#fff!important;text-decoration:none;font-size:15px}
+.vk-sosmed a:hover{opacity:.85}
+.vk-tombol{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff!important}
+.vk-layanan{scroll-margin-top:1rem;padding:.75rem 0 1rem;border-bottom:1px solid var(--bs-border-color-translucent)}
+.vk-layanan:last-of-type{border-bottom:0}
+.vk-ajakan{margin-top:1rem;padding:.75rem 1rem;background:var(--bs-light,#f5f7fb);border-radius:var(--bs-border-radius)}
+.vk-poin{padding-left:1.1rem}
+.gallery{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:1rem 0!important}
+.gallery .gallery-item{float:none!important;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}
+.gallery .gallery-item img{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border:0!important;border-radius:var(--bs-border-radius)}
+.gallery .gallery-caption{font-size:12px;margin-top:.35rem}
+.gallery br{display:none}
+.velocity-list-stats>div{display:flex;justify-content:space-between;gap:1rem;padding:.4rem 0;border-bottom:1px solid rgba(127,127,127,.28)!important}
+.velocity-list-stats>div:last-child{border-bottom:0!important}
+.velocity-list-stats .fw-bold{font-variant-numeric:tabular-nums}
+.velocity-header-logo img{max-height:110px;width:auto;height:auto}
+.home-wrapper .position-relative.overflow-hidden::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.25) 60%,rgba(0,0,0,0));z-index:1}
+.home-wrapper .position-relative.overflow-hidden>.position-absolute{z-index:2}
+.velocity-home-card h4{color:var(--bs-primary)}
+.velocity-card-button .btn{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff}
+.velocity-card-button .btn:hover,.velocity-card-button .btn:focus{filter:brightness(1.12);color:#fff}
+@media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:575.98px){.home-wrapper .position-relative.overflow-hidden>.position-absolute .col-md-7{max-width:78%}.velocity-home-title{font-size:17px;line-height:23px;margin-bottom:.25rem!important}.velocity-home-desc{display:none}}
+/* /velocity-tampilan-klasik */'''
+
+
+REMOTE_PHP = r'''<?php
+// Dijalankan tema-klasik lewat wp eval-file <file> <folder>.
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+if (!$d) { echo "tampilan: data_tidak_terbaca\n"; return; }
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+require_once ABSPATH . 'wp-admin/includes/nav-menu.php';
+$admins = get_users(['role' => 'administrator', 'number' => 1, 'orderby' => 'ID']);
+wp_set_current_user($admins ? $admins[0]->ID : 1);
+kses_remove_filters();
+$st = get_option('velocity_tampilan_klasik', []); if (!is_array($st)) { $st = []; }
+$tema = get_stylesheet();
+echo "tampilan: tema=$tema\n";
+$milik_installer = function ($id) {
+    $m = get_post_meta($id, '_velocity_content_md5', true);
+    return $m && $m === md5(get_post_field('post_content', $id) . "\n");
+};
+$tandai = function ($id) { update_post_meta($id, '_velocity_content_md5', md5(get_post_field('post_content', $id) . "\n")); };
+
+// 1. Media (dipakai ulang lewat sidik berkas)
+$media = [];
+foreach ($d['aset'] as $kunci => $a) {
+    $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_tampilan_aset', 'meta_value' => $a['sidik']]);
+    if ($ada) { $media[$kunci] = (int) $ada[0]; continue; }
+    $tmp = wp_tempnam($a['file']); copy("$dir/{$a['file']}", $tmp);
+    $id = media_handle_sideload(['name' => $a['file'], 'tmp_name' => $tmp], 0, $a['judul']);
+    if (is_wp_error($id)) { echo "tampilan: media_gagal:$kunci\n"; continue; }
+    update_post_meta($id, '_velocity_tampilan_aset', $a['sidik']);
+    update_post_meta($id, '_wp_attachment_image_alt', $a['judul']);
+    $media[$kunci] = (int) $id;
+    $baru_media = ($baru_media ?? 0) + 1;
+}
+echo 'tampilan: media=' . count($media) . ' baru=' . ($baru_media ?? 0) . "\n";
+$ganti = function ($v) use (&$ganti, $media) {
+    if (is_array($v)) { return array_map($ganti, $v); }
+    if (!is_string($v)) { return $v; }
+    if (preg_match('/^\{\{id:([a-z0-9-]+)\}\}$/', $v, $m)) { return $media[$m[1]] ?? 0; }
+    if (preg_match('/^\{\{url:([a-z0-9-]+)\}\}$/', $v, $m)) { return isset($media[$m[1]]) ? wp_get_attachment_url($media[$m[1]]) : ''; }
+    if (strpos($v, '/') === 0 && strpos($v, '//') !== 0) { return home_url($v); }
+    return $v;
+};
+
+// 2. Halaman Layanan + menu
+$lokasi = get_nav_menu_locations(); $menu_id = (int) ($lokasi['primary'] ?? 0);
+if ($d['halaman_layanan'] !== '') {
+    $hal = get_page_by_path('layanan', OBJECT, 'page');
+    if (!$hal) {
+        $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Layanan', 'post_name' => 'layanan',
+                              'post_content' => $d['halaman_layanan']], true);
+        if (!is_wp_error($id)) { $tandai($id); echo "tampilan: layanan_dibuat:$id\n"; $hal = get_post($id); }
+    } elseif ($milik_installer($hal->ID) && $hal->post_content !== $d['halaman_layanan']) {
+        wp_update_post(['ID' => $hal->ID, 'post_content' => $d['halaman_layanan']]); $tandai($hal->ID); echo "tampilan: layanan_diperbarui\n";
+    } elseif (!$milik_installer($hal->ID)) { echo "tampilan: layanan_dibiarkan:disunting\n"; }
+    if ($hal && $menu_id) {
+        $items = wp_get_nav_menu_items($menu_id) ?: [];
+        $ada = false; $posisi = count($items) + 1;
+        foreach ($items as $it) {
+            if ((int) $it->object_id === $hal->ID) { $ada = true; }
+            if ($it->object === 'page' && get_post_field('post_name', $it->object_id) === 'tentang-kami') { $posisi = $it->menu_order + 1; }
+        }
+        if (!$ada) {
+            foreach ($items as $it) { if ($it->menu_order >= $posisi) { wp_update_post(['ID' => $it->ID, 'menu_order' => $it->menu_order + 1]); } }
+            wp_update_nav_menu_item($menu_id, 0, ['menu-item-object-id' => $hal->ID, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type',
+                'menu-item-title' => 'Layanan', 'menu-item-status' => 'publish', 'menu-item-position' => $posisi]);
+            echo "tampilan: menu_layanan\n";
+        }
+    }
+}
+
+// 3. Beranda: template + pengaturan tema
+$depan = (int) get_option('page_on_front');
+if (isset($d['mods'][$tema]) && $depan) {
+    $tpl = get_post_meta($depan, '_wp_page_template', true);
+    $file = '';
+    foreach (glob(get_stylesheet_directory() . '/*.php') as $f) {
+        if (preg_match('/Template Name:\s*Home Template/i', (string) file_get_contents($f, false, null, 0, 600))) { $file = basename($f); break; }
+    }
+    if ($file && in_array($tpl, ['', 'default', $file], true)) {
+        update_post_meta($depan, '_wp_page_template', $file); echo "tampilan: template_beranda:$file\n";
+    }
+    $mods = $ganti($d['mods'][$tema]);
+    $kini = []; foreach (array_keys($mods) as $k) { $kini[$k] = get_theme_mod($k, null); }
+    $bawaan = $d['bawaan'][$tema] ?? [];
+    $sama = fn($x, $y) => (is_scalar($x) || $x === null) && (is_scalar($y) || $y === null) ? (string) $x === (string) $y : wp_json_encode($x) === wp_json_encode($y);
+    $kosong = !array_filter($kini, fn($v, $k) => $v !== null && $v !== '' && $v !== [] && !(array_key_exists($k, $bawaan) && $sama($v, $bawaan[$k])),
+                            ARRAY_FILTER_USE_BOTH);
+    $sidik_kini = md5(wp_json_encode($kini));
+    if ($kosong || ($st['mods'][$tema] ?? '') === $sidik_kini) {
+        foreach ($mods as $k => $v) { set_theme_mod($k, $v); }
+        $baca = []; foreach (array_keys($mods) as $k) { $baca[$k] = get_theme_mod($k, null); }
+        $st['mods'][$tema] = md5(wp_json_encode($baca));
+        echo 'tampilan: beranda_diisi:' . implode(',', array_keys($mods)) . "\n";
+    } else { echo "tampilan: beranda_dibiarkan:pengaturan_tema_disunting\n"; }
+} else {
+    echo "tampilan: beranda_tema_belum_didukung:$tema\n";
+}
+
+// 4. Blok kontak di Hubungi Kami
+$kontak = get_page_by_path('hubungi-kami', OBJECT, 'page');
+if ($kontak) {
+    $isi = $kontak->post_content;
+    $blok = "<!-- velocity-kontak -->\n" . $d['blok_kontak'] . "\n<!-- /velocity-kontak -->";
+    if (!$milik_installer($kontak->ID)) { echo "tampilan: kontak_dibiarkan:disunting\n"; }
+    else {
+        if (strpos($isi, '<!-- velocity-kontak -->') !== false) {
+            $baru = preg_replace('#<!-- velocity-kontak -->.*?<!-- /velocity-kontak -->#s', str_replace('$', '\\$', $blok), $isi);
+        } elseif (strpos($isi, '<!-- velocity-map -->') !== false) {
+            $baru = str_replace('<!-- velocity-map -->', $blok . "\n<!-- velocity-map -->", $isi);
+        } else { $baru = rtrim($isi) . "\n" . $blok; }
+        if ($baru !== $isi) { wp_update_post(['ID' => $kontak->ID, 'post_content' => $baru]); $tandai($kontak->ID); echo "tampilan: kontak_ditulis\n"; }
+    }
+}
+
+// 5. Widget
+global $wp_registered_sidebars;
+$sb = wp_get_sidebars_widgets();
+$blok_w = get_option('widget_block', []); if (!is_array($blok_w)) { $blok_w = []; }
+$ch = get_option('widget_custom_html', []); if (!is_array($ch)) { $ch = []; }
+$tx = get_option('widget_text', []); if (!is_array($tx)) { $tx = []; }
+$rp = get_option('widget_recent-posts', []); if (!is_array($rp)) { $rp = []; }
+$bawaan = function ($w) use ($blok_w) {
+    if (!preg_match('/^block-(\d+)$/', $w, $m)) { return false; }
+    $c = (string) ($blok_w[(int) $m[1]]['content'] ?? '');
+    $sisa = preg_replace('#<!-- /?wp:(search|latest-posts|latest-comments|archives|categories|group|heading)\b.*?-->#s', '', $c);
+    return trim(wp_strip_all_tags($sisa)) === '' || preg_match('/^(Recent Posts|Recent Comments|Archives|Categories)$/m', trim(wp_strip_all_tags($sisa)));
+};
+$milik = (array) ($st['widget'] ?? []);
+$boleh = function ($daftar) use ($bawaan, $milik) {
+    $daftar = array_values((array) $daftar);
+    if (!$daftar || $daftar === array_values((array) ($milik['__daftar'][md5(wp_json_encode($daftar))] ?? []))) { return true; }
+    foreach ($daftar as $w) { if (!$bawaan($w) && !in_array($w, (array) ($milik['__semua'] ?? []), true)) { return false; } }
+    return true;
+};
+$nomor = 300;
+$buat_html = function ($judul, $isi) use (&$ch, &$nomor) {
+    while (isset($ch[$nomor])) { $nomor++; }
+    $ch[$nomor] = ['title' => $judul, 'content' => $isi]; return 'custom_html-' . $nomor++;
+};
+$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, $milik) {
+    foreach ((array) $daftar as $w) {
+        if ($bawaan($w)) { unset($blok_w[(int) substr($w, 6)]); }
+        elseif (in_array($w, (array) ($milik['__semua'] ?? []), true)) {
+            [$jenis, $n] = [substr($w, 0, strrpos($w, '-')), (int) substr($w, strrpos($w, '-') + 1)];
+            if ($jenis === 'custom_html') { unset($ch[$n]); } elseif ($jenis === 'text') { unset($tx[$n]); } elseif ($jenis === 'recent-posts') { unset($rp[$n]); }
+        }
+    }
+};
+$W = $d['widget']; $semua = []; $ubah = [];
+$utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isset($wp_registered_sidebars['sidebar-1']) ? 'sidebar-1' : '');
+if ($utama && $boleh($sb[$utama] ?? [])) {
+    $hapus_bawaan($sb[$utama] ?? []);
+    $baru = [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
+    if (!empty($W['layanan'])) { $baru[] = $buat_html($W['layanan'][0], $W['layanan'][1]); }
+    $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
+    $baru[] = "recent-posts-$n";
+    $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
+}
+$kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
+foreach ($kaki as [$id, $k]) {
+    if (!isset($wp_registered_sidebars[$id]) || empty($W[$k]) || !$boleh($sb[$id] ?? [])) { continue; }
+    $hapus_bawaan($sb[$id] ?? []);
+    if ($k === 'footer_statistik') {
+        $n = 300; while (isset($tx[$n])) { $n++; }
+        $tx[$n] = ['title' => $W[$k][0], 'text' => $W[$k][1], 'filter' => 'content', 'visual' => true];
+        $sb[$id] = ["text-$n"];
+    } else { $sb[$id] = [$buat_html($W[$k][0], $W[$k][1])]; }
+    $ubah[] = $id; $semua = array_merge($semua, $sb[$id]);
+}
+foreach (['_multiwidget'] as $x) { $ch[$x] = 1; $tx[$x] = 1; $rp[$x] = 1; $blok_w[$x] = 1; }
+update_option('widget_block', $blok_w); update_option('widget_custom_html', $ch); update_option('widget_text', $tx); update_option('widget_recent-posts', $rp);
+wp_set_sidebars_widgets($sb);
+$daftar_milik = [];
+foreach ($ubah as $id) { $daftar_milik[md5(wp_json_encode(array_values($sb[$id])))] = array_values($sb[$id]); }
+$st['widget'] = ['__semua' => array_values(array_unique(array_merge((array) ($milik['__semua'] ?? []), $semua))), '__daftar' => $daftar_milik];
+echo 'tampilan: widget=' . ($ubah ? implode(',', $ubah) : 'dibiarkan') . "\n";
+
+// 6. CSS di antara penanda
+$css = wp_get_custom_css();
+$tanpa = trim(preg_replace('#/\* velocity-tampilan-klasik \*/.*?/\* /velocity-tampilan-klasik \*/#s', '', $css));
+$baru = trim($tanpa . "\n\n" . $d['css']);
+if ($baru !== trim($css)) { wp_update_custom_css_post($baru, ['stylesheet' => $tema]); echo "tampilan: css_ditulis\n"; }
+
+// 7. Statistik pengunjung (sekali; kalau orang mematikannya sesudah itu, dibiarkan)
+if (empty($st['statistik'])) {
+    if ((string) get_option('statistik_velocity', '1') !== '1') { update_option('statistik_velocity', '1'); echo "tampilan: statistik_dinyalakan\n"; }
+    $st['statistik'] = gmdate('c');
+}
+$st['diperbarui'] = gmdate('c');
+update_option('velocity_tampilan_klasik', $st, false);
+echo "tampilan: selesai\n";
+'''
+
+
+FOTO_ARTIKEL_PHP = r'''<?php
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+$admins = get_users(['role' => 'administrator', 'number' => 1, 'orderby' => 'ID']);
+wp_set_current_user($admins ? $admins[0]->ID : 1);
+$kosong = get_posts(['post_type' => 'post', 'post_status' => 'publish', 'numberposts' => -1, 'orderby' => 'date', 'order' => 'ASC',
+                     'meta_query' => [['key' => '_thumbnail_id', 'compare' => 'NOT EXISTS']]]);
+$media = function ($kunci) use ($d, $dir) {
+    $a = $d['aset'][$kunci];
+    $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_tampilan_aset', 'meta_value' => $a['sidik']]);
+    if ($ada) { return (int) $ada[0]; }
+    $tmp = wp_tempnam($a['file']); copy("$dir/{$a['file']}", $tmp);
+    $id = media_handle_sideload(['name' => $a['file'], 'tmp_name' => $tmp], 0, $a['judul'], ['post_excerpt' => $a['caption']]);
+    if (is_wp_error($id)) { return 0; }
+    update_post_meta($id, '_velocity_tampilan_aset', $a['sidik']);
+    update_post_meta($id, '_wp_attachment_image_alt', $a['judul']);
+    return (int) $id;
+};
+$putar = 0; $isi = 0;
+foreach ($kosong as $p) {
+    if ($d['klien']) {
+        $kunci = $d['klien'][$putar++ % count($d['klien'])];
+    } else {
+        $kat = get_the_category($p->ID);
+        $kunci = $d['sampul'][$kat ? $kat[0]->name : ''] ?? ($d['sampul']['*'] ?? '');
+    }
+    $id = $kunci ? $media($kunci) : 0;
+    if ($id) { set_post_thumbnail($p->ID, $id); $isi++; echo "foto_artikel: {$p->ID} <- $kunci\n"; }
+}
+echo 'foto_artikel: ' . $isi . '/' . count($kosong) . " diisi\n";
+'''
+
+
+def kirim(cfg, kerja, php, domain):
+    """Kirim folder kerja + skrip PHP lewat satu koneksi SSH lalu jalankan dengan wp eval-file."""
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not key or not Path(key).is_file():
+        print('tampilan: kunci SSH tidak ada')
+        return None
+    (kerja / 'terapkan.php').write_text(php)
+    finish = muat('site_finish', HERE / 'site-finish')
+    ssh = finish.ssh_command(cfg, key)
+    docroot = finish.docroot(domain, cfg.get('da_user', ''))
+    user = cfg.get('da_user', '')
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        for f in kerja.iterdir():
+            tar.add(f, arcname=f.name)
+    wp = 'php -d memory_limit=512M /usr/local/bin/wp eval-file "$T/terapkan.php" "$T"'
+    jalankan = (f'set -e; T=$(mktemp -d /tmp/velocity-tampilan.XXXXXX); tar xzf - -C "$T"; chmod 755 "$T"; chmod 644 "$T"/*; '
+                f'cd {shlex.quote(docroot)}; '
+                f'if id {shlex.quote(user)} >/dev/null 2>&1; then runuser -u {shlex.quote(user)} -- {wp} 2>&1 | grep -v Deprecated || true; '
+                f'else {wp} --allow-root 2>&1 | grep -v Deprecated || true; fi; rm -rf "$T"')
+    hasil = subprocess.run(ssh + [jalankan], input=buf.getvalue(), capture_output=True, timeout=600)
+    keluar = hasil.stdout.decode(errors='replace')
+    print(keluar.strip())
+    if hasil.returncode != 0:
+        print(f"tampilan: ssh_gagal (kode {hasil.returncode}) {hasil.stderr.decode(errors='replace').strip()[:300]}")
+        return None
+    return keluar
+
+
+def foto_artikel(manifest, cfg, domain):
+    try:
+        isi = json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        isi = {}
+    nama = cfg.get('site_title') or domain
+    warna = (isi.get('warna') or {}).get('utama')
+    kerja = Path(tempfile.mkdtemp(prefix=f'tema-klasik-foto-{domain}-'))
+    SEMENTARA.append(kerja)
+    aset, klien, sampul = {}, [], {}
+    for i, (p, _, _) in enumerate(foto_klien(domain)[:8], 1):
+        kunci = f'klien-{i}'
+        try:
+            potong(p, 1200, 800, kerja / f'{kunci}.jpg')
+        except Exception:
+            continue
+        aset[kunci] = {'judul': f'Foto {nama}', 'caption': f'Foto: {nama}'}
+        klien.append(kunci)
+    if not klien:
+        kategori = [l['judul'] for l in isi.get('layanan') or [] if l.get('judul')] or ['Artikel']
+        for i, k in enumerate(kategori, 1):
+            kunci = f'sampul-{i}'
+            sampul_kategori(k, nama, warna, kerja / f'{kunci}.jpg')
+            aset[kunci] = {'judul': f'Ilustrasi {k}', 'caption': f'Ilustrasi: {k} — {nama}'}
+            sampul[k] = kunci
+        sampul['*'] = next(iter(sampul.values()))
+    for kunci, a in aset.items():
+        a.update(file=f'{kunci}.jpg', sidik=f"{domain}:{kunci}:{hashlib.md5((kerja / f'{kunci}.jpg').read_bytes()).hexdigest()}")
+    (kerja / 'data.json').write_text(json.dumps({'aset': aset, 'klien': klien, 'sampul': sampul}, ensure_ascii=False))
+    print(f"foto_artikel: sumber={'foto_klien:' + str(len(klien)) if klien else 'sampul:' + str(len(sampul) - 1)}")
+    if '--coba' in sys.argv:
+        print(f'foto_artikel: folder={kerja}')
+        return 0
+    keluar = kirim(cfg, kerja, FOTO_ARTIKEL_PHP, domain)
+    return 0 if keluar and 'diisi' in keluar else 1
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: tema-klasik [--foto-artikel] <manifest> [--coba]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    cfg = read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('tampilan: manifest_tidak_valid')
+        return 2
+    if '--foto-artikel' in sys.argv:
+        return foto_artikel(manifest, cfg, domain)
+    if re.sub(r'\s', '', cfg.get('paket', '').lower()) in PAKET_CUSTOM or cfg.get('tema_fse'):
+        print('tampilan: dilewati:paket_custom_atau_tema_fse')
+        return 0
+    simpanan = GENERATED_DIR / f'{domain}-tema.json'
+    if not simpanan.is_file():
+        subprocess.run([sys.executable, str(HERE / 'paket-g-konten'), str(manifest)], check=False)
+    try:
+        isi = json.loads(simpanan.read_text())
+    except (OSError, ValueError):
+        print('tampilan: isi_contoh_tidak_ada, langkah dilewati')
+        return 1
+    if isi.get('jenis') == 'berita':
+        isi = {**isi, 'layanan': []}
+    vct = muat('velocity_child_theme', HERE / 'velocity-child-theme')
+    dk = vct.data_klien(domain, cfg.get('site_title', ''))
+    wa = dk.get('WA', '')
+    kontak = {'alamat': dk.get('ALAMAT', ''), 'telp': dk.get('TELP', ''), 'wa': wa,
+              'wa_tampil': dk.get('TELP', '') or ('0' + wa[2:] if wa else ''), 'email': dk.get('EMAIL_PUBLIK', '')}
+    if kontak['telp'] and wa and re.sub(r'\D', '', kontak['telp']).lstrip('0') == wa[2:]:
+        kontak['telp'] = ''  # nomor yang sama cukup tampil sebagai WhatsApp
+    print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
+          f"email={'publik' if kontak['email'] else 'tidak_ada'}")
+    data = susun(domain, cfg, isi, kontak)
+
+    # Gambar: foto klien dulu, lalu foto contoh bank foto, lalu banner polos.
+    kerja = Path(tempfile.mkdtemp(prefix=f'tema-klasik-{domain}-'))
+    SEMENTARA.append(kerja)
+    layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
+    klien = foto_klien(domain)
+    kunci_perlu = ['hero', 'tentang'] + [f'layanan-{l["slug"]}' for l in layanan]
+    simpan = TEMBOLOK / domain
+    if all((simpan / f'{k}.jpg').is_file() for k in kunci_perlu):
+        klien = []  # semua gambar sudah pernah disiapkan
+        sumber = {k: simpan / f'{k}.jpg' for k in kunci_perlu}
+        print('tampilan: gambar_tembolok')
+    else:
+        sumber = {}
+    if klien:
+        # Foto klien dipakai bergilir untuk semua slot: foto bank yang mengisi sisa slot pernah
+        # berupa pindaian arsip tua di situs yang punya lima foto armada sendiri.
+        for i, kunci in enumerate(['hero', 'tentang'] + [f'layanan-{l["slug"]}' for l in layanan]):
+            sumber[kunci] = klien[i % len(klien)][0]
+    slot = []
+    if 'hero' in sumber and 'tentang' in sumber and all(k in sumber for k in kunci_perlu):
+        pass
+    elif 'hero' not in sumber:
+        slot.append(('hero', isi.get('hero_foto') or '', 'Banner beranda'))
+    if 'tentang' not in sumber:
+        slot.append(('tentang', isi.get('tentang_foto') or '', 'Foto tentang kami'))
+    slot += [(f'layanan-{l["slug"]}', l.get('foto') or l['judul'], l['judul'])
+             for l in layanan if f'layanan-{l["slug"]}' not in sumber]
+    slot = [s for s in slot if s[1]]
+    if klien:
+        print(f'tampilan: foto_klien={len(klien)}')
+    slot = [s for s in slot if s[0] not in sumber]
+    sumber.update({k: v for k, v in foto_contoh(manifest, isi, slot).items() if k not in sumber})
+    aset = {}
+    ukuran = {'hero': (1800, 800), 'tentang': (800, 900)}
+    for kunci, berkas in sumber.items():
+        w, h = ukuran.get(kunci, (600, 600))
+        try:
+            if Path(berkas).parent == simpan:
+                tujuan = kerja / f'{kunci}.jpg'
+                tujuan.write_bytes(Path(berkas).read_bytes())
+            else:
+                tujuan = potong(berkas, w, h, kerja / f'{kunci}.jpg')
+        except Exception as e:
+            print(f'tampilan: gambar_gagal:{kunci}:{type(e).__name__}')
+            continue
+        aset[kunci] = tujuan
+    if 'hero' not in aset:
+        aset['hero'] = banner_polos(data['nama'], (isi.get('warna') or {}).get('utama'), kerja / 'hero.jpg')
+        print('tampilan: banner_polos')
+    if not coba:
+        simpan.mkdir(parents=True, exist_ok=True)
+        for kunci, berkas in aset.items():
+            if Path(berkas).parent != simpan:
+                (simpan / f'{kunci}.jpg').write_bytes(Path(berkas).read_bytes())
+    judul = {'hero': f"Banner {data['nama']}", 'tentang': f"Tentang {data['nama']}"}
+    judul.update({f'layanan-{l["slug"]}': l['judul'] for l in layanan})
+    data['aset'] = {k: {'file': f'{k}.jpg', 'judul': judul.get(k, k),
+                        'sidik': f"{domain}:{k}:{hashlib.md5(p.read_bytes()).hexdigest()}"} for k, p in aset.items()}
+    (kerja / 'data.json').write_text(json.dumps(data, ensure_ascii=False))
+    print(f"tampilan: siap aset={','.join(sorted(aset))} layanan={len(layanan)} folder={kerja}")
+    if coba:
+        return 0
+
+    keluar = kirim(cfg, kerja, REMOTE_PHP, domain)
+    if not keluar or 'tampilan: selesai' not in keluar:
+        print('tampilan: gagal')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    kode = main()
+    if '--coba' not in sys.argv:
+        import shutil
+        for folder in SEMENTARA:
+            shutil.rmtree(folder, ignore_errors=True)
+    sys.exit(kode)

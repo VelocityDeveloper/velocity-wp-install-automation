@@ -485,10 +485,15 @@ echo "media_settings_set" >&2
 php -d memory_limit=512M "$WP_BIN" user update 1 --display_name='Admin' --path="$DOCROOT" --allow-root 2>/dev/null && echo "admin_profile_set" >&2 || true
 
 # helper: create page only if not exist, return page id
+# Manifest `tanpa_halaman=galeri,layanan`: halaman yang sengaja dihapus tidak dibuat ulang.
 ensure_page() {
   local title=$1 content=$2
   local slug
   slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -dc 'a-z0-9-')
+  if [[ ",$(echo "${cfg[tanpa_halaman]:-}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')," == *",$slug,"* ]]; then
+    echo "page_skipped:${slug}" >&2
+    return 1
+  fi
   local existing_id
   # tab-separated: col1=ID, col2=post_title (may contain spaces)
   existing_id=$(php -d memory_limit=512M "$WP_BIN" post list --post_type=page --post_status=publish --fields=ID,post_title --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\t' -v t="$title" 'NR>1 && $2==t {print $1; exit}')
@@ -507,10 +512,10 @@ ensure_page() {
 }
 
 # standard pages (idempotent: skip if exists)
-ensure_page 'Berita' 'Halaman arsip berita.' >/dev/null
-ensure_page 'Tentang Kami' 'Halaman tentang kami.' >/dev/null
-ensure_page 'Galeri' 'Halaman galeri.' >/dev/null
-ensure_page 'Hubungi Kami' 'Halaman hubungi kami.' >/dev/null
+ensure_page 'Berita' 'Halaman arsip berita.' >/dev/null || true
+ensure_page 'Tentang Kami' 'Halaman tentang kami.' >/dev/null || true
+ensure_page 'Galeri' 'Halaman galeri.' >/dev/null || true
+ensure_page 'Hubungi Kami' 'Halaman hubungi kami.' >/dev/null || true
 echo "standard_pages_created" >&2
 
 # Konten demo bawaan WordPress ikut terbit di situs klien kalau dibiarkan. Hanya

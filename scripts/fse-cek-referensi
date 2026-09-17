@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Audit tema FSE terpasang vs rencana referensi desain klien.
+
+Dipakai `installer-runner` sesudah `fse-apply --tema` dan SEBELUM konten AI
+(permintaan user 2026-09-16): kalau hasilnya belum sesuai, langkah tema diulang
+dulu; kalau sudah sesuai, alur lanjut ke konten AI.
+
+  fse-cek-referensi <manifest> [--json]      (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Yang dibandingkan — hanya yang memang sudah ditulis langkah tema, bukan isi halaman
+(halaman disusun `fse-apply --isi` jauh sesudah ini):
+
+  tema aktif & versinya   velocity-fse, versi = versi template repo
+  gaya beranda            velocity_situs.gaya  vs  rencana referensi
+  font teks & judul       velocity_fse_desain.font_*  vs  hasil ukur referensi
+  token header/footer     header gelap, posisi logo & menu, footer gelap
+  bentuk tombol & kartu   radius tombol, radius kartu
+  palet                   warna utama & aksen situs vs warna klien/manifest
+
+Kode keluar: 0 sesuai (atau tidak ada referensi = tidak ada yang bisa dibandingkan),
+1 belum sesuai, 2 gagal memeriksa (SSH/tema tidak terbaca).
+"""
+import importlib.machinery
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def muat(nama, path):
+    spec = importlib.util.spec_from_loader(nama, importlib.machinery.SourceFileLoader(nama, str(path)))
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+PHP_BACA = r'''
+$fse = wp_get_theme('velocity-fse');
+vfse_keluar(array(
+    'tema' => get_stylesheet(),
+    'versi' => $fse->exists() ? (string) $fse->get('Version') : '',
+    'situs' => (array) get_option('velocity_situs', array()),
+    'desain' => (array) get_option('velocity_fse_desain', array()),
+    'palet' => (array) (get_option('velocity_fse_warna', array())),
+));
+'''
+
+
+def warna_global(situs):
+    """Warna utama & aksen yang benar-benar dipakai situs (wp_global_styles)."""
+    kode = r'''
+$id = (int) WP_Theme_JSON_Resolver::get_user_global_styles_post_id();
+$isi = $id ? json_decode(get_post($id)->post_content, true) : array();
+$palet = array();
+foreach ((array) (($isi['settings']['color']['palette']['theme'] ?? array())) as $w) {
+    if (isset($w['slug'], $w['color'])) { $palet[$w['slug']] = $w['color']; }
+}
+vfse_keluar(array('palet' => $palet));
+'''
+    try:
+        return situs.php(kode).get('palet') or {}
+    except Exception:
+        return {}
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print('usage: fse-cek-referensi <manifest> [--json]', file=sys.stderr)
+        return 2
+    fa = muat('fse_apply', HERE / 'fse-apply')
+    cfg = fa.read_manifest(args[0])
+    domain = cfg['domain'].lower()
+    rencana = fa.RENCANA_DIR / domain / 'desain-referensi.json'
+    ref_json = fa.RENCANA_DIR / domain / 'referensi.json'
+    if not rencana.is_file() or not ref_json.is_file():
+        print('fse_cek: tidak_ada_referensi (tidak ada yang dibandingkan)')
+        return 0
+    desain_ref = json.loads(rencana.read_text())
+    ref = json.loads(ref_json.read_text())
+    try:
+        situs = fa.Situs(cfg)
+        keadaan = situs.php(PHP_BACA)
+    except Exception as e:
+        print(f'fse_cek: gagal:{type(e).__name__}')
+        return 2
+
+    beda = []
+    tema_versi = fa.versi_template()
+    if keadaan.get('tema') != fa.SLUG:
+        beda.append(f"tema_aktif:{keadaan.get('tema') or '-'}")
+    elif tema_versi and keadaan.get('versi') != tema_versi:
+        beda.append(f"versi_tema:{keadaan.get('versi') or '-'}<{tema_versi}")
+
+    d = keadaan.get('desain') or {}
+    s = keadaan.get('situs') or {}
+    if not d:
+        beda.append('token_desain_kosong')
+    else:
+        f = desain_ref.get('font') or {}
+        modul = muat('referensi_desain', HERE / 'referensi_desain.py')
+        boleh = lambda nama, google: nama if nama and (google or nama.lower() in modul.FONT_SISTEM) else ''
+        harap = {
+            'font_teks': boleh(f.get('teks'), f.get('teks_google')),
+            'font_judul': boleh(f.get('judul'), f.get('judul_google')),
+            'header_gelap': bool((desain_ref.get('header') or {}).get('gelap')),
+            'logo_posisi': (desain_ref.get('header') or {}).get('logo_posisi'),
+            'menu_posisi': (desain_ref.get('header') or {}).get('menu_posisi'),
+            'footer_gelap': bool((desain_ref.get('footer') or {}).get('gelap')),
+            'tombol_radius': (desain_ref.get('tombol') or {}).get('radius'),
+            'kartu_radius': (desain_ref.get('kartu') or {}).get('radius'),
+        }
+        for kunci, nilai in harap.items():
+            if nilai in (None, ''):
+                continue
+            kini = d.get(kunci)
+            if isinstance(nilai, bool):
+                if bool(kini) != nilai:
+                    beda.append(f'{kunci}:{bool(kini)}≠{nilai}')
+            elif isinstance(nilai, (int, float)):
+                if abs(float(kini or 0) - float(nilai)) > 1:
+                    beda.append(f'{kunci}:{kini}≠{nilai}')
+            elif str(kini or '') != str(nilai):
+                beda.append(f'{kunci}:{kini or "-"}≠{nilai}')
+        # Header hanya diterapkan kalau rencananya memang begitu.
+        if desain_ref.get('terapkan_header') is False and d.get('terapkan_header'):
+            beda.append('terapkan_header:ya≠tidak')
+
+    gaya_ref = ref.get('gaya')
+    if gaya_ref and s.get('gaya') and s['gaya'] != gaya_ref:
+        beda.append(f"gaya:{s['gaya']}≠{gaya_ref}")
+
+    palet = warna_global(situs)
+    vct = fa.muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
+    utama, aksen, _ = fa.warna_situs(vct, domain, desain_ref, cfg)
+    harap_palet = {p['slug']: p['color'] for p in fa.hitung_palet(
+        vct, utama, aksen, gelap=ref.get('gaya') == 'dealer', versi=fa.palet_versi(cfg))}
+    for slug in ('primary', 'aksen', 'di-primary', 'di-aksen', 'putih'):
+        if palet.get(slug) and palet[slug].lower() != harap_palet[slug].lower():
+            beda.append(f'palet_{slug}:{palet[slug]}≠{harap_palet[slug]}')
+
+    hasil = {'domain': domain, 'sesuai': not beda, 'beda': beda,
+             'referensi': ref.get('url'), 'gaya': gaya_ref, 'tema': keadaan.get('versi')}
+    if '--json' in sys.argv:
+        print(json.dumps(hasil, ensure_ascii=False))
+    if beda:
+        print(f"fse_cek: belum_sesuai:{','.join(beda[:6])}")
+        return 1
+    print(f"fse_cek: sesuai (referensi {ref.get('url')}, gaya {gaya_ref}, tema {keadaan.get('versi')})")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

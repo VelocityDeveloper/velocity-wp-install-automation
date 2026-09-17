@@ -15,7 +15,9 @@ NOISE = re.compile(
     r'ObjectPool|Microsoft.*|MSWordDoc|Word\.Document.*|Times New Roman|Calibri|'
     r'Arial|Symbol|Cambria|WPS Office.*|Font Paragraf Default|Tabel Normal|'
     r'Tidak Ada Daftar|Teks Balon( KAR)?|Hyperlink|Sebutan Yang Belum Terselesaikan|'
-    r'[0-9A-F-]{8,}.*)$', re.I)
+    # ID heksa sisa .doc biner; wajib memuat huruf A-F supaya nomor telepon polos
+    # (paragraf "082137751984" di company profile) tidak ikut terbuang.
+    r'(?=[0-9-]*[A-F])[0-9A-F-]{8,}.*)$', re.I)
 # Nilai yang dibiarkan kosong oleh klien ditulis sebagai deretan titik.
 BLANK = re.compile(r'^[.\s_-]*$')
 # Label milik teks panduan template, bukan isian klien.

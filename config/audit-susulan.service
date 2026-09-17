@@ -1,0 +1,13 @@
+[Unit]
+Description=Audit susulan situs jadi terhadap aturan terbaru (hanya membaca situs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Kunci SSH yang sama dengan installer-status (secrets/ssh_key, cadangan id_ed25519).
+Environment=WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519
+EnvironmentFile=-/etc/velocity/secrets/installer.env
+ExecStart=/usr/bin/python3 -u /opt/velocity-wp-install-automation/scripts/audit-susulan --paralel 4
+TimeoutStartSec=45min
+Nice=10

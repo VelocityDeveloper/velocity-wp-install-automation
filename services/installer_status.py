@@ -12,10 +12,11 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 ROOT = Path('/home/project')
 ON_PROGRESS = Path('/home/On Progress')
@@ -24,6 +25,29 @@ RUNNER = Path('/opt/velocity-wp-install-automation/scripts/installer-runner')
 SECRETS = Path('/etc/velocity/secrets')
 SSH_KEY_CANDIDATES = [SECRETS / 'ssh_key', Path('/root/.ssh/id_ed25519'), Path('/root/.ssh/id_rsa')]
 DOMAIN_RE = re.compile(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+# Domain yang punya folder/manifest di /home/project tapi BUKAN project klien —
+# mis. server host kantor sendiri (keputusan user 2026-09-16: fahmi.hutara.com
+# adalah host server, bukan pekerjaan). Daftarnya sengaja eksplisit: "manifest
+# tanpa paket=" BUKAN penanda yang aman, karena arusaraadventure.com &
+# pondokbungaadi.com juga begitu dan keduanya project sungguhan yang terpasang.
+BUKAN_PROJECT_BAWAAN = {'fahmi.hutara.com'}
+BUKAN_PROJECT_FILE = Path('/etc/velocity/installer-bukan-project')
+
+
+def bukan_project():
+    """Domain yang tidak boleh tampil/diklaim sebagai project.
+
+    Bawaan di atas + satu domain per baris di BUKAN_PROJECT_FILE ('#' = komentar),
+    supaya tim bisa menambah tanpa mengubah kode."""
+    names = set(BUKAN_PROJECT_BAWAAN)
+    try:
+        for line in BUKAN_PROJECT_FILE.read_text(errors='replace').splitlines():
+            line = line.split('#', 1)[0].strip().lower()
+            if line:
+                names.add(line)
+    except OSError:
+        pass
+    return names
 SERVERS_FILE_CANDIDATES = [
     Path('/var/lib/velocity/servers.json'),  # server-registry store (managed via /server/ panel)
     Path(__file__).resolve().parent.parent / 'config' / 'servers.json',
@@ -61,22 +85,37 @@ CACHE_TTL = 30
 _running = {}  # domain -> subprocess.Popen
 _ai_running = {}  # domain -> subprocess.Popen
 
-# Ground truth for "belum diambil" (not yet claimed): vdnet CRM's project-list API,
-# filtered to status_pengerjaan=Belum dikerjakan (wm_project not assigned yet).
+# Ground truth antrean: API project-list vdnet, ditarik untuk dua status yang
+# sama dengan halaman https://new.velocitydeveloper.net/project_list —
+# "Belum dikerjakan" (wm_project belum ada = belum diambil) dan
+# "Dalam pengerjaan" (sudah dipegang webmaster). Yang kedua tetap ditampilkan
+# supaya daftar di sini tidak lebih pendek daripada daftar yang dibaca PM.
 PROJECT_LIST_API_URL = os.environ.get(
     'PROJECT_LIST_API_URL', 'https://new.velocitydeveloper.net/api/api/public/project-list')
 PROJECT_LIST_API_KEY_FILE = SECRETS / 'project_list_api_key'
+CRM_STATUSES = ('Belum dikerjakan', 'Dalam pengerjaan')
 # Hanya jenis project yang berarti "pasang WordPress". Tanpa saringan ini daftar
 # installer ikut memuat tiket Deposit Iklan Google, Tambah Space, dsb — 99% isi
 # daftar, padahal tidak ada hubungannya dengan instalasi.
-INSTALL_JENIS = {'Pembuatan', 'Pembuatan apk biasa', 'Pembuatan Tanpa Domain', 'Redesign'}
-BELUM_DIAMBIL_TTL = 900
-BELUM_DIAMBIL_RETRY = 30
+# Nilainya harus PERSIS sama dengan opsi jenis_project di CRM
+# (DataOpsiController::jenis_project) — 'Pembuatan Tanpa Domain' pernah ditulis
+# di sini padahal nilai aslinya 'Pembuatan Tanpa Domain+Hosting', jadi barisnya
+# tidak pernah muncul sama sekali. 'Pengembangan' sengaja di luar: situsnya
+# sudah hidup, bukan pekerjaan pasang baru.
+INSTALL_JENIS = {'Pembuatan', 'Pembuatan apk', 'Pembuatan apk biasa',
+                 'Pembuatan apk custom', 'Pembuatan Tanpa Domain',
+                 'Pembuatan Tanpa Hosting', 'Pembuatan Tanpa Domain+Hosting',
+                 'Pembuatan web konsep', 'Redesign'}
+# Status CRM yang dipakai sebagai status baris di halaman.
+ST_BELUM_DIAMBIL = 'belum diambil'
+ST_DIKERJAKAN_WM = 'dikerjakan webmaster'
+CRM_TTL = 900
+CRM_RETRY = 30
 # Panduan API menyarankan halaman kecil, bukan satu tarikan raksasa.
 PROJECT_LIST_PER_PAGE = 2000
 PROJECT_LIST_MAX_PAGES = 25
-_belum_diambil_cache = {'at': 0, 'value': {}, 'fetching': False, 'error': ''}
-_belum_diambil_lock = threading.Lock()
+_crm_cache_projects = {'at': 0, 'value': {}, 'fetching': False, 'error': ''}
+_crm_projects_lock = threading.Lock()
 # "Ambil alih" dicatat lokal: CRM belum punya API tulis, jadi status "Belum
 # dikerjakan" di sana tidak berubah walau installer sudah memegang project-nya.
 CLAIMS_FILE = STATE / 'claims.json'
@@ -340,106 +379,134 @@ def _project_list_api_key():
         return ''
 
 
-def _fetch_belum_diambil_domains_now():
-    """Pull every 'Belum dikerjakan' row from the vdnet project-list API, as
-    {domain: paket}. Uses one large per_page instead of many small pages — the
-    shared host in front of this API resets/bans connections after a burst of
-    rapid requests.
+def _crm_page(status: str, page: int, key: str):
+    # Urutkan naik berdasarkan id: dataset ini hidup, dan urutan default
+    # (tgl_deadline desc) bikin baris baru menggeser halaman berikutnya
+    # sehingga ada baris terlewat di batas halaman saat paginasi.
+    url = (f'{PROJECT_LIST_API_URL}?status_pengerjaan={urllib.parse.quote(status)}'
+           f'&per_page={PROJECT_LIST_PER_PAGE}&page={page}'
+           f'&order_by=id&order=asc')
+    # UA default urllib ('Python-urllib/x.y') kena aturan anti-bot CPGuard
+    # di depan API ini dan dibalas 403, padahal request yang sama lolos
+    # dengan UA biasa.
+    req = urllib.request.Request(url, headers={
+        'Authorization': f'Bearer {key}',
+        'User-Agent': 'velocity-installer/1.0',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode('utf-8', errors='replace'))
+
+
+def _crm_webmaster(item):
+    """Nama webmaster pemegang project, kalau CRM sudah menugaskannya."""
+    wm = item.get('wm_project') or {}
+    if not isinstance(wm, dict):
+        return ''
+    user = wm.get('user') or {}
+    nama = (user.get('name') if isinstance(user, dict) else '') or wm.get('webmaster') or ''
+    return str(nama).strip()
+
+
+def _fetch_crm_projects_now():
+    """Tarik antrean CRM untuk tiap status di CRM_STATUSES, jadi
+    {domain: {paket, deadline, jenis, crm_status, webmaster}}. Satu per_page
+    besar, bukan banyak halaman kecil — host bersama di depan API ini
+    me-reset/memblokir koneksi setelah rentetan request cepat.
     """
     key = _project_list_api_key()
     if not key:
         return {}
     found = {}
-    page = 1
-    while True:
-        # Urutkan naik berdasarkan id: dataset ini hidup, dan urutan default
-        # (tgl_deadline desc) bikin baris baru menggeser halaman berikutnya
-        # sehingga ada baris terlewat di batas halaman saat paginasi.
-        url = (f'{PROJECT_LIST_API_URL}?status_pengerjaan=Belum+dikerjakan'
-               f'&per_page={PROJECT_LIST_PER_PAGE}&page={page}'
-               f'&order_by=id&order=asc')
-        # UA default urllib ('Python-urllib/x.y') kena aturan anti-bot CPGuard
-        # di depan API ini dan dibalas 403, padahal request yang sama lolos
-        # dengan UA biasa.
-        req = urllib.request.Request(url, headers={
-            'Authorization': f'Bearer {key}',
-            'User-Agent': 'velocity-installer/1.0',
-            'Accept': 'application/json',
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode('utf-8', errors='replace'))
-        for item in data.get('data', []):
-            jenis = str(item.get('jenis') or '').strip()
-            if jenis not in INSTALL_JENIS:
-                continue
-            wh = item.get('webhost') or {}
-            name = str(wh.get('nama_web') or '').strip().lower()
-            if not name:
-                continue
-            paket = str((wh.get('paket') or {}).get('paket') or '').strip()
-            deadline = str(item.get('tgl_deadline') or '').strip()
-            # Satu domain bisa punya beberapa project: pertahankan nilai yang
-            # terisi supaya baris kosong tidak menimpanya, dan untuk deadline
-            # ambil yang paling dekat karena itu yang paling mendesak.
-            cur = found.setdefault(name, {'paket': '', 'deadline': '', 'jenis': []})
-            # Autopilot perlu jenisnya: Redesign berarti situsnya sudah hidup.
-            if jenis not in cur['jenis']:
-                cur['jenis'].append(jenis)
-            if paket and not cur['paket']:
-                cur['paket'] = paket
-            if deadline and (not cur['deadline'] or deadline < cur['deadline']):
-                cur['deadline'] = deadline
-        last_page = data.get('last_page', page)
-        if page >= last_page:
-            break
-        if page >= PROJECT_LIST_MAX_PAGES:
-            # Jangan memotong diam-diam kalau data tumbuh melewati batas.
-            print(json.dumps({'event': 'belum_diambil_truncated',
-                              'fetched_pages': page, 'last_page': last_page}), flush=True)
-            break
-        page += 1
-        time.sleep(1)  # be gentle with the shared host between pages
+    for status in CRM_STATUSES:
+        page = 1
+        while True:
+            data = _crm_page(status, page, key)
+            for item in data.get('data', []):
+                jenis = str(item.get('jenis') or '').strip()
+                if jenis not in INSTALL_JENIS:
+                    continue
+                wh = item.get('webhost') or {}
+                name = str(wh.get('nama_web') or '').strip().lower()
+                if not name:
+                    continue
+                paket = str((wh.get('paket') or {}).get('paket') or '').strip()
+                deadline = str(item.get('tgl_deadline') or '').strip()
+                webmaster = _crm_webmaster(item)
+                # Satu domain bisa punya beberapa project: pertahankan nilai yang
+                # terisi supaya baris kosong tidak menimpanya, dan untuk deadline
+                # ambil yang paling dekat karena itu yang paling mendesak.
+                cur = found.setdefault(name, {'paket': '', 'deadline': '', 'jenis': [],
+                                              'crm_status': '', 'webmaster': ''})
+                # Autopilot perlu jenisnya: Redesign berarti situsnya sudah hidup.
+                if jenis not in cur['jenis']:
+                    cur['jenis'].append(jenis)
+                if paket and not cur['paket']:
+                    cur['paket'] = paket
+                if deadline and (not cur['deadline'] or deadline < cur['deadline']):
+                    cur['deadline'] = deadline
+                if webmaster and not cur['webmaster']:
+                    cur['webmaster'] = webmaster
+                # "Belum dikerjakan" menang: kalau satu domain punya tiket yang
+                # belum diambil, pekerjaan itu memang masih menganggur walau
+                # tiket lain di domain sama sudah dipegang webmaster.
+                if cur['crm_status'] != ST_BELUM_DIAMBIL:
+                    cur['crm_status'] = (ST_BELUM_DIAMBIL if status == 'Belum dikerjakan'
+                                         else ST_DIKERJAKAN_WM)
+            last_page = data.get('last_page', page)
+            if page >= last_page:
+                break
+            if page >= PROJECT_LIST_MAX_PAGES:
+                # Jangan memotong diam-diam kalau data tumbuh melewati batas.
+                print(json.dumps({'event': 'crm_projects_truncated', 'status': status,
+                                  'fetched_pages': page, 'last_page': last_page}), flush=True)
+                break
+            page += 1
+            time.sleep(1)  # be gentle with the shared host between pages
+        time.sleep(1)
     return found
 
 
-def _refresh_belum_diambil_bg():
+def _refresh_crm_projects_bg():
     error = ''
     try:
-        fresh = _fetch_belum_diambil_domains_now()
-        if fresh or not _belum_diambil_cache['value']:
-            _belum_diambil_cache['value'] = fresh
+        fresh = _fetch_crm_projects_now()
+        if fresh or not _crm_cache_projects['value']:
+            _crm_cache_projects['value'] = fresh
     except Exception as e:  # keep serving the last-known set on API hiccup
         # Jangan gagal dalam diam: tanpa jejak ini, satu kegagalan sesaat bikin
         # halaman cuma menampilkan segelintir domain tanpa alasan yang terlacak.
         error = f'{type(e).__name__}: {e}'
-        print(json.dumps({'event': 'belum_diambil_refresh_failed', 'error': error}), flush=True)
+        print(json.dumps({'event': 'crm_projects_refresh_failed', 'error': error}), flush=True)
     finally:
-        _belum_diambil_cache['error'] = error
-        _belum_diambil_cache['at'] = time.time()
-        _belum_diambil_cache['fetching'] = False
+        _crm_cache_projects['error'] = error
+        _crm_cache_projects['at'] = time.time()
+        _crm_cache_projects['fetching'] = False
 
 
-def belum_diambil_domains():
-    """Cached {domain: {paket, deadline}} for domains the CRM says are not yet claimed.
-    First call blocks so the list isn't empty on a cold start; later refreshes
-    happen in a background thread so /api/installer never blocks ~24s on them.
+def crm_projects():
+    """Cache {domain: {paket, deadline, jenis, crm_status, webmaster}} untuk
+    project yang menurut CRM belum diambil atau sedang dikerjakan webmaster.
+    Panggilan pertama menahan diri sampai tarikan selesai supaya daftar tidak
+    kosong saat cold start; penyegaran berikutnya di thread latar supaya
+    /api/installer tidak pernah menunggu ~24s.
     """
     now = time.time()
-    if _belum_diambil_cache['at'] == 0:
+    if _crm_cache_projects['at'] == 0:
         # Cold start: tahan request lain sampai tarikan pertama selesai. Tanpa
         # kunci ini, request yang datang saat tarikan berjalan dapat cache
         # kosong dan halaman seolah cuma berisi 2 domain.
-        with _belum_diambil_lock:
-            if _belum_diambil_cache['at'] == 0:
-                _belum_diambil_cache['fetching'] = True
-                _refresh_belum_diambil_bg()
-        return _belum_diambil_cache['value']
+        with _crm_projects_lock:
+            if _crm_cache_projects['at'] == 0:
+                _crm_cache_projects['fetching'] = True
+                _refresh_crm_projects_bg()
+        return _crm_cache_projects['value']
     # Percobaan yang gagal tidak boleh membekukan cache kosong selama TTL penuh.
-    ttl = BELUM_DIAMBIL_RETRY if _belum_diambil_cache['error'] else BELUM_DIAMBIL_TTL
-    if now - _belum_diambil_cache['at'] >= ttl and not _belum_diambil_cache['fetching']:
-        _belum_diambil_cache['fetching'] = True
-        threading.Thread(target=_refresh_belum_diambil_bg, daemon=True).start()
-    return _belum_diambil_cache['value']
+    ttl = CRM_RETRY if _crm_cache_projects['error'] else CRM_TTL
+    if now - _crm_cache_projects['at'] >= ttl and not _crm_cache_projects['fetching']:
+        _crm_cache_projects['fetching'] = True
+        threading.Thread(target=_refresh_crm_projects_bg, daemon=True).start()
+    return _crm_cache_projects['value']
 
 
 def load_claims():
@@ -466,8 +533,11 @@ def claim_domain(domain: str, by: str):
     if not CLAIM_BY_RE.match(by):
         return None, 'invalid_by'
     name = domain.lower()
+    # Host server bukan pekerjaan: jangan sampai bisa diklaim lalu dipasangi WordPress.
+    if name in bukan_project():
+        return None, 'bukan_project'
     # Hanya pekerjaan yang memang ada: di antrean CRM atau sudah punya folder.
-    if (name not in belum_diambil_domains() and not (ON_PROGRESS / name).is_dir()
+    if (name not in crm_projects() and not (ON_PROGRESS / name).is_dir()
             and not (ROOT / name).is_dir()):
         return None, 'unknown_domain'
     with _claims_lock:
@@ -491,19 +561,23 @@ def release_claim(domain: str):
     return {'domain': name, 'released': True}, None
 
 
-def _queue_row(name, source, belum_diambil, claims, connected_hosts):
+def _queue_row(name, source, antrean, claims, connected_hosts):
     """Baris antrean untuk satu folder project, atau None kalau tidak perlu tampil."""
     manifest = ROOT / name / f'{name}.txt'
     has_manifest = manifest.is_file()
     row = domain_row(name, manifest if has_manifest else None)
     key = name.lower()
-    crm = belum_diambil.get(key) or {}
+    crm = antrean.get(key) or {}
     row['paket'] = crm.get('paket') or None
     row['deadline'] = crm.get('deadline') or None
     row['jenis'] = crm.get('jenis') or []
+    row['crm_status'] = crm.get('crm_status') or None
+    row['webmaster'] = crm.get('webmaster') or None
     row['claim'] = claims.get(key)
-    if key in belum_diambil and not row['claim']:
-        row['status'] = 'belum diambil'
+    if key in antrean and not row['claim']:
+        # Status CRM hanya menimpa status installer selama belum ada jejak
+        # instalasi: sekali installer punya manifest/run, itu yang lebih baru.
+        row['status'] = crm.get('crm_status') or ST_BELUM_DIAMBIL
     elif not has_manifest and not row['claim']:
         return None
     elif has_manifest and row.get('target_host') not in connected_hosts:
@@ -517,26 +591,27 @@ def domains():
     done = installed_domains()
     connected_hosts = {str(s.get('host', '')).strip() for s in load_servers()
                        if isinstance(s, dict) and str(s.get('host', '')).strip()}
-    belum_diambil = belum_diambil_domains()
+    antrean = crm_projects()
     claims = load_claims()
+    abaikan = bukan_project()
     seen = set()
     # primary source: On Progress folders synced from Google Drive
     if ON_PROGRESS.is_dir():
         for folder in sorted(p for p in ON_PROGRESS.iterdir() if p.is_dir()):
             name = folder.name
-            if not DOMAIN_RE.match(name) or name in done:
+            if not DOMAIN_RE.match(name) or name in done or name.lower() in abaikan:
                 continue
             seen.add(name)
-            row = _queue_row(name, 'onprogress', belum_diambil, claims, connected_hosts)
+            row = _queue_row(name, 'onprogress', antrean, claims, connected_hosts)
             if row:
                 rows.append(row)
     # fallback: existing /home/project folders (e.g. fahmi = Drive-less, yayasan = FAILED retry)
     if ROOT.is_dir():
         for folder in sorted(p for p in ROOT.iterdir() if p.is_dir()):
             name = folder.name
-            if name in seen or not DOMAIN_RE.match(name) or name in done:
+            if name in seen or not DOMAIN_RE.match(name) or name in done or name.lower() in abaikan:
                 continue
-            row = _queue_row(name, 'project', belum_diambil, claims, connected_hosts)
+            row = _queue_row(name, 'project', antrean, claims, connected_hosts)
             if row:
                 rows.append(row)
     # CRM adalah sumber kebenaran soal pekerjaan yang ada. Daftar di atas
@@ -545,20 +620,23 @@ def domains():
     # pekerjaan yang perlu dikejar. Tampilkan, dengan tanda folder belum ada.
     emitted = {r['domain'].lower() for r in rows}
     done_lower = {d.lower() for d in done}
-    for name in sorted(belum_diambil):
-        if name in emitted or name in done_lower or not DOMAIN_RE.match(name):
+    for name in sorted(antrean):
+        if name in emitted or name in done_lower or not DOMAIN_RE.match(name) or name in abaikan:
             continue
-        crm = belum_diambil.get(name) or {}
+        crm = antrean.get(name) or {}
         claim = claims.get(name)
         rows.append({
             'domain': name,
             'manifest': None,
             'folder': False,
-            'status': 'NO_FOLDER' if claim else 'belum diambil',
+            'status': ('NO_FOLDER' if claim
+                       else crm.get('crm_status') or ST_BELUM_DIAMBIL),
             'target_host': None,
             'paket': crm.get('paket') or None,
             'deadline': crm.get('deadline') or None,
             'jenis': crm.get('jenis') or [],
+            'crm_status': crm.get('crm_status') or None,
+            'webmaster': crm.get('webmaster') or None,
             'claim': claim,
             'log': [],
             'source': 'crm',
@@ -798,9 +876,13 @@ def generate_manifest(domain: str):
         content += f'velocity_addons_pkg={addons_pkg}\n'
     if theme_pkg:
         content += f'velocity_theme_pkg={theme_pkg}\n'
+    # Versi aturan palet tema FSE. Manifest baru memakai aturan terbaru; situs yang
+    # sudah terpasang tidak punya baris ini sehingga tampilannya tidak ikut berubah
+    # (permintaan user 2026-09-16: aturan kontras baru hanya untuk build berikutnya).
+    content += 'velocity_palet_versi=2\n'
     # Paket website dari CRM untuk laporan Telegram: situs yang sudah terpasang
     # tidak lagi muncul di antrean, jadi paketnya dicatat di manifest.
-    paket = str((belum_diambil_domains().get(domain.lower()) or {}).get('paket') or '')
+    paket = str((crm_projects().get(domain.lower()) or {}).get('paket') or '')
     if re.match(r'^[\w .&()/+-]{1,60}$', paket):
         content += f'paket={paket}\n'
     tmp = manifest.with_suffix('.txt.tmp')
@@ -825,6 +907,11 @@ def start_run(domain: str, mode: str):
     mengubah apa pun, termasuk status instalasi."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
         return None, 'invalid_domain'
+    # Host server bukan project: menyembunyikannya dari daftar saja tidak cukup,
+    # karena POST /api/installer/run menerima domain apa pun. Semua mode ditolak —
+    # apply di sini berarti memasang WordPress menimpa server host sendiri.
+    if domain.lower() in bukan_project():
+        return None, 'bukan_project'
     if mode not in ('dry-run', 'apply', 'finish', 'maintenance', 'child-theme', 'audit'):
         return None, 'invalid_mode'
     if mode in ('finish', 'maintenance', 'child-theme', 'audit') and not ssh_key_file():
@@ -875,6 +962,12 @@ def start_run(domain: str, mode: str):
 
 # --- AI Model Management ---
 
+# ID model boleh memuat garis miring (permintaan user 2026-09-16): penyedia seperti
+# OpenRouter/Together memakai nama berbentuk "vendor/model", mis. `meta-llama/llama-3-70b`.
+# Ruas tidak boleh kosong dan `..` ditolak — id ikut masuk ke URL /api/ai/models/<id>/delete.
+AI_MODEL_ID_RE = re.compile(r'^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$')
+
+
 def load_ai_models():
     """Load AI models configuration."""
     try:
@@ -899,7 +992,7 @@ def add_ai_model(model_data):
     Saat memperbarui, API key kosong berarti tetap memakai key tersimpan: halaman tidak
     pernah menerima key asli, jadi form edit mengirim kosong kalau key tidak diganti."""
     model_id = str(model_data.get('id') or '')
-    if not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
+    if not AI_MODEL_ID_RE.match(model_id) or '..' in model_id:
         return None, 'invalid_id'
     endpoint = str(model_data.get('endpoint') or '').strip().rstrip('/')
     if not re.match(r'^https?://\S+$', endpoint):
@@ -1290,6 +1383,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({'servers': load_servers()})
             return
+        if path == '/api/installer/susulan':
+            # Laporan scripts/audit-susulan: situs jadi yang belum ikut aturan terbaru (hanya dibaca).
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            try:
+                self._send_json(json.loads((STATE / 'audit-susulan.json').read_text()))
+            except (OSError, ValueError):
+                self._send_json({'waktu': '', 'jumlah': 0, 'perlu_susulan': 0, 'situs': []})
+            return
         if path == '/api/installer':
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
@@ -1527,8 +1630,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'status': 'ok', 'pemakaian': pemakaian})
             return
         if path.startswith('/api/ai/models/') and path.endswith('/delete'):
-            model_id = path[len('/api/ai/models/'):-len('/delete')]
-            if not model_id or not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
+            # Halaman mengirim id ter-encode (encodeURIComponent), jadi garis miring datang
+            # sebagai %2F dan tidak memecah rute.
+            model_id = unquote(path[len('/api/ai/models/'):-len('/delete')])
+            if not model_id or not AI_MODEL_ID_RE.match(model_id) or '..' in model_id:
                 self._send_json({'error': 'invalid_model_id'}, 400)
                 return
             if remove_ai_model(model_id):
@@ -1621,8 +1726,10 @@ class Handler(BaseHTTPRequestHandler):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
-            model_id = path[len('/api/ai/models/'):-len('/delete')]
-            if not model_id or not re.match(r'^[a-zA-Z0-9_-]+$', model_id):
+            # Halaman mengirim id ter-encode (encodeURIComponent), jadi garis miring datang
+            # sebagai %2F dan tidak memecah rute.
+            model_id = unquote(path[len('/api/ai/models/'):-len('/delete')])
+            if not model_id or not AI_MODEL_ID_RE.match(model_id) or '..' in model_id:
                 self._send_json({'error': 'invalid_model_id'}, 400)
                 return
             if remove_ai_model(model_id):

@@ -137,6 +137,9 @@ Terminal-style `/installer/`.
 - tombol `[ install ]` (status READY/SUCCESS) atau `[ retry ]` merah (status FAILED/installer_error) → modal konfirmasi dengan pilihan mode: **Dry run** (validasi saja) atau **Apply** (eksekusi nyata) → `POST /api/installer/run`
 - tombol `[ log ]` → popup detail log 30 baris terakhir
 - polling 10s, pause saat `document.hidden`
+- **Isi daftar = halaman `project_list` CRM.** Antrean ditarik dari `GET /api/api/public/project-list` untuk **dua** status sekaligus (`CRM_STATUSES`): `Belum dikerjakan` → baris berstatus `belum diambil`, dan `Dalam pengerjaan` → baris berstatus `dikerjakan webmaster` (ikon `◑`, badge `WM: <nama>`, aksi **Ambil alih** memakai konfirmasi karena ada orang yang sedang memegangnya). Autopilot & `onprogress-sync` hanya menyentuh `belum diambil`, jadi baris webmaster tampil tanpa pernah ditabrak. Saringan jenisnya `INSTALL_JENIS` dan nilainya **harus persis sama** dengan opsi `jenis_project` di CRM (`DataOpsiController::jenis_project`) — `Pembuatan Tanpa Domain` sempat ditulis di sini padahal nilai aslinya `Pembuatan Tanpa Domain+Hosting`, dan barisnya tidak pernah muncul sama sekali tanpa galat apa pun. `Pengembangan` sengaja di luar daftar: situsnya sudah hidup, bukan pekerjaan pasang baru (keputusan user 2026-09-16).
+- Filter deadline bawaannya **semua deadline** (2026-09-16) — bawaan lama "deadline belum terlewat" menyembunyikan 11 dari 26 baris, sehingga daftar di layar tidak pernah cocok dengan `project_list` walau datanya benar.
+- **Bukan project** (mis. server host kantor sendiri): daftar dirakit dari folder `/home/On Progress` + folder `/home/project` + antrean CRM, sehingga folder yang kebetulan ada di `/home/project` ikut terbawa walau bukan pekerjaan klien. Domain di `BUKAN_PROJECT_BAWAAN` (`services/installer_status.py`, saat ini `fahmi.hutara.com`) dan baris di `/etc/velocity/installer-bukan-project` (satu domain per baris, `#` komentar) disembunyikan dari daftar **sekaligus** ditolak `claim` & `run` dengan galat `bukan_project` — menyembunyikan saja tidak cukup, karena `POST /api/installer/run` menerima domain apa pun dan `apply` di host server berarti menimpanya dengan WordPress. Manifest tanpa `paket=` sengaja TIDAK dipakai sebagai penanda otomatis: `arusaraadventure.com` & `pondokbungaadi.com` juga tanpa `paket=` dan keduanya project sungguhan yang sudah terpasang.
 - **Bagan proses** (panel "Proses berjalan" di atas filter + aksi "Bagan proses" per domain): simpul tiap langkah `installer-runner` (validasi, install WordPress, cek HTTP, baca referensi desain, tema FSE, VD Store, konten AI, finishing, bersih-bersih, foto slot, halaman blok, foto artikel, cek visual, QA, maintenance, selesai) dengan status menunggu/berjalan/selesai/gagal/dilewati dan durasi, dibaca dari penanda log run terakhir (mulai `RUNNING: VALIDATING`). Domain berstatus RUNNING dipantau tiap 3 detik lewat `GET /api/installer?domain=<domain>` (satu baris, log 1500 baris, tetap bisa dibaca setelah domain terpasang dan hilang dari antrean); kartu yang selesai bertahan 10 menit. Cabang paket yang ada: desain custom (G / Portal Berita Custom / Toko Online Custom) → referensi desain + tema FSE, **Paket E → child theme baku `velocity-pakete`**, Paket F & paket lain → child theme dari referensi form, toko online biasa → child theme lalu VD Store.
 
   **Aturan tetap (permintaan user 2026-09-16): setiap penambahan atau perubahan alur di `installer-runner` wajib langsung disusulkan ke bagan ini dalam perubahan yang sama** — simpul baru di `SIMPUL`, garisnya di `GARIS`, dan cabang paket baru di `konteksRun` (`web/installer/index.html`). Bagan inilah yang dibaca PM & webmaster; alur yang tidak tergambar sama saja dengan alur yang tidak terlihat. Setelah menyunting halaman, pasang ke web root (`./deploy.sh`, atau `install -m 644 web/installer/index.html /usr/share/nginx/html/installer/index.html`) dan cek hasilnya di `http://192.168.88.211/installer/` — menyunting berkas repo saja tidak mengubah halaman yang dilihat orang.
@@ -236,6 +239,22 @@ INSTALL_MODE=child-theme WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 \
 
 Untuk paket lain mode ini hanya memasang + mengaktifkan child theme (`scripts/child-theme-apply`). Untuk Paket G menjalankan [alur Paket G](#alur-paket-g-baku). Keduanya tanpa install ulang, tanpa konten AI, tanpa notifikasi, dan tanpa mengubah status instalasi di `<domain>.json`.
 
+## Palet warna tema FSE (`scripts/cek-palet-fse`)
+
+Palet ditulis `fse-apply --tema` dari warna klien (`hitung_palet`). Ada dua bentuk: **biasa** (latar terang `#f7f8fa`, `putih` = `#ffffff`) dan **gelap** (seluruh halaman gelap, `latar #16191e`, `putih` dipakai ulang sebagai latar halaman `#0d0f12`) — yang gelap **hanya** untuk gaya `dealer`.
+
+Dua jebakan yang sudah diperbaiki 2026-09-16 (bumiairchemitech.com):
+
+- **Parameter `gelap` tertimpa variabel warna bernama sama** di dalam `hitung_palet()`, sehingga `if gelap:` selalu benar dan **semua** situs FSE berlatar hitam. Variabelnya kini `utama_gelap`. Penjaganya `scripts/cek-palet-fse` (dijalankan `deploy.sh`) memeriksa **nilai** palet: situs biasa harus `putih = #ffffff` dan latar vs judul ≥ 7:1, palet dealer harus gelap, dan teks di atas warna utama/aksen ≥ 4.5:1.
+- **Teks kusam di tombol berwarna** — `perbaiki_kontras()` memakai opsi pertama yang lolos 4.5:1, jadi untuk hijau `#009A4B` teks yang dipilih hitam (4.68:1): sah menurut WCAG, tapi tombolnya terlihat kusam. Aturan **versi 2** (`permukaan_terang()`, keputusan user 2026-09-16): kalau teks gelap lolos dengan kontras < 6 dan warnanya bisa digelapkan sedikit sampai teks putih lolos, warna itu digelapkan dan teksnya jadi putih. Warna yang memang nyaman dengan teks gelap (amber `#fca311` 8.49, oranye `#ff7f00` 6.78) tidak tersentuh — diukur atas 22 situs paket custom, hanya 1 yang berubah.
+
+  Aturan ini **hanya berlaku untuk build berikutnya**: manifest baru ditulis dengan `velocity_palet_versi=2` (`generate_manifest`), sedangkan manifest situs yang sudah jadi tidak punya baris itu dan tetap memakai aturan versi 1, sehingga tampilannya tidak berubah walau di-`finish` ulang. Situs lama yang ingin ikut aturan baru: tambahkan sendiri `velocity_palet_versi=2` ke manifest-nya.
+
+  Angka yang sama dipakai sebagai **versi aturan tampilan**: `fse-apply --tema` menulisnya ke `velocity_fse_desain.tampilan_versi`, dan `functions.php` menambahkan kelas body `vf-tampilan-2`. Aturan CSS baru dipasang di balik kelas itu — situs versi 1 tetap memakai tampilan lamanya meski temanya diperbarui.
+
+  Yang sudah memakai jalur ini: **tampilan statistik pengunjung di footer** (permintaan user 2026-09-16). Shortcode-nya tetap `[velocity-statistics style="list"]`, tetapi tampilannya kini mengikuti token desain referensi klien: angka memakai font judul + `font-variant-numeric: tabular-nums`, garis pemisah & baris selang-seling dari `currentColor` (kelas Bootstrap `border-bottom` milik plugin tidak pernah aktif di tema blok), sudut mengikuti `--vf-kartu-radius`, dan warna angka mengikuti footer terang/gelap (`aksen-teks` / `aksen-di-primary`) supaya tetap 4.5:1.
+- **Teks di atas foto tidak boleh memakai token `putih`**, karena di palet gelap token itu berarti latar halaman — judul hero pernah tampil hitam di atas foto gelap. Pakai `di-primary` (selalu `#ffffff`): berlaku untuk `.vf-hero-foto`, `.vf-ajakan-foto`, dan `.vf-pita-foto`.
+
 ## Tema FSE untuk desain custom (`scripts/fse-apply`, `templates/tema-fse/`)
 
 Keputusan user 2026-09-14: **FSE dulu, tidak pakai child theme.** Child theme klasik dinilai kurang efektif karena isi dinamis terkunci di PHP. Paket G & Portal Berita Custom kini memakai block theme generik `velocity-fse` — kerangka sama untuk semua klien, isi khas klien di database sehingga PM bisa menyunting dari wp-admin:
@@ -264,6 +283,7 @@ Installer (`website-install-from-manifest`) tidak memasang tema induk `velocity`
 **Desain mengikuti referensi klien** (permintaan user 2026-09-14: "pastikan desain yang dibuat sama dengan referensi yang diminta"). Dulu installer mengabaikan isian "website yang ingin dicontoh" — hanya referensi yang cocok dengan API tema Velocity yang dipakai. Sekarang `fse-apply`:
 - membaca URL + catatan klien dari FORM ISIAN (`referensi_form`; contoh isian template & tautan Velocity diabaikan),
 - membaca ciri HTML halaman referensi (kolom samping, kartu selebar layar, grid dua kolom, font Google) dan meminta AI memilih gaya beranda terdekat dari katalog `GAYA` (cadangan: heuristik); manifest `gaya_beranda=klasik|sorotan` selalu menang,
+- **font teks diambil dari font yang paling banyak terlihat**, bukan dari default `<body>` (perbaikan 2026-09-16). erhaeschemical.com memakai Inter hanya di strip topbar — 1 elemen, 0,4% luas teks — sementara 60 elemen lain memakai Poppins, sehingga bumiairchemitech.com sempat berteks Inter dan tidak mirip referensinya. Pengukur kini menimbang luas piksel tiap font (font ikon diabaikan) dan memakai `<body>` hanya sebagai cadangan. Situs yang sudah terukur tidak berubah: hasil pengukuran ditembolok per URL + `VERSI` di `referensi_desain.py`, dan `VERSI` sengaja tidak dinaikkan supaya aturan baru hanya berlaku untuk build berikutnya,
 - menyimpan hasilnya di `/var/lib/velocity/fse-rencana/<domain>/referensi.json` (tidak diulang tiap run) dan menulis `gaya`, `referensi`, `font_teks`, `font_judul` ke opsi `velocity_situs`,
 - `paket-g-cek-visual` ikut memotret halaman referensi (`referensi-beranda-*.png`) di folder yang sama dengan hasil — **bandingkan keduanya sebelum melapor selesai**.
 
@@ -272,6 +292,21 @@ Gaya yang ada: `klasik` (portal padat + kolom samping) dan `sorotan` (majalah fo
 **Email & ikon media sosial wajib** (aturan user 2026-09-14, semua build): footer (`parts/footer.html`) dan halaman Hubungi Kami memuat blok `velocity/kontak` (email publik klien sebagai mailto) dan `core/social-links` ikon saja — Facebook, Instagram, X, YouTube, TikTok dengan tautan bawaan ke beranda platform (PM menggantinya dengan akun klien). Email biodata pemilik tidak pernah ditampilkan otomatis; kalau klien tidak memberi email publik, tanyakan dulu ke user.
 
 Belum ada di jalur FSE (masih milik child Paket G): susunan beranda mengikuti urutan halaman company profile (`inc/compro.php`) dan foto contoh per slot desain perusahaan (`paket-g-foto` hanya dipakai untuk foto utama artikel).
+
+### Referensi versi 5: struktur, bukan hanya gaya (2026-09-17)
+
+Pelajaran jasakontraktorindo.com (referensi kontraktorhijau.com) — hasil manual yang mirip datang dari meniru **struktur** referensi:
+
+- **Deteksi referensi**: `referensi_form()` menerima domain polos (`kontraktorhijau.com`) dan kalimat "contoh/seperti/samakan X" di kolom lain (bukan "materi/isi samakan X"). Dampak di 61 proyek (2026-09-17): 12 → 22 terdeteksi.
+- **Pengukur** (`referensi-desain.js`): pohon menu + submenu, font menu, detail kartu (border, padding, jarak, kartu tengah disorot, tombol per kartu, keterangan foto), bar di dasar hero, kotak berlatar, header melayang, dan **lebar wadah di layar 1366 & 1920** (tetap px vs persen). Header/footer/elemen fixed tidak dihitung saat memecah seksi; gulir pelan untuk foto lazy-load.
+- **Klasifikasi** (`referensi_desain.py`): baris judul page builder digabung dengan baris isinya (`gabung_kepala`); jenis baru `paket`; "tahapan", "kepuasan klien", "bukti kualitas" dikenali; deret foto berketerangan = galeri; pita gelap foto|teks = ajakan terbelah. Rencana memuat `menu`, `wadah`/`wadah_px`/`wadah_maks`, `halaman.layanan_detail`, `halaman.faq`.
+- **Pustaka komponen** (`fse-apply` + `templates/tema-fse/inc/referensi-komponen.php` + `assets/css/referensi-komponen.css`, aktif hanya untuk rencana v5 lewat `body.vf-ref-v5`): header melayang, bar konsultasi hero, judul seksi bertombol, kartu ikon bertombol, tentang dalam kotak, galeri berketerangan, keunggulan s.d. 8, **pilihan layanan pengganti paket harga (tanpa angka)**, tahapan akordeon (+foto), seksi form, ajakan terbelah, grid kolom tetap (`vf-kolom-N`).
+- **Menu & halaman dari menu referensi** (`menu_referensi`, `halaman_menu_referensi`): submenu layanan → halaman anak `/layanan/<slug>/` per layanan klien, submenu blog → kategori, FAQ disusun dari fakta klien (layanan, area, alur, kontak). Tidak aktif untuk portal berita, dealer, toko, atau manifest bermenu manual (`label_menu=` / `tanpa_halaman=`).
+- **Warna**: kolom "WARNA TEMA" yang meminta beda dari web contoh → warna referensi tidak dipakai.
+
+**Rig uji lokal** (`/var/lib/velocity/tools/wp-uji/`, lihat README.txt di sana): WordPress + SQLite + WP-CLI dilayani `php -S 127.0.0.1:8099 -t situs router.php`; `fse-apply` diarahkan ke sana dengan `VELOCITY_LOKAL_SSH`/`VELOCITY_LOKAL_DOCROOT`, rencana ke folder uji dengan `VELOCITY_FSE_RENCANA`, dan isi contoh dengan `VELOCITY_AI_GENERATED`. Situs klien tidak tersentuh.
+
+**Cek visual** (`paket-g-cek-visual` + `potret-halaman` + `banding-potret`): semua halaman dipotret Playwright (gulir pelan), halaman diambil dari menu situs, HP diperiksa (scroll horizontal, tombol menu HP ada & membuka menu, gambar rusak), dan referensi dipotret desktop + HP lalu digabung berdampingan (`banding-beranda-*.png`). `notify-telegram.py` mengirim album perbandingan itu (maks 6 desktop + 4 HP) bersama laporan SUCCESS/CHECK.
 
 ## Alur Paket G baku
 
@@ -282,9 +317,36 @@ Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nan
 | 1 | `compro-klien <domain>` | Company profile PDF → susunan bagian, prakata, warna, latar, logo, foto (`/var/lib/velocity/compro/<domain>/`). Tanpa PDF: dilewati |
 | 2 | `paket-g-konten <manifest>` | Isi contoh dari form + dokumen; disesuaikan dengan compro (layanan tertulis, slogan, prakata, motto) |
 | 3 | `fse-apply --tema <manifest>` | Pasang/aktifkan velocity-fse, data situs, palet, rubrik (sebelum konten AI) |
+| 3b | `fse-cek-referensi <manifest>` | **Gerbang sebelum konten AI** (keputusan user 2026-09-16): bandingkan hasil langkah tema dengan rencana referensi. Belum sesuai → ulangi langkah 3 (maks `FSE_CEK_MAKS`, bawaan 3), sesuai → lanjut |
 | 4 | `fse-apply --isi <manifest>` | Halaman berupa blok + menu `wp_navigation` (harus sesudah `site-finish`) |
 | 5 | `paket-g-foto <manifest>` | Hanya portal berita: foto utama artikel |
 | 6 | `paket-g-cek-visual <manifest>` | Screenshot desktop & HP ke `/var/lib/velocity/visual/<domain>/<waktu>/` + cek HTTP/layar kosong; `site-audit` membaca temuannya |
+| 7 | `fse-audit-kemiripan <manifest>` | **Audit kemiripan tampilan** (permintaan user 2026-09-17): situs jadi diukur dengan pengukur referensi, dinilai per bagian & per seksi. Belum mirip → `fse-apply --tema` (+ gerbang 3b) dan `fse-apply --isi` digenerate ulang lalu diaudit lagi (`audit_kemiripan`, maks `FSE_MIRIP_MAKS`, bawaan 3 generate; berhenti lebih awal kalau skor header+footer+beranda tidak naik). Masih belum mirip → laporan Telegram "perlu dicek" memuat catatan `desain_belum_mirip_referensi:<bagian>` **dan daftar yang perlu diperbaiki** (per cek & per seksi: nilai situs → nilai referensi, skor, folder screenshot); pratinjau: `notify-telegram.py --perbaikan <domain>` |
+
+**Gerbang tema vs referensi** (`scripts/fse-cek-referensi`, langkah 3b): membaca situs lewat WP-CLI lalu membandingkan dengan `fse-rencana/<domain>/desain-referensi.json` — tema aktif & versinya (harus = versi template repo), gaya beranda, font teks & judul, token header/footer (gelap, posisi logo & menu), radius tombol & kartu, serta palet (`primary`, `aksen`, `di-primary`, `di-aksen`, `putih`). Kode keluar 0 = sesuai atau tidak ada referensi, 1 = belum sesuai, 2 = tidak bisa diperiksa. `installer-runner` mengulang `fse-apply --tema` selama hasilnya 1, maksimal `FSE_CEK_MAKS` percobaan, lalu tetap lanjut ke konten AI dengan catatan `fse_cek: masih belum sesuai setelah N percobaan` — pemeriksaan ini tidak pernah menggagalkan instalasi. Log: `fse_cek: sesuai|belum_sesuai:<daftar beda>|tidak_ada_referensi|gagal:<alasan>`.
+
+**Desain kiriman klien didahulukan** (centralimpex.com 2026-09-17: form tanpa website contoh, tetapi klien mengirim folder `desain/` berisi ekspor HTML 8 halaman). `referensi_form()` kini memanggil `desain_lokal()` lebih dulu: folder bernama desain/design/mockup/template/tampilan/layout (≤3 tingkat) berisi `index.html`, atau zip bernama serupa (diekstrak ke `fse-rencana/<domain>/desain-klien/`, tanpa jalur keluar folder) → URL `file://` yang diukur pengukur yang sama; halaman dalam dikenali dari nama berkasnya. Rencana mencatat `sumber_referensi: desain_klien`. Saat diperkenalkan hanya 1 dari ±3.000 folder proyek yang terkena. `cari_logo.py` juga memakai logo di folder desain bila nama berkasnya memuat nama domain klien (`central-impex-logo.png`); logo situs contoh perusahaan lain tetap diabaikan.
+
+Pengenal seksi (`jenis_seksi`) membaca juga nama kelas seksi (`inquiry-cta`, `intro-section`, `markets-section`) dan teks label kecil di atas judul ("PRODUCT SCOPE", "WHY WORK WITH US"); jenis baru `pasar` (jangkauan pasar/negara tujuan — tanpa data klien dilewati `fse-apply` dan dicatat di `beranda-dilewati.json`). Latar bergradien (`background-image: linear-gradient`) dibaca warnanya, dan perataan banner diukur dari posisi teks judul, bukan kotak `<h1>`.
+
+Token tema VERSI 4 (velocity-fse 1.10.13): `tanpa_cari` (kotak cari header & topbar disembunyikan), `footer_logo` (logo situs menggantikan nama di kolom pertama footer, berlatar putih di footer gelap), `footer_bawah_rata` (`vf-hak-cipta-terbelah|tengah`), `footer_judul_kapital`, `banner_latar|rata|tinggi|remah` (banner judul halaman dalam: gelap/aksen/foto dari slot hero/terang, rata, tinggi, breadcrumb). Beranda referensi berlabel memberi label kecil (teks milik situs) dan judul seksi rata kiri (`vf-rata-kiri`) bila referensinya begitu.
+
+**Pembacaan referensi yang diperdalam** (permintaan user 2026-09-17, `referensi_desain.py` `VERSI = 4` + `referensi-desain.js`). Rencana `desain-referensi.json` kini memuat:
+- `header`: terang/gelap, posisi logo & menu, satu/dua baris, tinggi, tinggi logo, ukuran/ketebalan/warna menu (`menu_berwarna`), kotak cari, dropdown, tombol ajakan (ikon keranjang & lencana tidak dihitung) + sudutnya, ikon keranjang, garis bawah, lengket, topbar (latar & isi: telepon/email/sosmed/alamat/jam);
+- `footer`: latar, jumlah kolom (baris kolom yang mengisi ≥55% lebar footer; kolom bersarang tidak dihitung), isi tiap kolom (`kolom_isi`: logo/tentang/menu/kontak/sosmed/statistik/peta/form/galeri) & judulnya, baris hak cipta (`bawah_rata`, `bawah_beda_latar`, `pita` = latar sendiri selebar layar), judul kapital;
+- `seksi[]` beranda: selain jenis/latar/kolom/rata, juga `label` (teks kecil di atas judul), `foto_posisi` (kiri/kanan pada seksi berdampingan; kolom yang dirata-tengah vertikal tetap terbaca berdampingan), `ruang` (rapat/sedang/lega), `kartu_bingkai`. Blok `core/cover` (foto + lapisan + isi yang saling menimpa) dibaca sebagai SATU seksi;
+- `halaman{}`: halaman dalam referensi dari menunya (tentang/layanan/produk/galeri/kontak/artikel, satu per jenis) diukur dalam satu browser — `banner` judul (ada, latar foto/warna/terang, rata, breadcrumb, tinggi), susunan seksi, isi form/peta & apakah berdampingan.
+
+Pengukur mencatat juga `kontras_rendah` (teks/tautan berkontras < 2,2 di header, footer, tiap seksi) — dipakai audit, bukan rencana. `referensi-desain.js` menerima banyak halaman sekaligus (`<url> <json> <png|-> ...`) dan `VELOCITY_UKUR_COOKIE` (cookie Playwright) untuk membaca situs yang sedang maintenance; admin bar disembunyikan.
+
+**Audit kemiripan** (`scripts/fse-audit-kemiripan <manifest|domain> [--json] [--ambang=80]`, langkah 7). Beda dengan gerbang 3b yang hanya membaca opsi WordPress: audit ini membaca **tampilan** situs jadi (beranda + halaman yang padanannya ada di referensi) dengan pengukur yang sama, lalu memberi skor 0–100:
+- `header` (ambang 80): latar, posisi logo & menu, baris, ajakan, topbar & isinya, lengket, huruf & warna menu, cari, keranjang, tinggi, logo, garis bawah, teks tak terbaca;
+- `footer` (80): latar, jumlah kolom (±1, kolom Statistik wajib), isi & urutan kolom, baris hak cipta (rata, latar, pita), teks tak terbaca, **sama di semua halaman**;
+- `beranda` (80): urutan jenis seksi (LCS; seksi yang `fse-apply` lewati karena klien tak punya datanya — `fse-rencana/<domain>/beranda-dilewati.json` — tidak dihitung), lalu per pasangan seksi: kelompok latar (terang/abu = terang, gelap/aksen = warna, foto), rata, kolom kartu, berdampingan & sisi foto, label, varian hero; teks tak terbaca. Seksi situs dikenali dari kelas `vf-ref-<jenis>`;
+- `gaya` (80): font teks & judul, sudut tombol, judul kapital;
+- `halaman_<jenis>` (70): halaman ada, banner (latar, rata, breadcrumb, tinggi), isi kontak & form|peta berdampingan, susunan, teks tak terbaca.
+
+Yang sengaja tidak dihitung: warna (warna klien menang), kolom Statistik, email + sosmed di footer, isi teks/foto. Gaya beranda dari manifest (dealer/klinik/katalog) hanya dinilai header/footer/gaya. Situs maintenance dibaca sebagai admin: token sesi 15 menit dibuat & dihapus lewat WP-CLI, tidak pernah dicetak. Hasil: `fse-rencana/<domain>/audit-kemiripan.json` + `audit/situs-*.json|png` (bandingkan dengan `referensi-potret*.png`). Log: `kemiripan: header=.. footer=.. beranda=..`, `kemiripan: beda <bagian>.<cek>: situs=.. referensi=..`, `kemiripan: seksi <n>.<jenis> (<skor>): ...`, `kemiripan: sesuai|belum_mirip:<bagian>|tidak_ada_referensi|gagal:<alasan>`. Kode keluar 0/1/2 seperti gerbang 3b; tidak pernah menggagalkan instalasi.
 
 Sejak 2026-09-15 langkah 3–4 hanya FSE. Langkah lama jalur child (`child-theme-apply --perbarui`, `paket-g-foto` per slot, `paket-g-setup`, `site-finish --widget`) tidak dipanggil lagi untuk paket custom.
 
@@ -297,7 +359,7 @@ Keputusan user 2026-09-14: "paket G = paket custom design, untuk portal berita c
 - **Isi** (`paket-g-konten`, `jenis=berita`): rubrik dibaca kode dari susunan menu FORM ISIAN (isian bernilai "berisi berita-berita …"); warna dari gambar contoh warna klien — kode hex hasil OCR, atau warna dominan gambar yang dipotret Chromium headless (server tanpa pengurai JPEG); AI hanya menulis nama tampil (huruf & urutan harus sama dengan nama di form), slogan, tentang, dan pedoman redaksi. Tidak mengarang nama awak redaksi, badan hukum, nomor verifikasi, atau jumlah pembaca.
 - **Tema** (`inc/berita.php`, `single.php`, `archive.php`, `home.php`; body class `<prefix>--berita`): topbar tanggal + slogan, beranda berita utama + terbaru + blok per rubrik dengan kolom samping (terpopuler, rubrik, tentang), arsip & indeks berita, halaman artikel dengan berita terkait, `[<prefix>_redaksi]`, dan form "Kirim Pesan ke Redaksi". Situs non-berita tetap memakai single/archive/index tema induk.
 - **Artikel** (`ai-content-generator.py`): kategori = rubrik tema; `articles_per_rubrik` (bawaan 3) artikel per rubrik bergaya **tulisan informatif, bukan laporan peristiwa** — tanpa kejadian, nama orang, kutipan, angka, atau tanggal karangan. Artikel tersimpan yang kategorinya tidak cocok dengan situs dibuat ulang; artikel contoh lama dihapus hanya bila belum pernah disunting.
-- **Foto** (`paket-g-foto`): foto utama tiap artikel tanpa thumbnail dari Openverse (CC0/PDM), kata kunci per artikel dari AI dengan cadangan per rubrik.
+- **Foto** (`paket-g-foto --artikel`): foto utama tiap artikel tanpa thumbnail dari **Pexels** (kunci `/home/pexel/api-key.txt`, env `VELOCITY_PEXELS_KEY_FILE`; kunci tidak pernah dicetak), cadangan Openverse (CC0/PDM) → Commons bila Pexels kosong, menolak (401/403/429), atau tak ada yang layak. Kata kunci per artikel dari AI dengan cadangan per rubrik; caption "Foto ilustrasi: <alt> — <fotografer>, Pexels". `--ganti-artikel` mencarikan ulang artikel yang masih memakai foto contoh bank foto lama / `sampul-*` installer (foto klien tidak disentuh) dan menghapus lampiran lama yang tak dipakai lagi — dipakai untuk rmbrentcar.com 2026-09-17.
 - **Halaman & menu** (`paket-g-setup`): kategori rubrik (slug sama dengan theme-data), halaman Redaksi, blok kontak + form di Hubungi Kami, menu Home → rubrik → Redaksi → Kontak Kami.
 - **Urutan**: di situs lama tanpa child theme, tema harus dipasang **sebelum** generator artikel (`paket_g_tema` → konten AI & `site-finish` → `paket_g_isi`); kalau terbalik, generator tidak melihat rubrik dan artikel tetap satu kategori "Blog".
 
@@ -407,13 +469,37 @@ Keputusan user 2026-09-14: semua situs buatan installer menampilkan kredit di ba
 Keputusan user 2026-09-14, berlaku untuk semua paket (tema klasik, child theme, maupun FSE). Situs belum boleh dilaporkan selesai sebelum keempatnya terpenuhi.
 
 1. **Favicon wajib ada.** `site-finish` memasangnya: logo klien kalau ada, ikon logo contoh kalau tidak (bagian [Favicon](#favicon) dan [Logo contoh](#logo-contoh-scriptsvelocity-logo)). Situs FSE yang temanya dipasang manual juga wajib diperiksa. Audit: `favicon_belum_terpasang`.
-2. **Halaman kebijakan privasi (Privacy Policy) wajib ada dan terbit.** `website-install-from-manifest` membuat halaman "Kebijakan Privasi" berstatus publish dan menetapkannya sebagai `wp_page_for_privacy_policy` (Pengaturan → Privasi). Draft "Privacy Policy" bawaan WordPress tidak dihitung. Audit: `halaman_privasi_tidak_ada` / `halaman_privasi_belum_terbit:<status>`.
+2. **Halaman kebijakan privasi (Privacy Policy) wajib ada dan terbit.** `website-install-from-manifest` membuat halaman "Kebijakan Privasi" berstatus publish dan menetapkannya sebagai `wp_page_for_privacy_policy` (Pengaturan → Privasi). Draft "Privacy Policy" bawaan WordPress tidak dihitung — karena itu `site-finish` (2026-09-16) menerbitkan draf itu dan mengganti judulnya kalau situs sudah terpasang tanpa halaman privasi. Audit: `halaman_privasi_tidak_ada` / `halaman_privasi_belum_terbit:<status>`.
 3. **Tampilan desktop dan mobile wajib rapi, terutama padding dan margin.** Periksa lewat screenshot di lebar desktop (1366px) dan HP (390px), jangan hanya HTTP 200. `paket-g-cek-visual` sudah memotret keduanya. Daftar periksa dan contoh kasus nyata ada di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md#kerapian-padding--margin-desktop-dan-mobile).
 4. **Featured image (foto utama) setiap post wajib punya caption.** Caption = kolom *Keterangan* attachment (`post_excerpt`, dibaca `wp_get_attachment_caption()`), dan **wajib tampil** di halaman artikel di bawah foto. Isinya harus benar: keterangan dari klien, atau sumber/kredit foto contoh (mis. judul & pembuat dari Openverse). Jangan mengarang peristiwa, nama orang, atau lokasi. Keadaan saat ini (2026-09-14): `paket-g-foto` memasang foto utama lewat `wp media import --featured_image` **tanpa** caption, `templates/child-theme-paket-g/single.php` hanya `the_post_thumbnail()`, dan blok `core/post-featured-image` di tema FSE tidak mencetak caption. Ketiganya perlu disesuaikan. Audit: `foto_utama_tanpa_caption:<jumlah>`.
+5. **Statistik pengunjung di footer, sebagai kolom.** Keputusan user 2026-09-15, dipertegas 2026-09-16: shortcode velocity-addons `[velocity-statistics style="list" show="all" with_online="1" …]` dipasang di **satu kolom footer** sejajar kolom Menu/Kontak, dengan **judul kolom** "Statistik Pengunjung" dan **isi cukup list** (label di kiri, angka di kanan) — tanpa ikon, kotak, atau pita selebar footer. Markup plugin memakai kelas Bootstrap (`list-group`, `d-flex`, `fw-bold`) yang tidak dimuat tema blok, jadi daftarnya ditata CSS tema (`.vf-statistik` di `templates/tema-fse/style.css`, kolom keempat di `templates/tema-fse/parts/footer.html`). Versi plugin lama mencetak `<div>` per baris, versi baru `<li>` — keduanya ditangani.
+6. **Email publik + ikon media sosial** di halaman Kontak Kami dan footer (keputusan user 2026-09-14): `core/social-links` ikon saja (facebook, instagram, x, youtube, tiktok) dengan URL bawaan platform sampai klien memberi akun. Kalau form hanya memuat email biodata pemilik, tanya user dulu; jawabannya ditulis di manifest (`email_publik=`).
+7. **Setiap tema wajib punya `screenshot.jpg`.** Keputusan user 2026-09-16, untuk tema FSE maupun child theme: berkas `screenshot.jpg` ukuran **1200x900**, latar **polos gelap**, tulisan **putih** berisi **nama tema** (Theme Name). Tanpa itu tema tampil sebagai kotak kosong di Tampilan → Tema. Alatnya `scripts/tema-screenshot <nama tema> <keluaran.jpg> [warna latar]` (Node + Chromium, karena server ini tidak punya PIL/ImageMagick dan librsvg tidak bisa menulis JPEG). `velocity-fse` membawa `templates/tema-fse/screenshot.jpg` di repo (dijaga `deploy.sh`), child theme membuatnya per situs saat render (`screenshot_tema` di `scripts/velocity-child-theme`, latar = warna utama klien digelapkan).
+
+## Logo klien dicari di semua kiriman klien (`scripts/cari_logo.py`)
+
+Keputusan user 2026-09-16: **logo dicari lebih dulu di berkas yang diupload klien — company profile, compro, atau berkas apa pun — dan logo contoh baru dibuat kalau benar-benar tidak ada.** Dulu hanya dua sumber (gambar bernama `logo*` dan potongan dari satu PDF compro terpilih), sehingga klien yang logonya "hanya" ada di dalam docx atau di PDF kedua tetap dapat logo contoh.
+
+Urutan pencarian (`cari_logo.cari(domain, folder, compro)`), berhenti di yang pertama ketemu:
+
+| # | Sumber | Catatan |
+|---|---|---|
+| 1 | gambar di folder klien yang namanya menyebut `logo`/`lambang`/`brand` | perilaku lama, PNG diutamakan |
+| 2 | potongan company profile (`compro-klien`) | logo bertransparansi dari halaman 1 |
+| 3 | gambar tertanam di **PDF lain** di folder klien | proposal, katalog, compro yang tidak terpilih |
+| 4 | gambar tertanam di **dokumen Office** (`.docx`/`.pptx`) | logo kop surat & sampul proposal |
+| 5 | gambar lepas lain yang berciri logo | PNG bertransparansi, tidak mendatar, ≤2000px |
+| — | tidak ada → `scripts/velocity-logo` | logo contoh (bagian di bawah) |
+
+Sumber 3–5 wajib lolos `mirip_logo()`: latar tembus pandang (≥15%) atau palet ≤24 warna, total ≤60 warna, ada tinta yang tergambar (≥5%), dan bukan bidang rata. Tanpa saringan itu ikut terambil **tangkapan layar situs contoh** di dalam docx dan **kotak bayangan hiasan** dari PDF (keduanya terjadi 2026-09-16). Subfolder bernama `contoh`/`referensi`/`desain`/`screenshot` tidak pernah dibaca — isinya logo perusahaan lain.
+
+Diperiksa atas 43 folder antrean: 8 domain punya berkas bernama logo, 2 dari company profile, 1 dari docx (medikaklinikteknologi.com), sisanya memang tidak mengirim logo.
+
+Log `site-finish`: `finish: logo dari <sumber>` (mis. `dokumen:Company profil untuk website.docx`) atau `finish: logo klien tidak ditemukan di kiriman klien`.
 
 ## Favicon
 
-**Kalau klien punya logo, favicon selalu logo klien** (keputusan 2026-09-14, berlaku untuk semua paket). Logo klien = gambar bernama `logo*` di folder klien, atau logo yang dipotong `compro-klien` dari company profile.
+**Kalau klien punya logo, favicon selalu logo klien** (keputusan 2026-09-14, berlaku untuk semua paket). Logo klien dicari lewat `cari_logo.py` di atas.
 
 - Logo tidak dipakai mentah: `site-finish` menaruhnya utuh di tengah kanvas transparan 512×512 (`favicon_klien`, lewat `rsvg-convert`), karena WordPress butuh ikon persegi ≥512px dan logo klien sering mendatar atau kecil. Media-nya bertanda `_velocity_source=favicon-klien:…`.
 - Favicon yang dipasang installer (ikon logo contoh, logo mentah dari versi lama) digeser favicon logo klien. Favicon yang diunggah orang lewat Customizer (tanpa `_velocity_source`) tidak pernah ditimpa.
@@ -457,6 +543,16 @@ Yang dibandingkan: tema aktif vs child theme yang seharusnya, halaman wajib (Pak
 
 Audit tidak mengubah apa pun — status instalasi di `<domain>.json` dan notifikasi Telegram tidak disentuh.
 
+Pemeriksaan tambahan 2026-09-17 (pelajaran jasakontraktorindo.com & centralimpex.com): `referensi_form_terlewat` (form menyebut web contoh — termasuk domain polos atau "contoh seperti X" di kolom lain — tetapi rencana tercatat tanpa referensi), `artikel_tanpa_foto_utama`, `statistik_footer_tidak_ada`, `sosmed_footer_tidak_ada`, `seo_dasar_kosong`, `teks_catatan_ai` (kalimat seperti "... belum tersedia dalam data perusahaan" tampil), `judul_ganda` (h1/h2 sama tercetak dua kali), dan `kontak_biodata_tampil` (email/alamat BIODATA PEMILIK tampil di beranda/kontak; lolos bila tercantum di "Kontak utk di web", dokumen klien selain form, atau disetujui di manifest `email_publik=` / `alamat_publik=`). Form pemesanan dikenali dari blok `wp:*/form` mana pun, dan halaman wajib menerima slug padanan (about/profil, portofolio/gallery, blog/insights, kontak/contact); situs `tema_fse=` hanya dituntut halaman kontak.
+
+### Audit susulan (`scripts/audit-susulan`, halaman `/installer/susulan/`)
+
+Situs yang sudah jadi tidak otomatis ikut aturan yang lahir sesudahnya. `audit-susulan` menjalankan `site-audit` (hanya membaca) untuk semua manifest berstatus SUCCESS/CHECK, memisahkan temuan "belum ikut aturan" dari temuan lain, dan menyimpan `/var/lib/velocity/installer/audit-susulan.json` → `/api/installer/susulan` → halaman `/installer/susulan/` (filter per aturan). Perbaikan tetap diputuskan manusia karena sebagian situs sedang dikerjakan webmaster. Timer `audit-susulan.timer` menjalankannya tiap hari 03:40.
+
+```bash
+WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 scripts/audit-susulan [--paralel 4] [domain ...]
+```
+
 Temuan `maintenance_mati_setelah_dinyalakan_installer` sengaja ada: pernah terjadi maintenance mode mati sendiri sehingga situs yang belum diserahkan sempat terbuka untuk umum, dan `site-finish --maintenance` tidak akan menyalakannya lagi (penanda `velocity_installer_maintenance` sudah ada). Pemulihannya manual: `wp option update maintenance_mode 1`.
 
 Pelajaran lain dari pembangunan alur ini dicatat di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md) — baca sebelum menambah langkah otomatis baru. Khusus soal palet warna dan keterbacaan: [`docs/warna-dan-kontras.md`](docs/warna-dan-kontras.md), dengan penjaganya `scripts/cek-warna-tema` (ikut dijalankan `deploy.sh`).
@@ -477,6 +573,7 @@ CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/instal
 - `POST /api/installer/claim` — body `{"domain":"example.com","by":"manual"|"autopilot"}`. Idempoten.
 - `POST /api/installer/release` — body `{"domain":"example.com"}`.
 - Halaman installer: menu **Ambil alih** / **Lepas klaim**, badge `DIAMBIL: MANUAL|AUTOPILOT`.
+- Domain berstatus `dikerjakan webmaster` tetap bisa diklaim (installer memang pernah mengerjakan project yang di CRM sudah ditugaskan, mis. `popcreativeprint.com`), tapi tombolnya minta konfirmasi berisi nama webmasternya supaya tidak ada yang ditabrak tanpa sadar.
 
 ## Autopilot (`scripts/installer-autopilot`)
 
@@ -485,18 +582,41 @@ CRM belum punya API tulis, jadi klaim dicatat lokal di `/var/lib/velocity/instal
 1. Domain yang sedang dipegang autopilot dilanjutkan: dry-run OK + `site=empty` → apply. Dry-run gagal, situs sudah berisi (`site=wordpress|not_empty`), atau run macet >2 jam → fase `manual` (tanpa notifikasi untuk tahap dry-run; apply yang gagal tetap dilaporkan).
 2. Kalau tidak ada run berjalan, ambil **satu** project `belum diambil` yang lolos saringan: klaim → generate manifest → dry-run.
 
-Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), FORM ISIAN klien terbaca, belum pernah ditangani autopilot, dan aturan deadline sesuai `AUTOPILOT_PRIORITAS`:
+Saringan: folder Drive sudah tersinkron, jenis `Pembuatan`/`Pembuatan apk biasa`/`Pembuatan Tanpa Domain` (Redesign tidak), FORM ISIAN klien terbaca, belum pernah ditangani autopilot, dan **deadline belum terlewat**.
 
-- `terlama` (bawaan, keputusan user 2026-09-13): hanya project yang deadline-nya **sudah lewat** (minimal `AUTOPILOT_MIN_TELAT_DAYS`, bawaan 1 hari), yang paling lama lewat diambil dulu. Project yang deadline-nya belum lewat sedang dikerjakan manual oleh webmaster selama masa uji coba, jadi dilewati (`deadline_belum_lewat_dikerjakan_webmaster`). Saat diterapkan kandidat berubah dari 0 menjadi 12.
-- `terdekat` (perilaku lama): deadline terdekat dulu; yang lewat lebih dari `AUTOPILOT_DEADLINE_GRACE_DAYS` (10) hari dilewati.
+**Aturan deadline (keputusan user 2026-09-16, menggantikan mode `terlama`):** autopilot hanya mengambil project yang deadline-nya **belum terlewat**, yang paling dekat lebih dulu (deadline hari ini masih terhitung belum lewat; baris tanpa deadline ikut diambil, diurutkan paling belakang). Project yang deadline-nya sudah lewat **dibiarkan** untuk dikerjakan manusia — alasannya `deadline_sudah_terlewat_biarkan_manual`. `AUTOPILOT_PRIORITAS`, `AUTOPILOT_MIN_TELAT_DAYS`, dan `AUTOPILOT_DEADLINE_GRACE_DAYS` tidak lagi dipakai autopilot (`AUTOPILOT_DEADLINE_GRACE_DAYS` masih dibaca `onprogress-sync` untuk menentukan folder mana yang ditarik dari Drive).
+
+Aturan lama `terlama` (2026-09-13) memakai deadline sebagai tebakan "ini sedang dipegang webmaster". Tebakan itu tidak diperlukan lagi sejak daftar menarik status `Dalam pengerjaan` dari CRM: project yang sudah ditugaskan ke webmaster berstatus `dikerjakan webmaster` dan tidak pernah masuk hitungan autopilot, jadi yang tersisa di `belum diambil` memang benar-benar belum dipegang siapa pun.
+
+> Catatan 2026-09-16: `AUTO_JENIS` masih menulis `Pembuatan Tanpa Domain`, padahal nilai di CRM adalah `Pembuatan Tanpa Domain+Hosting` — jadi jenis itu **tidak pernah** benar-benar diambil autopilot (`jenis_redesign_atau_lain`). `INSTALL_JENIS` (daftar di halaman) sudah diperbaiki; `AUTO_JENIS` sengaja dibiarkan karena memperbaikinya berarti autopilot mulai mengambil kategori project yang selama ini tidak pernah disentuhnya — keputusan user.
 
 Mode di `/etc/velocity/installer-autopilot.env`: `AUTOPILOT_MODE=observe` (default — hanya mencatat rencana ke `/var/lib/velocity/installer/autopilot-last.json` + journald) atau `AUTOPILOT_MODE=active`. Jejak per domain: `/var/lib/velocity/installer/autopilot.json`.
 
 ## Sync Google Drive (`scripts/onprogress-sync`)
 
-`onprogress-sync-queue.timer` — tiap 10 menit, hanya folder domain berstatus `belum diambil` yang deadline-nya belum terlewat. Tidak ada sync penuh: Drive berisi ±10 ribu folder yang tidak dibutuhkan installer.
+`onprogress-sync-queue.timer` — tiap 10 menit. Tidak ada sync penuh: Drive berisi ±10 ribu folder yang tidak dibutuhkan installer.
 
-Selalu `rclone copy` (tidak pernah menghapus file lokal).
+**Disalin berkala selama project masih berjalan, bukan sekali saat masuk antrean** (permintaan user 2026-09-16: klien kerap menambah berkas di Drive sesudah project diambil alih). Saringan lama hanya `belum diambil`, jadi begitu autopilot mengklaim sebuah domain foldernya berhenti disinkron dan tambahan data klien tidak pernah sampai — 19 dari 33 folder yang sekarang ikut adalah project yang sudah diklaim/dipegang webmaster dan selama ini terlewat.
+
+Yang ikut: semua baris di daftar installer, kecuali (a) status `RUNNING` — jangan mengubah data sumber di tengah instalasi, ikut lagi putaran berikutnya; (b) `belum diambil` yang deadline-nya lewat lebih dari `AUTOPILOT_DEADLINE_GRACE_DAYS` (10) hari. Project yang sudah terpasang penuh (SUCCESS/COMPLETE) hilang dari daftar, jadi berhenti disinkron dengan sendirinya. Dampak saat diterapkan: 14 → 33 folder.
+
+Selalu `rclone copy` (tidak pernah menghapus file lokal) — menyalin ulang folder yang sudah ada murah, rclone hanya memindahkan berkas baru/berubah.
+
+## Tampilan paket biasa / child theme klasik (`scripts/tema-klasik`)
+
+Permintaan user 2026-09-17 (sedotwcsrirejeki.com, rmbrentcar.com): paket non-custom harus terpasang serapi situs yang dirapikan manual (sobirin-advokat.com). Alur `installer-runner` untuk paket biasa kini:
+
+1. `paket-g-konten` (sebelum konten AI) → `<domain>-tema.json`: hero, layanan, keunggulan, profil. Layanannya jadi **kategori artikel** (`kategori_isi_contoh` di `ai-content-generator.py`); artikel "Blog" lama yang belum disunting dipensiunkan.
+2. `tema-klasik` (sesudah site-finish, satu koneksi SSH, `wp eval-file` sebagai user DA):
+   - beranda memakai template "Home Template" child theme + pengaturan temanya lewat adaptor: `velocity-pakete` (banner_*, judul_layanan, services_list) dan `velocity-perusahaan2` (home_banner, *_banner, sambutan, layanan_repeater, title_homelogo). Tema lain: `tampilan: beranda_tema_belum_didukung:<slug>`.
+   - halaman **Layanan** (anchor per layanan) + menu; blok kontak `<!-- velocity-kontak -->` di Hubungi Kami (telepon, WhatsApp, email publik, ikon sosial Bootstrap Icons); widget sidebar (hubungi, layanan, artikel terbaru) & footer (tentang + email + ikon sosial, kontak, `[velocity-statistics]`); CSS di antara `/* velocity-tampilan-klasik */`; `statistik_velocity=1` sekali.
+   - gambar: foto klien bergilir → foto bank (pemilih `paket-g-foto`) → banner gradasi. Tembolok `/var/lib/velocity/tampilan/<domain>/` supaya run ulang tidak mengunggah media baru.
+   - tidak menimpa kerja orang: nilai bawaan tema dianggap kosong; pengaturan/widget/halaman hanya ditulis bila kosong, bawaan, atau masih persis tulisan langkah ini (opsi `velocity_tampilan_klasik`, meta `_velocity_content_md5`).
+3. `paket-g-foto --artikel` lalu `tema-klasik --foto-artikel`: sisa artikel tanpa foto bank yang layak diberi foto klien bergilir atau sampul bertuliskan kategori (caption selalu ada).
+
+`paket-g-foto` menolak calon foto berupa kartun/satire/karikatur/politik, gambar teknik/peta/denah, dan arsip lawas (`bukan_foto`). Mode `child-theme` untuk paket biasa ikut menjalankan langkah 1–3. Uji tanpa SSH: `scripts/tema-klasik <manifest> --coba`.
+
+Belum tercakup: kontak publik hanya dari "Kontak utk di web"/company profile — email & alamat biodata pemilik tidak pernah tampil, jadi situs tanpa data itu hanya menampilkan WhatsApp.
 
 ## Token GitHub & pengingat kedaluwarsa (`scripts/cek-token-github`)
 
@@ -509,7 +629,8 @@ Token organisasi di `/etc/velocity/secrets/github_token` (600) dipakai dua hal: 
 ```bash
 install -m 644 config/onprogress-sync@.service config/onprogress-sync-queue.timer \
   config/installer-autopilot.service config/installer-autopilot.timer \
-  config/velocity-token-github.service config/velocity-token-github.timer /etc/systemd/system/
+  config/velocity-token-github.service config/velocity-token-github.timer \
+  config/audit-susulan.service config/audit-susulan.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now onprogress-sync-queue.timer installer-autopilot.timer velocity-token-github.timer
+systemctl enable --now onprogress-sync-queue.timer installer-autopilot.timer velocity-token-github.timer audit-susulan.timer
 ```

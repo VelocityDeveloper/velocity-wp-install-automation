@@ -122,7 +122,7 @@ def _clean_lines(lines):
     return out
 
 
-def collect_client_docs(folder, total_budget=TOTAL_BUDGET):
+def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DOC_BUDGET):
     """{'sources': [(nama, teks)], 'unreadable': [...], 'skipped': [...]}"""
     folder = Path(folder)
     result = {'sources': [], 'unreadable': [], 'skipped': []}
@@ -147,7 +147,7 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET):
         if len(text) < 40:
             result['unreadable'].append(name)  # mis. PDF hasil scan tanpa teks
             continue
-        room = min(PER_DOC_BUDGET, total_budget - used)
+        room = min(per_doc_budget, total_budget - used)
         if room < 300:
             result['skipped'].append(name)
             continue

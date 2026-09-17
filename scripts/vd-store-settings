@@ -3,6 +3,12 @@
 
 Runs after vd-store activation. Blank form fields stay blank; shipping origin
 requires provider API already configured in VD Store.
+
+Halaman toko (keputusan user 2026-09-17): sesudah pengaturan disimpan, halaman di
+Pengaturan VD Store > Halaman dibuat lewat SettingsController::generate_pages() milik
+VD Store (Katalog, Cek Ongkir, Profil Saya, Keranjang, Checkout, Terima Kasih, Tracking
+Order). Halaman terbit yang sudah memuat shortcode-nya dipakai lebih dulu, jadi run ulang
+tidak membuat halaman ganda. "Profil Saya" = akun pelanggan, BUKAN Tentang Kami.
 """
 import base64
 import json
@@ -88,7 +94,18 @@ WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$
 php -d memory_limit=512M "$WP_BIN" eval '
 $d=json_decode(base64_decode("__DATA__"),true); $s=(array)get_option("wp_store_settings",[]);
 foreach (["address"=>"store_address","email"=>"store_email","phone"=>"store_phone","wa"=>"store_wa"] as $a=>$b) { if (array_key_exists($a,$d)) $s[$b]=(string)$d[$a]; }
-if (!empty($d["banks"])) { $a=[]; foreach($d["banks"] as $n) $a[]=["bank_name"=>(string)$n,"bank_account"=>"","bank_holder"=>""]; $s["payment_methods"]=["bank_transfer"]; $s["store_bank_accounts"]=$a; }
+if (!empty($d["banks"])) {
+  // Nama bank = LABEL dropdown VD Store (wp_store_bank_labels: "BCA", "Bank Mandiri", ...), bukan teks form
+  // ("bca") — teks yang tak cocok tampil sebagai "Lainnya" (yukpergimancing.com 2026-09-17). Rekening yang
+  // sudah ada (nomor/pemilik diisi PM) dipertahankan; bank dari form yang belum ada ditambahkan.
+  $label=function_exists("wp_store_bank_labels")?wp_store_bank_labels():[]; $norm=function($v){return preg_replace("/[^a-z0-9]/","",preg_replace("/^bank\s+/i","",strtolower(trim((string)$v))));};
+  $cari=function($n)use($label,$norm){$k=$norm($n); if($k==="")return null; foreach($label as $kode=>$l){ if($kode==="lainnya")continue; if($norm($kode)===$k||$norm($l)===$k)return $l; } return null;};
+  $lama=array_values(array_filter((array)($s["store_bank_accounts"]??[]),"is_array")); $a=[];
+  foreach($lama as $x){ $nm=(string)($x["bank_name"]??""); if($nm!=="Lainnya"&&!in_array($nm,$label,true)){ $l=$cari($nm); if($l){$x["bank_name"]=$l;$x["custom_bank_name"]="";$x["bank_logo_id"]=0;} else {$x["custom_bank_name"]=$nm;$x["bank_name"]="Lainnya";} } $a[]=$x; }
+  foreach($d["banks"] as $n){ $l=$cari($n); $baru=$l?["bank_name"=>$l,"custom_bank_name"=>""]:["bank_name"=>"Lainnya","custom_bank_name"=>(string)$n];
+    $ada=false; foreach($a as $x){ if(($x["bank_name"]??"")===$baru["bank_name"]&&(string)($x["custom_bank_name"]??"")===$baru["custom_bank_name"]){$ada=true;break;} }
+    if(!$ada) $a[]=$baru+["bank_logo_id"=>0,"bank_account"=>"","bank_holder"=>""]; }
+  $s["payment_methods"]=array_values(array_unique(array_merge((array)($s["payment_methods"]??[]),["bank_transfer"]))); $s["store_bank_accounts"]=$a; }
 if (!empty($d["couriers"])) { $map=["jne"=>"JNE","tiki"=>"TIKI","sicepat"=>"SiCepat","j&t"=>"J&T","jnt"=>"J&T"]; $c=[]; foreach($d["couriers"] as $n){$k=strtolower(trim($n)); if(isset($map[$k]))$c[$k=="j&t"||$k=="jnt"?"jnt":$k]=$map[$k];} if($c)$s["shipping_couriers"]=$c; }
 if ($d["province_id"]!=="" && $d["city_id"]!=="" && $d["subdistrict_id"]!=="") { $s["shipping_origin_province"]=(string)$d["province_id"]; $s["shipping_origin_city"]=(string)$d["city_id"]; $s["shipping_origin_subdistrict"]=(string)$d["subdistrict_id"]; echo "origin:manifest_ids\n"; }
 elseif ($d["origin_text"]!=="" && !empty($s["rajaongkir_api_key"])) {
@@ -100,6 +117,15 @@ elseif ($d["origin_text"]!=="" && !empty($s["rajaongkir_api_key"])) {
   if($p){$pid=(string)($p["id"]??$p["province_id"]??"");$cities=$get($base."/destination/city/".$pid);foreach($cities as $x){$cid=(string)($x["id"]??$x["city_id"]??"");$ds=$get($base."/destination/district/".$cid);foreach($ds as $dist){if($match((string)($dist["name"]??$dist["subdistrict_name"]??""))){$s["shipping_origin_province"]=$pid;$s["shipping_origin_city"]=$cid;$s["shipping_origin_subdistrict"]=(string)($dist["id"]??$dist["subdistrict_id"]??"");echo "origin:api_lookup\n";break 2;}}}}
 }
 update_option("wp_store_settings",$s);
+// Halaman toko (Pengaturan VD Store > Halaman > generate), keputusan user 2026-09-17. Halaman terbit yang sudah
+// memuat shortcode-nya dipakai dulu supaya tidak ganda; sisanya dibuat oleh fungsi VD Store sendiri.
+$hal=["page_catalog"=>"wp_store_catalog","page_shipping_check"=>"wp_store_shipping_checker","page_profile"=>"wp_store_profile","page_cart"=>"store_cart","page_checkout"=>"store_checkout","page_thanks"=>"store_thanks","page_tracking"=>"store_tracking"];
+$s=(array)get_option("wp_store_settings",[]);
+foreach($hal as $k=>$sc){ $ada=!empty($s[$k])?get_post((int)$s[$k]):null; if($ada&&$ada->post_status!=="trash")continue;
+  foreach(get_posts(["post_type"=>"page","post_status"=>"publish","numberposts"=>-1,"s"=>"[".$sc]) as $pg){ if(has_shortcode($pg->post_content,$sc)){ $s[$k]=$pg->ID; echo "halaman_toko_dipakai:$k:$pg->ID\n"; break; } } }
+update_option("wp_store_settings",$s);
+if (class_exists("WpStore\\Api\\SettingsController")) { $r=(new \WpStore\Api\SettingsController())->generate_pages(); $rd=$r->get_data(); echo "halaman_toko:".($rd["message"]??"")."\n"; $s=(array)get_option("wp_store_settings",[]); foreach($hal as $k=>$sc) echo "halaman_toko_id:$k:".(int)($s[$k]??0)."\n"; }
+else { echo "halaman_toko:dilewati:vd_store_tidak_aktif\n"; }
 foreach($d["categories"] as $n){$n=trim($n);if($n!==""){ $slug=sanitize_title($n); if(!term_exists($slug,"store_product_cat")) wp_insert_term($n,"store_product_cat",["slug"=>$slug]); }}
 echo wp_json_encode(["address"=>$s["store_address"]??"","email"=>$s["store_email"]??"","phone"=>$s["store_phone"]??"","wa"=>$s["store_wa"]??"","banks"=>$s["store_bank_accounts"]??[],"couriers"=>$s["shipping_couriers"]??[],"origin"=>[$s["shipping_origin_province"]??"",$s["shipping_origin_city"]??"",$s["shipping_origin_subdistrict"]??""]]);
 ' --path="$DOCROOT" --allow-root

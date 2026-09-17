@@ -508,9 +508,9 @@
           <input id="domain-filter" type="search" placeholder="filter domain..." autocomplete="off" />
           <select id="status-filter"><option value="">semua status</option></select>
           <select id="deadline-filter">
+            <option value="semua">semua deadline</option>
             <option value="aktif">deadline belum terlewat</option>
             <option value="lewat">deadline terlewat</option>
-            <option value="semua">semua deadline</option>
           </select>
           <button class="action" type="button" id="clear-filter">[ clear ]</button>
         </section>
@@ -782,12 +782,17 @@
             const isReady = x.status === 'READY' || x.status === 'SUCCESS';
             const isRunning = x.status === 'RUNNING';
             const isFailed = x.status === 'FAILED' || x.status === 'installer_error';
+            // Dipegang webmaster di CRM: bukan antrean installer, bukan pula
+            // kegagalan — jangan diberi warna merah/hijau yang menyesatkan.
+            const dikerjakanWm = x.status === 'dikerjakan webmaster';
             const pillClass = isFailed ? 'failed' : isReady ? 'ready' : 'missing';
-            const statusFull = x.status + (x.stage ? ' / ' + x.stage : '');
+            const statusFull = x.status + (x.stage ? ' / ' + x.stage : '')
+              + (dikerjakanWm && x.webmaster ? ' (' + x.webmaster + ')' : '');
             const statusIcon = isFailed ? '✗'
               : isRunning ? '◐'
               : isReady ? '✓'
               : x.status === 'belum diambil' ? '○'
+              : dikerjakanWm ? '◑'
               : '!';
             const logLines = (x.log || []).join('\\n');
             const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
@@ -808,6 +813,15 @@
             });
             if (x.status === 'belum diambil') {
               acts.unshift({ label: 'Ambil alih', run: () => claimAction(x.domain, 'claim') });
+            } else if (dikerjakanWm) {
+              acts.unshift({
+                label: 'Ambil alih',
+                danger: true,
+                run: () => {
+                  const siapa = x.webmaster ? x.webmaster : 'seorang webmaster';
+                  if (confirm(x.domain + ' sedang dikerjakan ' + siapa + ' menurut CRM. Ambil alih?')) claimAction(x.domain, 'claim');
+                },
+              });
             } else if (x.claim) {
               acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
             }
@@ -822,10 +836,13 @@
               : x.source === 'crm'
               ? ' <span class="badge warn" title="Ada di CRM tapi folder Drive belum tersinkron, jadi manifest belum bisa dibuat">TANPA FOLDER</span>'
               : '';
+            const wmBadge = dikerjakanWm
+              ? ` <span class="badge warn" title="Status CRM: Dalam pengerjaan">WM${x.webmaster ? ': ' + esc(String(x.webmaster).toUpperCase()) : ''}</span>`
+              : '';
             const claimBadge = x.claim
               ? ` <span class="badge ${x.claim.by === 'autopilot' ? 'local' : 'ok'}" title="Diambil alih ${esc(x.claim.at || '')}">DIAMBIL: ${x.claim.by === 'autopilot' ? 'AUTOPILOT' : 'MANUAL'}</span>`
               : '';
-            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${wmBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
             const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
             const dash = '<span style="color:var(--muted)">-</span>';
             const paketCell = x.paket ? esc(x.paket) : dash;
@@ -1022,6 +1039,7 @@
           { id: "content_clean", label: "Konten AI bersih terpasang (tanpa gambar/placeholder palsu)", patterns: ["page_filled", "page_created", "page_kept", "Artikel terbit", "article_exists"] },
           { id: "client_assets", label: "Finishing: logo, galeri, tagline, warna, WhatsApp, peta", patterns: ["finish_done"] },
           { id: "cleanup", label: "Hapus tema & plugin bawaan yang tidak dipakai", patterns: ["cleanup: cleanup_done"] },
+          { id: "kemiripan", label: "Audit kemiripan desain vs referensi (header, footer, beranda, halaman dalam)", patterns: ["kemiripan: sesuai", "kemiripan: belum_mirip:", "kemiripan: tidak_ada_referensi", "kemiripan: gagal:"] },
           { id: "qa", label: "Pemeriksaan akhir (SSL, gambar, placeholder, menu, kategori)", patterns: ["qa_result"] },
           { id: "maintenance", label: "Maintenance mode (velocity-addons)", patterns: ["maintenance: maintenance_"] },
           { id: "complete", label: "Install Complete", patterns: ["install_complete", "COMPLETE", "SUCCESS"] }
@@ -1113,6 +1131,23 @@
         if (m[1]) return (m[2] === 'tembolok' ? 'sudah diukur: ' : 'diukur: ') + m[1].replace(/^https?:\/\//, '').replace(/\/$/, '');
         return m[3] ? 'form tanpa website contoh' : 'pengukuran gagal: ' + m[4];
       }
+      // Keterangan simpul audit kemiripan (log fse-audit-kemiripan + putaran generate ulang).
+      function hasilMirip(t) {
+        if (/kemiripan: tidak_ada_referensi/.test(t)) return 'tanpa referensi';
+        const g = /kemiripan: gagal:(\S+)/.exec(t);
+        if (g) return 'tidak bisa diperiksa: ' + g[1];
+        // Hasil audit TERAKHIR (sesudah generate ulang) yang ditampilkan.
+        const semua = [...t.matchAll(/kemiripan: header=(\d+) footer=(\d+) beranda=(\d+)/g)];
+        const skor = semua[semua.length - 1];
+        const angka = skor ? 'header ' + skor[1] + ' · footer ' + skor[2] + ' · beranda ' + skor[3] : '';
+        const ulang = (t.match(/tema & halaman FSE digenerate ulang/g) || []).length;
+        const kali = ulang ? ' setelah ' + (ulang + 1) + 'x generate' : '';
+        const akhir = [...t.matchAll(/kemiripan: (sesuai|belum_mirip:\S+)/g)].pop();
+        if (!akhir) return null;
+        if (akhir[1] === 'sesuai') return 'mirip' + kali + (angka ? ': ' + angka : '');
+        return 'belum mirip' + kali + ' (' + akhir[1].slice(12).replace(/halaman_/g, '') + '), rincian dikirim'
+          + (angka ? ': ' + angka : '');
+      }
       // Paket F saat ini diperlakukan sama dengan paket lain (child theme dari referensi form);
       // child theme khusus per website Paket F belum diotomatiskan.
       const SIMPUL = [
@@ -1136,12 +1171,26 @@
         // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
         // di installer-runner): hasilnya (fse-rencana/<domain>/desain-referensi.json) jadi acuan utama
         // tata letak & gaya beranda, jadi langkah ini berdiri sendiri di bagan.
-        { id: 'referensi', kol: 5, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM website contoh di form',
+        { id: 'referensi', kol: 5, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah (juga domain polos)',
           mulai: /Paket custom: cek referensi desain di form/, selesai: /referensi: (ada:|tidak_ada|gagal:)/,
           gagal: /referensi: gagal:/, ketHasil: hasilReferensi, aktif: c => dan(tanpaDry(c), c.custom) },
         { id: 'fse', kol: 6, jalur: 0, nama: 'Tema FSE', ket0: 'compro, isi contoh, velocity-fse',
           mulai: /Paket custom: (tema FSE|tema dilewati)/,
           selesai: /fse: tema_siap|tema dilewati/, lewati: /Paket custom: tema dilewati/, aktif: c => dan(tanpaDry(c), c.custom) },
+        // Gerbang sebelum konten AI (keputusan user 2026-09-16): hasil langkah tema dibandingkan dengan
+        // rencana referensi desain klien (scripts/fse-cek-referensi). Belum sesuai -> balik ke langkah
+        // tema (maks FSE_CEK_MAKS percobaan), sesuai -> lanjut. Log: `fse_cek: sesuai|belum_sesuai:...`.
+        { id: 'cekTema', kol: 7, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse: tema_siap|fse_cek: |tema dilewati/,
+          aktif: c => dan(tanpaDry(c), c.custom),
+          ket: (c, row) => {
+            const t = (row.log || []).join('\n');
+            if (/fse_cek: sesuai/.test(t)) return 'ya';
+            if (/fse_cek: masih belum sesuai/.test(t)) return 'lanjut dengan catatan';
+            if (/fse_cek: tidak_ada_referensi/.test(t)) return 'tanpa referensi';
+            if (/fse_cek: belum_sesuai/.test(t)) return 'belum, tema diulang';
+            if (/fse_cek: (gagal|tidak bisa)/.test(t)) return 'tidak bisa diperiksa';
+            return 'menunggu';
+          } },
         { id: 'childF', kol: 5, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form lewat API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
         { id: 'childToko', kol: 5, jalur: 2, nama: 'Child theme toko', ket0: 'toko biasa: referensi form via API', mulai: CHILD_THEME,
@@ -1154,37 +1203,84 @@
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko)) },
         // Plugin toko dipasang SESUDAH tema: di Toko Online Custom tema FSE dibangun dari referensi
         // desain lebih dulu (keputusan user 2026-09-16), toko biasa masuk dari cabang child theme.
-        { id: 'vdstore', kol: 7, jalur: 2, nama: 'VD Store', ket0: 'plugin & pengaturan toko', mulai: /\] VD Store$/,
+        { id: 'vdstore', kol: 8, jalur: 2, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
           selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
-          ketHasil: t => (/vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.toko) },
-        { id: 'konten', kol: 8, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
+          ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
+            : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.toko) },
+        // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
+        // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
+        { id: 'isiKlasik', kol: 8, jalur: 4, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
+          mulai: /\] Isi contoh \(tema klasik\)/, selesai: /konten: (isi contoh dibuat|memakai isi contoh|isi tersimpan|gagal)/,
+          gagal: /konten: gagal/, ketHasil: t => { const m = /konten: isi contoh dibuat \(([^)]*)\)/.exec(t); return m ? m[1] : null; },
+          aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+        { id: 'konten', kol: 9, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
           selesai: /AI content generation completed/, aktif: tanpaDry },
-        { id: 'finishing', kol: 9, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/,
+        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/,
           selesai: /finish_done/, aktif: tanpaDry },
-        { id: 'baru', kol: 10, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
+        { id: 'baru', kol: 11, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
           ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
-        { id: 'bersih', kol: 11, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
+        { id: 'bersih', kol: 12, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
           selesai: /cleanup_done/, aktif: c => dan(tanpaDry(c), c.installBaru) },
-        { id: 'isi', kol: 12, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
+        { id: 'isi', kol: 13, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
           ket: c => (c.custom === null ? 'paket tidak terbaca' : c.custom ? 'ya: G / Portal / Toko Custom' : 'tidak') },
-        { id: 'fotoSlot', kol: 13, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
+        { id: 'fotoSlot', kol: 14, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
           mulai: /Paket custom: foto per slot desain/, aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'halaman', kol: 14, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda FSE', mulai: /Paket custom: halaman blok & menu/,
+        { id: 'dealerUnit', kol: 15, jalur: 0, nama: 'Unit mobil & foto dealer', ket0: 'CPT mobil, foto seksi',
+          mulai: /Paket custom: unit mobil & foto dealer/, selesai: /dealer: unit_terbit=/,
+          ketHasil: t => { const m = /dealer: unit_terbit=(\d+)/.exec(t); return m ? m[1] + ' unit terbit' : null; },
+          aktif: c => dan(tanpaDry(c), c.custom, c.dealer) },
+        { id: 'klinikFoto', kol: 15, jalur: 2, nama: 'Foto seksi klinik', ket0: 'dari mockup klien',
+          mulai: /Paket custom: foto seksi klinik/, selesai: /klinik: foto_di_media=|klinik: data_tidak_ada/,
+          ketHasil: t => { const m = t.match(/klinik: slot:/g); return m ? m.length + ' slot foto' : null; },
+          aktif: c => dan(tanpaDry(c), c.custom, c.klinik) },
+        // Paket biasa: tampilan child theme klasik (scripts/tema-klasik) lalu foto utama artikel.
+        { id: 'tampilan', kol: 14, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget',
+          mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
+          ketHasil: t => (/tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
+            : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null),
+          aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+        { id: 'fotoKlasik', kol: 17, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul',
+          mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
+          ketHasil: t => {
+            const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
+            const sisa = /foto_artikel: (\d+)\/(\d+) diisi/.exec(t);
+            if (!bank && !sisa) return null;
+            return (bank ? bank[1] + ' foto bank' : '0 foto bank') + (sisa ? ' + ' + sisa[1] + ' foto klien/sampul' : '');
+          },
+          aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+        { id: 'halaman', kol: 16, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda + halaman dari menu referensi', mulai: /Paket custom: halaman blok & menu/,
           aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'fotoArtikel', kol: 15, jalur: 0, nama: 'Foto utama artikel', ket0: 'ber-caption kredit foto', mulai: /Paket custom: foto utama artikel/,
+        { id: 'fotoArtikel', kol: 17, jalur: 0, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul', mulai: /Paket custom: foto utama artikel/,
+          selesai: /foto_artikel: \d+\/\d+ diisi/,
+          ketHasil: t => {
+            const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
+            const sisa = /foto_artikel: (\d+)\/(\d+) diisi/.exec(t);
+            if (!bank && !sisa) return null;
+            return (bank ? bank[1] + ' foto Pexels/bank' : '0 foto bank') + (sisa ? ' + ' + sisa[1] + ' foto klien/sampul' : '');
+          },
           aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'visual', kol: 16, jalur: 0, nama: 'Cek visual', ket0: 'screenshot desktop & HP', mulai: /Paket custom: cek visual/,
+        { id: 'visual', kol: 18, jalur: 0, nama: 'Cek visual', ket0: 'desktop & HP + banding referensi ke Telegram', mulai: /Paket custom: cek visual/,
           selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'qa', kol: 17, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
-        { id: 'maint', kol: 18, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
+        // Audit kemiripan (permintaan user 2026-09-17, scripts/fse-audit-kemiripan): tampilan situs jadi
+        // diukur dengan pengukur referensi lalu dinilai per bagian (header, footer, beranda per seksi,
+        // gaya, halaman dalam). Belum mirip -> dilaporkan "perlu dicek" di Telegram, alur tetap lanjut.
+        // Belum mirip -> tema + halaman FSE digenerate ulang lalu diaudit lagi (installer-runner
+        // audit_kemiripan, maks FSE_MIRIP_MAKS, berhenti kalau skor tidak naik); sisa beda dikirim
+        // sebagai daftar "perlu diperbaiki" di laporan Telegram.
+        { id: 'mirip', kol: 19, jalur: 0, cek: true, nama: 'Mirip referensi?', ket0: 'header, footer, beranda per seksi',
+          mulai: /Paket custom: audit kemiripan/, selesai: /kemiripan: (sesuai|belum_mirip:|tidak_ada_referensi|gagal:)/,
+          ket: (c, row) => hasilMirip(segmenRun(row).join('\n')) || 'menunggu',
+          aktif: c => dan(tanpaDry(c), c.custom) },
+        { id: 'qa', kol: 20, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
+        { id: 'maint', kol: 21, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
           ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
             : c.maintLewat !== null ? (c.maintLewat ? 'ya' : 'tidak') : c.custom === null ? 'menunggu' : c.custom ? 'ya: paket custom' : 'tidak') },
-        { id: 'maintLewat', kol: 19, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
+        { id: 'maintLewat', kol: 22, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
           selesai: /maintenance_dilewati/, aktif: c => dan(hanyaMode('apply')(c), c.maintLewat ?? c.custom) },
-        { id: 'maintOn', kol: 19, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
+        { id: 'maintOn', kol: 22, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
           selesai: /maintenance: maintenance_(enabled|active|skip)/,
           aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
-        { id: 'selesai', kol: 20, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
+        { id: 'selesai', kol: 23, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
       ];
       // [dari, ke, label, syarat]. Tanpa syarat: garis dari simpul pengecekan aktif kalau tujuannya
       // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
@@ -1195,15 +1291,30 @@
         ['http', 'paket'],
         ['paket', 'referensi', 'G / Portal / Toko Custom'], ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
         ['paket', 'childToko', 'Toko Online'], ['paket', 'childLain', 'lainnya'],
-        ['referensi', 'fse'],
+        ['referensi', 'fse'], ['fse', 'cekTema'],
+        // Belum sesuai referensi: kembali ke langkah tema sebelum konten AI ditulis.
+        ['cekTema', 'fse', 'belum, ulangi tema'],
         // Toko Online Custom: tema FSE dulu, plugin VD Store sesudahnya. Paket custom lain langsung ke konten.
-        ['fse', 'vdstore', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
-        ['fse', 'konten', '', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
-        ['childF', 'konten'], ['childE', 'konten'], ['childToko', 'vdstore'], ['vdstore', 'konten'], ['childLain', 'konten'],
+        ['cekTema', 'vdstore', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
+        ['cekTema', 'konten', 'sesuai', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
+        ['childF', 'isiKlasik'], ['childE', 'isiKlasik'], ['childToko', 'vdstore'], ['childLain', 'isiKlasik'],
+        ['vdstore', 'konten', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
+        ['vdstore', 'isiKlasik', 'toko biasa', c => dan(tanpaDry(c), c.tokoBiasa)],
+        ['isiKlasik', 'konten'],
         ['konten', 'finishing'], ['finishing', 'baru'],
         ['baru', 'bersih', 'ya'], ['bersih', 'isi'], ['baru', 'isi', 'tidak', c => dan(tanpaDry(c), c.installBaru === null ? null : !c.installBaru)],
-        ['isi', 'fotoSlot', 'ya'], ['fotoSlot', 'halaman'], ['halaman', 'fotoArtikel'], ['fotoArtikel', 'visual'], ['visual', 'qa'],
-        ['isi', 'qa', 'tidak', c => dan(tanpaDry(c), c.custom === null ? null : !c.custom)],
+        ['isi', 'fotoSlot', 'ya'],
+        ['fotoSlot', 'dealerUnit', 'dealer mobil', c => dan(tanpaDry(c), c.custom, c.dealer)],
+        ['dealerUnit', 'halaman'],
+        ['fotoSlot', 'klinikFoto', 'gaya klinik', c => dan(tanpaDry(c), c.custom, c.klinik)],
+        ['klinikFoto', 'halaman'],
+        ['fotoSlot', 'halaman', '', c => dan(tanpaDry(c), c.custom,
+          c.dealer === null || c.klinik === null ? null : !c.dealer && !c.klinik)],
+        ['halaman', 'fotoArtikel'], ['fotoArtikel', 'visual'], ['visual', 'mirip'],
+        // Belum mirip: kembali ke tema FSE (generate ulang tema + halaman), lalu diaudit lagi.
+        ['mirip', 'fse', 'belum mirip, generate ulang', c => dan(tanpaDry(c), c.custom, c.miripUlang)],
+        ['mirip', 'qa', 'mirip / dilaporkan'],
+        ['isi', 'tampilan', 'tidak'], ['tampilan', 'fotoKlasik'], ['fotoKlasik', 'qa'],
         ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
         ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ];
@@ -1258,6 +1369,15 @@
           tokoBiasa: paket ? toko && !custom : null,
           installBaru: /\] Bersihkan tema & plugin bawaan/.test(teks) ? true : lewatFinishing ? false : null,
           maintLewat: /maintenance_dilewati/.test(teks) ? true : /\] Maintenance mode/.test(teks) ? false : null,
+          // Situs dealer mobil (manifest gaya_beranda=dealer): unit CPT mobil + foto seksinya
+          // dipasang sebelum halaman blok. Runner hanya mencetak barisnya untuk situs dealer.
+          dealer: /Paket custom: unit mobil & foto dealer/.test(teks) ? true
+            : /Paket custom: halaman blok & menu/.test(teks) ? false : null,
+          // Gaya klinik (manifest gaya_beranda=klinik): foto seksi dari mockup klien ke slot.
+          klinik: /Paket custom: foto seksi klinik/.test(teks) ? true
+            : /Paket custom: halaman blok & menu/.test(teks) ? false : null,
+          // Audit kemiripan menyatakan belum mirip dan tema + halaman FSE digenerate ulang.
+          miripUlang: /tema & halaman FSE digenerate ulang/.test(teks),
         };
       }
 
@@ -1557,7 +1677,7 @@
       document.getElementById('clear-filter').addEventListener('click', () => {
         domainFilter.value = '';
         statusFilter.value = '';
-        deadlineFilter.value = 'aktif';
+        deadlineFilter.value = 'semua';
         currentPage = 1;
         load();
       });

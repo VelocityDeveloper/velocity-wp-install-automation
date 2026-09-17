@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Foto seksi beranda gaya `klinik` (manifest `gaya_beranda=klinik`).
+
+Dijalankan installer-runner SEBELUM `fse-apply --isi` karena beranda memuat URL foto slot.
+
+  fse-klinik <manifest> [--coba]
+
+Sumber: /var/lib/velocity/fse-klinik/<domain>.json (bagian `foto`: slot -> berkas + judul)
+dengan berkasnya di /var/lib/velocity/fse-klinik/<domain>/foto/. Foto berasal dari mockup
+desain klien, jadi tidak dicari ke Openverse/Commons.
+
+Aturan menimpa sama dengan fse-dealer: slot yang sudah berisi foto lain (dipasang orang)
+dibiarkan; impor idempoten lewat meta `_velocity_source` (nama berkas + md5 isinya, jadi
+foto pengganti dengan nama sama ikut terimpor ulang).
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+KLINIK_DIR = Path(os.environ.get('VELOCITY_FSE_KLINIK') or '/var/lib/velocity/fse-klinik')
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+PHP_SLOT = r'''
+$hasil = array();
+$peta = get_option('vfse_images', array());
+$peta = is_array($peta) ? $peta : array();
+foreach ((array) $d['slot'] as $kunci => $id) {
+    $id = (int) $id;
+    if (!$id) { continue; }
+    if (!empty($peta[$kunci]) && (int) $peta[$kunci] !== $id
+        && !get_post_meta((int) $peta[$kunci], '_velocity_foto_contoh', true)) {
+        $hasil[] = 'slot_dibiarkan:' . $kunci;   // foto yang dipasang orang tidak ditimpa
+        continue;
+    }
+    $peta[$kunci] = $id;
+    update_post_meta($id, '_velocity_foto_contoh', '1');
+    $hasil[] = 'slot:' . $kunci . '=' . $id;
+}
+update_option('vfse_images', $peta);
+vfse_keluar(array('hasil' => $hasil));
+'''
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: fse-klinik <manifest> [--coba]', file=sys.stderr)
+        return 2
+    fse = muat('fse_apply', 'fse-apply')
+    cfg = fse.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    berkas = KLINIK_DIR / f'{domain}.json'
+    if not berkas.is_file():
+        print(f'klinik: data_tidak_ada:{berkas}')
+        return 0
+    daftar = json.loads(berkas.read_text()).get('foto') or {}
+    folder = KLINIK_DIR / domain / 'foto'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        foto = {}
+        for slot, f in daftar.items():
+            asal = folder / str(f.get('berkas') or '')
+            if not asal.is_file():
+                print(f'klinik: foto_tidak_ada:{slot} ({asal})')
+                continue
+            shutil.copyfile(asal, Path(tmp) / asal.name)
+            md5 = hashlib.md5(asal.read_bytes()).hexdigest()[:10]
+            foto[f'slot:{slot}'] = {'berkas': asal.name, 'judul': f.get('judul') or slot,
+                                    'caption': f.get('caption') or '',
+                                    'sumber': f'fse-klinik:{domain}/{asal.name}:{md5}'}
+        print(f'klinik: {domain} foto_siap={len(foto)}/{len(daftar)}')
+        if coba or not foto:
+            for kunci, f in sorted(foto.items()):
+                print(f"klinik: coba {kunci} -> {f['berkas']}")
+            return 0
+        situs = fse.Situs(cfg)
+        ids = muat('fse_dealer', 'fse-dealer').unggah(situs, Path(tmp), foto, awalan='klinik')
+
+    jawab = situs.php(PHP_SLOT, {'slot': {k.split(':', 1)[1]: v for k, v in ids.items() if k.startswith('slot:')}})
+    for baris in jawab['hasil']:
+        print(f'klinik: {baris}')
+    return 0 if ids else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

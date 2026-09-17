@@ -211,6 +211,46 @@ def history(rentang):
             'recording_since': int(mulai) if mulai else None}
 
 
+BACKUP_STATUS = '/var/lib/velocity/backup/status.json'
+
+
+def backup_status():
+    """Status backup harian ke Google Drive untuk panel dashboard.
+
+    Isinya ditulis velocity-backup tiap tahap. Jadwal berikutnya ditanyakan ke
+    systemd, bukan disimpan di berkas: kalau timer dimatikan atau diubah, panel
+    harus ikut jujur, bukan menampilkan jadwal yang sudah tidak berlaku.
+    """
+    out = {'state': 'belum_pernah', 'phase': None, 'error': None}
+    try:
+        with open(BACKUP_STATUS) as f:
+            out.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    try:
+        proc = subprocess.run(
+            ['/usr/bin/systemctl', 'show', 'velocity-backup.timer',
+             '--property=NextElapseUSecRealtime', '--property=ActiveState'],
+            capture_output=True, text=True, timeout=5)
+        props = dict(l.split('=', 1) for l in proc.stdout.splitlines() if '=' in l)
+        out['timer_active'] = props.get('ActiveState') == 'active'
+        # Meski namanya USec, systemd mencetak properti ini sebagai teks
+        # ("Thu 2026-09-17 02:00:07 WIB") dan --timestamp=unix tidak mengubahnya.
+        # Ambil tanggal+jamnya saja lalu baca sebagai waktu lokal; singkatan zona
+        # (WIB) tidak bisa diandalkan strptime.
+        bagian = props.get('NextElapseUSecRealtime', '').split()
+        out['next_run'] = (int(time.mktime(time.strptime(
+            f'{bagian[1]} {bagian[2]}', '%Y-%m-%d %H:%M:%S'))) if len(bagian) >= 3 else None)
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        out['timer_active'] = None
+        out['next_run'] = None
+    # Backup yang diam-diam berhenti jalan adalah mode gagal paling mahal: panel
+    # tetap hijau karena run terakhir memang sukses, padahal isinya sudah basi.
+    last_ok = out.get('last_ok')
+    out['stale'] = bool(last_ok and time.time() - last_ok > 48 * 3600)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, status, data):
         body = json.dumps(data, separators=(',', ':')).encode()
@@ -225,6 +265,9 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition('?')
         if path == '/api/drive':
             self.json_response(200, drive_status())
+            return
+        if path == '/api/backup':
+            self.json_response(200, backup_status())
             return
         if path == '/api/stats/history':
             self.json_response(200, history((parse_qs(query).get('range') or ['1h'])[0]))

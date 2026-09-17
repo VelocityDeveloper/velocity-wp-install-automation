@@ -258,17 +258,17 @@ def isi_unit(u):
     return str(u.get('isi') or '').strip()
 
 
-def unggah(situs, tmp, foto):
+def unggah(situs, tmp, foto, awalan='dealer'):
     """Impor berkas foto ke Media Library lewat WP-CLI; idempoten lewat meta _velocity_source."""
     if not foto:
         return {}
-    folder = f'/tmp/velocity-dealer-{os.getpid()}'
+    folder = f'/tmp/velocity-{awalan}-{os.getpid()}'
     tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(tmp), '.'], stdout=subprocess.PIPE)
     kirim = subprocess.run(situs.ssh + [f'rm -rf {folder} && mkdir -p {folder} && tar -xzf - -C {folder}'],
                            stdin=tar.stdout, capture_output=True, text=True, timeout=600)
     tar.wait()
     if kirim.returncode != 0:
-        print(f'dealer: gagal_mengirim_foto:{kirim.stderr.strip()[:120]}')
+        print(f'{awalan}: gagal_mengirim_foto:{kirim.stderr.strip()[:120]}')
         return {}
     perintah = ['set -e', f'D={shlex.quote(situs.docroot)}',
                 'wp() { php -d memory_limit=512M /usr/local/bin/wp "$@" --path="$D" --allow-root 2>/dev/null; }']
@@ -290,8 +290,8 @@ def unggah(situs, tmp, foto):
             ids[kunci.strip()] = int(nilai)
     kurang = [k for k in foto if k not in ids]
     if kurang:
-        print(f'dealer: foto_gagal_impor={kurang}')
-    print(f'dealer: foto_di_media={len(ids)}')
+        print(f'{awalan}: foto_gagal_impor={kurang}')
+    print(f'{awalan}: foto_di_media={len(ids)}')
     return ids
 
 

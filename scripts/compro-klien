@@ -107,12 +107,31 @@ def jalankan(perintah, **kw):
     return subprocess.run(perintah, capture_output=True, text=True, timeout=kw.pop('timeout', 180), **kw)
 
 
+def pdf_berteks(pdf):
+    """PDF yang isinya teks/vektor sungguhan, bukan hasil pindai per halaman.
+
+    bumiairchemitech.com (2026-09-16) mengirim dua berkas: deck asli 24 halaman
+    (teks + logo bertransparansi) dan ekspor 42MB yang tiap halamannya SATU gambar
+    penuh. Yang kedua terpilih karena lebih besar, dan akibatnya logo tidak ketemu,
+    warna merek kosong, dan 'foto'-nya berupa halaman utuh — sampulnya dipakai jadi
+    latar hero sehingga tulisan hero bertumpuk dengan tulisan di gambar."""
+    try:
+        teks = jalankan(['pdftotext', '-f', '1', '-l', '3', str(pdf), '-']).stdout or ''
+        font = jalankan(['pdffonts', str(pdf)]).stdout or ''
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # Font tertanam + teks yang bisa disalin = halaman masih punya objek sendiri.
+    return len(re.sub(r'\s', '', teks)) >= 200 and len(font.splitlines()) > 2
+
+
 def cari_compro(domain):
     folder = ON_PROGRESS / domain
     if not folder.is_dir():
         return None
     pdf = [p for p in folder.iterdir() if p.suffix.lower() == '.pdf' and not p.name.upper().startswith('FORM ISIAN')]
-    pdf.sort(key=lambda p: (not PROFIL_RE.search(p.name), -p.stat().st_size))
+    # Berteks dulu (logo & warna merek hanya bisa diambil dari situ), baru nama yang
+    # menyebut profil, baru yang paling besar.
+    pdf.sort(key=lambda p: (not pdf_berteks(p), not PROFIL_RE.search(p.name), -p.stat().st_size))
     return pdf[0] if pdf else None
 
 
@@ -184,6 +203,19 @@ ALAMAT_RE = re.compile(r'\b(jl|jalan|kabupaten|kab|kecamatan|kec|desa|kelurahan|
                        r'blok|perumahan|komplek|kompleks|kode ?pos|gedung|lantai)\b', re.I)
 
 
+# Judul kolom daftar proyek terbaca sebagai kalimat biasa: deck BACh memuat baris
+# "No Name Of Project Year Costumer" di beberapa slide, dan itu sempat terbit sebagai
+# slogan di hero situs (bumiairchemitech.com 2026-09-16).
+KATA_TABEL = re.compile(r'\b(no|name|nama|year|tahun|customer|costumer|client|klien|project|proyek|'
+                        r'qty|quantity|jumlah|date|tanggal|description|keterangan|item|total|unit|'
+                        r'price|harga|location|lokasi|status|periode|period)\b', re.I)
+
+
+def kepala_tabel(baris):
+    """Baris yang isinya cuma nama-nama kolom, bukan kalimat."""
+    return len(KATA_TABEL.findall(baris)) >= 3
+
+
 def cari_slogan(halaman, nama):
     """Slogan: kalimat ber-huruf campuran di sampul atau yang berulang, bukan alamat.
 
@@ -197,6 +229,7 @@ def cari_slogan(halaman, nama):
     calon = [b for b in hitung
              if 12 <= len(b) <= 70 and b != b.upper() and len(b.split()) >= 3
              and not re.search(r'\d|@|www\.', b) and not ALAMAT_RE.search(b)
+             and not kepala_tabel(b)
              and (not nama or nama.lower().replace('.', '') not in b.lower().replace('.', ''))]
     calon.sort(key=lambda b: (b not in sampul, -hitung[b], len(b)))
     if calon and (calon[0] in sampul or hitung[calon[0]] >= 2):
@@ -446,6 +479,29 @@ def hiasan(baris, kanal, alpha, lebar, tinggi):
     return tampak / total < 0.6 and satu_warna >= 0.6
 
 
+def polos(baris, kanal, lebar, tinggi):
+    """Bidang warna/gradien latar slide — bukan foto.
+
+    Deck bumiairchemitech.com (2026-09-16) menaruh latar abu 1536x864 di tiap slide.
+    Rasionya 1.78 sehingga lolos syarat hero dan sempat jadi latar hero yang kosong."""
+    # Yang membedakan bukan jumlah warnanya (gradien halus tetap punya banyak nilai),
+    # melainkan detail antar piksel bertetangga: latar slide ini 0.0045, foto aslinya
+    # di deck yang sama 0.13-0.14, logo 0.04.
+    langkah_y = max(1, tinggi // 40)
+    langkah_x = max(1, lebar // 40)
+    beda = []
+    for y in range(0, tinggi, langkah_y):
+        seri = []
+        for x in range(0, lebar, langkah_x):
+            o = x * kanal
+            rgb = baris[y][o:o + 3] if kanal >= 3 else bytes([baris[y][o]] * 3)
+            seri.append(colorsys.rgb_to_hls(*(c / 255 for c in rgb))[1])
+        beda += [abs(seri[i + 1] - seri[i]) for i in range(len(seri) - 1)]
+    if not beda:
+        return True
+    return sum(beda) / len(beda) < 0.02
+
+
 def potong_logo(gambar, tujuan):
     """Logo dari gambar kepala halaman 1: gambar lebar ber-smask, gumpalan paling kiri."""
     for i, g in enumerate(gambar):
@@ -553,6 +609,12 @@ def ambil_foto(pdf, gambar, keluar, tmp):
         else:
             ekstensi = g['path'].suffix.lower()
             if ekstensi not in ('.jpg', '.jpeg', '.png'):
+                continue
+            try:
+                lebar, tinggi, kanal, rgb = rgb_terurai(pdf, g, tmp)
+            except (ValueError, OSError, IndexError, zlib.error):
+                rgb = None
+            if rgb is not None and polos(rgb, kanal, lebar, tinggi):
                 continue
             nama = f'foto-{nomor:02d}{ekstensi}'
             (keluar / nama).write_bytes(mentah)

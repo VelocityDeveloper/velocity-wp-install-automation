@@ -21,6 +21,7 @@ berkas di situs masih berisi isian netral template (belum disunting orang).
 """
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -259,12 +260,34 @@ def teks_pdf(pdf):
         return ''
 
 
-def sesuaikan_compro(isi, domain, log=print):
+def teks_klien(domain):
+    """FORM ISIAN + dokumen lampiran klien sebagai teks — sejajar company profile."""
+    folder = Path('/home/On Progress') / domain
+    bagian = []
+    try:
+        from client_form import read_client_form
+        bagian.append(read_client_form(folder).get('text', ''))
+    except Exception:
+        pass
+    try:
+        # Layanan klien sering ditulis di dokumen lampiran (Data Isian Website.docx),
+        # bukan di FORM ISIAN — keduanya sama-sama tulisan klien.
+        from client_docs import collect_client_docs
+        bagian += [v if isinstance(v, str) else str(v) for v in collect_client_docs(folder).values()]
+    except Exception:
+        pass
+    return '\n'.join(bagian)
+
+
+def sesuaikan_compro(isi, domain, log=print, sumber_klien=''):
     """Isi yang wajib mengikuti company profile; dijalankan tiap kali (idempoten).
 
     - slogan & prakata dibaca kode dari PDF, lebih pasti daripada tulisan AI;
-    - layanan hanya yang benar-benar tertulis di compro — AI menggenapkan jadi
-      empat dengan "Packaging Industri" yang tidak ada di dokumen;
+    - layanan hanya yang benar-benar tertulis di data klien — AI menggenapkan jadi
+      empat dengan "Packaging Industri" yang tidak ada di dokumen. Yang dihitung
+      bukan cuma compro: FORM ISIAN juga tulisan klien, dan bumiairchemitech.com
+      (2026-09-16) kehilangan Groundwater Engineering & EPC — layanan yang ditulis
+      sendiri oleh klien di form — karena deck-nya memakai penamaan lain;
     - moto tidak lagi dibuang meski sama dengan slogan: di compro MAS keduanya
       memang kalimat yang sama ("MOTO Innovating for a Better Tomorrow")."""
     compro = data_compro(domain)
@@ -282,7 +305,9 @@ def sesuaikan_compro(isi, domain, log=print):
         # moto karena sama dengan slogan, padahal compro memang menulisnya begitu.
         isi['moto'] = moto.group(1).strip()
     if sumber and isi.get('layanan'):
-        tertulis = [l for l in isi['layanan'] if frasa_tertulis(l['judul'], sumber)]
+        tertulis = [l for l in isi['layanan']
+                    if frasa_tertulis(l['judul'], sumber)
+                    or (sumber_klien and frasa_tertulis(l['judul'], sumber_klien))]
         dibuang = [l['judul'] for l in isi['layanan'] if l not in tertulis]
         if tertulis and dibuang:
             log(f'Layanan yang tidak tertulis di company profile dibuang: {dibuang}')
@@ -330,8 +355,15 @@ Kembalikan JSON dengan bentuk persis:
 "struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
 Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4, keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
-        jawab = gen.ai_call(sistem, permintaan, model)
+        # Prompt isi contoh panjang: beri waktu lebih dari bawaan 120 detik.
+        jawab = gen.ai_call(sistem, permintaan, model,
+                            timeout=int(os.environ.get('VELOCITY_AI_TIMEOUT_ISI', '420')),
+                            max_tokens=int(os.environ.get('VELOCITY_AI_MAXTOK_ISI', '12000')))
         if not jawab:
+            # Jangan diam: model yang menjawab kosong (atau panggilan gagal) dulu hanya
+            # muncul sebagai "AI tidak menghasilkan isi tema yang lengkap" tanpa sebab,
+            # padahal artinya beda — lihat baris ERROR di log AI domain ini.
+            gen.log(f'Isi tema percobaan {percobaan + 1}: jawaban AI kosong')
             continue
         try:
             awal, akhir = jawab.find('{'), jawab.rfind('}')
@@ -339,7 +371,7 @@ Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4,
             dibuang = saring_data_perusahaan(isi, info)
             if dibuang:
                 gen.log(f'Data perusahaan yang tidak tertulis di dokumen dibuang: {dibuang[:8]}')
-            sesuaikan_compro(isi, domain, gen.log)
+            sesuaikan_compro(isi, domain, gen.log, info)
             if not warna_dipilih_klien(domain) and any(isi['warna'].values()):
                 gen.log(f"Warna dari AI dibuang (bukan pilihan klien): {isi['warna']}")
                 isi['warna'] = {'utama': '', 'aksen': ''}
@@ -619,7 +651,7 @@ def main():
         print(f"konten: isi contoh dibuat ({', '.join(x['judul'] for x in (isi.get('rubrik') or isi['layanan']))})")
     else:
         isi = json.loads(simpanan.read_text())
-        if sesuaikan_compro(isi, domain):
+        if sesuaikan_compro(isi, domain, sumber_klien=teks_klien(domain)):
             simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
             print(f"konten: isi tersimpan disesuaikan dengan company profile "
                   f"({', '.join(l['judul'] for l in isi['layanan'])})")

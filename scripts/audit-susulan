@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Audit susulan: situs yang sudah jadi diperiksa ulang terhadap aturan yang lahir sesudahnya.
+
+Pemakaian: audit-susulan [--paralel N] [domain ...]      (butuh WP_INSTALL_SSH_KEY_FILE)
+Hasil:     /var/lib/velocity/installer/audit-susulan.json  (dibaca /api/installer/susulan
+           dan halaman /installer/susulan/)
+
+Permintaan user 2026-09-17 (jasakontraktorindo.com dibangun 11 Sep, sebelum aturan kredit
+footer, statistik, sosmed, SEO, foto artikel, dan referensi domain polos): situs lama tidak
+ikut aturan baru. Langkah ini HANYA MEMBACA (scripts/site-audit) — tidak mengubah situs,
+karena sebagian situs sedang dikerjakan webmaster secara manual. Keputusan perbaikan ada di
+manusia; hasilnya berupa daftar per situs.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = Path('/home/project')
+STATE = Path('/var/lib/velocity/installer')
+KELUARAN = STATE / 'audit-susulan.json'
+# Temuan yang berasal dari aturan baru (bukan kerusakan instalasi) — dikelompokkan terpisah
+# supaya PM tahu mana yang "belum ikut aturan" dan mana yang "ada masalah".
+ATURAN = {
+    'referensi_form_terlewat': 'Referensi desain di form belum dipakai',
+    'kredit_footer_tidak_ada': 'Kredit "Design by Velocity Developer" belum ada',
+    'statistik_footer_tidak_ada': 'Statistik pengunjung belum di footer',
+    'sosmed_footer_tidak_ada': 'Ikon media sosial belum di footer',
+    'seo_dasar_kosong': 'SEO dasar velocity-addons kosong',
+    'artikel_tanpa_foto_utama': 'Artikel tanpa foto utama',
+    'foto_utama_tanpa_caption': 'Foto utama tanpa caption',
+    'kontak_biodata_tampil': 'Email/alamat biodata pemilik tampil (perlu persetujuan)',
+    'teks_catatan_ai': 'Catatan AI ("belum tersedia...") tampil di halaman',
+    'judul_ganda': 'Judul tercetak dua kali di satu halaman',
+    'favicon_belum_terpasang': 'Favicon belum terpasang',
+    'halaman_privasi_tidak_ada': 'Halaman kebijakan privasi tidak ada',
+    'halaman_privasi_belum_terbit': 'Halaman kebijakan privasi belum terbit',
+    'tema_bukan_fse': 'Paket custom belum memakai tema FSE',
+}
+
+
+def status_situs(domain):
+    try:
+        d = json.loads((STATE / f'{domain}.json').read_text())
+        return d.get('status', ''), d.get('updated_at', '')
+    except (OSError, ValueError):
+        return '', ''
+
+
+def audit(domain):
+    manifest = ROOT / domain / f'{domain}.txt'
+    mulai = time.time()
+    try:
+        run = subprocess.run([sys.executable, str(HERE / 'site-audit'), str(manifest), '--json'],
+                             capture_output=True, text=True, timeout=420)
+        hasil = json.loads(run.stdout.strip().splitlines()[-1])
+    except (subprocess.TimeoutExpired, ValueError, IndexError, OSError) as e:
+        hasil = {'audit': 'gagal', 'temuan': [f'audit_gagal:{type(e).__name__}'], 'info': {}}
+    temuan = hasil.get('temuan') or []
+    aturan, lain = [], []
+    for t in temuan:
+        kunci = t.split(':', 1)[0]
+        (aturan if kunci in ATURAN else lain).append(t)
+    status, diperbarui = status_situs(domain)
+    return {
+        'domain': domain, 'status_instalasi': status, 'diperbarui': diperbarui,
+        'paket': (hasil.get('info') or {}).get('paket', ''), 'tema': (hasil.get('info') or {}).get('tema', ''),
+        'aturan_baru': [{'kode': t, 'arti': ATURAN[t.split(':', 1)[0]]} for t in aturan],
+        'temuan_lain': lain, 'detik': round(time.time() - mulai, 1),
+    }
+
+
+def main():
+    args = sys.argv[1:]
+    paralel = 4
+    if '--paralel' in args:
+        i = args.index('--paralel')
+        paralel = max(1, min(int(args[i + 1]), 8))
+        del args[i:i + 2]
+    if not os.environ.get('WP_INSTALL_SSH_KEY_FILE'):
+        print('susulan: WP_INSTALL_SSH_KEY_FILE belum diset', file=sys.stderr)
+        return 2
+    domains = args or sorted(d.name for d in ROOT.iterdir()
+                             if (d / f'{d.name}.txt').is_file() and status_situs(d.name)[0] in ('SUCCESS', 'CHECK'))
+    with ThreadPoolExecutor(max_workers=paralel) as ex:
+        hasil = list(ex.map(audit, domains))
+    lama = {}
+    if args:
+        # Audit sebagian: situs lain dari laporan sebelumnya tetap disimpan.
+        try:
+            lama = {s['domain']: s for s in json.loads(KELUARAN.read_text()).get('situs') or []}
+        except (OSError, ValueError):
+            lama = {}
+    for h in hasil:
+        lama[h['domain']] = h
+    situs = sorted(lama.values(), key=lambda s: (-len(s['aturan_baru']), s['domain']))
+    laporan = {'waktu': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'jumlah': len(situs),
+               'perlu_susulan': sum(1 for s in situs if s['aturan_baru']), 'situs': situs}
+    tmp = KELUARAN.with_suffix('.tmp')
+    tmp.write_text(json.dumps(laporan, ensure_ascii=False, indent=1))
+    tmp.replace(KELUARAN)
+    for s in hasil:
+        print(f"susulan: {s['domain']:45} aturan={len(s['aturan_baru'])} lain={len(s['temuan_lain'])}")
+    print(f"susulan: {laporan['perlu_susulan']}/{laporan['jumlah']} situs perlu susulan -> {KELUARAN}")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

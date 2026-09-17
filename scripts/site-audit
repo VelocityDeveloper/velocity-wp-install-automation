@@ -48,8 +48,14 @@ $halaman = array();
 foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
     $halaman[$p->post_name] = array('id' => $p->ID, 'status' => $p->post_status,
                                     'isi' => strlen((string) $p->post_content),
-                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]|<!-- wp:velocity\/form-kirim/', (string) $p->post_content));
+                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]|<!-- wp:[a-z0-9-]+\/(form|form-kirim|rfq)\b/', (string) $p->post_content),
+                                    // Judul yang tercetak dua kali di satu halaman (isi + shortcode/blok yang
+                                    // mencetak judul sama) — jasakontraktorindo.com "Ajukan Pemesanan" ganda.
+                                    'judul_ganda' => $p->post_status === 'publish' ? velocity_audit_judul_ganda($p) : '');
 }
+// Gaya beranda tema FSE (velocity_situs): situs dealer mobil punya set halaman sendiri.
+$velocity_situs = get_option('velocity_situs');
+$gaya_situs = is_array($velocity_situs) ? (string) ($velocity_situs['gaya'] ?? '') : '';
 $menu_items = array();
 foreach (get_nav_menu_locations() as $lokasi => $term_id) {
     if (!$term_id) { continue; }
@@ -88,19 +94,76 @@ $tema_dir = get_stylesheet_directory();
 foreach (array('theme-data.php') as $f) {
     if (is_readable($tema_dir . '/inc/' . $f)) { $teks .= file_get_contents($tema_dir . '/inc/' . $f); }
 }
+function velocity_audit_judul_ganda($p)
+{
+    $GLOBALS['post'] = $p;
+    setup_postdata($p);
+    $html = (string) apply_filters('the_content', $p->post_content);
+    wp_reset_postdata();
+    if (!preg_match_all('#<h[12][^>]*>(.*?)</h[12]>#is', $html, $m)) {
+        return '';
+    }
+    $hitung = array_count_values(array_filter(array_map(function ($t) {
+        return strtolower(trim(preg_replace('/\s+/', ' ', html_entity_decode(wp_strip_all_tags($t), ENT_QUOTES))));
+    }, $m[1])));
+    foreach ($hitung as $judul => $n) {
+        if ($n > 1) {
+            return substr($judul, 0, 40);
+        }
+    }
+    return '';
+}
+
+function velocity_audit_isi_tema($dir)
+{
+    // Footer & isi tema yang tampil di semua halaman: part footer (termasuk versi
+    // Site Editor) untuk block theme, berkas footer/inc untuk tema klasik.
+    $isi = '';
+    if (function_exists('wp_is_block_theme') && wp_is_block_theme()) {
+        $part = get_block_template(get_stylesheet() . '//footer', 'wp_template_part');
+        $isi .= $part ? (string) $part->content : '';
+        foreach ((array) glob($dir . '/{inc,blocks}/*.php', GLOB_BRACE) as $f) {
+            $isi .= (string) @file_get_contents($f);
+        }
+        foreach ((array) glob($dir . '/blocks/*/*.php') as $f) {
+            $isi .= (string) @file_get_contents($f);
+        }
+    } else {
+        foreach (array_merge(array($dir . '/footer.php'), (array) glob($dir . '/inc/*.php')) as $f) {
+            $isi .= is_readable($f) ? (string) @file_get_contents($f) : '';
+        }
+        ob_start();
+        do_action('justg_do_footer');
+        $isi .= (string) ob_get_clean();
+    }
+    return $isi;
+}
+
 function velocity_audit_captcha_form($dir)
 {
+    // Semua berkas tema diperiksa, bukan berhenti di yang pertama ber-$_POST: di
+    // velocity-fse `inc/dealer.php` (simpan metabox wp-admin) datang lebih dulu secara
+    // alfabet daripada `inc/form.php`, sehingga form yang justru berkaptcha dilaporkan
+    // "form_tanpa_captcha" (bumiairchemitech.com 2026-09-16). POST milik wp-admin —
+    // ada save_post/current_user_can/is_admin — bukan form pengunjung.
+    $form_publik = false;
+    $captcha = false;
     foreach (array_merge(array($dir . '/functions.php'), (array) glob($dir . '/inc/*.php')) as $f) {
         if (!is_readable($f)) {
             continue;
         }
         $kode = @php_strip_whitespace($f);
-        // Form dikenali dari pemroses POST-nya; captcha dari pemanggilan plugin.
-        if ($kode && preg_match('/\$_POST/', $kode)) {
-            return (int) (bool) preg_match('/velocity_captcha|Velocity_Addons_Captcha/', $kode);
+        if (!$kode) {
+            continue;
+        }
+        if (preg_match('/velocity_captcha|Velocity_Addons_Captcha|velocity_fse_captcha/', $kode)) {
+            $captcha = true;
+        }
+        if (preg_match('/\$_POST/', $kode) && !preg_match('/save_post|current_user_can|is_admin\(/', $kode)) {
+            $form_publik = true;
         }
     }
-    return 1; // tidak ada form di tema: tidak ada yang perlu dilindungi
+    return (int) (!$form_publik || $captcha);
 }
 
 function velocity_audit_kategori()
@@ -250,6 +313,7 @@ echo wp_json_encode(array(
     // "plugin yang menyediakannya" ikut terbaca sebagai kode.
     'wa_tema'         => (int) velocity_audit_wa_tema($tema_dir),
     'shortcode_hilang' => array_values(array_unique($sc_hilang)),
+    'gaya' => $gaya_situs,
     'captcha'         => (array) get_option('captcha_velocity', array()),
     'peta'            => (array) get_option('velocity_map', array()),
     'kategori'        => velocity_audit_kategori(),
@@ -260,6 +324,12 @@ echo wp_json_encode(array(
     // Form kiriman pengunjung wajib memanggil captcha milik plugin.
     'captcha_form'    => (int) velocity_audit_captcha_form($tema_dir),
     'kredit_footer'   => velocity_audit_kredit_footer(),
+    'isi_tema'        => velocity_audit_isi_tema($tema_dir),
+    'artikel_tanpa_foto' => count(get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'fields' => 'ids', 'numberposts' => -1,
+                                                  'meta_query' => array(array('key' => '_thumbnail_id', 'compare' => 'NOT EXISTS'))))),
+    'seo'             => array('home_title' => (string) get_option('home_title'), 'home_description' => (string) get_option('home_description'),
+                               'share_image' => (string) get_option('share_image'), 'logo' => (int) (get_option('site_logo') ?: get_theme_mod('custom_logo'))),
+    'situs_kontak'    => is_array($velocity_situs) ? array('email' => (string) ($velocity_situs['email_publik'] ?? ''), 'alamat' => (string) ($velocity_situs['alamat'] ?? '')) : null,
     'widget_nyasar'   => $widget_nyasar,
     'widget_bersih'   => (string) get_option('velocity_widget_bersih'),
     'sidebar_aktif'   => count((array) $wp_registered_sidebars),
@@ -298,6 +368,46 @@ def info_tema(domain, cfg):
         if sep:
             hasil[key.strip()] = value.strip()
     return hasil
+
+
+def referensi_form(domain):
+    """Referensi desain menurut FORM ISIAN (logika yang sama dengan referensi_desain.py)."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('referensi_desain', HERE / 'referensi_desain.py')
+        modul = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modul)
+        return modul.referensi_form(domain) or {}
+    except Exception:
+        return {}
+
+
+def dokumen_klien(domain):
+    """Teks dokumen klien selain FORM ISIAN (company profile, katalog), '' bila tak terbaca."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from client_docs import collect_client_docs
+        return '\n'.join(t for n, t in collect_client_docs(Path('/home/On Progress') / domain, 10 ** 7, 10 ** 7).get('sources', [])
+                         if not n.upper().startswith('FORM ISIAN'))
+    except Exception:
+        return ''
+
+
+def biodata_pemilik(domain):
+    """Email & alamat dari bagian BIODATA PEMILIK FORM ISIAN (+ kolom kontak untuk web)."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from client_form import read_client_form
+        form = read_client_form(Path('/home/On Progress') / domain)
+    except Exception:
+        return {}
+    teks = form.get('text') or ''
+    m = re.search(r'BIO\s*A?DATA\s+PEMILIK(.*?)(FORM\s*3|DESAIN\s+WEBSITE|$)', teks, re.I | re.S)
+    bagian = m.group(1) if m else ''
+    email = re.search(r'[\w.+-]+@[\w-]+\.[\w.]+', bagian)
+    alamat = re.search(r'Alamat\s+lengkap\s*:\s*([^\n]+)', bagian, re.I)
+    kontak = next((str(v) for k, v in (form.get('fields') or {}).items() if re.search(r'kontak utk di web|kontak untuk di web', k, re.I)), '')
+    return {'email': email.group(0) if email else '', 'alamat': alamat.group(1).strip() if alamat else '', 'kontak_web': kontak}
 
 
 def http(url, method='GET', timeout=20):
@@ -352,10 +462,14 @@ def main():
     paket_custom = re.sub(r'[^a-z]', '', paket.lower()) in ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
     paket_berita = 'berita' in paket.lower()
 
-    ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-           '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
-           f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
-    header = f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}'
+    # Situs di lokasi tidak baku (staging velocitydeveloper.co): pengganti ssh + docroot
+    # lewat VELOCITY_LOKAL_*, sama seperti scripts/fse-apply & scripts/site-finish.
+    lokal = os.environ.get('VELOCITY_LOKAL_SSH', ''), os.environ.get('VELOCITY_LOKAL_DOCROOT', '')
+    ssh = [lokal[0]] if all(lokal) else [
+        'ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+        '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+        f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+    header = f'DOCROOT={shlex.quote(lokal[1] or f"/home/{da_user}/domains/{domain}/public_html")}'
     run = subprocess.run(ssh + ['bash', '-s'], input=header + '\n' + REMOTE,
                          capture_output=True, text=True, timeout=300)
     baris = [l for l in run.stdout.splitlines() if l.strip().startswith('{')]
@@ -376,6 +490,20 @@ def main():
     tema_fse = situs['tema'] == 'velocity-fse'
     if paket_custom and not tema_fse and situs['tema'] != cfg.get('tema_fse'):
         temuan.append(f"tema_bukan_fse:{situs['tema']}")
+
+    # --- referensi desain di FORM ISIAN tertangkap installer? ---
+    # jasakontraktorindo.com (2026-09-17): klien menulis "kontraktorhijau.com" tanpa
+    # http://, installer mencatat tanpa_referensi, dan situs jadi tidak mirip pilihan klien.
+    if paket_custom:
+        ref_form = referensi_form(domain)
+        try:
+            rencana = json.loads((Path('/var/lib/velocity/fse-rencana') / domain / 'referensi.json').read_text())
+        except (OSError, ValueError):
+            rencana = {}
+        info['referensi'] = ref_form.get('url') or '-'
+        if ref_form.get('url') and not cfg.get('tema_fse') and (
+                not rencana.get('url') or rencana.get('sumber') == 'tanpa_referensi'):
+            temuan.append('referensi_form_terlewat:' + re.sub(r'^\w+://', '', ref_form['url'])[:60])
 
     # --- tampilan mengikuti company profile & tombol WhatsApp ---
     if paket_custom:
@@ -409,11 +537,37 @@ def main():
             info['visual'] = 'belum pernah dicek'
 
     # --- halaman & menu ---
+    # Situs dealer mobil: unit tinggal di CPT `mobil` (arsip /model-unit/), halaman wajibnya
+    # Test Drive & Simulasi Kredit — bukan Layanan/Produk/Pemesanan.
+    dealer = (situs.get('gaya') or cfg.get('gaya_beranda', '')).strip().lower() == 'dealer'
     wajib = ['beranda', 'tentang-kami', 'galeri', 'berita', 'hubungi-kami']
     if paket_custom:
-        wajib += ['redaksi'] if paket_berita else ['layanan', 'produk', 'pemesanan']
-    hilang = [s for s in wajib if s not in situs['halaman']]
-    draft = [s for s in wajib if situs['halaman'].get(s, {}).get('status') not in (None, 'publish')]
+        wajib += (['redaksi'] if paket_berita else ['test-drive', 'simulasi-kredit'] if dealer
+                  else ['layanan', 'produk', 'pemesanan'])
+    # Slug padanan: situs FSE mengikuti menu referensi/desain klien (centralimpex.com
+    # about/contact/products, jasakontraktorindo.com portofolio), bukan slug baku Paket G.
+    padanan = {
+        'tentang-kami': ['tentang-kami', 'profil', 'about', 'about-us', 'tentang'],
+        'galeri': ['galeri', 'portofolio', 'portfolio', 'gallery', 'galeri-foto', 'proyek'],
+        'berita': ['berita', 'blog', 'artikel', 'insights', 'news'],
+        'hubungi-kami': ['hubungi-kami', 'kontak', 'contact', 'kontak-kami'],
+        'layanan': ['layanan', 'services', 'jasa', 'solutions'],
+        'produk': ['produk', 'products', 'katalog', 'product'],
+        'pemesanan': ['pemesanan', 'order', 'rfq'],
+    }
+    def cari_halaman(slug):
+        calon = [x for x in padanan.get(slug, [slug]) if x in situs['halaman']]
+        terbit = [x for x in calon if situs['halaman'][x].get('status') == 'publish']
+        return (terbit or calon or [None])[0]
+    if slug_arsip := next((k for k, v in situs['halaman'].items() if v.get('id') == situs.get('halaman_artikel')), None):
+        padanan['berita'].insert(0, slug_arsip)
+    # Tema FSE buatan tangan boleh tanpa halaman Produk (digabung ke layanan).
+    # Tema FSE buatan tangan (manifest tema_fse=) mengikuti susunan halaman desain klien/
+    # referensi — yang dituntut hanya halaman kontak.
+    if cfg.get('tema_fse'):
+        wajib = ['hubungi-kami']
+    hilang = [s for s in wajib if not cari_halaman(s)]
+    draft = [s for s in wajib if cari_halaman(s) and situs['halaman'][cari_halaman(s)].get('status') != 'publish']
     if hilang:
         temuan.append('halaman_hilang:' + ','.join(hilang))
     if draft:
@@ -426,8 +580,9 @@ def main():
     # --- form pemesanan (permintaan tetap Paket G) ---
     if paket_custom:
         # Portal berita memasang form "Kirim Pesan ke Redaksi" di Hubungi Kami.
-        pemesanan = situs['halaman'].get('hubungi-kami' if paket_berita else 'pemesanan') or {}
-        if not pemesanan.get('shortcode'):
+        slug_form = 'hubungi-kami' if (paket_berita or dealer) else 'pemesanan'
+        # Form boleh berada di halaman padanan mana pun (Kontak/Contact/RFQ).
+        if not any((situs['halaman'].get(x) or {}).get('shortcode') for x in padanan.get(slug_form, [slug_form]) + padanan['hubungi-kami']):
             temuan.append('form_pemesanan_tidak_terpasang')
         info['pemesanan_masuk'] = situs.get('pemesanan_masuk', 0)
 
@@ -455,6 +610,37 @@ def main():
         temuan.append(f"foto_utama_tanpa_caption:{foto_utama['tanpa_caption']}")
     if not situs['tagline']:
         temuan.append('tagline_kosong')
+    # Artikel tanpa foto utama tidak ikut terhitung di atas (hanya yang punya foto):
+    # jasakontraktorindo.com tercatat "0 post, 0 tanpa caption" dengan 8 artikel tanpa foto.
+    if situs.get('artikel_tanpa_foto'):
+        info['foto_utama'] += f", {situs['artikel_tanpa_foto']} tanpa foto"
+        temuan.append(f"artikel_tanpa_foto_utama:{situs['artikel_tanpa_foto']}")
+
+    # --- wajib footer: statistik pengunjung & ikon sosmed; SEO dasar ---
+    isi_tema = situs.get('isi_tema') or ''
+    if 'velocity-statistics' not in isi_tema and 'velocity-list-stats' not in isi_tema:
+        temuan.append('statistik_footer_tidak_ada')
+    if not re.search(r'wp:social-links|facebook\.com|instagram\.com', isi_tema):
+        temuan.append('sosmed_footer_tidak_ada')
+    seo = situs.get('seo') or {}
+    seo_kosong = [k for k in ('home_title', 'home_description') if not seo.get(k)]
+    if seo.get('logo') and not seo.get('share_image'):
+        seo_kosong.append('share_image')
+    if seo_kosong:
+        temuan.append('seo_dasar_kosong:' + ','.join(seo_kosong))
+
+    # --- isi halaman: catatan AI & judul ganda ---
+    try:
+        sys.path.insert(0, str(HERE))
+        from content_sanitize import PENOLAKAN
+        catatan = PENOLAKAN.findall(html.unescape(re.sub(r'<[^>]+>', ' ', teks)))
+        if catatan:
+            temuan.append(f'teks_catatan_ai:{len(catatan)}')
+    except ImportError:
+        pass
+    ganda = [f"{k}({v['judul_ganda']})" for k, v in situs['halaman'].items() if v.get('judul_ganda')]
+    if ganda:
+        temuan.append('judul_ganda:' + ','.join(ganda[:3]))
 
     # --- shortcode tanpa fungsi ---
     hilang = situs.get('shortcode_hilang') or []
@@ -462,6 +648,41 @@ def main():
     if hilang:
         # Tercetak apa adanya ke pengunjung, jadi ini masalah yang terlihat.
         temuan.append('shortcode_tanpa_fungsi:' + ','.join(hilang[:4]))
+
+    # --- biodata pemilik tampil sebagai kontak publik? ---
+    # Email & alamat di FORM 2 (BIODATA PEMILIK) hanya untuk administrasi; boleh tampil
+    # hanya kalau juga ditulis di "Kontak utk di web" atau disetujui (manifest email_publik).
+    biodata = biodata_pemilik(domain)
+    # Yang dinilai = HTML yang dilihat pengunjung (beranda + halaman kontak). Berkas tema
+    # memuat email PENERIMA form yang memang boleh email pemilik, jadi tidak dipakai.
+    # Situs maintenance (503) jatuh ke isi halaman + Data Situs FSE.
+    tampil = ''
+    for jalur in ('/', f"/{cari_halaman('hubungi-kami') or 'hubungi-kami'}/"):
+        kode_h, isi_h = http(f'https://{domain}{jalur}?audit={int(time.time())}')
+        if kode_h == 200:
+            tampil += isi_h.decode('utf-8', 'replace')
+    if not tampil:
+        tampil = teks + ' ' + json.dumps(situs.get('situs_kontak') or {})
+    tampil = html.unescape(tampil)
+    bocor = []
+    alamat_kunci = re.sub(r'\W+', ' ', biodata.get('alamat', '')).strip().lower()[:25]
+    calon = []
+    if biodata.get('email') and biodata['email'].lower() in tampil.lower() \
+            and biodata['email'].lower() not in (biodata.get('kontak_web', '') + cfg.get('email_publik', '')).lower():
+        calon.append('email')
+    if len(alamat_kunci) >= 12 and alamat_kunci in re.sub(r'\W+', ' ', tampil).lower() \
+            and not cfg.get('alamat_publik'):
+        calon.append('alamat')
+    if calon:
+        # Nilai yang juga tertulis di dokumen klien selain FORM ISIAN (company profile,
+        # medikaklinikteknologi.com) memang kontak publik klien, bukan sekadar biodata.
+        dokumen = dokumen_klien(domain).lower()
+        dokumen_rata = re.sub(r'\W+', ' ', dokumen)
+        bocor = [c for c in calon if not (
+            (c == 'email' and biodata['email'].lower() in dokumen)
+            or (c == 'alamat' and alamat_kunci in dokumen_rata))]
+    if bocor:
+        temuan.append('kontak_biodata_tampil:' + ','.join(bocor))
 
     # --- kontak publik ---
     kontak = situs.get('kontak_publik')
@@ -561,7 +782,7 @@ def main():
 
     # --- widget ---
     info['widget_nyasar'] = situs['widget_nyasar']
-    if paket_custom and situs['widget_nyasar'] and not tema_fse:
+    if paket_custom and situs['widget_nyasar'] and not tema_fse and not cfg.get('tema_fse'):
         temuan.append(f"widget_bawaan_tersisa:{situs['widget_nyasar']}")
 
     # --- kredit footer "Design by Velocity Developer" ---

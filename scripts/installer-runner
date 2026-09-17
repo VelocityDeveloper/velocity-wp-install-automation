@@ -10,6 +10,11 @@ MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
 SCRIPTS=/opt/velocity-wp-install-automation/scripts
 MANIFEST="$ROOT/$DOMAIN/$DOMAIN.txt"
+# Berapa kali langkah tema FSE boleh diulang saat hasilnya belum sesuai referensi.
+FSE_CEK_MAKS=${FSE_CEK_MAKS:-3}
+# Berapa kali tema + halaman FSE boleh digenerate (termasuk yang pertama) selama tampilan
+# situs jadi belum mirip referensi menurut audit kemiripan.
+FSE_MIRIP_MAKS=${FSE_MIRIP_MAKS:-3}
 STATE_DIR=/var/lib/velocity/installer
 STATE="$STATE_DIR/$DOMAIN.json"
 LOG="$STATE_DIR/$DOMAIN.log"
@@ -82,6 +87,10 @@ portal_berita() {
 #                 5. fse-apply --isi    halaman berupa blok + menu (SESUDAH site-finish)
 #                 6. paket-g-foto       foto utama artikel portal berita
 #                 7. paket-g-cek-visual screenshot desktop/HP untuk dicek mata
+#                 8. fse-audit-kemiripan tampilan situs jadi vs referensi, per bagian & per seksi
+#                                       (header, footer, beranda, gaya, halaman dalam); belum mirip
+#                                       -> generate ulang tema + halaman FSE lalu audit lagi
+#                                       (audit_kemiripan, maks FSE_MIRIP_MAKS)
 paket_g_tema() {
   # Keputusan user 2026-09-15: setelah paket dicek, periksa desain referensi di form. Hasilnya
   # (fse-rencana/<domain>/desain-referensi.json) dibaca fse-apply --tema & --isi.
@@ -96,6 +105,47 @@ paket_g_tema() {
   fi
   printf '[%s] Paket custom: tema FSE (velocity-fse)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1
+  cek_tema_referensi
+}
+
+# Gerbang sebelum konten AI (keputusan user 2026-09-16): hasil langkah tema dibandingkan
+# dengan rencana referensi desain klien (tema & versinya, gaya beranda, font, token
+# header/footer/tombol/kartu, palet). Belum sesuai -> langkah tema diulang; sesuai ->
+# alur lanjut ke konten AI. Tidak pernah menggagalkan instalasi: sesudah FSE_CEK_MAKS
+# percobaan alur tetap lanjut dengan catatan, dan situs tanpa referensi langsung lolos.
+cek_tema_referensi() {
+  local percobaan=1 kode
+  while :; do
+    /usr/bin/python3 "$SCRIPTS/fse-cek-referensi" "$MANIFEST" >> "$LOG" 2>&1 && kode=0 || kode=$?
+    if [[ "$kode" == 0 ]]; then
+      return 0
+    fi
+    if [[ "$kode" != 1 ]]; then
+      printf '[%s] fse_cek: tidak bisa diperiksa (kode %s), lanjut\n' "$(date -Is)" "$kode" >> "$LOG"
+      return 0
+    fi
+    if (( percobaan >= FSE_CEK_MAKS )); then
+      printf '[%s] fse_cek: masih belum sesuai setelah %s percobaan, lanjut ke konten AI\n' \
+        "$(date -Is)" "$percobaan" >> "$LOG"
+      return 0
+    fi
+    percobaan=$(( percobaan + 1 ))
+    printf '[%s] Paket custom: tema FSE diulang (percobaan %s)\n' "$(date -Is)" "$percobaan" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1 || true
+  done
+}
+# Paket biasa (child theme klasik): beranda dari template child theme, halaman Layanan, blok
+# kontak, widget sidebar/footer, CSS (scripts/tema-klasik), lalu foto utama artikel. Harus
+# SESUDAH site-finish: finishing menulis halaman Hubungi Kami (peta) dan CSS warna.
+tampilan_klasik() {
+  echo "[$(date -Is)] Tampilan tema klasik" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/tema-klasik" "$MANIFEST" >> "$LOG" 2>&1 || true
+  if ! portal_berita; then
+    echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+    # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
+    /usr/bin/python3 "$SCRIPTS/tema-klasik" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
 }
 paket_g_isi() {
   [[ "$JALUR_TEMA" == fse ]] || return 0
@@ -110,6 +160,12 @@ paket_g_isi() {
     printf '[%s] Paket custom: unit mobil & foto dealer\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/fse-dealer" "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
+  # Gaya klinik: foto seksi dari mockup desain klien (fse-klinik/<domain>/foto) masuk slot
+  # sebelum beranda disusun, sama alasannya dengan dealer.
+  if grep -q '^gaya_beranda=klinik' "$MANIFEST" 2>/dev/null; then
+    printf '[%s] Paket custom: foto seksi klinik\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-klinik" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   printf '[%s] Paket custom: halaman blok & menu (FSE)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
   # Foto utama artikel (ber-caption kredit foto): portal berita dan situs perusahaan.
@@ -119,8 +175,68 @@ paket_g_isi() {
   else
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
+  # Sisa artikel tanpa foto (Pexels & bank foto tak memberi yang layak / API gagal): foto klien
+  # bergilir atau sampul kategori, sama seperti paket biasa — tiap artikel pasti berfoto utama.
+  /usr/bin/python3 "$SCRIPTS/tema-klasik" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Permintaan user 2026-09-17: pastikan desain yang dibuat mirip referensi yang diminta,
+  # dicek detail per seksi (terutama header, footer, beranda). Tidak menggagalkan instalasi:
+  # hasil belum mirip ikut dilaporkan sebagai "perlu dicek" (lihat masalah_kemiripan).
+  audit_kemiripan
+}
+
+# Permintaan user 2026-09-17: desain yang belum mirip referensi digenerate ulang, dan yang
+# perlu diperbaiki dikirim di laporan. Setiap putaran: audit -> belum mirip -> fse-apply
+# --tema (+ gerbang token) -> fse-apply --isi -> audit lagi. Berhenti kalau sudah mirip,
+# FSE_MIRIP_MAKS tercapai, atau skor tidak naik (generator deterministik: input yang sama
+# menghasilkan desain yang sama, jadi putaran berikutnya tidak akan mengubah apa pun —
+# sisa beda harus diperbaiki di kode/tema, dan daftarnya ikut laporan Telegram).
+# Halaman yang sudah disunting orang tidak ditimpa (md5 di fse-apply).
+skor_kemiripan() {
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+s = d.get("skor") or {}
+print(sum(int(s.get(k, 0)) for k in ("header", "footer", "beranda")))' \
+    "/var/lib/velocity/fse-rencana/$DOMAIN/audit-kemiripan.json" 2>/dev/null || echo 0
+}
+audit_kemiripan() {
+  local percobaan=1 kode skor skor_lalu=-1
+  while :; do
+    printf '[%s] Paket custom: audit kemiripan desain vs referensi (percobaan %s)\n' "$(date -Is)" "$percobaan" >> "$LOG"
+    VELOCITY_KEMIRIPAN_PERCOBAAN=$percobaan /usr/bin/python3 "$SCRIPTS/fse-audit-kemiripan" "$MANIFEST" >> "$LOG" 2>&1 \
+      && kode=0 || kode=$?
+    # 0 mirip / tanpa referensi, 2 tidak bisa diperiksa: tidak ada yang bisa diulang.
+    [[ "$kode" == 1 ]] || return 0
+    skor=$(skor_kemiripan)
+    if (( percobaan >= FSE_MIRIP_MAKS )); then
+      printf '[%s] kemiripan_ulang: masih belum mirip setelah %s kali generate, dilaporkan\n' \
+        "$(date -Is)" "$percobaan" >> "$LOG"
+      return 0
+    fi
+    if (( skor <= skor_lalu )); then
+      printf '[%s] kemiripan_ulang: skor tidak naik (%s), generate ulang dihentikan, dilaporkan\n' \
+        "$(date -Is)" "$skor" >> "$LOG"
+      return 0
+    fi
+    skor_lalu=$skor
+    percobaan=$(( percobaan + 1 ))
+    printf '[%s] Paket custom: desain belum mirip, tema & halaman FSE digenerate ulang (percobaan %s)\n' \
+      "$(date -Is)" "$percobaan" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1 || true
+    cek_tema_referensi
+    /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
+  done
+}
+
+# Bagian yang belum mirip referensi dari audit run ini (kosong kalau mirip/tanpa referensi).
+masalah_kemiripan() {
+  local berkas="/var/lib/velocity/fse-rencana/$DOMAIN/audit-kemiripan.json"
+  [[ -f "$berkas" && "$berkas" -nt "$LOG_AWAL_RUN" ]] || return 0
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+if not d.get("sesuai") and d.get("belum_mirip"):
+    print("desain_belum_mirip_referensi:" + "+".join(d["belum_mirip"]))' "$berkas" 2>/dev/null || true
 }
 
 # Situs yang sudah dipindah ke block theme buatan tangan (birutourtravel.com,
@@ -154,8 +270,9 @@ if [[ "$MODE" == "child-theme" ]]; then
     INSTALL_MODE=apply /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
     paket_g_isi
   else
-    /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1
-    rc=$?
+    /usr/bin/python3 "$SCRIPTS/child-theme-apply" "$MANIFEST" >> "$LOG" 2>&1 && rc=0 || rc=$?
+    /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
+    tampilan_klasik
   fi
   exit $rc
 fi
@@ -169,6 +286,9 @@ printf '[%s] Mode run: %s | paket: %s\n' "$(date -Is)" "$MODE" \
 state RUNNING RUNNING_INSTALLER
 # Awal log run ini: dipakai untuk tahu apakah run ini memasang WordPress dari awal.
 run_start=$(( $(wc -l < "$LOG") + 1 ))
+# Penanda waktu awal run: hasil audit yang lebih tua dari ini bukan milik run ini.
+LOG_AWAL_RUN=$(mktemp /tmp/velocity-run.XXXXXX)
+trap 'rm -f "$LOG_AWAL_RUN"' EXIT
 if [[ "$MODE" != "finish" && "$MODE" != "maintenance" ]]; then
   INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" "$SCRIPTS/website-install-from-manifest" >> "$LOG" 2>&1
 fi
@@ -205,6 +325,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   /usr/bin/python3 "$SCRIPTS/vd-store" "$MANIFEST" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] VD Store settings (sesudah plugin/API)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/vd-store-settings" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Paket biasa (child theme klasik): isi contoh terstruktur dulu — layanannya jadi kategori
+  # artikel dan isi beranda/Layanan di langkah tampilan (permintaan user 2026-09-17).
+  if ! paket_desain_custom; then
+    echo "[$(date -Is)] Isi contoh (tema klasik)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   echo "[$(date -Is)] Starting AI content generation" >> "$LOG"
   INSTALL_MODE=apply VELOCITY_CONTENT_REFRESH=$refresh /usr/bin/python3 "$SCRIPTS/ai-content-generator.py" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Tembolok compro: murah kalau sudah pernah dibaca, perlu untuk situs lama (mode finish).
@@ -223,6 +349,8 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # peta), yang akan hilang kalau urutannya dibalik. Detail di paket_g_isi.
   if paket_desain_custom; then
     paket_g_isi || true
+  else
+    tampilan_klasik
   fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"
@@ -231,6 +359,12 @@ try:
     print(",".join(json.loads(sys.argv[1]).get("problems", [])))
 except Exception:
     print("qa_gagal_dijalankan")' "$qa")
+  if paket_desain_custom; then
+    mirip=$(masalah_kemiripan)
+    if [[ -n "$mirip" ]]; then
+      problems="${problems:+$problems,}$mirip"
+    fi
+  fi
 fi
 if [[ "$MODE" == "apply" || "$MODE" == "maintenance" ]]; then
   # Langkah terakhir: tutup situs dengan maintenance mode velocity-addons sampai PM

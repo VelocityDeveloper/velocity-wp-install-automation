@@ -18,7 +18,11 @@
 	},
 	"supports": {
 		"html": false,
-		"multiple": false
+		"multiple": false,
+		"align": [
+			"wide",
+			"full"
+		]
 	},
 	"editorScript": "velocity-fse-blok",
 	"render": "file:./render.php",

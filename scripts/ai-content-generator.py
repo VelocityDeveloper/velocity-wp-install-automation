@@ -17,11 +17,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client_form import read_client_form
 from client_docs import collect_client_docs, format_for_prompt
-from content_sanitize import clean_html
+from content_sanitize import buang_kalimat_meragukan, clean_html
 
 CONTENT_RULES = """Aturan konten (wajib):
 - Gunakan HANYA fakta dari data klien di atas: nama usaha, produk/layanan, keunggulan, sejarah, visi-misi, area layanan, alamat, kontak. Jangan mengarang nomor telepon, alamat, harga, angka, penghargaan, atau klaim yang tidak ada di data. Kalau suatu info tidak ada, lewati tanpa menulis contoh palsu.
 - Bagian bertanda DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau WhatsApp pribadi pemilik. Kontak publik ambil dari "Kontak utk di web" atau kontak di dokumen perusahaan.
+- Jangan pernah menulis bahwa suatu informasi belum tersedia, tidak tercantum, atau tidak ada di data — cukup lewati bagiannya. Jangan menulis sertifikasi, garansi, layanan gratis, lama pengalaman, atau jumlah proyek/klien kecuali tertulis di data klien.
 - Abaikan teks panduan bawaan template form (mis. "Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
 - Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ.
 - Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto, galeri, peta, dan tombol WhatsApp dipasang otomatis oleh sistem dari file klien."""
@@ -166,8 +167,13 @@ def catat_token(model, usage, model_jawab, ok):
     except Exception as e:
         log(f'WARNING: pemakaian token tidak tercatat: {e}')
 
-def ai_call(system_prompt, user_prompt, model):
-    """Call OpenAI-compatible API"""
+def ai_call(system_prompt, user_prompt, model, timeout=None, max_tokens=None):
+    """Call OpenAI-compatible API.
+
+    `timeout` detik (bawaan VELOCITY_AI_TIMEOUT atau 120). Prompt panjang seperti isi
+    contoh tema butuh lebih lama: 2026-09-16 layanan AI melambat (prompt satu kalimat
+    saja 57 detik) sehingga dua percobaan isi contoh habis waktu dan gagal.
+    """
     api_key = model.get('api_key', '')
     if not api_key:
         log('ERROR: API key not found in model config')
@@ -176,7 +182,10 @@ def ai_call(system_prompt, user_prompt, model):
     endpoint = model.get('endpoint', 'https://api.openai.com/v1')
     model_name = model.get('model', '')
     temperature = model.get('temperature', 0.7)
-    max_tokens = model.get('max_tokens', 4096)
+    # Model penalar (mis. xiaomi/mimo-v2.5) menghabiskan jatah ini untuk berpikir dan
+    # mengembalikan content KOSONG kalau jatahnya habis — gejalanya panggilan "berhasil"
+    # (token tercatat) tapi tanpa jawaban (medikaklinikteknologi.com, 2026-09-16).
+    max_tokens = max_tokens or model.get('max_tokens') or 4096
     
     payload = json.dumps({
         'model': model_name,
@@ -199,11 +208,17 @@ def ai_call(system_prompt, user_prompt, model):
     
     tercatat = False
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or int(os.environ.get('VELOCITY_AI_TIMEOUT', '120'))) as resp:
             result = json.loads(resp.read())
             catat_token(model, result.get('usage') or {}, result.get('model', ''), True)
             tercatat = True
-            content = result['choices'][0]['message']['content']
+            pilihan = result['choices'][0]
+            content = pilihan['message'].get('content') or ''
+            if not content.strip():
+                log(f"ERROR: jawaban AI kosong (finish_reason={pilihan.get('finish_reason')}, "
+                    f"completion_tokens={(result.get('usage') or {}).get('completion_tokens')}, "
+                    f"max_tokens={max_tokens})")
+                return None
             # Strip markdown code fences
             content = content.strip()
             if content.startswith('```'):
@@ -219,6 +234,37 @@ def ai_call(system_prompt, user_prompt, model):
         if not tercatat:
             catat_token(model, {}, '', False)
         return None
+
+def ai_json_list(system_prompt, user_prompt, model, jenis):
+    """Panggil AI dan urai array JSON; satu kali ulang kalau JSON-nya rusak.
+
+    centralimpex.com (2026-09-16/17): jawaban AI sesekali terpotong atau berkutip tak
+    di-escape ("Unterminated string", "Expecting property name"), sehingga semua halaman
+    atau satu kategori artikel hilang dari instalasi."""
+    for percobaan in (1, 2):
+        prompt = user_prompt if percobaan == 1 else (
+            user_prompt + '\n\nIMPORTANT: your previous answer was not valid JSON. Return ONLY a complete, '
+            'valid JSON array: escape every double quote inside strings as \\", no trailing commas, '
+            'and keep each content within the requested length so the array is not cut off.')
+        response = ai_call(system_prompt, prompt, model)
+        if not response:
+            return None
+        try:
+            # strict=False: baris baru/tab mentah di dalam teks HTML jawaban AI membuat
+            # json.loads gagal "Invalid control character" (sobirin-advokat.com 2026-09-16).
+            hasil = json.loads(response, strict=False)
+        except json.JSONDecodeError as e:
+            log(f'ERROR: Failed to parse {jenis} JSON (percobaan {percobaan}): {e}')
+            log(f'Response: {response[:500]}')
+            continue
+        if not isinstance(hasil, list):
+            log('ERROR: AI response is not a JSON array')
+            return None
+        if percobaan > 1:
+            log(f'{jenis} JSON valid pada percobaan {percobaan}')
+        return hasil
+    return None
+
 
 def generate_pages(site_title, domain, client_info, model):
     """Generate 4 pages: Home, Profile, Gallery, Contact"""
@@ -237,7 +283,7 @@ def generate_pages(site_title, domain, client_info, model):
 Generate 4 pages plus a tagline. Return JSON array:
 [
   {{"slug":"home","title":"Home","content":"<HTML homepage: hero heading and intro, products/services, advantages, call to action. 300-500 words.>"}},
-  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile: history, vision-mission, values, team if available. 300-500 words.>"}},
+  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile. Include history, vision-mission, values, or team ONLY when they appear in the client data; silently skip missing parts. Never write that some information is unavailable or not provided. 300-500 words.>"}},
   {{"slug":"gallery","title":"Gallery","content":"<HTML short intro for the photo gallery describing the client's products or activities. 60-120 words. Photos are added automatically.>"}},
   {{"slug":"contact","title":"Kontak","content":"<HTML contact info: public phone/WhatsApp, email, address, opening hours only if present in client data, plus an invitation to get in touch. 80-200 words. No form, no map.>"}},
   {{"slug":"tagline","title":"Tagline","content":"<client's slogan if present, otherwise a plain-text summary of the business, max 8 words, no HTML>"}}
@@ -245,20 +291,7 @@ Generate 4 pages plus a tagline. Return JSON array:
 
 Use Indonesian language. Content should be professional HTML without images, forms, iframes, or placeholders."""
     
-    response = ai_call(system_prompt, user_prompt, model)
-    if not response:
-        return None
-    
-    try:
-        pages = json.loads(response)
-        if not isinstance(pages, list):
-            log('ERROR: AI response is not a JSON array')
-            return None
-        return pages
-    except json.JSONDecodeError as e:
-        log(f'ERROR: Failed to parse pages JSON: {e}')
-        log(f'Response: {response[:500]}')
-        return None
+    return ai_json_list(system_prompt, user_prompt, model, 'pages')
 
 def rapikan_artikel(daftar, category):
     """Artikel valid saja, dengan nama kolom baku.
@@ -399,20 +432,7 @@ Return JSON array:
 
 Use Indonesian language. Ground the content in the client's actual field of business from the client data."""
     
-    response = ai_call(system_prompt, user_prompt, model)
-    if not response:
-        return None
-    
-    try:
-        articles = json.loads(response)
-        if not isinstance(articles, list):
-            log('ERROR: AI response is not a JSON array')
-            return None
-        return articles
-    except json.JSONDecodeError as e:
-        log(f'ERROR: Failed to parse articles JSON: {e}')
-        log(f'Response: {response[:500]}')
-        return None
+    return ai_json_list(system_prompt, user_prompt, model, 'articles')
 
 def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
     """Judul layanan dari child theme yang terpasang, untuk dipakai jadi kategori.
@@ -469,6 +489,22 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
         layanan.append({'judul': judul.strip()[:60], 'keterangan': keterangan.strip()[:400], 'jenis': jenis})
     # Portal berita bisa punya lebih banyak rubrik daripada layanan perusahaan.
     return layanan[:10 if jenis == 'berita' else 6]
+
+
+def kategori_isi_contoh(domain):
+    """Layanan dari isi contoh (<domain>-tema.json, scripts/paket-g-konten) sebagai kategori artikel.
+
+    Child theme klasik (Paket E/F, dll.) tidak menyimpan daftar layanan, sehingga semua
+    artikel dulu masuk satu kategori "Blog" (sedotwcsrirejeki.com, rmbrentcar.com 2026-09-17)."""
+    try:
+        isi = json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        return []
+    if isi.get('jenis') == 'berita':
+        return [{'judul': r['judul'], 'keterangan': str(r.get('teks') or ''), 'jenis': 'berita'}
+                for r in isi.get('rubrik') or [] if r.get('judul')]
+    return [{'judul': l['judul'], 'keterangan': ' '.join([str(l.get('teks') or '')] + list(l.get('rincian') or [])).strip()}
+            for l in isi.get('layanan') or [] if l.get('judul')]
 
 
 def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun=()):
@@ -545,10 +581,14 @@ else
   stored=$($WP_BIN post meta get "$page_id" _velocity_content_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
   fse_milik=$($WP_BIN post meta get "$page_id" _velocity_fse_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
   fse_tata=$($WP_BIN post meta get "$page_id" _velocity_fse_layout --path="$DOCROOT" --allow-root 2>/dev/null || true)
-  # Tema FSE (scripts/fse-apply): Beranda berisi tata letak blok dan tidak pernah
-  # ditimpa tulisan AI; halaman lain sudah diubah jadi blok, ditulis ulang hanya di
-  # mode finish (fse-apply --isi mengubahnya lagi jadi blok sesudahnya).
-  if [[ -n "$fse_tata" || ( -n "$fse_milik" && "{refresh}" != 1 ) ]]; then
+  # Tema FSE (scripts/fse-apply): halaman ini milik fse-apply, isinya blok yang
+  # disusun dari data situs — tulisan AI TIDAK PERNAH menimpanya, termasuk di mode
+  # finish. Pengecualian refresh dulu ada di sini dan merusak situs: generator
+  # menulis ulang Tentang Kami/Galeri/Hubungi Kami jadi HTML polos, lalu
+  # `fse-apply --isi` menolak memperbaikinya karena isinya tidak lagi cocok dengan
+  # md5 miliknya ("sudah disunting orang") — blok kontak, media sosial, dan form
+  # pemesanan hilang permanen (bumiairchemitech.com, 2026-09-16).
+  if [[ -n "$fse_tata" || -n "$fse_milik" ]]; then
     echo "page_kept_fse:{slug}:$page_id"
   # Ditimpa hanya kalau masih placeholder, mode finish, atau isinya belum berubah
   # sejak terakhir ditulis installer (md5 sama) — suntingan manusia tidak hilang.
@@ -749,6 +789,10 @@ def main():
     articles = load_saved(GENERATED_DIR / f'{domain}-articles.json')
     pensiun = []
     kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
+    if not kategori:
+        kategori = kategori_isi_contoh(domain)
+        if kategori:
+            log(f'Kategori dari layanan isi contoh: {", ".join(k["judul"] for k in kategori)}')
     berita = bool(kategori) and kategori[0].get('jenis') == 'berita'
     if berita:
         per_kategori = max(per_kategori, int(cfg.get('articles_per_rubrik', '3')))
@@ -801,13 +845,15 @@ def main():
             log('Tema tanpa daftar layanan, memakai satu kategori')
             articles = generate_articles(site_title, domain, client_info, model,
                                          num_articles, article_category)
-    if not articles:
-        log('ERROR: Failed to generate articles')
-        sys.exit(3)
-    
     articles_file = GENERATED_DIR / f'{domain}-articles.json'
-    articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
-    log(f'Articles saved: {articles_file}')
+    if articles:
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+        log(f'Articles saved: {articles_file}')
+    else:
+        # Halaman tetap diterbitkan: dulu exit di sini membuat halaman yang sudah jadi
+        # ikut tidak terpasang (sobirin-advokat.com tersisa placeholder semua).
+        log('ERROR: Failed to generate articles, halaman tetap diterbitkan')
+        articles = []
     
     # Biodata pemilik tidak boleh terbit, apa pun yang ditulis AI.
     jumlah_buang = 0
@@ -818,6 +864,22 @@ def main():
                 jumlah_buang += n
     if jumlah_buang:
         log(f'Data pribadi pemilik dibuang dari konten: {jumlah_buang} paragraf/butir')
+        pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+
+    # Catatan/penolakan AI ("... belum tersedia dalam data perusahaan") tidak boleh
+    # terbit, dan klaim (sertifikasi, garansi, gratis, angka pengalaman/proyek) di
+    # halaman hanya boleh kalau ada di data klien (jasakontraktorindo.com 2026-09-17).
+    # Klaim hanya dicek saat data klien lengkap terbaca (konten baru dibuat);
+    # artikel pengetahuan umum hanya disaring kalimat penolakannya.
+    alasan_buang = []
+    for daftar, data_cek in ((pages, client_info if need_ai else None), (articles, None)):
+        for item in daftar if isinstance(daftar, list) else []:
+            if isinstance(item, dict) and item.get('content') and item.get('slug') != 'tagline':
+                item['content'], alasan = buang_kalimat_meragukan(item['content'], data_cek)
+                alasan_buang += [f"{item.get('slug')}:{a}" for a in alasan]
+    if alasan_buang:
+        log(f'Kalimat meragukan dibuang: {len(alasan_buang)} ({", ".join(alasan_buang[:8])})')
         pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
         articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
 
@@ -840,6 +902,12 @@ def main():
     
     # Apply: publish content
     log('Publishing content to remote...')
+    # Manifest `tanpa_halaman=galeri,layanan` (yukpergimancing.com 2026-09-17): halaman yang sengaja
+    # dihapus tidak dibuat ulang oleh generator.
+    tanpa = {x.strip().lower() for x in cfg.get('tanpa_halaman', '').split(',') if x.strip()}
+    slug_wp = {'home': 'beranda', 'profile': 'tentang-kami', 'gallery': 'galeri', 'contact': 'hubungi-kami'}
+    if tanpa:
+        pages = [pg for pg in pages if slug_wp.get(str(pg.get('slug', '')).lower()) not in tanpa]
     success = publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun)
     
     if success:

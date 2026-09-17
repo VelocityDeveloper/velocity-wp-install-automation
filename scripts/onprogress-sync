@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 # Salin folder project dari Google Drive "On Progress" ke /home/On Progress.
 #
-# Hanya domain yang benar-benar menunggu installer: status "belum diambil" di
-# antrean dan deadline belum lewat jauh (toleransi sama dengan autopilot, lihat
-# DEADLINE_GRACE di installer-autopilot). Drive berisi ±10 ribu folder (puluhan
-# GiB) yang tidak dibutuhkan installer, jadi tidak ada sync penuh.
+# Disalin BERKALA selama project masih berjalan, bukan sekali saat masuk antrean:
+# klien kerap menambah berkas di Drive sesudah project diambil alih (permintaan
+# user 2026-09-16). Dulu saringannya hanya status "belum diambil", jadi begitu
+# autopilot mengklaim sebuah domain, foldernya berhenti disinkron dan tambahan
+# data dari klien tidak pernah sampai ke server.
+#
+# Yang disalin sekarang: semua baris di daftar installer, KECUALI
+#   - status RUNNING — jangan mengubah data sumber di tengah instalasi berjalan;
+#     ikut lagi di putaran berikutnya (10 menit) begitu run-nya selesai.
+#   - "belum diambil" yang deadline-nya lewat lebih dari AUTOPILOT_DEADLINE_GRACE_DAYS
+#     — antrean basi yang tidak akan dikerjakan autopilot.
+# Project yang sudah terpasang penuh (SUCCESS/COMPLETE) tidak muncul di daftar,
+# jadi dengan sendirinya berhenti disinkron. Drive berisi ±10 ribu folder (puluhan
+# GiB) yang tidak dibutuhkan installer, jadi tetap tidak ada sync penuh
+# (keputusan user 2026-09-11): saringan ini ~33 folder, bukan 10 ribu.
 #
 # Selalu `rclone copy`, bukan `sync`: file lokal tidak pernah dihapus, dan remote
-# gdrive memang read-only.
+# gdrive memang read-only. Menyalin ulang folder yang sudah ada murah — rclone
+# hanya memindahkan berkas yang baru atau berubah.
 set -Eeuo pipefail
 
 REMOTE='gdrive:On Progress'
@@ -20,10 +32,11 @@ ok = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
 today = datetime.date.today()
 grace = datetime.timedelta(days=int(os.environ.get("AUTOPILOT_DEADLINE_GRACE_DAYS", "10")))
 for r in json.load(sys.stdin).get("domains", []):
-    if r.get("status") != "belum diambil":
+    status = r.get("status")
+    if status == "RUNNING":
         continue
-    # Tanpa deadline tidak dianggap terlewat, sama seperti halaman installer.
-    if r.get("deadline"):
+    if status == "belum diambil" and r.get("deadline"):
+        # Tanpa deadline tidak dianggap terlewat, sama seperti halaman installer.
         try:
             telat = today - datetime.date.fromisoformat(r["deadline"])
         except ValueError:

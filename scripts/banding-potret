@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+/*
+ * Gambar perbandingan berdampingan: referensi (kiri) vs situs (kanan), dipotong per
+ * bagian supaya bisa dibuka di Telegram/HP. Cara yang dipakai saat mencocokkan
+ * jasakontraktorindo.com & centralimpex.com (2026-09-17) — perbedaan tata letak jauh
+ * lebih cepat terlihat berdampingan daripada dua berkas terpisah.
+ *
+ * Pemakaian: banding-potret <kiri.png> <kanan.png> <awalan-keluaran> [skala=0.4] [tinggi_bagian_px=2400]
+ * Keluaran: <awalan>-1.png, <awalan>-2.png, ... ; baris terakhir `banding:ok:<jumlah>`.
+ * Kode keluar: 0 berhasil, 1 gagal, 3 playwright-core belum terpasang.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const akar = process.env.VELOCITY_BLOCKVAL || '/var/lib/velocity/tools/blockval';
+const modul = path.join(akar, 'node_modules', 'playwright-core');
+if (!fs.existsSync(modul)) {
+  console.log('banding:playwright_tidak_ada');
+  process.exit(3);
+}
+const { chromium } = require(modul);
+const [kiri, kanan, awalan, skala = '0.4', potongPx = '2400'] = process.argv.slice(2);
+if (!kiri || !kanan || !awalan) {
+  console.log('usage: banding-potret <kiri.png> <kanan.png> <awalan> [skala] [tinggi_bagian]');
+  process.exit(1);
+}
+const chrome = process.env.VELOCITY_CHROME
+  || fs.readdirSync('/root/.cache/ms-playwright').filter((d) => d.startsWith('chromium-')).sort().reverse()
+    .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
+const ukuran = (f) => { const d = fs.readFileSync(f); return [d.readUInt32BE(16), d.readUInt32BE(20)]; };
+
+(async () => {
+  const s = +skala;
+  const [w1, h1] = ukuran(kiri);
+  const [w2, h2] = ukuran(kanan);
+  const W = Math.round((w1 + w2) * s) + 30;
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: W, height: 800 } });
+    const b64 = (f) => `data:image/png;base64,${fs.readFileSync(f).toString('base64')}`;
+    await page.setContent(`<body style="margin:0;background:#ff00ff;display:flex;gap:10px;padding:10px;align-items:flex-start;font:14px sans-serif">
+      <figure style="margin:0"><figcaption style="color:#fff;padding:2px 0 6px">REFERENSI</figcaption><img style="display:block;width:${w1 * s}px" src="${b64(kiri)}"></figure>
+      <figure style="margin:0"><figcaption style="color:#fff;padding:2px 0 6px">SITUS</figcaption><img style="display:block;width:${w2 * s}px" src="${b64(kanan)}"></figure></body>`);
+    await page.waitForLoadState('load');
+    const H = await page.evaluate(() => document.documentElement.scrollHeight);
+    const langkah = Math.round(+potongPx * s);
+    let n = 0;
+    for (let y = 0; y < H - 2; y += langkah) {
+      n += 1;
+      await page.screenshot({ path: `${awalan}-${n}.png`, fullPage: true,
+        clip: { x: 0, y, width: W, height: Math.min(langkah, H - y) } });
+    }
+    console.log(`banding:ok:${n}`);
+    await browser.close();
+    process.exit(0);
+  } catch (e) {
+    console.log(`banding:gagal:${e.message.split('\n')[0]}`);
+    process.exit(1);
+  }
+})();

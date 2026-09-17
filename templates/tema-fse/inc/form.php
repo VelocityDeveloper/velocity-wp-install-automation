@@ -68,7 +68,40 @@ function velocity_fse_form_kolom()
         'pesan'  => array('label' => $berita ? 'Pesan' : 'Kebutuhan Anda', 'type' => 'textarea', 'wajib' => $berita,
             'placeholder' => $berita ? 'Tulis pesan atau informasi untuk redaksi.' : 'Ceritakan singkat kebutuhan Anda.'),
     );
+    // Kolom versi klien dari Data Situs (kunci `form`, ditulis installer dari company profile):
+    // urutan, label, pilihan, dan catatan mengikuti klien. Kunci yang dipakai pengolah
+    // kiriman (nama, wa, email, jenis) selalu ada.
+    $atur = velocity_fse_situs('form');
+    if (is_array($atur) && !empty($atur['kolom']) && is_array($atur['kolom'])) {
+        $boleh = array_flip(array('label', 'type', 'wajib', 'placeholder', 'opsi', 'autocomplete', 'catatan'));
+        $baru = array();
+        foreach ($atur['kolom'] as $nama => $ubah) {
+            $nama = sanitize_key($nama);
+            $dasar = isset($kolom[$nama]) ? $kolom[$nama] : array('label' => $nama, 'type' => 'text', 'wajib' => false);
+            $k = array_merge($dasar, array_intersect_key((array) $ubah, $boleh));
+            if (!in_array($k['type'], array('text', 'tel', 'email', 'select', 'textarea'), true)
+                || ($k['type'] === 'select' && empty($k['opsi']))) {
+                $k = $dasar;
+            }
+            $baru[$nama] = $k;
+        }
+        foreach (array('nama', 'wa', 'email', 'jenis') as $perlu) {
+            if (!isset($baru[$perlu])) {
+                $baru[$perlu] = $kolom[$perlu];
+            }
+        }
+        $kolom = $baru;
+    }
     return apply_filters('velocity_fse_form_kolom', $kolom);
+}
+
+function velocity_fse_form_tombol()
+{
+    $atur = velocity_fse_situs('form');
+    if (is_array($atur) && !empty($atur['tombol'])) {
+        return (string) $atur['tombol'];
+    }
+    return (velocity_fse_jenis_berita() || velocity_fse_dealer()) ? 'Kirim Pesan' : 'Kirim Pemesanan';
 }
 
 add_action('init', function () {
@@ -106,7 +139,10 @@ add_action('template_redirect', function () {
     if (empty($_POST['vf_form_kirim'])) {
         return;
     }
-    $kembali = wp_get_referer() ? wp_get_referer() : home_url('/');
+    // wp_get_referer() kosong bila referer = URL yang sedang diminta (form dikirim ke
+    // halamannya sendiri), sehingga pengunjung terlempar ke beranda
+    // (jasakontraktorindo.com 2026-09-17). Referer mentah divalidasi sendiri.
+    $kembali = wp_validate_redirect(remove_query_arg('pesan', strtok((string) wp_get_raw_referer(), '#')), home_url('/'));
     $ke = function ($pesan) use ($kembali) {
         wp_safe_redirect(add_query_arg('pesan', $pesan, $kembali) . '#formulir');
         exit;
@@ -206,6 +242,9 @@ function velocity_fse_form_render()
             $ph = isset($k['placeholder']) ? $k['placeholder'] : ''; ?>
             <p class="vf-form__baris<?php echo $k['type'] === 'textarea' ? ' vf-form__penuh' : ''; ?>">
                 <label for="<?php echo esc_attr($id); ?>"><?php echo esc_html($k['label']); ?><?php if ($wajib) : ?> <span aria-hidden="true">*</span><?php endif; ?></label>
+                <?php if (!empty($k['catatan'])) : ?>
+                    <small class="vf-form__bantuan"><?php echo esc_html($k['catatan']); ?></small>
+                <?php endif; ?>
                 <?php if ($k['type'] === 'select') : ?>
                     <select id="<?php echo esc_attr($id); ?>" name="vf[<?php echo esc_attr($nama); ?>]"<?php echo $wajib ? ' required' : ''; ?>>
                         <?php foreach ($k['opsi'] as $opsi) : ?>
@@ -232,7 +271,7 @@ function velocity_fse_form_render()
         </p>
         <?php wp_nonce_field('velocity_fse_form', 'vf_nonce'); ?>
         <p class="vf-form__kirim vf-form__penuh">
-            <button type="submit" name="vf_form_kirim" value="1" class="wp-element-button"><?php echo (velocity_fse_jenis_berita() || velocity_fse_dealer()) ? 'Kirim Pesan' : 'Kirim Pemesanan'; ?></button>
+            <button type="submit" name="vf_form_kirim" value="1" class="wp-element-button"><?php echo esc_html(velocity_fse_form_tombol()); ?></button>
             <?php if ($wa) : ?>
                 <a href="<?php echo esc_url($wa); ?>" target="_blank" rel="noopener nofollow">Atau chat WhatsApp</a>
             <?php endif; ?>

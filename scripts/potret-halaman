@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 /*
  * Potret satu halaman penuh lewat Playwright (viewport normal + digulir supaya
- * gambar lazy-load ikut termuat). Dipakai paket-g-cek-visual untuk situs
- * referensi klien: Chromium CLI (--screenshot) menggantung di situs berat seperti
+ * gambar lazy-load ikut termuat). Dipakai paket-g-cek-visual untuk situs klien
+ * maupun referensinya: Chromium CLI (--screenshot) menggantung di situs berat seperti
  * ourgrandfatherstory.com, dan jendela setinggi ribuan px merusak elemen ber-vh.
  *
- * Pemakaian: potret-halaman <url> <keluaran.png> [lebar] [tinggi]
+ * Pemakaian: potret-halaman <url> <keluaran.png> [lebar] [tinggi] [--hp] [--cek]
+ *   --hp   UA ponsel + layar sentuh (lebar bawaan 390x844)
+ *   --cek  cetak satu baris `cek:{json}`: scroll horizontal, gambar rusak, tautan menu,
+ *          dan (dengan --hp) apakah tombol menu HP ada & membuka daftar menu.
  * Modul dibaca dari VELOCITY_BLOCKVAL (bawaan /var/lib/velocity/tools/blockval).
  * Kode keluar: 0 berhasil, 1 gagal, 3 playwright-core belum terpasang.
+ *
+ * Gulir: sampai dasar halaman (bukan jumlah langkah tetap), 400px per 250ms — gulir
+ * cepat meninggalkan foto lazy-load kosong di screenshot (jasakontraktorindo.com 2026-09-17).
  */
 const fs = require('fs');
 const path = require('path');
@@ -19,29 +25,91 @@ if (!fs.existsSync(modul)) {
   process.exit(3);
 }
 const { chromium } = require(modul);
-const [url, keluaran, lebar = '1366', tinggi = '900'] = process.argv.slice(2);
+const opsi = process.argv.slice(2).filter((a) => a.startsWith('--'));
+const argumen = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const hp = opsi.includes('--hp');
+const [url, keluaran, lebar = hp ? '390' : '1366', tinggi = hp ? '844' : '900'] = argumen;
 const chrome = process.env.VELOCITY_CHROME
   || fs.readdirSync('/root/.cache/ms-playwright').filter((d) => d.startsWith('chromium-')).sort().reverse()
     .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
+const UA = hp
+  ? 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36'
+  : 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+
+// Tombol menu HP yang umum: blok navigation core, child Velocity (Bootstrap), <details>.
+const PEMICU_MENU = [
+  '.wp-block-navigation__responsive-container-open',
+  'button.navbar-toggler', '.menu-toggle', 'details.mobile-nav > summary',
+  // Divi (web referensi kontraktorhijau.com), Beaver Themer, Elementor, pola umum.
+  '.mobile_menu_bar', '.fl-menu-mobile-toggle', '.elementor-menu-toggle',
+  '[class*="hamburger" i]', '[class*="burger" i]', '[class*="menu-toggle" i]', '[class*="nav-toggle" i]',
+].join(', ');
+
+const tautanTerlihat = () => [...document.querySelectorAll('a[href]')].filter((a) => {
+  const r = a.getBoundingClientRect();
+  const g = getComputedStyle(a);
+  return r.width > 0 && r.height > 0 && r.top >= 0 && r.top < window.innerHeight && g.visibility !== 'hidden';
+}).length;
 
 (async () => {
   const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox'] });
   // Batas keseluruhan: situs yang tidak pernah selesai tidak boleh menahan installer.
-  const berhenti = setTimeout(() => { console.log('potret:timeout'); process.exit(1); }, 150000);
+  const berhenti = setTimeout(() => { console.log('potret:timeout'); process.exit(1); }, 170000);
   try {
     const page = await browser.newPage({
       viewport: { width: +lebar, height: +tinggi },
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+      userAgent: UA,
+      isMobile: hp,
+      hasTouch: hp,
     });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
-    for (let i = 0; i < 30; i += 1) {
-      await page.mouse.wheel(0, 900);
-      await page.waitForTimeout(250);
-    }
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.evaluate(async () => {
+      const tunggu = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < 120; y += 400, i += 1) {
+        window.scrollTo(0, y);
+        await tunggu(250);
+      }
+      window.scrollTo(0, 0);
+    });
     await page.waitForTimeout(1500);
     await page.screenshot({ path: keluaran, fullPage: true, timeout: 60000 });
     console.log(`potret:ok:${keluaran}`);
+
+    if (opsi.includes('--cek')) {
+      const cek = await page.evaluate((pemicu) => {
+        const tampak = (el) => {
+          const r = el.getBoundingClientRect();
+          const g = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && g.visibility !== 'hidden' && g.display !== 'none';
+        };
+        const rusak = [...document.images].filter((i) => i.complete && i.naturalWidth === 0 && i.currentSrc
+          && !/^data:/.test(i.currentSrc)).map((i) => i.currentSrc.slice(0, 120));
+        const header = document.querySelector('header, .site-header') || document.body;
+        const menu = [...new Set([...header.querySelectorAll('nav a[href], [class*="menu" i] a[href]')]
+          .map((a) => a.href.split('#')[0]).filter((h) => h.startsWith(location.origin)))].slice(0, 20);
+        return {
+          lebar_dokumen: document.documentElement.scrollWidth,
+          lebar_layar: window.innerWidth,
+          gambar_rusak: rusak,
+          menu,
+          tombol_menu_hp: [...document.querySelectorAll(pemicu)].some(tampak),
+        };
+      }, PEMICU_MENU);
+      cek.scroll_horizontal = cek.lebar_dokumen > cek.lebar_layar + 2;
+      if (hp && cek.tombol_menu_hp) {
+        // Buka menu HP, lalu pastikan tautan menu yang terlihat bertambah.
+        const sebelum = await page.evaluate(tautanTerlihat);
+        await page.locator(PEMICU_MENU).filter({ visible: true }).first().click({ timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(700);
+        const sesudah = await page.evaluate(tautanTerlihat);
+        cek.menu_hp_terbuka = sesudah > sebelum;
+        const buka = keluaran.replace(/\.png$/, '-menu.png');
+        await page.screenshot({ path: buka }).catch(() => {});
+        cek.potret_menu = buka;
+      }
+      console.log(`cek:${JSON.stringify(cek)}`);
+    }
     clearTimeout(berhenti);
     await browser.close();
     process.exit(0);

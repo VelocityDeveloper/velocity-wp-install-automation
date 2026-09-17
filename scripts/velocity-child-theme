@@ -64,7 +64,7 @@ GITHUB_RILIS_RE = re.compile(
 # Paket desain custom: child theme digenerate bernama project. Portal Berita Custom
 # memakai template yang sama dengan varian berita (keputusan user 2026-09-14).
 SCAFFOLD_PAKET = {'paketg', 'paketportalberitacustom'}
-SCAFFOLD_VERSION = '1.1.0'
+SCAFFOLD_VERSION = '1.1.1'
 # Paket yang child theme-nya sudah baku: paketnya sendiri yang menentukan tema,
 # bukan referensi desain di form (keputusan user 2026-09-16). Slug diambil apa
 # adanya dari API tema Velocity, jadi versi barunya ikut tanpa mengubah kode.
@@ -238,6 +238,22 @@ def scaffold_png(width=1200, height=900, rgb=(31, 42, 68)):
             + chunk(b'IEND', b''))
 
 
+def screenshot_tema(nama, latar):
+    """screenshot.jpg 1200x900 (latar gelap, nama tema putih) lewat scripts/tema-screenshot.
+    None kalau alat Playwright belum ada di mesin ini."""
+    alat = Path(__file__).resolve().parent / 'tema-screenshot'
+    with tempfile.TemporaryDirectory() as tmp:
+        keluaran = Path(tmp) / 'screenshot.jpg'
+        try:
+            run = subprocess.run(['node', str(alat), str(nama), str(keluaran), latar],
+                                 capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if run.returncode != 0 or not keluaran.is_file():
+            return None
+        return keluaran.read_bytes()
+
+
 def hex_ke_rgb(nilai):
     nilai = nilai.lstrip('#')
     return tuple(int(nilai[i:i + 2], 16) for i in (0, 2, 4))
@@ -294,7 +310,9 @@ def perbaiki_kontras(latar, minimal=KONTRAS_MINIMAL, gelap=None):
     return warna, teks_di_atas(warna, gelap)
 
 
-NOMOR_RE = re.compile(r'(?:\+?62|0)8[\d\s.-]{7,14}\d')
+# Dibatasi non-angka di kedua sisi: teks sampah docx ("45808907399655" di sebelah
+# logo company profile medikaklinikteknologi.com) sempat terbaca sebagai nomor WA.
+NOMOR_RE = re.compile(r'(?<![\d+])(?:\+?62|0)8[\d\s.-]{7,14}\d(?!\d)')
 EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
 
 
@@ -327,6 +345,21 @@ def alamat_kontak_web(teks):
     return ', '.join(baris)
 
 
+def alamat_dokumen(teks):
+    """Alamat kantor dari dokumen klien: baris sesudah label "Office"/"Alamat"/"Kantor".
+
+    Tanpa label, kata seperti "kota" di badan tulisan ikut terbaca sebagai alamat."""
+    baris = [b.strip() for b in str(teks or '').splitlines()]
+    for i, b in enumerate(baris):
+        cocok = re.match(r'^(office|alamat(\s+kantor)?|kantor|address|head office)\s*:?\s*(.*)$', b, re.I)
+        if not cocok:
+            continue
+        calon = cocok.group(3) or (baris[i + 1] if i + 1 < len(baris) else '')
+        if alamat_kontak_web(calon):
+            return calon.strip(' ,')
+    return ''
+
+
 def data_klien(domain, nama=''):
     """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php.
 
@@ -349,12 +382,20 @@ def data_klien(domain, nama=''):
     dokumen = ''
     try:
         from client_docs import collect_client_docs
-        dokumen = '\n'.join(t for n, t in collect_client_docs(folder).get('sources', [])
+        # Tanpa jatah prompt AI: kontak company profile biasanya di halaman terakhir
+        # (medikaklinikteknologi.com: docx 30 rb karakter, kontak terpotong di 7000).
+        dokumen = '\n'.join(t for n, t in collect_client_docs(folder, 10 ** 7, 10 ** 7).get('sources', [])
                             if not n.upper().startswith('FORM ISIAN'))
     except Exception:
         pass
 
-    nama = nama.strip() or field(r'nama perusahaan|nama media') or domain.split('.')[0].replace('-', ' ').title()
+    # FORM 1 ("NAMA PERUSAHAAN/ INSTANSI") didahulukan: "Nama Perusahaan" di BIODATA PEMILIK
+    # (FORM 2) sering ditulis lain (jasakontraktorindo.com: "jasa renovasi dan interior jabodetabek").
+    # Di .doc label, ":" dan isinya berada di baris terpisah sehingga tidak masuk `fields`.
+    m_nama = re.search(r'NAMA\s+PERUSAHAAN\s*/\s*INSTANSI\s*\n\s*:?\s*\n?\s*([^\n]{3,80})', teks_form)
+    nama_form1 = m_nama.group(1).strip() if m_nama and not re.match(r'^[.\s]*$|^SLOGAN', m_nama.group(1), re.I) else ''
+    nama = (nama.strip() or field(r'nama perusahaan\s*/\s*instansi|nama instansi') or nama_form1 or field(r'nama perusahaan|nama media')
+            or domain.split('.')[0].replace('-', ' ').title())
     kontak_web = field(r'kontak utk di web|kontak untuk di web')
     wa, telp = nomor_wa(kontak_web)
     if not wa:
@@ -393,7 +434,7 @@ def data_klien(domain, nama=''):
         # Alamat biodata FORM ISIAN ("Alamat lengkap" pemilik) hanya dipakai kalau
         # memang tidak ada bagian biodata terpisah; anaksegalabangsa.com sempat
         # menampilkan alamat rumah pemilik di footer. Kota tetap dipakai untuk peta.
-        'ALAMAT': (alamat_compro or alamat_kontak_web(kontak_web)
+        'ALAMAT': (alamat_compro or alamat_kontak_web(kontak_web) or alamat_dokumen(dokumen)
                    or ('' if re.search(r'BIO\s*A?DATA|data ini kami gunakan untuk administrasi', teks_form, re.I)
                        else ', '.join(b for b in bagian if b)))[:200],
         'AREA': kota or provinsi or 'sekitarnya',
@@ -589,7 +630,15 @@ def berkas_template(nilai):
         hasil[nama] = isi_template(sumber.read_text(), nilai)
     if not hasil:
         raise FileNotFoundError('template kosong')
-    hasil['screenshot.png'] = scaffold_png(rgb=hex_ke_rgb(nilai['PRIMARY']))
+    # Aturan user 2026-09-16: setiap tema (FSE maupun child) wajib punya screenshot.jpg
+    # 1200x900 berlatar polos gelap dengan nama temanya dalam huruf putih.
+    hasil['screenshot.jpg'] = screenshot_tema(nilai.get('THEME_NAME') or nilai['NAMA'],
+                                              geser_terang(nilai['PRIMARY'], -0.45))
+    if hasil['screenshot.jpg'] is None:
+        # Playwright belum terpasang: tema tetap punya gambar supaya tidak kosong di wp-admin.
+        del hasil['screenshot.jpg']
+        hasil['screenshot.png'] = scaffold_png(rgb=hex_ke_rgb(nilai['PRIMARY']))
+        print('tema: screenshot_jpg_dilewati:playwright_tidak_ada', file=sys.stderr)
     return hasil
 
 

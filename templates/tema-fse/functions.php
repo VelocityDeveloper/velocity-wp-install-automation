@@ -26,6 +26,7 @@ require get_theme_file_path('inc/situs.php');
 require get_theme_file_path('inc/form.php');
 require get_theme_file_path('inc/pengaturan.php');
 require get_theme_file_path('inc/dealer.php');
+require get_theme_file_path('inc/referensi.php');
 
 add_action('after_setup_theme', function () {
     add_theme_support('wp-block-styles');
@@ -35,6 +36,10 @@ add_action('after_setup_theme', function () {
 
 add_action('wp_enqueue_scripts', function () {
     wp_enqueue_style('velocity-fse', get_stylesheet_uri(), array(), VELOCITY_FSE_VERSI);
+    if (velocity_fse_situs('gaya') === 'klinik') {
+        wp_enqueue_script('velocity-fse-menu-hp', get_theme_file_uri('assets/js/menu-hp.js'), array(), VELOCITY_FSE_VERSI,
+            array('in_footer' => true, 'strategy' => 'defer'));
+    }
     // Font mengikuti referensi desain klien (scripts/fse-apply mengisi font_teks/font_judul
     // dengan slug fontFamilies di theme.json).
     $css = '';
@@ -137,10 +142,77 @@ add_filter('body_class', function ($kelas) {
             }
             if (empty($desain['header_ajakan'])) { $kelas[] = 'vf-tanpa-ajakan'; }
             if (empty($desain['topbar'])) { $kelas[] = 'vf-tanpa-topbar'; }
+            // Token referensi 2026-09-17 (rencana VERSI 3, yukpergimancing.com): topbar gelap,
+            // menu berwarna, keranjang di header, footer 5 kolom + pita hak cipta.
+            foreach (array('topbar_gelap' => 'vf-topbar-gelap', 'menu_berwarna' => 'vf-menu-berwarna',
+                'footer_pita' => 'vf-footer-pita') as $k => $c) {
+                if (!empty($desain[$k])) { $kelas[] = $c; }
+            }
+            if (!empty($desain['header_keranjang']) && velocity_fse_toko()) { $kelas[] = 'vf-header-keranjang'; }
+            // Token rencana VERSI 4 (2026-09-17, centralimpex.com): kotak cari, logo & baris hak
+            // cipta footer, judul kolom footer, banner judul halaman dalam.
+            if (!empty($desain['tanpa_cari'])) { $kelas[] = 'vf-tanpa-cari'; }
+            if (!empty($desain['footer_logo'])) { $kelas[] = 'vf-footer-logo'; }
+            $bawah = (string) ($desain['footer_bawah_rata'] ?? '');
+            if (in_array($bawah, array('terbelah', 'tengah'), true)) { $kelas[] = 'vf-hak-cipta-' . $bawah; }
+            if (array_key_exists('footer_judul_kapital', $desain) && empty($desain['footer_judul_kapital'])) {
+                $kelas[] = 'vf-footer-judul-biasa';
+            }
+            $banner = (string) ($desain['banner_latar'] ?? '');
+            if (in_array($banner, array('gelap', 'aksen', 'foto', 'abu', 'terang'), true)) {
+                $kelas[] = 'vf-banner-' . $banner;
+                $kelas[] = 'vf-banner-' . (($desain['banner_rata'] ?? '') === 'tengah' ? 'tengah' : 'kiri');
+                $tinggi = (string) ($desain['banner_tinggi'] ?? '');
+                if (in_array($tinggi, array('tinggi', 'sedang'), true)) { $kelas[] = 'vf-banner-' . $tinggi; }
+            }
+            if ((int) ($desain['footer_kolom'] ?? 0) >= 5 && velocity_fse_toko()) { $kelas[] = 'vf-footer-5'; }
         }
+        // Aksen klien berwarna netral (abu) tidak cukup kontras sebagai tombol: tombol memakai warna utama.
+        if (($desain['tombol_warna'] ?? '') === 'primary') { $kelas[] = 'vf-tombol-primary'; }
         foreach (array('tombol_kapital' => 'vf-tombol-kapital', 'judul_kapital' => 'vf-judul-kapital', 'kartu_bayangan' => 'vf-kartu-bayangan') as $k => $c) {
             if (!empty($desain[$k])) { $kelas[] = $c; }
         }
+        // Versi aturan tampilan (manifest `velocity_palet_versi`). Aturan baru dipasang
+        // di balik kelas ini supaya situs yang sudah jadi tidak ikut berubah.
+        if ((int) ($desain['tampilan_versi'] ?? 1) >= 2) { $kelas[] = 'vf-tampilan-2'; }
     }
     return $kelas;
 });
+
+// Logo situs di kolom pertama footer bila referensinya berlogo (token footer_logo).
+add_filter('render_block_core/site-title', function ($html, $blok) {
+    $desain = velocity_fse_desain();
+    if (empty($desain['footer_logo']) || strpos((string) ($blok['attrs']['className'] ?? ''), 'vf-footer__nama') === false) {
+        return $html;
+    }
+    $logo = (int) get_theme_mod('custom_logo');
+    $gambar = $logo ? wp_get_attachment_image($logo, 'medium', false, array('class' => 'vf-footer__logo-img', 'alt' => get_bloginfo('name'))) : '';
+    return $gambar ? '<a class="vf-footer__logo" href="' . esc_url(home_url('/')) . '">' . $gambar . '</a>' : $html;
+}, 10, 2);
+
+// Banner judul halaman dalam mengikuti referensi (token banner_*): foto latar dari slot hero
+// dan breadcrumb "Beranda / Judul" bila referensinya memakai keduanya.
+add_filter('render_block_core/group', function ($html, $blok) {
+    if (strpos((string) ($blok['attrs']['className'] ?? ''), 'vf-judul-halaman') === false || is_front_page()) {
+        return $html;
+    }
+    $desain = velocity_fse_desain();
+    if (($desain['banner_latar'] ?? '') === 'foto') {
+        $slot = (array) get_option('vfse_images', array());
+        $url = !empty($slot['hero']) ? wp_get_attachment_image_url((int) $slot['hero'], 'large') : '';
+        if ($url) {
+            $var = '--vf-banner-foto:url(' . esc_url($url) . ');';
+            // Atribut style yang sudah ada (padding) dipertahankan: style kedua diabaikan browser.
+            $html = preg_match('/(class="wp-block-group vf-judul-halaman[^"]*"\s+style=")/', $html)
+                ? preg_replace('/(class="wp-block-group vf-judul-halaman[^"]*"\s+style=")/', '$1' . $var, $html, 1)
+                : preg_replace('/class="wp-block-group vf-judul-halaman/', 'style="' . $var . '" $0', $html, 1);
+        }
+    }
+    if (!empty($desain['banner_remah']) && is_singular()) {
+        $remah = '<nav class="vf-remah" aria-label="Breadcrumb"><a href="' . esc_url(home_url('/')) . '">Beranda</a>'
+            . ' <span aria-hidden="true">/</span> <span>' . esc_html(get_the_title()) . '</span></nav>';
+        $html = preg_replace('/<\/div>\s*$/', $remah . '</div>', $html, 1);
+    }
+    return $html;
+}, 10, 2);
+

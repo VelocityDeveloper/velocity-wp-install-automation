@@ -1,0 +1,65 @@
+<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+
+<!-- wp:group {"tagName":"main","className":"vf-dealer-arsip","layout":{"type":"default"}} -->
+<main class="wp-block-group vf-dealer-arsip"><!-- wp:group {"align":"full","className":"vf-dealer-kepala","backgroundColor":"primary-gelap","textColor":"di-primary","style":{"spacing":{"padding":{"top":"var:preset|spacing|70","bottom":"var:preset|spacing|70"}},"elements":{"link":{"color":{"text":"var:preset|color|di-primary"}}}},"layout":{"type":"constrained","contentSize":"1400px"}} -->
+<div class="wp-block-group alignfull vf-dealer-kepala has-di-primary-color has-primary-gelap-background-color has-text-color has-background has-link-color" style="padding-top:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--70)"><!-- wp:group {"className":"vf-dealer-kepala__teks","layout":{"type":"default"}} -->
+<div class="wp-block-group vf-dealer-kepala__teks"><!-- wp:velocity/judul-arsip /-->
+
+<!-- wp:paragraph {"className":"vf-dealer-kepala__sub"} -->
+<p class="vf-dealer-kepala__sub">Kumpulan artikel, tips, dan kabar terbaru dari kami.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:term-description /-->
+
+<!-- wp:buttons {"className":"vf-dealer-kepala__aksi"} -->
+<div class="wp-block-buttons vf-dealer-kepala__aksi"><!-- wp:button -->
+<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="/hubungi-kami/">Hubungi Kami</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons --></div>
+<!-- /wp:group --></div>
+<!-- /wp:group -->
+
+<!-- wp:group {"className":"vf-seksi vf-rata-tengah vf-dealer-arsip__pengantar","layout":{"type":"constrained"}} -->
+<div class="wp-block-group vf-seksi vf-rata-tengah vf-dealer-arsip__pengantar"><!-- wp:heading -->
+<h2 class="wp-block-heading">Informasi &amp; Tips Terbaru</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Bacaan singkat seputar produk, perawatan, dan hal-hal yang sering ditanyakan pembeli.</p>
+<!-- /wp:paragraph --></div>
+<!-- /wp:group -->
+
+<!-- wp:group {"className":"vf-seksi vf-dealer-arsip__isi","style":{"spacing":{"padding":{"top":"0"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group vf-seksi vf-dealer-arsip__isi" style="padding-top:0"><!-- wp:query {"queryId":41,"query":{"perPage":12,"pages":0,"offset":0,"postType":"post","order":"desc","orderBy":"date","author":"","search":"","exclude":[],"sticky":"","inherit":true},"align":"wide"} -->
+<div class="wp-block-query alignwide"><!-- wp:post-template {"className":"vf-artikel-kartu","layout":{"type":"grid","columnCount":3,"minimumColumnWidth":"17rem"}} -->
+<!-- wp:group {"className":"vf-artikel-kartu__foto","layout":{"type":"default"}} -->
+<div class="wp-block-group vf-artikel-kartu__foto"><!-- wp:post-featured-image {"isLink":true,"aspectRatio":"16/10"} /-->
+
+<!-- wp:post-date {"className":"vf-artikel-kartu__tanggal"} /--></div>
+<!-- /wp:group -->
+
+<!-- wp:post-title {"level":3,"isLink":true} /-->
+
+<!-- wp:post-excerpt {"excerptLength":18,"showMoreOnNewLine":false,"moreText":""} /-->
+
+<!-- wp:read-more {"content":"Baca Selengkapnya","className":"vf-artikel-kartu__lanjut"} /-->
+<!-- /wp:post-template -->
+
+<!-- wp:query-pagination {"layout":{"type":"flex","justifyContent":"center"}} -->
+<!-- wp:query-pagination-previous {"label":"Sebelumnya"} /-->
+
+<!-- wp:query-pagination-numbers /-->
+
+<!-- wp:query-pagination-next {"label":"Berikutnya"} /-->
+<!-- /wp:query-pagination -->
+
+<!-- wp:query-no-results -->
+<!-- wp:paragraph -->
+<p>Belum ada tulisan di sini.</p>
+<!-- /wp:paragraph -->
+<!-- /wp:query-no-results --></div>
+<!-- /wp:query --></div>
+<!-- /wp:group --></main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->

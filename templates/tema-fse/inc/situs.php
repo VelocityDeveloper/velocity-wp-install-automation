@@ -12,6 +12,15 @@ defined('ABSPATH') || exit;
 
 // Product katalog custom: bukan WooCommerce, supaya data produk terpisah dari post berita.
 add_action('init', function () {
+    // Data Situs `katalog_produk` = false: situs tanpa katalog (medikaklinikteknologi.com) tidak
+    // menampilkan menu Produk. Tetap didaftarkan selama masih ada isi product apa pun.
+    if (velocity_fse_situs('katalog_produk') === false) {
+        global $wpdb;
+        $ada = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'product'");
+        if (!$ada) {
+            return;
+        }
+    }
     register_post_type('product', array(
         'labels' => array(
             'name' => 'Produk', 'singular_name' => 'Produk', 'add_new_item' => 'Tambah Produk',
@@ -138,3 +147,111 @@ add_action('pre_get_posts', function ($q) {
         $q->set('posts_per_page', 13);
     }
 });
+
+
+/**
+ * Tombol ajakan header & tautan bawaan "/hubungi-kami/" mengikuti Data Situs
+ * `tombol_header` = [label, path] bila situs memakai halaman kontak lain
+ * (medikaklinikteknologi.com: "Start Your Clinic" → /contact/).
+ */
+add_filter('render_block_core/button', function ($html) {
+    $atur = velocity_fse_situs('tombol_header');
+    if (!is_array($atur) || empty($atur[0]) || empty($atur[1]) || strpos($html, 'href="/hubungi-kami/"') === false) {
+        return $html;
+    }
+    return str_replace(
+        array('href="/hubungi-kami/"', '>Hubungi Kami</a>'),
+        array('href="' . esc_url(home_url((string) $atur[1])) . '"', '>' . esc_html((string) $atur[0]) . '</a>'),
+        $html
+    );
+});
+
+/**
+ * Tautan bawaan template ke halaman standar (mis. "Selengkapnya →" /tentang-kami/ di kolom
+ * samping) dialihkan lewat Data Situs `ganti_tautan` = {"/tentang-kami/": "/about/"} untuk
+ * situs yang memakai halaman menu klien sendiri.
+ */
+add_filter('render_block_core/paragraph', function ($html) {
+    $peta = velocity_fse_situs('ganti_tautan');
+    if (!is_array($peta) || strpos($html, 'href="/') === false) {
+        return $html;
+    }
+    foreach ($peta as $dari => $ke) {
+        $html = str_replace('href="' . $dari . '"', 'href="' . esc_url(home_url((string) $ke)) . '"', $html);
+    }
+    return $html;
+});
+
+/** Hasil pencarian gaya klinik: halaman (tanpa kategori) tetap berlabel seperti kartu artikel. */
+add_filter('render_block_core/post-terms', function ($html, $block, $instance) {
+    if (trim(wp_strip_all_tags($html)) !== '' || !is_search() || velocity_fse_situs('gaya') !== 'klinik') {
+        return $html;
+    }
+    $id = isset($instance->context['postId']) ? (int) $instance->context['postId'] : 0;
+    if (!$id || get_post_type($id) !== 'page') {
+        return $html;
+    }
+    return '<div class="wp-block-post-terms vf-label vf-label--halaman"><span>Halaman</span></div>';
+}, 10, 3);
+
+/**
+ * Data Situs `logo_footer` = true: nama situs di footer diganti logo situs (logo bertulisan nama
+ * perusahaan, jadi teks nama tidak diulang). Logo diberi alas putih lewat CSS .vf-footer__logo.
+ */
+add_filter('render_block_core/site-title', function ($html, $block) {
+    $kelas = isset($block['attrs']['className']) ? (string) $block['attrs']['className'] : '';
+    if (strpos($kelas, 'vf-footer__nama') === false || velocity_fse_situs('logo_footer') !== true) {
+        return $html;
+    }
+    $id = (int) get_option('site_logo');
+    $gambar = $id ? wp_get_attachment_image($id, 'medium', false, array(
+        'class' => 'vf-footer__logo-img', 'alt' => velocity_fse_situs('nama'), 'loading' => 'lazy',
+    )) : '';
+    if ($gambar === '') {
+        return $html;
+    }
+    return sprintf('<p class="vf-footer__logo"><a href="%s" rel="home">%s</a></p>', esc_url(home_url('/')), $gambar);
+}, 10, 2);
+
+/**
+ * Data Situs `tautan_legal` = [[label, path], ...]: tautan Privacy Policy / Terms di kanan
+ * baris bawah footer. Isi lama (hak cipta + kredit) dibungkus .vf-footer__kiri supaya di HP
+ * urutannya bisa dibalik utuh. Tautan ke halaman yang belum terbit tidak dicetak.
+ */
+add_filter('render_block_core/group', function ($html, $block) {
+    $kelas = isset($block['attrs']['className']) ? (string) $block['attrs']['className'] : '';
+    $daftar = velocity_fse_situs('tautan_legal');
+    if (strpos($kelas, 'vf-footer__bawah') === false || !is_array($daftar)) {
+        return $html;
+    }
+    $tautan = array();
+    foreach ($daftar as $t) {
+        if (!is_array($t) || count($t) !== 2) {
+            continue;
+        }
+        $hal = get_page_by_path(trim((string) $t[1], '/'));
+        if (!$hal || $hal->post_status !== 'publish') {
+            continue;
+        }
+        $tautan[] = sprintf('<a href="%s">%s</a>', esc_url(get_permalink($hal)), esc_html((string) $t[0]));
+    }
+    $buka = strpos($html, '>');
+    $tutup = strrpos($html, '</div>');
+    if (!$tautan || $buka === false || $tutup === false) {
+        return $html;
+    }
+    return substr($html, 0, $buka + 1)
+        . '<div class="vf-footer__kiri">' . substr($html, $buka + 1, $tutup - $buka - 1) . '</div>'
+        . '<p class="vf-footer__legal">' . implode('<span aria-hidden="true">|</span>', $tautan) . '</p>'
+        . substr($html, $tutup);
+}, 10, 2);
+
+/** Ikon sosmed (.vf-sosmed) gaya klinik dibuka di tab baru (permintaan user 2026-09-16). */
+add_filter('render_block_core/social-links', function ($html, $block) {
+    $kelas = isset($block['attrs']['className']) ? (string) $block['attrs']['className'] : '';
+    if (strpos($kelas, 'vf-sosmed') === false || velocity_fse_situs('gaya') !== 'klinik') {
+        return $html;
+    }
+    return preg_replace('/<a (?![^>]*\btarget=)([^>]*class="wp-block-social-link-anchor")/',
+        '<a target="_blank" rel="noopener noreferrer" $1', $html);
+}, 10, 2);

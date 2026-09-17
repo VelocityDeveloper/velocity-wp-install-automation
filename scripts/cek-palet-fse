@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Penjaga palet tema FSE: nilai warnanya, bukan sekadar sintaks kodenya.
+
+Dijalankan deploy.sh. Latar belakang: parameter `gelap` di `hitung_palet()` pernah
+tertimpa variabel warna bernama sama, sehingga `if gelap:` selalu benar dan SEMUA
+situs velocity-fse berlatar hitam — padahal palet gelap hanya untuk gaya dealer
+(bumiairchemitech.com, 2026-09-16). `php -l`/py_compile tidak bisa melihat itu.
+"""
+import importlib.machinery
+import importlib.util
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def muat(nama, path):
+    spec = importlib.util.spec_from_loader(nama, importlib.machinery.SourceFileLoader(nama, str(path)))
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+def main():
+    sys.path.insert(0, str(HERE))
+    fa = muat('fse_apply', HERE / 'fse-apply')
+    vct = fa.muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
+    masalah = []
+    # Aturan permukaan penuh warna (versi 2, hanya untuk manifest baru): teks gelap
+    # yang lolos tipis diganti warna sedikit lebih gelap + teks putih. Warna yang
+    # memang nyaman dengan teks gelap (amber) tidak boleh ikut berubah.
+    v2_hijau = {p['slug']: p['color'] for p in fa.hitung_palet(vct, '#2E308A', '#009A4B', versi=2)}
+    if v2_hijau['di-aksen'].lower() != '#ffffff':
+        masalah.append('palet versi 2: hijau mid-tone masih memakai teks gelap')
+    v1_hijau = {p['slug']: p['color'] for p in fa.hitung_palet(vct, '#2E308A', '#009A4B')}
+    if v1_hijau['di-aksen'].lower() == '#ffffff':
+        masalah.append('palet versi 1 ikut berubah — situs lama tidak boleh terpengaruh')
+    v2_amber = {p['slug']: p['color'] for p in fa.hitung_palet(vct, '#14213d', '#fca311', versi=2)}
+    if v2_amber['aksen'].lower() != '#fca311':
+        masalah.append(f'palet versi 2: amber ikut digelapkan ({v2_amber["aksen"]})')
+    for utama, aksen in (('#2E308A', '#009A4B'), ('#14213d', '#fca311'), ('#b00020', '#0057b8')):
+        terang = {p['slug']: p['color'] for p in fa.hitung_palet(vct, utama, aksen)}
+        gelap = {p['slug']: p['color'] for p in fa.hitung_palet(vct, utama, aksen, gelap=True)}
+        if terang['putih'].lower() != '#ffffff':
+            masalah.append(f'{utama}: palet biasa tidak terang (putih={terang["putih"]})')
+        if vct.kontras(terang['latar'], terang['ink']) < 7:
+            masalah.append(f'{utama}: latar vs judul kurang kontras ({terang["latar"]}/{terang["ink"]})')
+        if gelap['putih'].lower() == '#ffffff':
+            masalah.append(f'{utama}: palet dealer tidak gelap')
+        # Teks di atas warna utama & aksen wajib terbaca (penjaga kontras WCAG).
+        for latar, teks in (('primary', 'di-primary'), ('aksen', 'di-aksen')):
+            for nama, palet in (('biasa', terang), ('dealer', gelap)):
+                if vct.kontras(palet[latar], palet[teks]) < 4.5:
+                    masalah.append(f'{utama}: palet {nama} {latar} vs {teks} kurang kontras')
+    for m in masalah:
+        print(f'palet_fse: {m}', file=sys.stderr)
+    print('palet_fse: ok' if not masalah else f'palet_fse: {len(masalah)} masalah')
+    return 1 if masalah else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

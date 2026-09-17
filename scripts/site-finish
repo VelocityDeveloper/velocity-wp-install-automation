@@ -28,6 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import cari_logo  # noqa: E402
 from client_form import read_client_form  # noqa: E402
 
 ON_PROGRESS = Path('/home/On Progress')
@@ -266,6 +267,11 @@ cur_md5() { wp post get "$1" --field=post_content 2>/dev/null | md5sum | cut -d'
 save_md5() { wp post meta update "$1" _velocity_content_md5 "$(cur_md5 "$1")" >/dev/null 2>&1 || true; }
 managed() { local s; s=$(wp post meta get "$1" _velocity_content_md5 2>/dev/null || true); [[ -n "$s" && "$s" == "$(cur_md5 "$1")" ]]; }
 page_by_title() { wp post list --post_type=page --post_status=publish --fields=ID,post_title 2>/dev/null | awk -F'\t' -v t="$1" 'NR>1 && $2==t {print $1; exit}'; }
+# Halaman milik tema FSE (scripts/fse-apply) disusun dari blok: galeri, kontak, dan
+# petanya ikut dibangun di sana. Menambah shortcode/iframe di sini membuat isinya
+# tidak lagi cocok dengan md5 milik fse-apply, sehingga run berikutnya menganggapnya
+# "sudah disunting orang" dan halaman berhenti diperbarui (bumiairchemitech.com 2026-09-16).
+milik_fse() { [[ -n "$(wp post meta get "$1" _velocity_fse_md5 2>/dev/null || true)" ]]; }
 import_media() {
   local id
   id=$(wp post list --post_type=attachment --post_status=inherit --meta_key=_velocity_source --meta_value="$2" --field=ID 2>/dev/null | head -1)
@@ -377,7 +383,9 @@ for i in "${!PHOTO_FILES[@]}"; do
   [[ -n "$id" ]] && ids+=("$id")
 done
 gal=$(page_by_title 'Galeri' || true)
-if [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && managed "$gal"; then
+if [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && milik_fse "$gal"; then
+  echo "gallery_skip:halaman_tema_fse" >&2
+elif [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && managed "$gal"; then
   content=$(wp post get "$gal" --field=post_content 2>/dev/null || true)
   if [[ "$content" != *velocity-gallery* ]]; then
     joined=$(IFS=,; echo "${ids[*]}")
@@ -392,7 +400,9 @@ if [[ -n "$MAP_QUERY" ]]; then
   # klien sering tidak dikenali peta sehingga iframe-nya tampil kosong.
   wp option update velocity_map "$MAP_DATA" --format=json >/dev/null
   kontak=$(page_by_title 'Hubungi Kami' || true)
-  if [[ -n "$kontak" ]] && managed "$kontak"; then
+  if [[ -n "$kontak" ]] && milik_fse "$kontak"; then
+    echo "map_skip:halaman_tema_fse" >&2
+  elif [[ -n "$kontak" ]] && managed "$kontak"; then
     content=$(wp post get "$kontak" --field=post_content 2>/dev/null || true)
     # Child theme Paket G merender petanya sendiri lewat shortcode *_kontak;
     # menambah iframe di sini akan membuat dua peta di halaman yang sama.
@@ -440,6 +450,18 @@ if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; t
   wp option update nomor_whatsapp_contacts "$WA_CONTACTS" --format=json >/dev/null
   wp option update whatsapp_text "$WA_LABEL" >/dev/null
   wp option update whatsapp_message "$WA_MESSAGE" >/dev/null && echo "whatsapp_set" >&2
+elif [[ -n "$WA_CONTACTS" ]]; then
+  # Tulisan tombol wajib ajakan, bukan nama web (aturan user 2026-09-12). Situs yang
+  # dipasang sebelum aturan itu punya nama kontak = judul situs, dan blok di atas tidak
+  # menyentuhnya karena nomornya sudah terisi — jadi temuan audit
+  # `tombol_whatsapp_bernama_situs` tidak pernah hilang sendiri. Yang diperbaiki hanya
+  # label yang persis judul situs; label pilihan PM tidak disentuh.
+  nama_kini=$(wp option get nomor_whatsapp_contacts --format=json 2>/dev/null | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' | head -1)
+  judul_situs=$(wp option get blogname 2>/dev/null | sed 's/&amp;/\&/g')
+  if [[ -n "$nama_kini" && "$nama_kini" == "$judul_situs" ]]; then
+    wp option update nomor_whatsapp_contacts "$WA_CONTACTS" --format=json >/dev/null
+    wp option update whatsapp_text "$WA_LABEL" >/dev/null && echo "whatsapp_label_diperbaiki" >&2
+  fi
 fi
 
 # Halaman kebijakan privasi wajib ada & terbit (keputusan user 2026-09-14). WordPress
@@ -677,6 +699,9 @@ def logo_media_key(logo, folder, contoh):
     if COMPRO_ROOT in logo.parents:
         # Logo hasil potongan company profile tinggal di luar folder klien.
         return 'logo-compro:' + str(logo.stat().st_size)
+    if folder not in logo.parents:
+        # Logo yang diambil cari_logo.py dari PDF/dokumen lain: tersimpan di /var/lib/velocity/logos.
+        return f'logo-klien:{logo.name}:{logo.stat().st_size}'
     return f'{logo.relative_to(folder)}:{logo.stat().st_size}'
 
 
@@ -794,21 +819,33 @@ def main():
     fields = form['fields']
     title = cfg.get('site_title') or domain
     wa = wa_number(field(fields, r'kontak utk di web|kontak untuk di web'))
+    if not wa:
+        # Nomor publik di dokumen klien (company profile), sama dengan Data Situs tema FSE.
+        try:
+            import importlib.machinery
+            import importlib.util
+            loader = importlib.machinery.SourceFileLoader('velocity_child_theme', str(Path(__file__).resolve().parent / 'velocity-child-theme'))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            vct = importlib.util.module_from_spec(spec)
+            loader.exec_module(vct)
+            wa = vct.data_klien(domain, title).get('WA', '')
+        except Exception:
+            wa = ''
     address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
     compro = data_compro(domain)
     # Slogan: tulisan klien di form → slogan di company profile → buatan AI.
     tagline = slogan(form['text']) or compro.get('slogan') or ai_tagline(domain)
     css = colors_css(pick_colors(field(fields, r'warna tema')))
     seo = seo_dasar(domain, title, tagline)
-    logo, photos = client_assets(folder)
-    if not logo:
-        # Logo yang terpotong dari kepala halaman company profile adalah logo asli
-        # klien: dipakai sebelum membuat logo contoh, dan menggeser logo contoh
-        # yang sudah terpasang (aturan penggantian sudah menanganinya).
-        logo_compro = Path((compro.get('logo') or {}).get('berkas', ''))
-        if logo_compro.is_file():
-            logo = logo_compro
-            print(f'finish: logo dari company profile ({logo_compro.name})')
+    _, photos = client_assets(folder)
+    # Logo dicari di SEMUA kiriman klien (keputusan user 2026-09-16): berkas bernama
+    # logo, potongan company profile, PDF lain, dokumen Office, lalu gambar berciri
+    # logo. Semuanya logo asli klien, jadi menggeser logo contoh yang sudah terpasang.
+    logo, sumber_logo = cari_logo.cari(domain, folder, compro)
+    if logo:
+        print(f'finish: logo dari {sumber_logo}')
+    else:
+        print('finish: logo klien tidak ditemukan di kiriman klien')
     # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa
     # identitas sama sekali, dibuatkan logo contoh dari nama + warna tema —
     # penanda sementara yang gampang diganti PM/desainer, bukan logo final.

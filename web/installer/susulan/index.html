@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>velocity@server:~/installer/susulan</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <style>
+      :root {
+        --bg: #080b0a;
+        --panel: #0d1210;
+        --line: #1b2b22;
+        --text: #c8d7cc;
+        --muted: #718579;
+        --green: #55e879;
+        --cyan: #68d9e8;
+        --yellow: #e9d36b;
+        --red: #ff7373;
+      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body {
+        margin: 0;
+        padding: 24px;
+        color: var(--text);
+        background: radial-gradient(circle at 50% -20%, #15301f 0, #080b0a 45%);
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      }
+      .terminal { width: min(1100px, 100%); margin: auto; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #0a0e0c; }
+      .bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #111814; color: var(--muted); }
+      .bar a { color: var(--cyan); text-decoration: none; margin-left: auto; font-size: 12px; }
+      .screen { padding: 24px clamp(16px, 4vw, 38px) 30px; }
+      h1 { font-size: 15px; font-weight: 400; color: var(--green); margin: 0 0 6px; }
+      .ket { color: var(--muted); margin: 0 0 18px; }
+      .ringkas { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+      .chip { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--yellow); font-size: 12px; cursor: pointer; background: transparent; font: inherit; font-size: 12px; }
+      .chip.aktif { background: #1c2a20; color: var(--green); }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 9px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 400; font-size: 12px; }
+      td.domain { color: var(--cyan); white-space: nowrap; }
+      ul { margin: 0; padding-left: 16px; }
+      li { margin: 2px 0; }
+      .lain { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      td.lain { max-width: 280px; }
+      .nol { color: var(--green); }
+      @media (max-width: 700px) {
+        table, tbody, tr, td { display: block; }
+        thead { display: none; }
+        td { border-top: 0; padding: 4px 0; }
+        tr { border-top: 1px solid var(--line); padding: 10px 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="terminal">
+      <div class="bar">~/installer/susulan <a href="/installer/">← kembali ke installer</a></div>
+      <div class="screen">
+        <h1>Situs jadi yang belum ikut aturan terbaru</h1>
+        <p class="ket" id="ket">memuat…</p>
+        <div class="ringkas" id="ringkas"></div>
+        <table>
+          <thead><tr><th>situs</th><th>paket / tema</th><th>belum ikut aturan</th><th>temuan lain</th></tr></thead>
+          <tbody id="isi"></tbody>
+        </table>
+      </div>
+    </div>
+    <script>
+      // Data: scripts/audit-susulan (hanya membaca situs) -> /api/installer/susulan.
+      const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      let data = { situs: [] };
+      let saring = '';
+      function gambar() {
+        const baris = data.situs.filter((s) => !saring || s.aturan_baru.some((a) => a.kode.split(':')[0] === saring));
+        document.getElementById('isi').innerHTML = baris.map((s) => `<tr>
+          <td class="domain">${esc(s.domain)}<div class="lain">${esc(s.status_instalasi)}</div></td>
+          <td>${esc(s.paket)}<div class="lain">${esc(s.tema)}</div></td>
+          <td>${s.aturan_baru.length ? '<ul>' + s.aturan_baru.map((a) => `<li title="${esc(a.kode)}">${esc(a.arti)}${a.kode.includes(':') ? ' <span class="lain">(' + esc(a.kode.split(':').slice(1).join(':')) + ')</span>' : ''}</li>`).join('') + '</ul>' : '<span class="nol">sudah ikut semua</span>'}</td>
+          <td class="lain">${s.temuan_lain.map(esc).join('<br>')}</td></tr>`).join('');
+      }
+      function ringkasan() {
+        const hitung = {};
+        for (const s of data.situs) for (const a of s.aturan_baru) {
+          const k = a.kode.split(':')[0];
+          hitung[k] = hitung[k] || { n: 0, arti: a.arti };
+          hitung[k].n += 1;
+        }
+        const el = document.getElementById('ringkas');
+        el.innerHTML = Object.entries(hitung).sort((a, b) => b[1].n - a[1].n)
+          .map(([k, v]) => `<button class="chip${saring === k ? ' aktif' : ''}" data-k="${esc(k)}">${esc(v.arti)} · ${v.n}</button>`).join('');
+        el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+          saring = saring === b.dataset.k ? '' : b.dataset.k;
+          ringkasan();
+          gambar();
+        }));
+      }
+      fetch('/api/installer/susulan', { cache: 'no-store' }).then((r) => r.json()).then((d) => {
+        data = d;
+        document.getElementById('ket').textContent = d.waktu
+          ? `${d.perlu_susulan} dari ${d.jumlah} situs perlu susulan · diperiksa ${d.waktu} · perbaikan diputuskan manusia (sebagian situs sedang dikerjakan webmaster)`
+          : 'belum ada laporan — jalankan scripts/audit-susulan';
+        ringkasan();
+        gambar();
+      }).catch(() => { document.getElementById('ket').textContent = 'laporan tidak terbaca'; });
+    </script>
+  </body>
+</html>

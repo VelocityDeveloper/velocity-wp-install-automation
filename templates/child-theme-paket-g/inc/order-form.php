@@ -112,7 +112,9 @@ if (!function_exists('{{PREFIX}}_form_proses')) {
         if (empty($_POST['{{PREFIX}}_form_pemesanan'])) {
             return;
         }
-        $kembali = wp_get_referer() ?: home_url('/');
+        // wp_get_referer() kosong bila referer = URL yang sedang diminta (form dikirim ke
+        // halamannya sendiri) → pengunjung terlempar ke beranda. Referer mentah divalidasi sendiri.
+        $kembali = wp_validate_redirect(remove_query_arg('pesan', strtok((string) wp_get_raw_referer(), '#')), home_url('/'));
         // Honeypot: diisi bot, tidak pernah diisi manusia (disembunyikan CSS).
         if (!empty($_POST['{{PREFIX}}_website'])) {
             wp_safe_redirect(add_query_arg('pesan', 'terkirim', $kembali) . '#pemesanan');

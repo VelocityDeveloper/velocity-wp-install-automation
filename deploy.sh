@@ -8,12 +8,18 @@ WEB_ROOT=${WEB_ROOT:-/usr/share/nginx/html}
 cd "$REPO_DIR"
 git pull --ff-only origin main
 bash -n scripts/website-install-from-manifest scripts/installer-runner
-python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto scripts/compro-klien scripts/cek-fungsi-tema scripts/paket-g-cek-visual scripts/fse-apply scripts/referensi_desain.py services/installer_status.py
+python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto scripts/compro-klien scripts/cek-fungsi-tema scripts/paket-g-cek-visual scripts/fse-apply scripts/fse-dealer scripts/fse-klinik scripts/referensi_desain.py scripts/fse-cek-referensi scripts/fse-audit-kemiripan services/installer_status.py
 node --check scripts/referensi-desain.js
+node --check scripts/potret-halaman
+node --check scripts/banding-potret
+python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga tema FSE: markup blok templates/parts/patterns harus valid menurut parser
 # editor WordPress (kode 3 = alat node belum terpasang di mesin ini, dilewati).
 python3 -m json.tool templates/tema-fse/theme.json >/dev/null
+# Setiap tema wajib punya screenshot.jpg 1200x900 (aturan user 2026-09-16); tanpa itu
+# tema tampil sebagai kotak kosong di Tampilan → Tema.
+[[ -s templates/tema-fse/screenshot.jpg ]] || { echo 'ERROR: templates/tema-fse/screenshot.jpg hilang' >&2; exit 1; }
 node scripts/cek-blok templates/tema-fse/templates/*.html templates/tema-fse/parts/*.html templates/tema-fse/patterns/*.php >/dev/null || [[ $? == 3 ]]
 for f in $(find templates/tema-fse -name '*.php'); do php -l "$f" >/dev/null; done
 # Penjaga kontras: template tidak boleh lolos deploy kalau teks di latar gelap
@@ -24,6 +30,10 @@ python3 scripts/cek-warna-tema >/dev/null
 uji_tema=$(mktemp -d)
 python3 scripts/velocity-child-theme uji-paket-g.test --paket "Paket G" --nama "Uji Paket G" --cache "$uji_tema" | grep -q '^status=generated'
 rm -rf "$uji_tema"
+# Penjaga palet FSE: situs biasa harus berlatar terang, palet gelap hanya untuk gaya
+# dealer. Parameter `gelap` pernah tertimpa variabel warna bernama sama sehingga SEMUA
+# situs FSE berlatar hitam (2026-09-16) — cek nilainya, bukan cuma sintaksnya.
+python3 scripts/cek-palet-fse >/dev/null
 
 install -d -m 755 "$INSTALL_ROOT/scripts"
 if [[ "$(realpath scripts/website-install-from-manifest)" != "$(realpath "$INSTALL_ROOT/scripts/website-install-from-manifest")" ]]; then
@@ -32,9 +42,13 @@ fi
 if [[ "$(realpath scripts/installer-runner)" != "$(realpath "$INSTALL_ROOT/scripts/installer-runner")" ]]; then
   install -m 755 scripts/installer-runner "$INSTALL_ROOT/scripts/installer-runner"
 fi
-install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
+if [[ "$(realpath scripts/ai-content-generator.py)" != "$(realpath "$INSTALL_ROOT/scripts/ai-content-generator.py")" ]]; then
+  install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
+fi
 install -d -m 755 "$WEB_ROOT/installer"
 install -m 644 web/installer/index.html "$WEB_ROOT/installer/index.html"
+install -d -m 755 "$WEB_ROOT/installer/susulan"
+install -m 644 web/installer/susulan/index.html "$WEB_ROOT/installer/susulan/index.html"
 install -d -m 755 "$WEB_ROOT/server"
 install -m 644 web/server/index.html "$WEB_ROOT/server/index.html"
 install -d -m 755 "$WEB_ROOT/ai"

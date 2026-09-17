@@ -9,12 +9,25 @@ Keputusan user 2026-09-13: slot gambar tidak boleh dibiarkan kosong. Urutannya:
   2. foto kiriman klien yang sudah diimpor site-finish (meta _velocity_source)
   3. foto contoh dari Openverse sesuai kata kunci di <domain>-tema.json
 
-Foto contoh dibatasi ke lisensi CC0 / Public Domain Mark: bebas dipakai situs
-komersial tanpa kewajiban mencantumkan pembuat. Asal-usulnya tetap dicatat di
+Foto contoh slot dibatasi ke lisensi CC0 / Public Domain Mark: bebas dipakai situs
+komersial tanpa kewajiban mencantumkan pembuat. Foto utama artikel (--artikel) dicari
+di Pexels lebih dulu (kunci /home/pexel/api-key.txt, bisa diganti env
+VELOCITY_PEXELS_KEY_FILE), lalu Openverse/Commons bila tak ada yang layak. Asal-usulnya tetap dicatat di
 meta `_velocity_foto_contoh` (sumber, pembuat, lisensi) supaya bisa ditelusuri
 dan diganti foto klien saat sudah dikirim.
 
 --coba hanya menampilkan pilihan foto per slot, tanpa mengunggah apa pun.
+--artikel --ganti-artikel  foto utama artikel yang masih foto contoh bank foto / sampul installer
+                dicarikan ulang (Pexels dulu), foto lama dihapus bila tak dipakai lagi.
+--ganti-contoh  slot berisi foto contoh bank foto dinilai & dicarikan ulang (foto klien/orang
+                tidak disentuh); foto contoh lama yang tak dirujuk lagi dihapus.
+--bersihkan-contoh  hapus foto contoh yang tidak lagi dipakai slot, konten, thumbnail, atau opsi
+                (jalankan sesudah fse-apply --isi menyusun ulang halaman).
+
+Pelajaran centralimpex.com 2026-09-17: penilai AI kehabisan token (max_tokens 4096) lalu
+cadangan kata kunci memasang foto "Beverage bottle as foreign body in rectum" dan Lego.
+Sekarang penilai AI diberi token cukup + satu ulangan, dan bila AI tetap gagal slot
+dibiarkan kosong (tema punya tampilan tanpa foto) — tidak lagi jatuh ke kata kunci.
 """
 import json
 import os
@@ -81,7 +94,7 @@ class Openverse:
     """
 
     def __init__(self):
-        self.tembolok, self.habis, self.jumlah = {}, False, 0
+        self.tembolok, self.habis, self.jumlah, self.commons = {}, False, 0, 0
 
     def cari(self, query):
         query = re.sub(r'\s+', ' ', query or '').strip().lower()
@@ -97,15 +110,120 @@ class Openverse:
                 hasil = json.load(resp).get('results', [])
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                self.habis = True
-                print('foto: batas harian Openverse tercapai, pencarian dihentikan')
+                print('foto: batas harian Openverse tercapai, pindah ke Wikimedia Commons')
             hasil = []
         except Exception:
             hasil = []
         self.jumlah += 1
         time.sleep(1)  # sopan ke layanan publik tanpa kunci
+        if sum(1 for r in hasil if layak(r, 1000, ())) < 3:
+            # Openverse sering tak terjangkau dari server installer (timeout/403, galat ditelan) atau
+            # hanya memberi arsip berjudul kode ("150420-F-QP401-038") yang gugur di saringan —
+            # langkah foto jadi diam-diam 0 hasil. Tambahkan kandidat Commons CC0/PD.
+            hasil = hasil + commons_cari(query)
+            self.commons += 1
         self.tembolok[query] = hasil
         return hasil
+
+
+PEXELS = 'https://api.pexels.com/v1/search'
+# Kunci API Pexels (permintaan user 2026-09-17, rmbrentcar.com): foto artikel dari Pexels lebih
+# relevan daripada bank foto CC0 (dulu terpasang "Plasma lights", foto udara gunung, halte bus).
+PEXELS_KUNCI = Path(os.environ.get('VELOCITY_PEXELS_KEY_FILE') or '/home/pexel/api-key.txt')
+
+
+class Pexels:
+    """Pencarian Pexels (lisensi Pexels: bebas dipakai komersial, kredit dicantumkan di caption).
+
+    Hasil dibentuk seperti hasil Openverse (title = teks alt Pexels) supaya saringan layak/relevan,
+    penilai AI, dan kredit_foto tetap berlaku. Tanpa berkas kunci, sumber ini dilewati."""
+
+    def __init__(self):
+        try:
+            self.kunci = PEXELS_KUNCI.read_text().strip()
+        except OSError:
+            self.kunci = ''
+        self.tembolok, self.jumlah, self.habis = {}, 0, False
+
+    @property
+    def aktif(self):
+        return bool(self.kunci) and not self.habis
+
+    def cari(self, query):
+        query = re.sub(r'\s+', ' ', query or '').strip().lower()
+        if not query or not self.aktif:
+            return []
+        if query in self.tembolok:
+            return self.tembolok[query]
+        url = PEXELS + '?' + urllib.parse.urlencode({'query': query, 'per_page': 30, 'orientation': 'landscape'})
+        req = urllib.request.Request(url, headers=dict(UA, Authorization=self.kunci))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                foto = json.load(resp).get('photos') or []
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403, 429):
+                # Kunci salah / kuota habis (200 permintaan per jam): pindah ke bank foto CC0.
+                print(f'foto: Pexels menolak ({e.code}), pindah ke Openverse/Commons')
+                self.habis = True
+            foto = []
+        except Exception:
+            foto = []
+        self.jumlah += 1
+        hasil = []
+        for f in foto:
+            src = f.get('src') or {}
+            hasil.append({
+                'url': src.get('large2x') or src.get('large') or src.get('original'),
+                'title': re.sub(r'\s+', ' ', str(f.get('alt') or '')).strip(),
+                'tags': [], 'width': f.get('width') or 0, 'height': f.get('height') or 0,
+                'creator': f.get('photographer') or '', 'license': 'pexels', 'filetype': 'jpg',
+                'foreign_landing_url': f.get('url') or '', 'sumber': 'pexels',
+            })
+        self.tembolok[query] = hasil
+        return hasil
+
+
+COMMONS = 'https://commons.wikimedia.org/w/api.php'
+
+
+def commons_cari(query):
+    """Foto Wikimedia Commons berlisensi CC0 (P275=Q6938433) atau domain publik (P6216=Q19652),
+    dalam bentuk hasil Openverse supaya saringan layak/relevan/kredit_foto tetap berlaku."""
+    url = COMMONS + '?' + urllib.parse.urlencode({
+        'action': 'query', 'format': 'json', 'generator': 'search', 'gsrnamespace': 6, 'gsrlimit': 20,
+        'gsrsearch': f'{query} filetype:bitmap haswbstatement:P275=Q6938433|P6216=Q19652',
+        'prop': 'imageinfo', 'iiprop': 'url|size|extmetadata', 'iiurlwidth': 1600,
+    })
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=40) as resp:
+            halaman = (json.load(resp).get('query') or {}).get('pages') or {}
+    except Exception as e:
+        print(f'foto: commons_gagal:{type(e).__name__}')
+        return []
+    hasil = []
+    for hal in sorted(halaman.values(), key=lambda h: h.get('index', 0)):
+        ii = (hal.get('imageinfo') or [{}])[0]
+        em = ii.get('extmetadata') or {}
+        nilai = lambda k: re.sub(r'<[^>]+>', '', str((em.get(k) or {}).get('value') or '')).strip()
+        berkas = hal.get('title', '').replace('File:', '')
+        nama, _, ekstensi = berkas.rpartition('.')
+        lisensi = nilai('LicenseShortName').lower()
+        lebar, tinggi = int(ii.get('width') or 0), int(ii.get('height') or 0)
+        skala = min(1.0, 1600 / lebar) if lebar else 1.0
+        hasil.append({
+            'title': re.sub(r'[_-]+', ' ', nama).strip(),
+            'url': ii.get('thumburl') or ii.get('url'),
+            'foreign_landing_url': ii.get('descriptionurl') or '',
+            # Ukuran berkas yang diunduh (thumb 1600px), bukan aslinya.
+            'width': round(lebar * skala), 'height': round(tinggi * skala),
+            'filetype': ekstensi.lower(),
+            'creator': re.split(r'[,;(]', nilai('Artist'))[0].strip()[:60],
+            'license': 'cc0' if 'cc0' in lisensi else 'pdm',
+            # Judul berkas Commons jarang menyebut orang ("Innovation in Action- Naval Hospital"),
+            # deskripsinya menyebut ("Pictured left, Cmdr. ..., orthopedic surgeon") — ikut disaring.
+            'tags': [{'name': nilai('ImageDescription')[:400]}],
+        })
+    return hasil
 
 
 # Foto yang fokusnya orang bisa terkesan sebagai karyawan/klien sungguhan situs itu.
@@ -116,7 +234,7 @@ ORANG_RE = re.compile(r'\b(people|person|portrait|volunteers?|man|men|woman|wome
                       r'secretary|minister|president|mayor|governor|farmers?|workers?|employees?|staff|'
                       r'meeting|conference|officials?|director|chief|speaks?|speaking|interview|delegation|'
                       r'participants?|attendees?|visitors?|owners?|rancher|grower|community|operators?|'
-                      r'drivers?)\b', re.I)
+                      r'drivers?|pictured|corpsm[ae]n|sailors?|soldiers?|airm[ae]n|marines?|troops?|surgery|ceremony|breaks ground|ribbon|technicians?|nurses?|doctors?|physicians?|surgeons?|dentists?|patients?|pharmacists?)\b', re.I)
 
 
 def ada_orang(r):
@@ -135,9 +253,35 @@ def tak_terbaca(r):
     return len(kata) < 2
 
 
-def layak(r, lebar_min, sudah):
+# Bukan foto yang pantas untuk situs usaha: sobirin-advokat.com (2026-09-17) sempat mendapat
+# karikatur politik satire dan gambar teknik denah tambang; sedotwcsrirejeki.com pindaian arsip tua.
+BUKAN_FOTO_RE = re.compile(
+    # Batas kata dari huruf saja: judul bank foto sering menempel ("SatireCourtroom", "Satire_simple").
+    r'(?<![a-z])(satire|satirical|cartoon|caricature|comic|meme|parody|propaganda|political|politics|politician|'
+    r'president|election|illustration|drawing|sketch|clip ?art|painting|site plan|floor ?plan|blueprint|'
+    r'diagram|map|haer|habs|scanned|book images?|archives?|historic(al)?|vintage|poster)(?![a-z])'
+    # Tahun lawas di judul arsip: "Chaves County Courthouse (1920)", "Brisbane, 27 June 1934"
+    # (jasakontraktorindo.com 2026-09-17: foto inspeksi jembatan 1934 jadi foto artikel bangun rumah).
+    r'|(?<!\d)(18\d\d|19[0-7]\d)(?!\d)'
+    # Pameran/fashion/etalase/museum: "FashioNext", "Museum Stairs ... Brentano fabrics".
+    r'|(?<![a-z])(fashion\w*|runway|catwalk|exhibition|expo|trade ?show|booth|mannequins?|museum|showroom display)(?![a-z])', re.I)
+# Tempat ibadah (jasakontraktorindo.com: "Interior view of a modern Gurudwara" untuk artikel interior
+# rumah) — hanya boleh bila memang dicari (kontraktor masjid, dekorasi gereja).
+IBADAH_RE = re.compile(r'(?<![a-z])(temple|gurd?wara|gurudwara|mosque|masjid|church|cathedral|chapel|shrine|'
+                       r'synagogue|pagoda|monastery|vihara|pura)(?![a-z])', re.I)
+
+
+def bukan_foto(r, kata_kunci=''):
+    teks = ' '.join([str(r.get('title') or '')] + [str(t.get('name') or '') for t in (r.get('tags') or [])])
+    if IBADAH_RE.search(teks) and not IBADAH_RE.search(kata_kunci or ''):
+        return True
+    return bool(BUKAN_FOTO_RE.search(teks))
+
+
+def layak(r, lebar_min, sudah, kata_kunci=''):
     lebar, tinggi = r.get('width') or 0, r.get('height') or 0
     return (r.get('url') and r['url'] not in sudah and lebar >= lebar_min and not ada_orang(r) and not tak_terbaca(r)
+            and not bukan_foto(r, kata_kunci)
             # Panorama tipis (mis. 1024x334) jadi buram saat dipotong ke kartu 4:3.
             and tinggi >= 500 and tinggi >= lebar * 0.5
             and str(r.get('filetype') or 'jpg').lower() in ('jpg', 'jpeg', 'png', 'webp'))
@@ -199,7 +343,8 @@ def pilih_foto_klien(slot, isi, foto, ai):
                 'Jawab JSON {"<slot>": indeks} — lewati slot yang tidak punya foto cocok.\n\n'
                 + json.dumps({'bisnis': isi.get('hero_judul', ''), 'foto': daftar_foto, 'slot': daftar_slot},
                              ensure_ascii=False))
-        jawab = modul.ai_call('You assign client photos to website slots. Output ONLY valid JSON.', teks, model)
+        jawab = modul.ai_call('You assign client photos to website slots. Output ONLY valid JSON.', teks, model,
+                              max_tokens=16000)
         try:
             awal, akhir = jawab.find('{'), jawab.rfind('}')
             pilihan = {k: int(v) for k, v in json.loads(jawab[awal:akhir + 1]).items()
@@ -405,15 +550,18 @@ def kandidat_slot(slot, isi, ov):
     hasil = {}
     for kunci, kata, _ in slot:
         lebar_min = 1000 if kunci == 'hero' else 800
-        milik_slot = [r for r in ov.cari(kata) if layak(r, lebar_min, set())]
+        milik_slot = [r for r in ov.cari(kata) if layak(r, lebar_min, set(), kata)]
         milik_kolam = [r for r in kolam if layak(r, lebar_min, set())]
         # Selang-seling: kandidat khas slot tetap ada, tapi slot yang kata
         # kuncinya nihil tidak kehabisan pilihan dari kolam umum.
         calon, url = [], set()
         for i in range(max(len(milik_slot), len(milik_kolam))):
             for sumber in (milik_slot, milik_kolam):
-                if i < len(sumber) and sumber[i]['url'] not in url:
-                    url.add(sumber[i]['url'])
+                # Bank foto menyimpan foto yang sama di beberapa alamat: judul ikut jadi kunci
+                # supaya galeri tidak berisi foto kembar (centralimpex.com 2026-09-17).
+                judul = 'judul:' + re.sub(r'\W+', ' ', str(sumber[i].get('title') or '')).strip().lower() if i < len(sumber) else ''
+                if i < len(sumber) and sumber[i]['url'] not in url and (judul == 'judul:' or judul not in url):
+                    url.update({sumber[i]['url'], judul})
                     calon.append(sumber[i])
             if len(calon) >= 12:
                 break
@@ -440,19 +588,30 @@ def pilih_dengan_ai(slot, isi, calon, ai, tambahan=''):
             'Foto harus terlihat pantas di situs bisnis itu dan cocok dengan topik slot. '
             'Tolak foto tempat wisata, produk konsumen yang tidak terkait, foto yang memperlihatkan orang '
             '(pekerja, petani, operator, pengunjung — bisa terkesan karyawan/klien sungguhan), foto hitam-putih '
-            'atau arsip sejarah (judul berisi tahun lama, "historic", "archive"), '
+            'atau arsip sejarah (judul berisi tahun lama, "historic", "archive"), tempat ibadah (kecuali usahanya '
+            'memang tentang itu), pameran/fashion/etalase/museum, infrastruktur yang bukan bidang usaha (jembatan, '
+            'pelabuhan, bandara), '
             'atau apa pun yang maknanya melenceng dari bidang usaha.\n'
             + (tambahan + '\n' if tambahan else '') +
             'Jawab JSON {"<slot>": [indeks terbaik, cadangan, ...]} — daftar kosong kalau tidak ada yang pantas.\n\n'
             + json.dumps(permintaan, ensure_ascii=False))
-    jawab = modul.ai_call(sistem, teks, model)
-    try:
-        awal, akhir = jawab.find('{'), jawab.rfind('}')
-        pilihan = json.loads(jawab[awal:akhir + 1])
-        return {k: [int(i) for i in (v or []) if isinstance(i, int) or str(i).lstrip('-').isdigit()]
-                for k, v in pilihan.items()}
-    except Exception:
-        return None
+    # Model bernalar menghabiskan token sebelum menjawab: 4096 bawaan tidak cukup untuk
+    # menilai ±16 slot x 12 kandidat (centralimpex.com, finish_reason=length).
+    for _ in range(2):
+        jawab = modul.ai_call(sistem, teks, model, max_tokens=16000) or ''
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            pilihan = json.loads(jawab[awal:akhir + 1])
+            return {k: [int(i) for i in (v or []) if isinstance(i, int) or str(i).lstrip('-').isdigit()]
+                    for k, v in pilihan.items()}
+        except Exception:
+            continue
+    return None
+
+
+def judul_foto(r):
+    """Kunci judul foto bank foto (foto sama bisa punya beberapa alamat)."""
+    return 'judul:' + re.sub(r'\W+', ' ', str(r.get('title') or r.get('url'))).strip().lower()
 
 
 def pilih_foto(slot, isi, ov, ai=None):
@@ -463,7 +622,10 @@ def pilih_foto(slot, isi, ov, ai=None):
     sudah, hasil = set(), {}
     pilihan_ai = pilih_dengan_ai(slot, isi, calon, ai) if ai else None
     if pilihan_ai is None and ai:
-        print('foto: penilaian AI gagal, memakai pencocokan kata kunci')
+        # Judul bank foto terlalu berisik untuk kata kunci saja (foto medis & mainan pernah
+        # lolos): tanpa penilaian AI slot dibiarkan kosong, run berikutnya mencoba lagi.
+        print('foto: penilaian AI gagal dua kali, slot bank foto dibiarkan kosong')
+        return {}
     disetujui = []  # foto yang dinilai pantas, untuk cadangan pakai ulang
     for kunci, kata, _ in urutan:
         daftar = calon.get(kunci, [])
@@ -474,9 +636,9 @@ def pilih_foto(slot, isi, ov, ai=None):
             kandidat = [r for r in daftar if relevan(r, kata)]
         disetujui += [r for r in kandidat if r['url'] not in {d['url'] for d in disetujui}]
         for r in kandidat:
-            if r['url'] not in sudah:
+            if r['url'] not in sudah and judul_foto(r) not in sudah:
                 hasil[kunci] = (r, 'ai' if pilihan_ai is not None else 'kata kunci')
-                sudah.add(r['url'])
+                sudah.update({r['url'], judul_foto(r)})
                 break
 
     # Putaran kedua: slot kosong dinilai ulang terhadap SEMUA foto layak yang
@@ -496,9 +658,9 @@ def pilih_foto(slot, isi, ov, ai=None):
                                                 'Beri foto BERBEDA untuk setiap slot bila memungkinkan.')
             for kunci, _, _ in kosong:
                 for i in (pilihan2 or {}).get(kunci, []):
-                    if 0 <= i < len(sisa) and sisa[i]['url'] not in sudah:
+                    if 0 <= i < len(sisa) and sisa[i]['url'] not in sudah and judul_foto(sisa[i]) not in sudah:
                         hasil[kunci] = (sisa[i], 'ai-2')
-                        sudah.add(sisa[i]['url'])
+                        sudah.update({sisa[i]['url'], judul_foto(sisa[i])})
                         disetujui.append(sisa[i])
                         break
 
@@ -506,15 +668,17 @@ def pilih_foto(slot, isi, ov, ai=None):
     # sudah dinilai pantas. Galeri dihindarkan dari foto yang sama dua kali.
     kosong = [s for s in urutan if s[0] not in hasil]
     if kosong and disetujui:
-        dipakai_galeri = {hasil[k][0]['url'] for k in hasil if k.startswith('galeri-')}
+        # Galeri tidak boleh berisi foto yang sama (alamat maupun judul) — foto yang sudah tampil
+        # di hero/tentang/layanan juga dihindari; slot galeri tanpa foto unik dibiarkan kosong.
+        dipakai_galeri = {x for k in hasil for x in (hasil[k][0]['url'], judul_foto(hasil[k][0]))}
         putar = 0
         for kunci, _, _ in kosong:
             for langkah in range(len(disetujui)):
                 r = disetujui[(putar + langkah) % len(disetujui)]
-                if not (kunci.startswith('galeri-') and r['url'] in dipakai_galeri):
+                if not (kunci.startswith('galeri-') and {r['url'], judul_foto(r)} & dipakai_galeri):
                     hasil[kunci] = (r, 'ulang')
                     if kunci.startswith('galeri-'):
-                        dipakai_galeri.add(r['url'])
+                        dipakai_galeri.update({r['url'], judul_foto(r)})
                     putar += langkah + 1
                     break
     return hasil
@@ -525,7 +689,7 @@ def kredit_foto(r):
     ber-caption yang benar — sumber/kredit, bukan peristiwa karangan)."""
     judul = re.sub(r'\s+', ' ', str(r.get('title') or '')).strip()[:90]
     pembuat = re.sub(r'\s+', ' ', str(r.get('creator') or '')).strip()[:60]
-    lisensi = {'cc0': 'CC0', 'pdm': 'Public Domain'}.get(str(r.get('license') or '').lower(), str(r.get('license') or ''))
+    lisensi = {'cc0': 'CC0', 'pdm': 'Public Domain', 'pexels': 'Pexels'}.get(str(r.get('license') or '').lower(), str(r.get('license') or ''))
     bagian = [f'Foto ilustrasi: {judul}' if judul else 'Foto ilustrasi']
     if pembuat:
         bagian.append(pembuat)
@@ -560,10 +724,12 @@ def pilih_foto_berita_ai(ai, judul, calon):
     daftar = [{'i': i, 'judul': str(r.get('title') or '')[:90],
                'tag': [str(t.get('name') or '') for t in (r.get('tags') or [])][:8]} for i, r in enumerate(calon)]
     teks = ('Pilih satu foto ilustrasi untuk artikel portal berita berjudul "' + judul + '". Syarat: benda, tempat, '
-            'atau suasana yang sesuai topik. BUKAN potret atau wajah orang, BUKAN gambar berisi kutipan/poster/banyak '
+            'atau suasana yang sesuai topik. BUKAN potret atau wajah orang, BUKAN foto arsip lama/hitam-putih, BUKAN '
+            'tempat ibadah atau pameran/fashion kecuali topiknya memang itu, BUKAN gambar berisi kutipan/poster/banyak '
             'teks, BUKAN foto tokoh atau peristiwa tertentu. Jawab JSON {"i": <indeks>} atau {"i": -1} bila tidak '
             'ada yang layak.\n\n' + json.dumps(daftar, ensure_ascii=False))
-    jawab = modul.ai_call('You pick stock photos for news articles. Output ONLY valid JSON.', teks, model) or ''
+    jawab = modul.ai_call('You pick stock photos for news articles. Output ONLY valid JSON.', teks, model,
+                          max_tokens=8000) or ''
     try:
         i = int(json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1]).get('i', -1))
     except (ValueError, TypeError, AttributeError):
@@ -571,7 +737,7 @@ def pilih_foto_berita_ai(ai, judul, calon):
     return calon[i] if 0 <= i < len(calon) else False
 
 
-def foto_berita(cfg, domain, isi, key, coba, manifest):
+def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
     """Foto utama artikel portal berita dari foto contoh Openverse (CC0/PDM).
 
     Portal berita tanpa foto utama tampil sebagai kotak polos. Kata kunci per
@@ -587,14 +753,22 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
     if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
         ssh, docroot = [os.environ['VELOCITY_LOKAL_SSH']], os.environ['VELOCITY_LOKAL_DOCROOT']
     php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 60)) as $p) {"
-           " if (has_post_thumbnail($p->ID)) { continue; } $k = get_the_category($p->ID);"
-           " $o[] = array('id' => $p->ID, 'judul' => $p->post_title, 'rubrik' => $k ? $k[0]->name : ''); }"
+           " $lama = (int) get_post_thumbnail_id($p->ID);"
+           # --ganti-artikel: foto contoh bank foto (_velocity_foto_contoh non-Pexels) atau sampul ilustrasi
+           # installer dicarikan ulang; foto klien/unggahan orang tidak pernah disentuh.
+           " if ($lama) { if (!$ganti) { continue; } $j = json_decode((string) get_post_meta($lama, '_velocity_foto_contoh', true), true);"
+           " $contoh = is_array($j) && (($j['lisensi'] ?? '') !== 'pexels');"
+           " $sampul = (bool) preg_match('#/sampul-[0-9]+\\.[a-z]+$#', (string) get_attached_file($lama));"
+           " if (!$contoh && !$sampul) { continue; } }"
+           " $k = get_the_category($p->ID);"
+           " $o[] = array('id' => $p->ID, 'judul' => $p->post_title, 'rubrik' => $k ? $k[0]->name : '', 'lama' => $lama); }"
            # Sumber foto contoh yang sudah terpasang: dua artikel Ekonomi sempat memakai
            # foto yang sama karena yang dihindari hanya foto dari run yang sedang jalan.
            " $pakai = array(); foreach (get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => -1,"
            " 'meta_key' => '_velocity_foto_contoh', 'fields' => 'ids')) as $m) { $j = json_decode((string) get_post_meta($m, '_velocity_foto_contoh', true), true);"
            " if (!empty($j['sumber'])) { $pakai[] = $j['sumber']; } }"
            " echo wp_json_encode(array('artikel' => $o, 'terpakai' => $pakai));")
+    php = ('$ganti = ' + ('true' if ganti else 'false') + '; ') + php
     run = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
                                 f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
                          capture_output=True, text=True, timeout=120)
@@ -615,24 +789,39 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
                 'ilustrasi di bank foto bebas lisensi: benda, tempat, atau suasana yang terlihat — bukan orang, '
                 'logo, teks, atau peristiwa spesifik. Jawab JSON {"<id>": "kata kunci"}.\n\n'
                 + json.dumps(artikel, ensure_ascii=False))
-        jawab = modul.ai_call('You write stock photo search keywords. Output ONLY valid JSON.', teks, model) or ''
-        try:
-            kunci = {int(k): str(v) for k, v in json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1]).items()}
-        except (ValueError, TypeError):
-            kunci = {}
-    ov, sudah, rencana = Openverse(), set(), []
+        jawab = modul.ai_call('You write stock photo search keywords. Output ONLY valid JSON.', teks, model,
+                              max_tokens=16000) or ''
+        # Model kadang menjawab satu objek per baris ({"24": ..}\n{"23": ..}) — json.loads atas
+        # seluruh jawaban gagal dan semua artikel kehilangan kata kunci. Gabungkan tiap objek.
+        for potong in re.findall(r'\{[^{}]*\}', jawab):
+            try:
+                kunci.update({int(k): str(v) for k, v in json.loads(potong).items()})
+            except (ValueError, TypeError):
+                pass
+    ov, px, sudah, rencana = Openverse(), Pexels(), set(), []
+    if px.aktif:
+        print('foto: sumber utama Pexels, cadangan Openverse/Commons')
     for a in artikel:
         cadangan = next((v for k, v in CADANGAN_RUBRIK.items() if k in a['rubrik'].lower()), '')
         pilihan, dipakai = None, ''
-        for q in (kunci.get(a['id'], ''), cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])):
+        # "clinic interior, healthcare technology, ..." dicari per frasa: seluruh daftar sebagai
+        # satu kueri (semua kata wajib ada) hampir selalu kosong di bank foto.
+        frasa = [f.strip() for f in kunci.get(a['id'], '').split(',') if f.strip()][:4]
+        for q in frasa + [cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])]:
             if not q:
                 continue
-            calon = [r for r in ov.cari(q) if layak(r, 1000, sudah)
-                     and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
+            saring = lambda daftar: [r for r in daftar if layak(r, 1000, sudah, q)
+                                     and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
+            # Pexels dulu; bank foto CC0 hanya bila Pexels tidak memberi kandidat layak.
+            calon = saring(px.cari(q)) or saring(ov.cari(q))
             pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8]) if ai and calon else None
             if pilihan is False:
                 continue  # AI menilai tidak ada yang layak: coba kata kunci berikutnya
             if pilihan is None:
+                if ai:
+                    # Penilaian AI gagal: kandidat bank foto tidak dipasang tanpa dinilai
+                    # (pelajaran centralimpex.com 2026-09-17). Artikel tetap tanpa foto.
+                    break
                 pilihan = next((r for r in calon if relevan(r, q)), calon[0] if calon else None)
             if pilihan:
                 dipakai = q
@@ -645,7 +834,8 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
               + (f"{str(pilihan.get('title') or '')[:36]} [{dipakai}]" if pilihan else '(tidak ada foto layak)'))
         if ov.habis:
             break
-    print(f'foto: {len(rencana)}/{len(artikel)} artikel punya calon foto, {ov.jumlah} pencarian Openverse')
+    print(f'foto: {len(rencana)}/{len(artikel)} artikel punya calon foto, {px.jumlah} pencarian Pexels, {ov.jumlah} pencarian Openverse'
+          f' ({ov.commons} dilanjutkan ke Commons)')
     if coba or not rencana:
         return 0
     folder = f'/tmp/velocity-berita-{domain}'
@@ -680,9 +870,16 @@ def foto_berita(cfg, domain, isi, key, coba, manifest):
             f"--caption={shlex.quote(kredit_foto(pilihan))} --porcelain) && "
             f'wp post meta update "$id" _velocity_foto_contoh {shlex.quote(asal)} >/dev/null && '
             f"echo \"pasang={a['id']}\"")
+        if a.get('lama'):
+            # Foto contoh lama dihapus hanya bila tidak lagi dipakai artikel/halaman lain.
+            perintah.append(
+                f"n=$(wp eval 'global $wpdb; echo (int) $wpdb->get_var($wpdb->prepare(\"SELECT COUNT(*) FROM $wpdb->postmeta "
+                f"WHERE meta_key=%s AND meta_value=%s\", \"_thumbnail_id\", \"{int(a['lama'])}\"));'); "
+                f"[ \"$n\" = 0 ] && wp post delete {int(a['lama'])} --force >/dev/null && echo \"hapus={int(a['lama'])}\"")
     perintah.append(f'rm -rf {folder}')
     run = subprocess.run(ssh + ['bash', '-s'], input='\n'.join(perintah), capture_output=True, text=True, timeout=900)
-    print(f"foto: {run.stdout.count('pasang=')}/{len(artikel)} artikel diberi foto utama")
+    print(f"foto: {run.stdout.count('pasang=')}/{len(artikel)} artikel diberi foto utama"
+          + (f", {run.stdout.count('hapus=')} foto contoh lama dihapus" if ganti else ''))
     return 0
 
 
@@ -706,15 +903,19 @@ def main():
     domain, da_user = cfg.get('domain', '').lower(), cfg.get('da_user', '')
     key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     isi_berkas = GENERATED_DIR / f'{domain}-tema.json'
-    if not isi_berkas.is_file():
+    if isi_berkas.is_file():
+        isi = json.loads(isi_berkas.read_text())
+    elif '--artikel' in sys.argv:
+        # Foto artikel hanya butuh kata kunci AI per judul; isi contoh cuma cadangan (foto_umum).
+        isi = {}
+    else:
         print('foto: isi contoh belum ada (jalankan paket-g-konten dulu), langkah dilewati')
         return 0
-    isi = json.loads(isi_berkas.read_text())
     if isi.get('jenis') == 'berita' or '--artikel' in sys.argv:
         # Portal berita custom: yang perlu foto adalah artikel, bukan slot desain.
         # --artikel: foto utama artikel situs perusahaan (kartu Artikel Terbaru beranda FSE
         # tampil polos tanpa foto, sedangkan referensi klien selalu berfoto).
-        return foto_berita(cfg, domain, isi, key, coba, args[0])
+        return foto_berita(cfg, domain, isi, key, coba, args[0], ganti='--ganti-artikel' in sys.argv)
     if coba and rencana_compro(domain, isi):
         rencana = rencana_compro(domain, isi)
         for kunci, nama in rencana['slot'].items():
@@ -793,6 +994,15 @@ echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => 
             return pasang_compro(domain, isi, keadaan, ssh, docroot, rencana)
 
     terisi = {k: v for k, v in (keadaan.get('terisi') or {}).items() if v}
+    if '--bersihkan-contoh' in sys.argv:
+        return bersihkan_contoh(ssh, docroot, None, terisi)
+    # --ganti-contoh: foto contoh bank foto dicarikan ulang; media lamanya dihapus di akhir.
+    dibuang = {}
+    if '--ganti-contoh' in sys.argv:
+        for kunci in keadaan.get('contoh') or []:
+            if kunci in terisi:
+                dibuang[kunci] = terisi.pop(kunci)
+        print(f"foto: {len(dibuang)} slot foto contoh dinilai ulang")
     # Kalau company profile klien punya foto, slot yang masih berisi foto contoh
     # dianggap kosong supaya foto asli klien bisa menggantikannya. Foto yang
     # dipasang orang atau foto klien tidak pernah disentuh.
@@ -913,26 +1123,37 @@ echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => 
                             capture_output=True, text=True, timeout=120)
     jumlah = len(slot_dari_isi(isi))
     print(f"foto: {len(peta)}/{jumlah} slot terisi{'' if 'ok' in simpan.stdout else ' (GAGAL menyimpan peta)'}")
-    yatim = sorted({int(i) for i in contoh_lama.values()} - {int(i) for i in peta.values()})
+    yatim = sorted({int(i) for i in list(contoh_lama.values()) + list(dibuang.values())}
+                   - {int(i) for i in peta.values()})
     if 'ok' in simpan.stdout and yatim:
-        # Foto contoh yang digeser foto klien dihapus supaya pustaka media tidak
-        # penuh stok tak terpakai — hanya bila tidak dirujuk konten/thumbnail/opsi.
-        php = (
-            'global $wpdb; foreach (array(' + ','.join(map(str, yatim)) + ') as $id) {'
-            ' if (!get_post_meta($id, "_velocity_foto_contoh", true)) { continue; }'
-            ' $rel = preg_replace("/\\.[a-z0-9]+$/i", "", (string) get_post_meta($id, "_wp_attached_file", true));'
-            ' $like = "%" . $wpdb->esc_like($rel) . "%";'
-            ' $pakai = $rel === "" || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type NOT IN (\'attachment\',\'revision\') AND post_content LIKE %s", $like))'
-            ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key=\'_thumbnail_id\' AND meta_value=%d", $id))'
-            ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_value LIKE %s", $like));'
-            ' if ($pakai) { echo "dibiarkan:$id\n"; } elseif (wp_delete_attachment($id, true)) { echo "dihapus:$id\n"; } }')
-        bersih = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
-                                       f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
-                                capture_output=True, text=True, timeout=120)
-        dihapus = bersih.stdout.count('dihapus:')
-        print(f'foto: {dihapus}/{len(yatim)} foto contoh lama yang digantikan foto klien dihapus')
+        bersihkan_contoh(ssh, docroot, yatim, peta)
     return 0 if 'ok' in simpan.stdout else 1
 
+
+def bersihkan_contoh(ssh, docroot, yatim, peta):
+    """Hapus foto contoh (meta _velocity_foto_contoh) yang tidak dipakai slot dan tidak dirujuk
+    konten/thumbnail/opsi, supaya pustaka media tidak penuh stok tak terpakai.
+    yatim=None: semua foto contoh di situs diperiksa."""
+    daftar = ('array(' + ','.join(map(str, yatim)) + ')' if yatim is not None else
+              'get_posts(array("post_type" => "attachment", "post_status" => "inherit", "numberposts" => 300,'
+              ' "fields" => "ids", "meta_key" => "_velocity_foto_contoh"))')
+    slot = ','.join(str(int(i)) for i in peta.values()) or '0'
+    php = (
+        'global $wpdb; $slot = array(' + slot + '); foreach (' + daftar + ' as $id) {'
+        ' if (in_array((int) $id, $slot, true)) { continue; }'
+        ' if (!get_post_meta($id, "_velocity_foto_contoh", true)) { continue; }'
+        ' $rel = preg_replace("/\\.[a-z0-9]+$/i", "", (string) get_post_meta($id, "_wp_attached_file", true));'
+        ' $like = "%" . $wpdb->esc_like($rel) . "%";'
+        ' $pakai = $rel === "" || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type NOT IN (\'attachment\',\'revision\') AND post_status <> \'inherit\' AND post_content LIKE %s", $like))'
+        ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key=\'_thumbnail_id\' AND meta_value=%d", $id))'
+        ' || $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name NOT LIKE \'\\_%%\' AND option_value LIKE %s", $like));'
+        ' if ($pakai) { echo "dibiarkan:$id\n"; } elseif (wp_delete_attachment($id, true)) { echo "dihapus:$id\n"; } }')
+    bersih = subprocess.run(ssh + [f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(php)} '
+                                   f'--path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
+                            capture_output=True, text=True, timeout=120)
+    print(f"foto: {bersih.stdout.count('dihapus:')} foto contoh lama dihapus, "
+          f"{bersih.stdout.count('dibiarkan:')} dibiarkan karena masih dirujuk")
+    return 0
 
 if __name__ == '__main__':
     sys.exit(main())

@@ -8,12 +8,9 @@ Dijalankan installer-autopilot.timer. Satu putaran:
   2. Kalau tidak ada run berjalan, ambil SATU project "belum diambil" yang lolos
      saringan: klaim -> generate manifest -> dry-run.
 
-Urutan (AUTOPILOT_PRIORITAS):
-  terlama  (bawaan, keputusan user 2026-09-13) — hanya project yang deadline-nya
-           SUDAH lewat, yang paling lama lewat dulu. Masa uji coba: project yang
-           deadline-nya belum lewat sedang dikerjakan manual oleh webmaster dan
-           tidak boleh ditabrak autopilot.
-  terdekat — perilaku lama: deadline terdekat dulu, yang lewat >10 hari dilewati.
+Aturan deadline (keputusan user 2026-09-16): hanya project yang deadline-nya
+BELUM terlewat yang diambil, deadline terdekat lebih dulu. Yang sudah lewat
+dibiarkan — itu wilayah manusia, bukan autopilot.
 
 AUTOPILOT_MODE=observe (default) hanya mencatat rencana ke autopilot-last.json
 dan journald tanpa klaim/instalasi apa pun. AUTOPILOT_MODE=active menjalankannya.
@@ -49,14 +46,11 @@ STUCK_AFTER = datetime.timedelta(hours=2)
 DA_MISSING = ('da_user_home_missing', 'domain_dir_missing')
 WAIT_DA_EVERY = datetime.timedelta(minutes=30)
 WAIT_DA_MAX = datetime.timedelta(days=14)
-# Project biasanya selesai sebelum deadline, jadi deadline yang baru lewat
-# berarti pekerjaan telat -- tetap dikerjakan sampai batas ini. Yang lewat jauh
-# ditinggalkan: statusnya di CRM belum tentu masih berlaku.
-DEADLINE_GRACE = datetime.timedelta(
-    days=int(os.environ.get('AUTOPILOT_DEADLINE_GRACE_DAYS', '10')))
-PRIORITAS = os.environ.get('AUTOPILOT_PRIORITAS', 'terlama').strip().lower()
-# Mode terlama: deadline harus sudah lewat minimal sekian hari.
-MIN_TELAT = datetime.timedelta(days=int(os.environ.get('AUTOPILOT_MIN_TELAT_DAYS', '1')))
+# Aturan deadline (keputusan user 2026-09-16, menggantikan mode "terlama"):
+# autopilot HANYA mengambil project yang deadline-nya BELUM terlewat, yang
+# paling dekat lebih dulu. Project yang deadline-nya sudah lewat dibiarkan
+# untuk dikerjakan manusia -- statusnya di CRM belum tentu masih berlaku dan
+# biasanya sudah ada webmaster yang menanganinya di luar installer.
 
 
 def utcnow():
@@ -150,13 +144,12 @@ def skip_reason(row, journal, today):
     try:
         telat = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(str(row.get('deadline')))
     except ValueError:
+        # Tanpa deadline (atau tanggalnya tidak terbaca) bukan berarti terlewat,
+        # sama seperti aturan di halaman installer -- tetap boleh diambil.
         telat = None
-    if PRIORITAS == 'terlama':
-        if telat is None or telat < MIN_TELAT:
-            # Belum lewat deadline (atau tanpa deadline): wilayah webmaster.
-            return 'deadline_belum_lewat_dikerjakan_webmaster'
-    elif telat is not None and telat > DEADLINE_GRACE:
-        return 'deadline_terlewat'
+    if telat is not None and telat > datetime.timedelta(0):
+        # Deadline hari ini masih dihitung belum terlewat.
+        return 'deadline_sudah_terlewat_biarkan_manual'
     if not read_client_form(ON_PROGRESS / domain)['fields']:
         return 'form_isian_klien_tidak_terbaca'
     return None

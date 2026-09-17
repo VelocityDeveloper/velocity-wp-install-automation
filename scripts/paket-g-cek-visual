@@ -10,6 +10,16 @@ Langkah ini memotret beranda (desktop penuh + HP) dan halaman utama, memotong
 gambar panjang jadi potongan ≤1500px supaya bisa dibuka, dan memeriksa hal yang
 bisa diperiksa mesin: HTTP 200 dan layar tidak kosong.
 
+Versi 2026-09-17 (pelajaran jasakontraktorindo.com & centralimpex.com):
+  - semua halaman dipotret lewat scripts/potret-halaman (Playwright, viewport normal,
+    digulir pelan sampai dasar) — jendela CLI 9000px merusak elemen ber-vh dan foto
+    lazy-load tampil kosong;
+  - halaman diambil dari MENU situs (bukan slug baku) supaya halaman hasil desain
+    referensi (Profil, Portofolio, FAQ, halaman jasa) ikut terpotret;
+  - HP: scroll horizontal, tombol menu HP ada & membuka menu, gambar rusak;
+  - referensi dipotret desktop + HP dan digabung berdampingan dengan situs
+    (banding-beranda-*.png, banding-beranda-hp-*.png) — dikirim ke Telegram.
+
 Hasil: /var/lib/velocity/visual/<domain>/<waktu>/ (5 run terakhir disimpan),
 berisi PNG + ringkasan.json. Tanpa Chromium langkah ini dilewati, tidak gagal.
 """
@@ -24,6 +34,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -102,6 +113,37 @@ def domain_dari(argumen):
     return argumen.strip().lower()
 
 
+def potret(url, keluaran, hp=False):
+    """scripts/potret-halaman -> (berhasil, cek dict)."""
+    perintah = ['node', str(HERE / 'potret-halaman'), url, str(keluaran)] + (['--hp'] if hp else []) + ['--cek']
+    try:
+        run = subprocess.run(perintah, capture_output=True, text=True, timeout=200)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, {}
+    cek = {}
+    for baris in run.stdout.splitlines():
+        if baris.startswith('cek:'):
+            try:
+                cek = json.loads(baris[4:])
+            except ValueError:
+                pass
+    return Path(keluaran).is_file(), cek
+
+
+def banding(kiri, kanan, awalan):
+    try:
+        run = subprocess.run(['node', str(HERE / 'banding-potret'), str(kiri), str(kanan), str(awalan), '0.4', '2600'],
+                             capture_output=True, text=True, timeout=120)
+        m = re.search(r'banding:ok:(\d+)', run.stdout)
+        return int(m.group(1)) if m else 0
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+
+
+def nama_halaman(path):
+    return re.sub(r'[^a-z0-9]+', '-', path.strip('/').lower()).strip('-')[:40] or 'beranda'
+
+
 def main():
     if len(sys.argv) != 2:
         print('usage: paket-g-cek-visual <manifest|domain>', file=sys.stderr)
@@ -110,71 +152,81 @@ def main():
     if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
         print('visual: domain tidak valid')
         return 2
-    chrome = cari_chrome()
-    if not chrome:
+    if not cari_chrome() or not (HERE / 'potret-halaman').is_file():
         print('visual: Chromium tidak ditemukan, langkah dilewati')
         return 0
     folder = OUT_ROOT / domain / time.strftime('%Y%m%d-%H%M%S')
     folder.mkdir(parents=True, exist_ok=True)
     modul = png()
-    ringkasan, temuan = {'domain': domain, 'folder': str(folder), 'halaman': {}}, []
-    # Referensi desain klien (dicatat scripts/fse-apply): dipotret di folder yang sama
-    # supaya hasil dan referensi bisa dibandingkan berdampingan, bukan diingat-ingat.
+    ringkasan, temuan = {'domain': domain, 'folder': str(folder), 'halaman': {}, 'banding': []}, []
     try:
-        import json as _json
-        ref = _json.loads((Path('/var/lib/velocity/fse-rencana') / domain / 'referensi.json').read_text())
+        ref = json.loads((Path('/var/lib/velocity/fse-rencana') / domain / 'referensi.json').read_text())
     except (OSError, ValueError):
         ref = {}
-    if ref.get('url'):
-        mentah = folder / 'referensi-beranda-mentah.png'
-        # Playwright dulu (scripts/potret-halaman): Chromium CLI menggantung di situs
-        # referensi berat (ourgrandfatherstory.com, 2026-09-14). CLI hanya cadangan.
+    if not ref.get('url'):
+        # Rencana belum ada / tercatat tanpa referensi: baca langsung dari FORM ISIAN.
         try:
-            subprocess.run(['node', str(HERE / 'potret-halaman'), ref['url'], str(mentah), '1366', '900'],
-                           capture_output=True, timeout=170)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        if not mentah.is_file():
-            try:
-                subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
-                                f'--user-agent={UA}', '--window-size=1366,4000', '--virtual-time-budget=15000',
-                                f'--screenshot={mentah}', ref['url']], capture_output=True, timeout=90)
-            except subprocess.TimeoutExpired:
-                # Situs referensi yang berat bisa menggantung Chromium; itu bukan kesalahan
-                # situs klien, jadi pemotretan halaman kita tetap jalan.
-                print(f"visual: referensi     {ref['url']} tidak terpotret (timeout)")
-        if mentah.is_file():
-            try:
-                jumlah, _ = potong(modul, mentah, folder, 'referensi-beranda')
-                ringkasan['referensi'] = {'url': ref['url'], 'gaya': ref.get('gaya'), 'catatan': ref.get('catatan', ''),
-                                          'potongan': jumlah}
-                print(f"visual: referensi     {ref['url']} potongan={jumlah} (bandingkan dengan beranda-*.png)")
-            except (OSError, ValueError):
-                pass
-    for nama, path, lebar, tinggi, ua in HALAMAN:
+            loader = importlib.machinery.SourceFileLoader('referensi_desain', str(HERE / 'referensi_desain.py'))
+            spec = importlib.util.spec_from_loader('referensi_desain', loader)
+            rd = importlib.util.module_from_spec(spec)
+            loader.exec_module(rd)
+            ref = rd.referensi_form(domain) or {}
+        except Exception:
+            ref = {}
+
+    mentah_ref = {}
+    if ref.get('url'):
+        for nama, hp in (('referensi-beranda', False), ('referensi-beranda-hp', True)):
+            mentah = folder / f'{nama}-mentah.png'
+            ok, cek_ref = potret(ref['url'], mentah, hp)
+            if cek_ref.get('potret_menu') and Path(cek_ref['potret_menu']).is_file():
+                Path(cek_ref['potret_menu']).rename(folder / 'referensi-beranda-hp-menu.png')
+            if ok:
+                mentah_ref[hp] = mentah
+            else:
+                print(f"visual: referensi     {ref['url']} tidak terpotret ({'hp' if hp else 'desktop'})")
+        ringkasan['referensi'] = {'url': ref['url'], 'gaya': ref.get('gaya'), 'catatan': ref.get('catatan', '')}
+
+    daftar = [('beranda', '/', False), ('beranda-hp', '/', True)]
+    for nama, path, hp in daftar:
         url = f'https://{domain}{path}?cekvisual={int(time.time())}'
         kode = http_kode(url)
-        hasil = {'http': kode, 'potongan': 0}
-        if kode == 404 and nama != 'beranda':
-            # Halaman ini memang tidak ada di jenis situs tersebut.
+        hasil = {'http': kode, 'potongan': 0, 'path': path}
+        if kode == 404 and nama not in ('beranda', 'beranda-hp'):
             hasil['dilewati'] = True
         elif kode != 200:
             temuan.append(f'{nama}:http_{kode}')
         else:
             mentah = folder / f'{nama}-mentah.png'
-            try:
-                subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
-                                f'--user-agent={ua}', f'--window-size={lebar},{tinggi}', '--virtual-time-budget=20000',
-                                f'--screenshot={mentah}', url], capture_output=True, timeout=180)
-            except subprocess.TimeoutExpired:
-                # Chromium bisa menggantung (peta Google di Hubungi Kami, 2026-09-14);
-                # satu halaman macet tidak boleh menghentikan pemeriksaan halaman lain.
-                temuan.append(f'{nama}:screenshot_timeout')
-                ringkasan['halaman'][nama] = hasil
-                continue
-            if not mentah.is_file():
+            ok, cek = potret(url, mentah, hp)
+            if not ok:
                 temuan.append(f'{nama}:screenshot_gagal')
             else:
+                if nama == 'beranda' and len(daftar) == 2:
+                    # Halaman dalam = isi menu situs (maks 10), cadangan slug baku.
+                    jalur = []
+                    for tautan in cek.get('menu') or []:
+                        p = urllib.parse.urlsplit(tautan).path or '/'
+                        if p != '/' and p not in jalur and not re.search(r'/(category|tag|author|feed)/', p):
+                            jalur.append(p)
+                    if not jalur:
+                        jalur = [h[1] for h in HALAMAN if h[1] != '/']
+                    daftar += [(nama_halaman(p), p, False) for p in jalur[:10]]
+                if cek.get('scroll_horizontal'):
+                    temuan.append(f"{nama}:scroll_horizontal:{cek.get('lebar_dokumen')}px")
+                if cek.get('gambar_rusak'):
+                    temuan.append(f"{nama}:gambar_rusak:{len(cek['gambar_rusak'])}")
+                if hp and nama == 'beranda-hp':
+                    if not cek.get('tombol_menu_hp'):
+                        temuan.append('beranda-hp:tombol_menu_tidak_ada')
+                    elif not cek.get('menu_hp_terbuka'):
+                        temuan.append('beranda-hp:menu_hp_tidak_terbuka')
+                    if cek.get('potret_menu') and Path(cek['potret_menu']).is_file():
+                        Path(cek['potret_menu']).rename(folder / 'beranda-hp-menu.png')
+                # Perbandingan berdampingan sebelum PNG mentah dipotong & dihapus.
+                if nama in ('beranda', 'beranda-hp') and mentah_ref.get(hp):
+                    n = banding(mentah_ref[hp], mentah, folder / f'banding-{nama}')
+                    ringkasan['banding'] += [str(folder / f'banding-{nama}-{i}.png') for i in range(1, n + 1)]
                 try:
                     hasil['potongan'], beragam = potong(modul, mentah, folder, nama)
                     if not beragam:
@@ -183,10 +235,16 @@ def main():
                     temuan.append(f'{nama}:png_{type(e).__name__}')
         ringkasan['halaman'][nama] = hasil
         print(f"visual: {nama:13} http={kode} potongan={hasil['potongan']}")
+    for hp, mentah in mentah_ref.items():
+        try:
+            potong(modul, mentah, folder, 'referensi-beranda-hp' if hp else 'referensi-beranda')
+        except Exception:
+            mentah.unlink(missing_ok=True)
     ringkasan['temuan'] = temuan
     (folder / 'ringkasan.json').write_text(json.dumps(ringkasan, indent=2, ensure_ascii=False))
     for lama in sorted((OUT_ROOT / domain).iterdir())[:-5]:
         shutil.rmtree(lama, ignore_errors=True)
+    print(f"visual: banding={len(ringkasan['banding'])}")
     print(f'visual: folder={folder}')
     print(f"visual: temuan={','.join(temuan) or 'tidak ada'}")
     return 0

@@ -95,6 +95,37 @@ add_filter('query_loop_block_query_vars', function ($vars, $block) {
     return $vars;
 }, 10, 2);
 
+// Arsip tulisan & kategori situs dealer memakai templates/archive-dealer.html
+// (pita judul + pengantar tengah + grid tiga kartu berbadge tanggal) — mengikuti
+// tampilan halaman artikel referensi klien. Halaman tulisan (page_for_posts) ikut.
+foreach (array('home', 'category', 'tag', 'taxonomy', 'archive', 'author', 'date') as $jenis_arsip) {
+    add_filter($jenis_arsip . '_template_hierarchy', function ($templat) {
+        if (velocity_fse_dealer()) {
+            array_unshift($templat, 'archive-dealer');
+        }
+        return $templat;
+    });
+}
+
+// Halaman biasa situs dealer memakai templates/page-dealer.html: pita judul gelap
+// (judul + slogan + tombol ajakan) seperti halaman referensi klien.
+add_filter('page_template_hierarchy', function ($templat) {
+    // Halaman yang templatnya dipilih sendiri di editor (mis. "Halaman lebar") tidak diambil alih.
+    $pilihan = get_page_template_slug(get_queried_object_id());
+    if (velocity_fse_dealer() && !$pilihan) {
+        array_unshift($templat, 'page-dealer');
+    }
+    return $templat;
+});
+
+// Arsip model unit punya templatnya sendiri: jangan tertimpa archive-dealer.
+add_filter('archive_template_hierarchy', function ($templat) {
+    if (velocity_fse_dealer() && is_post_type_archive('mobil')) {
+        return array_values(array_diff($templat, array('archive-dealer')));
+    }
+    return $templat;
+}, 11);
+
 /** Meta satu unit mobil, sudah dinormalkan untuk ditampilkan. */
 function velocity_fse_mobil($post_id = 0)
 {

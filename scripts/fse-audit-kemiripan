@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""Audit kemiripan desain: situs jadi vs referensi web klien, per bagian dan per seksi.
+
+Permintaan user 2026-09-17: "untuk audit desain pastikan dicek kemiripan desain yang
+dibuat sudah sesuai referensi yang diminta; cek mendetail setiap section terutama
+header, footer dan beranda." `fse-cek-referensi` hanya membandingkan TOKEN yang
+ditulis langkah tema (opsi WordPress); audit ini membaca TAMPILAN situs jadi dengan
+pengukur yang sama dengan referensi (scripts/referensi-desain.js), jadi yang
+dibandingkan adalah apa yang dilihat pengunjung.
+
+  fse-audit-kemiripan <manifest> [--json] [--ambang=80]
+  fse-audit-kemiripan <domain>                 (manifest dicari di /home/project/<domain>/)
+
+Yang dinilai (0-100 per bagian):
+  header    latar terang/gelap, posisi logo & menu, satu/dua baris, tombol ajakan,
+            topbar (latar & isinya), lengket, huruf & warna menu, kotak cari, ikon
+            keranjang, tinggi, ukuran logo, garis bawah, teks yang tak terbaca
+  footer    latar, jumlah kolom, isi kolom (logo/tentang/menu/kontak) & urutannya,
+            baris hak cipta (perataan, latar & pita selebar layar), teks tak terbaca,
+            sama di semua halaman
+  beranda   urutan & jenis seksi (seksi referensi yang sengaja dilewati karena klien
+            tidak punya datanya tidak dihitung), lalu per seksi: kelompok latar,
+            perataan, kolom kartu, teks|foto berdampingan & sisi fotonya, label kecil
+            di atas judul, varian hero; teks tak terbaca
+  gaya      font teks & judul, sudut tombol & kartu, judul kapital
+  halaman   tiap halaman dalam referensi yang diukur (tentang/layanan/produk/galeri/
+            kontak/artikel): ada, banner judul (latar, perataan, breadcrumb), susunan
+
+Yang SENGAJA berbeda dari referensi dan tidak dihitung: warna (warna klien menang),
+kolom Statistik Pengunjung, email + ikon sosmed di footer, teks/foto/logo klien.
+
+Situs yang sedang maintenance dibaca sebagai admin lewat cookie login berumur 15 menit
+(token sesi dibuat & dihapus lewat WP-CLI, tidak pernah dicetak).
+
+Hasil: fse-rencana/<domain>/audit-kemiripan.json (+ audit/situs-*.json & potret PNG).
+Kode keluar: 0 sesuai (atau tanpa referensi), 1 belum sesuai, 2 gagal memeriksa.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = Path('/home/project')
+UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+AMBANG = 80          # header, footer, beranda harus >= ini
+AMBANG_HALAMAN = 70  # halaman dalam lebih longgar: isinya tulisan AI, bukan tata letak penuh
+# Seksi yang ditambahkan installer sebagai pelengkap (bukan dari referensi) tidak dihukum.
+SEKSI_PELENGKAP = {'ajakan', 'artikel', 'produk'}
+
+
+def muat(nama, path):
+    spec = importlib.util.spec_from_loader(nama, importlib.machinery.SourceFileLoader(nama, str(path)))
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+rd = muat('referensi_desain', HERE / 'referensi_desain.py')
+
+PHP_COOKIE = r'''
+$u = get_users(array('role' => 'administrator', 'number' => 1, 'orderby' => 'ID'));
+if (!$u) { vfse_keluar(array('galat' => 'tanpa_admin')); return; }
+$exp = time() + 900;
+$token = WP_Session_Tokens::get_instance($u[0]->ID)->create($exp);
+vfse_keluar(array('nama' => LOGGED_IN_COOKIE, 'nilai' => wp_generate_auth_cookie($u[0]->ID, $exp, 'logged_in', $token),
+    'host' => (string) parse_url(home_url('/'), PHP_URL_HOST), 'id' => (int) $u[0]->ID, 'token' => $token, 'exp' => $exp));
+'''
+PHP_HAPUS_TOKEN = r'''
+WP_Session_Tokens::get_instance((int) $d['id'])->destroy((string) $d['token']);
+vfse_keluar(array('ok' => 1));
+'''
+
+
+# ---------------------------------------------------------------------------
+# Pembanding
+# ---------------------------------------------------------------------------
+
+class Nilai:
+    """Kumpulan pemeriksaan berbobot satu bagian."""
+
+    def __init__(self, nama):
+        self.nama, self.item = nama, []
+
+    def cek(self, kunci, bobot, cocok, situs=None, referensi=None, skor=None):
+        """cocok: bool; skor (0..1) menggantikan cocok untuk nilai parsial."""
+        s = float(skor if skor is not None else (1.0 if cocok else 0.0))
+        self.item.append({'kunci': kunci, 'bobot': bobot, 'skor': round(s, 2), 'situs': situs, 'referensi': referensi})
+
+    def skor(self):
+        total = sum(i['bobot'] for i in self.item)
+        return round(100 * sum(i['bobot'] * i['skor'] for i in self.item) / total) if total else 100
+
+    def beda(self):
+        return [i for i in self.item if i['skor'] < 1]
+
+
+def lcs(a, b):
+    """Panjang subbarisan bersama terpanjang + pasangan indeksnya."""
+    t = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) - 1, -1, -1):
+        for j in range(len(b) - 1, -1, -1):
+            t[i][j] = t[i + 1][j + 1] + 1 if a[i] == b[j] else max(t[i + 1][j], t[i][j + 1])
+    pasangan, i, j = [], 0, 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            pasangan.append((i, j))
+            i, j = i + 1, j + 1
+        elif t[i + 1][j] >= t[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return t[0][0], pasangan
+
+
+def rasio(a, b, bawah, atas):
+    return bool(a and b and bawah <= a / b <= atas)
+
+
+def banding_header(ref, ukur):
+    n = Nilai('header')
+    h = ukur.get('header') or {}
+    if not h:
+        n.cek('header_terbaca', 10, False, 'tidak_terbaca', 'ada')
+        return n
+    t = ukur.get('topbar_info') or {}
+    n.cek('latar_gelap', 3, bool(h.get('gelap')) == ref['gelap'], bool(h.get('gelap')), ref['gelap'])
+    n.cek('logo_posisi', 2, (h.get('logo_posisi') or 'kiri') == ref['logo_posisi'], h.get('logo_posisi'), ref['logo_posisi'])
+    n.cek('menu_posisi', 2, (h.get('menu_posisi') or 'kanan') == ref['menu_posisi'], h.get('menu_posisi'), ref['menu_posisi'])
+    if 'dua_baris' in ref:
+        dua = (h.get('baris') or 1) >= 2
+        n.cek('dua_baris', 2, dua == ref['dua_baris'], dua, ref['dua_baris'])
+    n.cek('tombol_ajakan', 2, bool(h.get('tombol_ajakan')) == ref['tombol_ajakan'], bool(h.get('tombol_ajakan')), ref['tombol_ajakan'])
+    n.cek('topbar', 2, bool(ukur.get('topbar')) == ref['topbar'], bool(ukur.get('topbar')), ref['topbar'])
+    if ref['topbar'] and ukur.get('topbar') and 'topbar_gelap' in ref:
+        n.cek('topbar_gelap', 1, bool(t.get('gelap')) == ref['topbar_gelap'], bool(t.get('gelap')), ref['topbar_gelap'])
+    if ref['topbar'] and ukur.get('topbar') and ref.get('topbar_isi'):
+        punya = set(t.get('isi') or [])
+        n.cek('topbar_isi', 1, None, sorted(punya), ref['topbar_isi'],
+              skor=len(punya & set(ref['topbar_isi'])) / len(ref['topbar_isi']))
+    n.cek('lengket', 1, bool(h.get('lengket')) == ref['lengket'], bool(h.get('lengket')), ref['lengket'])
+    n.cek('menu_kapital', 1, bool(h.get('huruf_menu_kapital')) == ref['menu_kapital'],
+          bool(h.get('huruf_menu_kapital')), ref['menu_kapital'])
+    if 'cari' in ref:
+        n.cek('kotak_cari', 1, bool(h.get('cari')) == ref['cari'], bool(h.get('cari')), ref['cari'])
+    if ref.get('tinggi'):
+        n.cek('tinggi', 1, rasio(h.get('tinggi'), ref['tinggi'], 0.65, 1.5), h.get('tinggi'), ref['tinggi'])
+    if ref.get('logo_tinggi'):
+        n.cek('logo_tinggi', 1, rasio(h.get('logo_tinggi'), ref['logo_tinggi'], 0.5, 2), h.get('logo_tinggi'), ref['logo_tinggi'])
+    if ref.get('menu_ukuran'):
+        n.cek('menu_ukuran', 0.5, abs((h.get('menu_ukuran') or 0) - ref['menu_ukuran']) <= 2,
+              h.get('menu_ukuran'), ref['menu_ukuran'])
+    if 'menu_berwarna' in ref:
+        n.cek('menu_berwarna', 1, bool(h.get('menu_berwarna')) == ref['menu_berwarna'],
+              h.get('menu_warna') or bool(h.get('menu_berwarna')), ref['menu_berwarna'])
+    if ref.get('keranjang'):
+        # Hanya dihitung kalau referensi punya ikon keranjang (situs toko).
+        n.cek('ikon_keranjang', 1, bool(h.get('keranjang')), bool(h.get('keranjang')), True)
+    if 'garis_bawah' in ref:
+        n.cek('garis_bawah', 0.5, bool(h.get('garis_bawah')) == ref['garis_bawah'], bool(h.get('garis_bawah')), ref['garis_bawah'])
+    kr = h.get('kontras_rendah') or []
+    n.cek('teks_terbaca', 3, not kr, kr, [])
+    return n
+
+
+def isi_utama(isi):
+    """Jenis kolom footer yang dibandingkan (statistik & sosmed = kewajiban Velocity)."""
+    for j in ('logo', 'tentang', 'menu', 'kontak', 'peta', 'form', 'galeri'):
+        if j in isi:
+            return j
+    return ''
+
+
+def banding_footer(ref, ukur):
+    n = Nilai('footer')
+    f = ukur.get('footer') or {}
+    if not f:
+        n.cek('footer_terbaca', 10, False, 'tidak_terbaca', 'ada')
+        return n
+    n.cek('latar_gelap', 3, bool(f.get('gelap')) == ref['gelap'], bool(f.get('gelap')), ref['gelap'])
+    kolom = int(f.get('kolom') or 1)
+    # Kolom Statistik Pengunjung wajib (keputusan user 2026-09-16): boleh satu lebih banyak.
+    n.cek('jumlah_kolom', 2, -1 <= kolom - ref['kolom'] <= 1, kolom, ref['kolom'])
+    rinci = f.get('kolom_rinci') or []
+    if ref.get('kolom_isi'):
+        harap = {j for k in ref['kolom_isi'] for j in k if j in ('logo', 'tentang', 'menu', 'kontak', 'peta', 'form', 'galeri')}
+        punya = {j for c in rinci for j in c.get('isi') or []}
+        if harap:
+            n.cek('isi_kolom', 2, None, sorted(punya & harap | (punya - {'statistik', 'sosmed', 'lain'})), sorted(harap),
+                  skor=len(harap & punya) / len(harap))
+        urut_ref = [x for x in (isi_utama(k) for k in ref['kolom_isi']) if x]
+        urut_situs = [x for x in (isi_utama(c.get('isi') or []) for c in rinci) if x]
+        if urut_ref:
+            sama, _ = lcs(urut_ref, urut_situs)
+            n.cek('urutan_kolom', 1, None, urut_situs, urut_ref, skor=sama / len(urut_ref))
+    if 'logo' in ref:
+        n.cek('logo', 1, bool(f.get('logo')) == ref['logo'], bool(f.get('logo')), ref['logo'])
+    if 'bawah' in ref:
+        b = f.get('bawah') or {}
+        n.cek('baris_hak_cipta', 1, bool(b) == ref['bawah'], bool(b), ref['bawah'])
+        if ref['bawah'] and b:
+            n.cek('hak_cipta_rata', 1, b.get('rata') == ref['bawah_rata'], b.get('rata'), ref['bawah_rata'])
+            n.cek('hak_cipta_latar_beda', 0.5, bool(b.get('beda_latar')) == ref['bawah_beda_latar'],
+                  bool(b.get('beda_latar')), ref['bawah_beda_latar'])
+            if 'pita' in ref:
+                n.cek('hak_cipta_pita', 1, bool(b.get('pita')) == ref['pita'], bool(b.get('pita')), ref['pita'])
+    if 'judul_kapital' in ref:
+        n.cek('judul_kapital', 0.5, bool(f.get('judul_kapital')) == ref['judul_kapital'],
+              bool(f.get('judul_kapital')), ref['judul_kapital'])
+    kr = f.get('kontras_rendah') or []
+    n.cek('teks_terbaca', 3, not kr, kr, [])
+    return n
+
+
+def jenis_situs(s, i):
+    """Seksi situs sendiri dikenali dari kelas yang ditulis fse-apply."""
+    kelas = s.get('kelas') or ''
+    m = re.search(r'\bvf-ref-(hero|tentang|layanan|produk|keunggulan|alur|galeri|klien|artikel|kontak|ajakan)\b', kelas)
+    if m:
+        return m.group(1)
+    if re.search(r'\bvf-(hero|dealer-hero|hero-foto|hero-terang)\b', kelas):
+        return 'hero'
+    if re.search(r'\bvf-(ajakan|cta-strip|pita-foto)\b', kelas):
+        return 'ajakan'
+    return None
+
+
+def banding_butir(r, s):
+    """Skor 0..1 satu pasangan seksi referensi-situs + daftar beda."""
+    cek, beda = [], []
+
+    def tambah(kunci, bobot, ok, nilai_s, nilai_r):
+        cek.append((bobot, 1.0 if ok else 0.0))
+        if not ok:
+            beda.append(f'{kunci}:{nilai_s}≠{nilai_r}')
+
+    ks, kr = rd.kelompok_latar(s['latar']), rd.kelompok_latar(r['latar'])
+    if ks == kr:
+        cek.append((3, 1.0))
+    else:
+        # Foto berlapis warna vs pita warna: setengah mirip.
+        cek.append((3, 0.5 if {ks, kr} == {'foto', 'warna'} else 0.0))
+        beda.append(f'latar:{s["latar"]}≠{r["latar"]}')
+    tambah('rata', 1.5, s['rata'] == r['rata'], s['rata'], r['rata'])
+    if r.get('kolom'):
+        tambah('kolom', 1.5, bool(s.get('kolom')) and abs(s['kolom'] - r['kolom']) <= 1, s.get('kolom'), r['kolom'])
+    if r['jenis'] != 'hero':
+        tambah('berdampingan', 1, s['berdampingan'] == r['berdampingan'], s['berdampingan'], r['berdampingan'])
+    if r.get('foto_posisi') and s.get('foto_posisi'):
+        tambah('sisi_foto', 1, s['foto_posisi'] == r['foto_posisi'], s['foto_posisi'], r['foto_posisi'])
+    if 'label' in r:
+        tambah('label_kecil', 1, s.get('label') == r['label'], s.get('label'), r['label'])
+    if r['jenis'] == 'hero' and r.get('terukur', True):
+        tambah('hero_varian', 2, s.get('varian') == r.get('varian'), s.get('varian'), r.get('varian'))
+    total = sum(b for b, _ in cek)
+    return (sum(b * x for b, x in cek) / total if total else 1.0), beda
+
+
+def banding_susunan(n, ref_seksi, situs_seksi, dilewati, bobot_urut=4, bobot_rinci=4, awalan=''):
+    """Urutan jenis seksi + kemiripan tiap pasangan."""
+    sisa_lewat = list(dilewati)
+    harap = []
+    for s in ref_seksi:
+        if s['jenis'] in sisa_lewat:
+            sisa_lewat.remove(s['jenis'])
+            continue
+        harap.append(s)
+    a = [s['jenis'] for s in harap]
+    b = [s['jenis'] for s in situs_seksi]
+    if not a:
+        return []
+    sama, pasangan = lcs(a, b)
+    hilang = [a[i] for i in range(len(a)) if i not in {p[0] for p in pasangan}]
+    n.cek(awalan + 'susunan_seksi', bobot_urut, None, b, a, skor=sama / len(a))
+    rinci = []
+    for i, j in pasangan:
+        skor, beda = banding_butir(harap[i], situs_seksi[j])
+        rinci.append({'jenis': a[i], 'urutan_ref': i + 1, 'urutan_situs': j + 1, 'skor': round(100 * skor), 'beda': beda})
+    if rinci:
+        n.cek(awalan + 'rincian_seksi', bobot_rinci, None, [f"{x['jenis']}={x['skor']}" for x in rinci], 100,
+              skor=sum(x['skor'] for x in rinci) / (100 * len(rinci)))
+    if hilang:
+        n.item[-1 if not rinci else -2].setdefault('hilang', hilang)
+    tambahan = [x for x in b if x not in a and x not in SEKSI_PELENGKAP]
+    if tambahan:
+        n.item[-1].setdefault('tambahan', tambahan)
+    return rinci
+
+
+def banding_beranda(ref, ukur, dilewati):
+    n = Nilai('beranda')
+    if not ukur.get('seksi'):
+        n.cek('beranda_terbaca', 10, False, 'kosong', 'ada')
+        return n, []
+    situs, _ = rd.susun_seksi(rd.bersihkan_seksi(ukur['seksi']), jenis_dari=jenis_situs)
+    rinci = banding_susunan(n, ref.get('seksi') or [], situs, dilewati)
+    kr = sorted({t for s in ukur['seksi'] for t in s.get('kontras_rendah') or []})
+    n.cek('teks_terbaca', 3, not kr, kr[:8], [])
+    return n, rinci
+
+
+def banding_gaya(ref, ukur):
+    n = Nilai('gaya')
+    font = ukur.get('font') or {}
+    f = ref.get('font') or {}
+    boleh = lambda nama, google: nama if nama and (google or nama.lower() in rd.FONT_SISTEM) else ''
+    for kunci, nama in (('font_teks', boleh(f.get('teks'), f.get('teks_google'))),
+                        ('font_judul', boleh(f.get('judul'), f.get('judul_google')))):
+        if nama:
+            punya = font.get('teks' if kunci == 'font_teks' else 'judul') or ''
+            n.cek(kunci, 2, punya.lower() == nama.lower(), punya, nama)
+    t = ukur.get('tombol') or {}
+    r_tombol = (ref.get('tombol') or {}).get('radius')
+    if t and r_tombol is not None:
+        rt = t.get('radius') or 0
+        n.cek('sudut_tombol', 1, abs(rt - r_tombol) <= 4 or (rt >= 30 and r_tombol >= 30), rt, r_tombol)
+    if 'judul_kapital' in f:
+        n.cek('judul_kapital', 0.5, bool(font.get('judul_kapital')) == f['judul_kapital'],
+              bool(font.get('judul_kapital')), f['judul_kapital'])
+    return n
+
+
+def banding_halaman(nama, ref_hal, ukur):
+    n = Nilai(f'halaman_{nama}')
+    if ukur is None:
+        n.cek('halaman_ada', 5, False, 'tidak_ada', ref_hal.get('url'))
+        return n
+    situs = rd.rencana_halaman(ukur, jenis_dari=jenis_situs)
+    rb, sb = ref_hal['banner'], situs['banner']
+    n.cek('banner_ada', 1, sb['ada'] == rb['ada'], sb['ada'], rb['ada'])
+    if rb['ada'] and sb['ada']:
+        ks, kr = rd.kelompok_latar(sb['latar']), rd.kelompok_latar(rb['latar'])
+        n.cek('banner_latar', 1.5, ks == kr, sb['latar'], rb['latar'])
+        n.cek('banner_rata', 1, sb['rata'] == rb['rata'], sb['rata'], rb['rata'])
+        n.cek('breadcrumb', 0.5, sb['breadcrumb'] == rb['breadcrumb'], sb['breadcrumb'], rb['breadcrumb'])
+        n.cek('banner_tinggi', 0.5, sb['tinggi'] == rb['tinggi'], sb['tinggi'], rb['tinggi'])
+    if nama == 'kontak' and ref_hal.get('isi'):
+        n.cek('isi_kontak', 1, None, situs['isi'], ref_hal['isi'],
+              skor=len(set(situs['isi']) & set(ref_hal['isi'])) / len(ref_hal['isi']))
+        if ref_hal.get('form_peta_berdampingan'):
+            n.cek('form_peta_berdampingan', 1, situs['form_peta_berdampingan'], situs['form_peta_berdampingan'], True)
+    if ref_hal.get('seksi'):
+        banding_susunan(n, ref_hal['seksi'], situs['seksi'], [], bobot_urut=1.5, bobot_rinci=1.5)
+    kr = sorted({t for s in ukur.get('seksi') or [] for t in s.get('kontras_rendah') or []})
+    n.cek('teks_terbaca', 2, not kr, kr[:8], [])
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Pengukuran situs
+# ---------------------------------------------------------------------------
+
+def http(url):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=30) as r:
+            return r.status, r.read(400000).decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(400000).decode('utf-8', 'replace')
+    except Exception:
+        return 0, ''
+
+
+def ukur_situs(domain, halaman, folder, cookie):
+    """halaman: {nama: url} -> {nama: data ukur | None}."""
+    argumen = []
+    for nama, url in halaman.items():
+        (folder / f'situs-{nama}.json').unlink(missing_ok=True)
+        argumen += [url, str(folder / f'situs-{nama}.json'), str(folder / f'situs-{nama}.png')]
+    env = dict(os.environ)
+    if cookie:
+        env['VELOCITY_UKUR_COOKIE'] = json.dumps(cookie)
+    try:
+        subprocess.run(['node', str(HERE / 'referensi-desain.js')] + argumen, capture_output=True, text=True,
+                       timeout=180 + 90 * len(halaman), env=env)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    hasil = {}
+    for nama in halaman:
+        try:
+            hasil[nama] = json.loads((folder / f'situs-{nama}.json').read_text())
+        except (OSError, ValueError):
+            hasil[nama] = None
+    return hasil
+
+
+def cari_manifest(arg):
+    if Path(arg).is_file():
+        return Path(arg)
+    calon = ROOT / arg / f'{arg}.txt'
+    return calon if calon.is_file() else None
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print('usage: fse-audit-kemiripan <manifest|domain> [--json] [--ambang=80]', file=sys.stderr)
+        return 2
+    ambang = next((int(a.split('=', 1)[1]) for a in sys.argv[1:] if a.startswith('--ambang=')), AMBANG)
+    manifest = cari_manifest(args[0])
+    fa = muat('fse_apply', HERE / 'fse-apply')
+    cfg = fa.read_manifest(manifest) if manifest else {'domain': args[0]}
+    domain = cfg['domain'].lower()
+    folder_rencana = fa.RENCANA_DIR / domain
+    try:
+        ref = json.loads((folder_rencana / 'desain-referensi.json').read_text())
+    except (OSError, ValueError):
+        print('kemiripan: tidak_ada_referensi (tidak ada yang dibandingkan)')
+        return 0
+    if (ref.get('versi') or 0) < rd.VERSI:
+        # Rencana lama belum memuat detail header/footer/halaman dalam: ukur ulang referensinya.
+        baru, status = rd.periksa(domain)
+        if baru:
+            ref = baru
+            print(f'kemiripan: referensi_diukur_ulang ({status})')
+    try:
+        gaya = json.loads((folder_rencana / 'referensi.json').read_text()).get('gaya', '')
+    except (OSError, ValueError):
+        gaya = ''
+    try:
+        dilewati = json.loads((folder_rencana / 'beranda-dilewati.json').read_text())
+    except (OSError, ValueError):
+        dilewati = []
+
+    home = f'https://{domain}/'
+    kode, badan = http(home)
+    if kode == 0:
+        print('kemiripan: gagal:situs_tidak_terjangkau')
+        return 2
+    cookie, sesi, situs = None, None, None
+    if 'maintenance-shell' in badan:
+        try:
+            situs = fa.Situs(cfg)
+            sesi = situs.php(PHP_COOKIE)
+            if sesi.get('nilai'):
+                cookie = [{'name': sesi['nama'], 'value': sesi['nilai'], 'domain': sesi['host'], 'path': '/',
+                           'secure': True, 'httpOnly': True, 'expires': sesi['exp']}]
+        except Exception as e:
+            print(f'kemiripan: gagal:maintenance_tanpa_akses:{type(e).__name__}')
+            return 2
+
+    halaman = {'beranda': home}
+    for nama, pola, slug in rd.HALAMAN_DALAM:
+        if nama in (ref.get('halaman') or {}):
+            # Toko online: katalog di arsip VD Store /produk/ (bukan halaman).
+            halaman[nama] = f'{home}{slug}/'
+    folder = folder_rencana / 'audit'
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        # Halaman yang tidak ada (404) tidak diukur: dicatat "tidak_ada".
+        ada = {n: u for n, u in halaman.items() if n == 'beranda' or cookie or http(u)[0] == 200}
+        ukur = ukur_situs(domain, ada, folder, cookie)
+    finally:
+        if sesi and sesi.get('token'):
+            try:
+                situs.php(PHP_HAPUS_TOKEN, {'id': sesi['id'], 'token': sesi['token']})
+            except Exception:
+                print('kemiripan: token_sesi_pemeriksa_tidak_terhapus (kedaluwarsa sendiri 15 menit)')
+    utama = ukur.get('beranda')
+    if not utama:
+        print('kemiripan: gagal:beranda_tidak_terukur')
+        return 2
+    if 'maintenance-shell' in (utama.get('seksi') or [{}])[0].get('kelas', ''):
+        print('kemiripan: gagal:masih_halaman_maintenance')
+        return 2
+
+    bagian = [banding_header(ref['header'], utama)]
+    # Portal berita gaya sorotan punya header & footer sendiri yang sudah disepakati.
+    if gaya == 'sorotan':
+        bagian = []
+    bagian.append(banding_footer(ref['footer'], utama) if gaya != 'sorotan' else Nilai('footer'))
+    nilai_beranda, rinci = (banding_beranda(ref, utama, dilewati) if gaya == 'referensi'
+                            else (Nilai('beranda'), []))
+    if gaya not in ('referensi', ''):
+        # Susunan beranda dipilih lewat manifest (dealer/klinik/katalog/berita): hanya
+        # header, footer, dan gaya yang dibandingkan dengan referensi.
+        nilai_beranda.cek('susunan_dari_manifest', 0, True, gaya, 'referensi')
+    bagian.append(nilai_beranda)
+    bagian.append(banding_gaya(ref, utama))
+    temuan = []
+    for nama, ref_hal in (ref.get('halaman') or {}).items():
+        bagian.append(banding_halaman(nama, ref_hal, ukur.get(nama) if nama in ukur else None))
+    # Header & footer harus sama di semua halaman (template part yang sama).
+    for nama, data in ukur.items():
+        if nama == 'beranda' or not data:
+            continue
+        fu, fd = utama.get('footer') or {}, data.get('footer') or {}
+        if bool(fu.get('gelap')) != bool(fd.get('gelap')) or fu.get('kolom') != fd.get('kolom'):
+            temuan.append(f'footer_beda_antar_halaman:{nama}')
+            next(b for b in bagian if b.nama == 'footer').cek(f'sama_di_{nama}', 2, False,
+                                                                f"{'gelap' if fd.get('gelap') else 'terang'}/{fd.get('kolom')}k",
+                                                                f"{'gelap' if fu.get('gelap') else 'terang'}/{fu.get('kolom')}k")
+        hu, hd = utama.get('header') or {}, data.get('header') or {}
+        if bool(hu.get('gelap')) != bool(hd.get('gelap')) or hu.get('menu_posisi') != hd.get('menu_posisi'):
+            temuan.append(f'header_beda_antar_halaman:{nama}')
+            if bagian[0].nama == 'header':
+                bagian[0].cek(f'sama_di_{nama}', 2, False, hd.get('menu_posisi'), hu.get('menu_posisi'))
+
+    skor = {b.nama: b.skor() for b in bagian}
+    belum = [b.nama for b in bagian
+             if b.skor() < (AMBANG_HALAMAN if b.nama.startswith('halaman_') else ambang)]
+    hasil = {
+        'domain': domain, 'waktu': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'referensi': ref.get('url'), 'gaya': gaya,
+        'sesuai': not belum, 'belum_mirip': belum, 'skor': skor, 'temuan': temuan,
+        'bagian': {b.nama: {'skor': b.skor(), 'cek': b.item} for b in bagian},
+        'seksi_beranda': rinci, 'seksi_dilewati_tanpa_data': dilewati,
+        'potret': str(folder), 'maintenance': bool(cookie),
+        # Putaran generate ke berapa (installer-runner audit_kemiripan), dipakai laporan Telegram.
+        'percobaan': int(os.environ.get('VELOCITY_KEMIRIPAN_PERCOBAAN') or 1),
+    }
+    (folder_rencana / 'audit-kemiripan.json').write_text(json.dumps(hasil, ensure_ascii=False, indent=1))
+    if '--json' in sys.argv:
+        print(json.dumps(hasil, ensure_ascii=False))
+    print('kemiripan: ' + ' '.join(f'{k}={v}' for k, v in skor.items()) + f" (referensi {ref.get('url')})")
+    for b in bagian:
+        for i in b.beda():
+            tambahan = ''.join(f" {k}={','.join(map(str, i[k]))}" for k in ('hilang', 'tambahan') if i.get(k))
+            print(f"kemiripan: beda {b.nama}.{i['kunci']}: situs={i['situs']} referensi={i['referensi']}{tambahan}")
+    for r in rinci:
+        if r['beda']:
+            print(f"kemiripan: seksi {r['urutan_situs']}.{r['jenis']} ({r['skor']}): {', '.join(r['beda'])}")
+    if dilewati:
+        print(f"kemiripan: seksi_dilewati_tanpa_data={','.join(dilewati)} (tidak dihitung)")
+    for t in temuan:
+        print(f'kemiripan: temuan {t}')
+    print(f"kemiripan: {'sesuai' if not belum else 'belum_mirip:' + ','.join(belum)} potret={folder}")
+    return 0 if not belum else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
