@@ -24,10 +24,14 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
+import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 import zlib
@@ -49,6 +53,12 @@ HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
 LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
+# Rilis repo GitHub privat (mis. velocity-pakete) dibalas 404 tanpa login; unduhannya
+# diulang lewat API aset GitHub memakai token organisasi ini.
+GITHUB_TOKEN_FILE = Path(os.environ.get('WP_INSTALL_GITHUB_TOKEN_FILE')
+                         or '/etc/velocity/secrets/github_token')
+GITHUB_RILIS_RE = re.compile(
+    r'^https://github\.com/([\w.-]+)/([\w.-]+)/releases/download/([^/]+)/([^/?#]+)$')
 # Paket yang desainnya custom per project: child theme-nya digenerate, bukan
 # dicocokkan ke API. norm() dipakai supaya "Paket G" / "paket g" sama saja.
 # Paket desain custom: child theme digenerate bernama project. Portal Berita Custom
@@ -123,6 +133,39 @@ def theme_keys(theme):
     return {norm(re.sub(r'^velocity-|-child$', '', slug)), norm(name)} - {''}
 
 
+def token_github():
+    try:
+        return GITHUB_TOKEN_FILE.read_text().strip()
+    except OSError:
+        return ''
+
+
+def github_api(url, token, accept):
+    req = urllib.request.Request(url, headers=dict(UA, Accept=accept))
+    # Unredirected: unduhan aset dialihkan ke penyimpanan GitHub yang menolak header
+    # Authorization, jadi token hanya dikirim ke api.github.com.
+    req.add_unredirected_header('Authorization', f'Bearer {token}')
+    return urllib.request.urlopen(req, timeout=120)
+
+
+def buka_unduhan(url):
+    """Buka link zip tema. Rilis GitHub yang 404 (repo privat) diulang lewat API pakai token."""
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120)
+    except urllib.error.HTTPError as e:
+        rilis = GITHUB_RILIS_RE.match(url)
+        token = token_github()
+        if e.code != 404 or not rilis or not token:
+            raise
+    pemilik, repo, tag, nama = rilis.groups()
+    with github_api(f'https://api.github.com/repos/{pemilik}/{repo}/releases/tags/{tag}',
+                    token, 'application/vnd.github+json') as resp:
+        aset = next((a for a in json.load(resp).get('assets') or [] if a.get('name') == nama), None)
+    if not aset:
+        raise ValueError(f'aset {nama} tidak ada di rilis {repo} {tag}')
+    return github_api(aset['url'], token, 'application/octet-stream')
+
+
 def zip_tembolok(slug):
     """Zip tema yang pernah diunduh, versi terbaru (mtime). Kosong = belum pernah."""
     if not CACHE.is_dir():
@@ -141,8 +184,7 @@ def download(theme):
     if dest.is_file():
         return dest
     tmp = dest.with_suffix('.tmp')
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as resp, \
-            open(tmp, 'wb') as out:
+    with buka_unduhan(url) as resp, open(tmp, 'wb') as out:
         shutil.copyfileobj(resp, out)
     try:
         with zipfile.ZipFile(tmp) as z:
