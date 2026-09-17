@@ -68,6 +68,7 @@ AI_PERAN = (
     ('isi_contoh', 'Isi contoh desain: layanan, produk, warna', 'paket-g-konten'),
     ('foto', 'Pemilihan foto contoh', 'paket-g-foto'),
     ('fse', 'FSE builder: gaya beranda dari referensi', 'fse-apply'),
+    ('tema', 'Adaptor beranda child theme: AI membaca file tema', 'tema-klasik'),
 )
 AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
 AI_GENERATED = AI_CONFIG_DIR / 'generated'

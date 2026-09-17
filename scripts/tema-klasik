@@ -246,6 +246,17 @@ def susun(domain, cfg, isi, kontak):
         'footer_statistik': ('Statistik Pengunjung', '[velocity-statistics style="list"]'),
     }
     widget = {k: v for k, v in widget.items() if v}
+    # Tema tanpa template beranda / tanpa adaptor: kartu layanan + ajakan ditambahkan ke isi halaman Beranda.
+    beranda_blok = ''
+    if layanan:
+        beranda_blok = (f'<h2>{e(js.get("layanan") or "Layanan Kami")}</h2>\n<div class="vk-kartu-grid">'
+                        + ''.join(f'<div class="vk-kartu"><h3>{e(l["judul"])}</h3><p>{e(pendek(l.get("teks"), 140))}</p>'
+                                  f'<p><a href="/layanan/#{e(l["slug"])}">Selengkapnya</a></p></div>' for l in layanan)
+                        + '</div>')
+    beranda_blok += (f'\n<p class="vk-ajakan">Hubungi {e(nama)} untuk informasi dan pemesanan: '
+                     f'<a href="/hubungi-kami/">Hubungi Kami</a>'
+                     + (f' atau <a href="https://wa.me/{kontak["wa"]}" target="_blank" rel="noopener">WhatsApp</a>' if kontak['wa'] else '')
+                     + '.</p>')
     mods = {
         'velocity-pakete': {
             'banner_image': '{{url:hero}}',
@@ -284,7 +295,7 @@ def susun(domain, cfg, isi, kontak):
                                  'title_homelogo': 'Klien Kami', 'logo_repeater': []},
     }
     return {
-        'domain': domain, 'nama': nama, 'bawaan': bawaan,
+        'domain': domain, 'nama': nama, 'bawaan': bawaan, 'beranda_blok': beranda_blok,
         'halaman_layanan': halaman_layanan,
         'blok_kontak': blok_kontak,
         'widget': widget,
@@ -312,6 +323,9 @@ ul.vk-sosmed>li::before{content:none!important}
 .vk-layanan:last-of-type{border-bottom:0}
 .vk-ajakan{margin-top:1rem;padding:.75rem 1rem;background:var(--bs-light,#f5f7fb);border-radius:var(--bs-border-radius)}
 .vk-poin{padding-left:1.1rem}
+.vk-kartu-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:.75rem 0 1.25rem}
+.vk-kartu-grid .vk-kartu{margin:0}
+.vk-kartu h3{font-size:1rem;margin:0 0 .4rem}
 .gallery{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:1rem 0!important}
 .gallery .gallery-item{float:none!important;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}
 .gallery .gallery-item img{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border:0!important;border-radius:var(--bs-border-radius)}
@@ -370,6 +384,8 @@ echo 'tampilan: media=' . count($media) . ' baru=' . ($baru_media ?? 0) . "\n";
 $ganti = function ($v) use (&$ganti, $media) {
     if (is_array($v)) { return array_map($ganti, $v); }
     if (!is_string($v)) { return $v; }
+    if ($v === '{{id:logo}}') { return (int) get_theme_mod('custom_logo'); }
+    if ($v === '{{url:logo}}') { return (string) wp_get_attachment_url((int) get_theme_mod('custom_logo')); }
     if (preg_match('/^\{\{id:([a-z0-9-]+)\}\}$/', $v, $m)) { return $media[$m[1]] ?? 0; }
     if (preg_match('/^\{\{url:([a-z0-9-]+)\}\}$/', $v, $m)) { return isset($media[$m[1]]) ? wp_get_attachment_url($media[$m[1]]) : ''; }
     if (strpos($v, '/') === 0 && strpos($v, '//') !== 0) { return home_url($v); }
@@ -407,9 +423,16 @@ if ($d['halaman_layanan'] !== '') {
 $depan = (int) get_option('page_on_front');
 if (isset($d['mods'][$tema]) && $depan) {
     $tpl = get_post_meta($depan, '_wp_page_template', true);
+    echo 'tampilan: beranda_slug=' . get_post_field('post_name', $depan) . "\n";
     $file = '';
-    foreach (glob(get_stylesheet_directory() . '/*.php') as $f) {
-        if (preg_match('/Template Name:\s*Home Template/i', (string) file_get_contents($f, false, null, 0, 600))) { $file = basename($f); break; }
+    if (array_key_exists($tema, $d['template'] ?? [])) {
+        // Adaptor AI menyebut templatenya sendiri ('' = beranda tema tidak memakai template halaman).
+        $file = (string) $d['template'][$tema];
+        if ($file !== '' && !is_file(get_stylesheet_directory() . '/' . $file)) { $file = ''; }
+    } else {
+        foreach (glob(get_stylesheet_directory() . '/*.php') as $f) {
+            if (preg_match('/Template Name:\s*Home Template/i', (string) file_get_contents($f, false, null, 0, 600))) { $file = basename($f); break; }
+        }
     }
     if ($file && in_array($tpl, ['', 'default', $file], true)) {
         update_post_meta($depan, '_wp_page_template', $file); echo "tampilan: template_beranda:$file\n";
@@ -422,6 +445,10 @@ if (isset($d['mods'][$tema]) && $depan) {
                             ARRAY_FILTER_USE_BOTH);
     $sidik_kini = md5(wp_json_encode($kini));
     if ($kosong || ($st['mods'][$tema] ?? '') === $sidik_kini) {
+        if (!empty($d['cadangan']) && empty($st['cadangan'][$tema])) {
+            // Keadaan sebelum adaptor AI pertama kali menulis: dipulihkan kalau beranda gagal diperiksa.
+            $st['cadangan'][$tema] = ['mods' => $kini, 'tpl' => $tpl];
+        }
         foreach ($mods as $k => $v) { set_theme_mod($k, $v); }
         $baca = []; foreach (array_keys($mods) as $k) { $baca[$k] = get_theme_mod($k, null); }
         $st['mods'][$tema] = md5(wp_json_encode($baca));
@@ -429,6 +456,18 @@ if (isset($d['mods'][$tema]) && $depan) {
     } else { echo "tampilan: beranda_dibiarkan:pengaturan_tema_disunting\n"; }
 } else {
     echo "tampilan: beranda_tema_belum_didukung:$tema\n";
+}
+$tanpa_template = !isset($d['mods'][$tema]) || (array_key_exists($tema, $d['template'] ?? []) && (string) $d['template'][$tema] === '');
+if ($depan && $tanpa_template && $d['beranda_blok'] !== '') {
+    if (!$milik_installer($depan)) { echo "tampilan: beranda_blok_dibiarkan:disunting\n"; }
+    else {
+        $isi_b = get_post_field('post_content', $depan);
+        $blok_b = "<!-- velocity-beranda -->\n" . $d['beranda_blok'] . "\n<!-- /velocity-beranda -->";
+        $baru_b = strpos($isi_b, '<!-- velocity-beranda -->') !== false
+            ? preg_replace('#<!-- velocity-beranda -->.*?<!-- /velocity-beranda -->#s', str_replace('$', '\\$', $blok_b), $isi_b)
+            : rtrim($isi_b) . "\n" . $blok_b;
+        if ($baru_b !== $isi_b) { wp_update_post(['ID' => $depan, 'post_content' => $baru_b]); $tandai($depan); echo "tampilan: beranda_blok_ditulis\n"; }
+    }
 }
 
 // 4. Blok kontak di Hubungi Kami
@@ -524,6 +563,25 @@ if (empty($st['statistik'])) {
 $st['diperbarui'] = gmdate('c');
 update_option('velocity_tampilan_klasik', $st, false);
 echo "tampilan: selesai\n";
+'''
+
+
+KEMBALIKAN_PHP = r'''<?php
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+$st = get_option('velocity_tampilan_klasik', []);
+$t = (string) ($d['tema'] ?? '');
+$c = $st['cadangan'][$t] ?? null;
+if (!$t || !is_array($c) || get_stylesheet() !== $t) { echo "kembalikan: tidak_ada_cadangan\n"; return; }
+foreach ((array) $c['mods'] as $k => $v) { if ($v === null) { remove_theme_mod($k); } else { set_theme_mod($k, $v); } }
+$depan = (int) get_option('page_on_front');
+if ($depan) {
+    if ((string) $c['tpl'] === '') { delete_post_meta($depan, '_wp_page_template'); }
+    else { update_post_meta($depan, '_wp_page_template', $c['tpl']); }
+}
+unset($st['mods'][$t], $st['cadangan'][$t]);
+update_option('velocity_tampilan_klasik', $st, false);
+echo "kembalikan: selesai\n";
 '''
 
 
@@ -630,6 +688,68 @@ def foto_artikel(manifest, cfg, domain):
     return 0 if keluar and 'diisi' in keluar else 1
 
 
+def konteks_adaptor(cfg, domain, isi, kontak):
+    """Data untuk penanda adaptor AI (lihat adaptor_tema.PENANDA)."""
+    nama = cfg.get('site_title') or domain
+    js = isi.get('judul_seksi') or {}
+    return {
+        'teks': {
+            'nama': nama, 'slogan': isi.get('slogan') or '',
+            'hero_judul': pendek(isi.get('hero_judul') or nama, 60),
+            'hero_teks': pendek(isi.get('hero_teks'), 260), 'hero_teks_pendek': pendek(isi.get('hero_teks'), 130),
+            'profil': isi.get('profil') or isi.get('hero_teks') or '',
+            'tentang_judul': js.get('tentang') or f'Tentang {nama}',
+            'layanan_judul': js.get('layanan') or 'Layanan Kami', 'layanan_sub': js.get('layanan_sub') or '',
+            'keunggulan_judul': js.get('keunggulan') or 'Keunggulan Kami',
+            # Telepon dikosongkan di data kontak kalau sama dengan WhatsApp; kolom telepon tema tetap diisi.
+            'telp': kontak['telp'] or kontak['wa_tampil'], 'wa': kontak['wa'], 'wa_tampil': kontak['wa_tampil'],
+            'wa_link': f"https://wa.me/{kontak['wa']}" if kontak['wa'] else '',
+            'email': kontak['email'], 'alamat': kontak['alamat'],
+            'link_kontak': '/hubungi-kami/', 'link_layanan': '/layanan/', 'link_berita': '/berita/',
+        },
+        'daftar': {
+            'layanan': [{'slug': l['slug'], 'judul': l['judul'], 'teks': l.get('teks') or '',
+                         'teks_pendek': pendek(l.get('teks'), 110), 'rincian': ', '.join(l.get('rincian') or []),
+                         'link': f"/layanan/#{l['slug']}"} for l in isi.get('layanan') or [] if l.get('judul')],
+            'keunggulan': [{'judul': k['judul'], 'teks': k.get('teks') or ''}
+                           for k in isi.get('keunggulan') or [] if k.get('judul')],
+        },
+    }
+
+
+def adaptor_ai(manifest, at, info):
+    """Adaptor tersimpan untuk tema+versi ini, atau minta AI membacanya dari file tema."""
+    catatan = at.muat_adaptor(info) or {}
+    if catatan.get('status') in ('terverifikasi', 'belum_diperiksa') and catatan.get('adaptor'):
+        print(f"tampilan: adaptor_ai_tersimpan:{catatan['status']}")
+        return catatan
+    if catatan.get('status') == 'gagal' and int(catatan.get('percobaan') or 0) >= 3:
+        print(f"tampilan: adaptor_ai_menyerah:{catatan.get('alasan')}")
+        return None
+    argv_lama = sys.argv
+    sys.argv = [argv_lama[0], str(manifest)]
+    try:
+        gen = muat('acg_tema', HERE / 'ai-content-generator.py')
+    finally:
+        sys.argv = argv_lama
+    model = gen.get_model('tema')
+    if not model:
+        print('tampilan: adaptor_ai_tanpa_model')
+        return None
+    print(f"tampilan: adaptor_ai_membaca_tema:{info['tema']} {info.get('versi')} ({len(info['file'])} file)")
+    adaptor = at.minta_ai(gen, model, info, catatan.get('alasan', '') if catatan.get('status') == 'gagal' else '')
+    if not adaptor:
+        at.simpan_adaptor(info, {**catatan, 'status': 'gagal', 'alasan': 'ai_tidak_menghasilkan_adaptor_valid',
+                                 'percobaan': int(catatan.get('percobaan') or 0) + 1})
+        print('tampilan: adaptor_ai_gagal_dibuat')
+        return None
+    catatan = {'tema': info['tema'], 'versi': info.get('versi'), 'status': 'belum_diperiksa', 'adaptor': adaptor,
+               'percobaan': int(catatan.get('percobaan') or 0) + 1, 'model': model.get('id')}
+    at.simpan_adaptor(info, catatan)
+    print(f"tampilan: adaptor_ai_dibuat: template={adaptor.get('template')} mods={','.join(adaptor['mods'])}")
+    return catatan
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     coba = '--coba' in sys.argv
@@ -667,6 +787,29 @@ def main():
     print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
           f"email={'publik' if kontak['email'] else 'tidak_ada'}")
     data = susun(domain, cfg, isi, kontak)
+    data['template'] = {}
+
+    # Tema aktif dibaca dari server: adaptor buatan tangan dulu, AI untuk tema yang belum dikenal.
+    sys.path.insert(0, str(HERE))
+    import adaptor_tema as at
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    finish = muat('site_finish', HERE / 'site-finish')
+    info, catatan_ai, ctx = None, None, konteks_adaptor(cfg, domain, isi, kontak)
+    if key and Path(key).is_file():
+        try:
+            info = at.baca_tema(finish.ssh_command(cfg, key), finish.docroot(domain, cfg.get('da_user', '')), cfg.get('da_user', ''))
+        except Exception as e:
+            print(f'tampilan: baca_tema_gagal:{e}')
+    tema = (info or {}).get('tema', '')
+    paksa_ai = '--paksa-ai' in sys.argv
+    if info and tema not in at.BUKAN_ANAK and (tema not in data['mods'] or paksa_ai):
+        catatan_ai = adaptor_ai(manifest, at, info)
+        if catatan_ai:
+            ad = catatan_ai['adaptor']
+            data['mods'][tema] = at.isi_nilai(ad['mods'], ctx)
+            data['bawaan'][tema] = ad.get('bawaan') or {}
+            data['template'][tema] = ad.get('template') or ''
+            data['cadangan'] = True
 
     # Gambar: foto klien dulu, lalu foto contoh bank foto, lalu banner polos.
     kerja = Path(tempfile.mkdtemp(prefix=f'tema-klasik-{domain}-'))
@@ -729,12 +872,25 @@ def main():
     (kerja / 'data.json').write_text(json.dumps(data, ensure_ascii=False))
     print(f"tampilan: siap aset={','.join(sorted(aset))} layanan={len(layanan)} folder={kerja}")
     if coba:
+        (kerja / 'mods.json').write_text(json.dumps(data['mods'].get(tema), indent=1, ensure_ascii=False))
         return 0
-
     keluar = kirim(cfg, kerja, REMOTE_PHP, domain)
     if not keluar or 'tampilan: selesai' not in keluar:
         print('tampilan: gagal')
         return 1
+    if catatan_ai and 'tampilan: beranda_diisi' in keluar:
+        slug = (re.search(r'tampilan: beranda_slug=(\S*)', keluar) or [None, ''])[1]
+        lulus, alasan = at.periksa_beranda(domain, slug, ctx, catatan_ai['adaptor'])
+        if lulus:
+            at.simpan_adaptor(info, {**catatan_ai, 'status': 'terverifikasi', 'alasan': ''})
+            print('tampilan: adaptor_ai_terverifikasi')
+        else:
+            print(f'tampilan: adaptor_ai_gagal_diperiksa:{alasan}')
+            (kerja / 'data.json').write_text(json.dumps({'tema': tema}))
+            for f in kerja.glob('*.jpg'):
+                f.unlink()
+            kirim(cfg, kerja, KEMBALIKAN_PHP, domain)
+            at.simpan_adaptor(info, {**catatan_ai, 'status': 'gagal', 'alasan': alasan})
     return 0
 
 
