@@ -1,0 +1,10 @@
+[Unit]
+Description=Cek masa berlaku token GitHub installer tiap pagi
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Jakarta
+Persistent=true
+Unit=velocity-token-github.service
+
+[Install]
+WantedBy=timers.target

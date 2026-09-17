@@ -498,11 +498,18 @@ Mode di `/etc/velocity/installer-autopilot.env`: `AUTOPILOT_MODE=observe` (defau
 
 Selalu `rclone copy` (tidak pernah menghapus file lokal).
 
+## Token GitHub & pengingat kedaluwarsa (`scripts/cek-token-github`)
+
+Token organisasi di `/etc/velocity/secrets/github_token` (600) dipakai dua hal: `velocity-child-theme` (rilis repo privat seperti `velocity-pakete` dibalas 404 tanpa login, lalu diulang lewat API aset GitHub) dan git repo ini (credential helper; URL remote tanpa token). Mengganti token cukup menimpa file itu.
+
+`velocity-token-github.timer` tiap 09:00 WIB membaca tanggal kedaluwarsa dari header GitHub dan mengirim pengingat Telegram (tujuan sama dengan notifikasi installer) setiap hari mulai `GITHUB_TOKEN_BATAS_HARI` (bawaan 7) hari sebelum kedaluwarsa, atau langsung bila token ditolak/hilang. GitHub yang tak terjangkau tidak memicu pesan. `scripts/cek-token-github --cetak` menampilkan pesan tanpa mengirim.
+
 ## Pasang unit systemd
 
 ```bash
 install -m 644 config/onprogress-sync@.service config/onprogress-sync-queue.timer \
-  config/installer-autopilot.service config/installer-autopilot.timer /etc/systemd/system/
+  config/installer-autopilot.service config/installer-autopilot.timer \
+  config/velocity-token-github.service config/velocity-token-github.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now onprogress-sync-queue.timer installer-autopilot.timer
+systemctl enable --now onprogress-sync-queue.timer installer-autopilot.timer velocity-token-github.timer
 ```

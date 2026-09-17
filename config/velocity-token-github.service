@@ -1,0 +1,9 @@
+[Unit]
+Description=Pengingat Telegram token GitHub installer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -u /opt/velocity-wp-install-automation/scripts/cek-token-github
+TimeoutStartSec=5min

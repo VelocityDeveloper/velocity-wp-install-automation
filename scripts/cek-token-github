@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Pengingat Telegram sebelum token GitHub installer kedaluwarsa.
+
+Pemakaian: cek-token-github [--cetak]   (--cetak: tampilkan pesan, jangan kirim)
+
+Dijalankan velocity-token-github.timer tiap pagi. Token di
+/etc/velocity/secrets/github_token dipakai installer (child theme dari repo privat,
+mis. velocity-pakete) dan git repo automation. Tanggal kedaluwarsa dibaca langsung
+dari header GitHub, jadi token pengganti ikut terpantau tanpa mengubah apa pun:
+  sisa > BATAS_HARI      -> diam
+  sisa <= BATAS_HARI     -> kirim pengingat (tiap hari sampai token diganti)
+  token ditolak / hilang -> kirim peringatan
+Exit code: 0 aman/terkirim, 1 pengiriman gagal.
+"""
+import datetime
+import importlib.machinery
+import importlib.util
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+TOKEN_FILE = Path(os.environ.get('WP_INSTALL_GITHUB_TOKEN_FILE') or '/etc/velocity/secrets/github_token')
+BATAS_HARI = int(os.environ.get('GITHUB_TOKEN_BATAS_HARI', '7'))
+WIB = datetime.timezone(datetime.timedelta(hours=7))
+DAMPAK = ('Dampak kalau tidak diganti: child theme dari repo privat (Paket E / velocity-pakete) '
+          'gagal diunduh sehingga situs jatuh ke tema induk, dan git push repo automation ditolak.')
+CARA = ('Cara ganti: buat token baru di GitHub (izin <code>repo</code>), lalu timpa isi '
+        '<code>/etc/velocity/secrets/github_token</code> di server installer. Tidak ada tempat lain yang perlu diubah.')
+
+
+def cek_token():
+    """-> (status, kedaluwarsa|None). status: ok | ditolak | hilang | gagal:<alasan>"""
+    try:
+        token = TOKEN_FILE.read_text().strip()
+    except OSError:
+        token = ''
+    if not token:
+        return 'hilang', None
+    req = urllib.request.Request('https://api.github.com/rate_limit',
+                                 headers={'User-Agent': 'velocity-installer/1.0'})
+    req.add_unredirected_header('Authorization', f'Bearer {token}')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            teks = resp.headers.get('github-authentication-token-expiration') or ''
+    except urllib.error.HTTPError as e:
+        return ('ditolak' if e.code == 401 else f'gagal:HTTP {e.code}'), None
+    except OSError as e:
+        return f'gagal:{type(e).__name__}', None
+    if not teks:
+        return 'ok', None  # token tanpa tanggal kedaluwarsa
+    # Contoh: "2026-10-02 00:32:43 UTC"
+    return 'ok', datetime.datetime.strptime(teks.replace(' UTC', ''), '%Y-%m-%d %H:%M:%S') \
+        .replace(tzinfo=datetime.timezone.utc)
+
+
+def susun_pesan(status, kedaluwarsa, sekarang):
+    if status in ('ditolak', 'hilang'):
+        sebab = 'ditolak GitHub (sudah kedaluwarsa atau dicabut)' if status == 'ditolak' \
+            else 'tidak ada di server'
+        return f'🔴 <b>Token GitHub installer {sebab}</b>\n\n{DAMPAK}\n\n{CARA}'
+    if status != 'ok' or kedaluwarsa is None:
+        return None  # GitHub tak terjangkau atau token tanpa kedaluwarsa: jangan bikin ribut
+    # Dihitung per tanggal kalender WIB: pukul 09:00 tanggal 1, token yang mati tanggal 2
+    # pukul 07:32 itu "besok", walau sisa waktunya kurang dari 24 jam.
+    hari = (kedaluwarsa.astimezone(WIB).date() - sekarang.astimezone(WIB).date()).days
+    if hari > BATAS_HARI:
+        return None
+    waktu = kedaluwarsa.astimezone(WIB).strftime('%d-%m-%Y %H:%M WIB')
+    kapan = 'hari ini' if hari <= 0 else ('besok' if hari == 1 else f'{hari} hari lagi')
+    return (f'⚠️ <b>Token GitHub installer kedaluwarsa {kapan}</b>\n'
+            f'Berlaku sampai: {waktu}\n\n{DAMPAK}\n\n{CARA}')
+
+
+def main():
+    cetak = '--cetak' in sys.argv[1:]
+    status, kedaluwarsa = cek_token()
+    sekarang = datetime.datetime.now(datetime.timezone.utc)
+    ringkas = kedaluwarsa.astimezone(WIB).isoformat() if kedaluwarsa else '-'
+    print(f'token_github: status={status} kedaluwarsa={ringkas}')
+    pesan = susun_pesan(status, kedaluwarsa, sekarang)
+    if not pesan:
+        print('token_github: belum perlu pengingat')
+        return 0
+    if cetak:
+        print(pesan)
+        return 0
+    loader = importlib.machinery.SourceFileLoader('notify_telegram', str(HERE / 'notify-telegram.py'))
+    spec = importlib.util.spec_from_loader('notify_telegram', loader)
+    tg = importlib.util.module_from_spec(spec)
+    loader.exec_module(tg)
+    token, chats = tg.load_config()
+    if not token or not chats:
+        print('token_github: telegram belum diset', file=sys.stderr)
+        return 1
+    gagal = 0
+    for chat in chats:
+        try:
+            ok, _ = tg.send(token, chat, pesan)
+        except OSError as e:
+            ok = False
+            print(f'token_github: kirim gagal: {type(e).__name__}', file=sys.stderr)
+        gagal += 0 if ok else 1
+    print(f'token_github: pengingat terkirim ke {len(chats) - gagal}/{len(chats)} tujuan')
+    return 1 if gagal else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
