@@ -651,6 +651,10 @@ else
   child_val() { sed -n "s/^$1=//p" <<<"$child_out" | head -1; }
   child_status=$(child_val status)
   echo "child_theme:${child_status:-error}:$(child_val ref):$(child_val slug)" >&2
+  # Alasan kegagalan di baris sendiri: format child_theme:<status>:<ref>:<slug> dibaca
+  # notify-telegram & bagan proses, jadi tidak boleh ditambah kolom.
+  child_error=$(child_val error)
+  [[ -z "$child_error" ]] || echo "child_theme_error:$child_error" >&2
   if [[ "$child_status" == matched ]]; then
     CHILD_SLUG=$(child_val slug)
     CHILD_ZIP=$(child_val zip)
