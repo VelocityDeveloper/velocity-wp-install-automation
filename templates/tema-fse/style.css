@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.10.35
+Version: 1.10.36
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -1619,6 +1619,20 @@ body.vf-gaya-dealer iframe[title="Peta lokasi"] { border-radius: var(--vf-dealer
   max-width: 100%;
   margin-left: 0;
   margin-right: 0;
+}
+
+/* Video latar YouTube/Vimeo di blok cover (backgroundType embed-video) selalu menutupi cover.
+   Core WP 7.1 memberi iframe 100vw x 100vh, jadi video 16:9 hanya pas bila layar juga 16:9:
+   di HP 390px video tampil 390x219 di tengah hero setinggi 620px (xpengjakartaindonesia.com
+   2026-09-17). Ukuran dihitung dari cover sendiri lewat container query: sisi yang kurang
+   dilebarkan mengikuti rasio 16:9, kelebihannya terpotong overflow cover. */
+.wp-block-cover .wp-block-cover__embed-background { container-type: size; overflow: hidden; }
+.wp-block-cover .wp-block-cover__embed-background iframe {
+  width: max(100cqw, 177.78cqh) !important;
+  height: max(100cqh, 56.25cqw) !important;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
 }
 
 /* ---------- arsip tulisan & kategori situs dealer (templates/archive-dealer.html) ----------
