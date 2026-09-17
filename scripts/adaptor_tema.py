@@ -1,6 +1,6 @@
 """Adaptor beranda child theme klasik yang disusun AI dari file tema yang terpasang.
 
-Dipakai scripts/tema-klasik untuk tema yang belum punya adaptor buatan tangan (permintaan
+Dipakai scripts/theme-paket-biasa untuk tema yang belum punya adaptor buatan tangan (permintaan
 user 2026-09-17, "beri AI akses ke tema biar dia kerjakan sesuai file tema yang ada").
 
 Alur: file PHP child theme diambil dari server -> AI membaca kode beranda & pengaturan

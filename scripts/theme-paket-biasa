@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tampilan situs child theme klasik (paket non-custom) dari isi contoh & data klien.
 
-Pemakaian: tema-klasik <manifest> [--coba]      (butuh WP_INSTALL_SSH_KEY_FILE)
-           tema-klasik --foto-artikel <manifest>  foto utama artikel yang masih kosong sesudah
+Pemakaian: theme-paket-biasa <manifest> [--coba]      (butuh WP_INSTALL_SSH_KEY_FILE)
+           theme-paket-biasa --foto-artikel <manifest>  foto utama artikel yang masih kosong sesudah
                                                    paket-g-foto: foto klien bergilir, atau sampul
                                                    bertuliskan kategori bila klien tak punya foto
 
@@ -177,7 +177,7 @@ def foto_contoh(manifest, isi, slot):
         print(f'tampilan: foto_contoh_gagal:{type(e).__name__}')
         return {}
     hasil = {}
-    folder = Path(tempfile.mkdtemp(prefix='tema-klasik-foto-'))
+    folder = Path(tempfile.mkdtemp(prefix='theme-paket-biasa-foto-'))
     SEMENTARA.append(folder)
     for kunci, (r, _) in pilihan.items():
         berkas = folder / f'{kunci}.img'
@@ -346,7 +346,7 @@ ul.vk-sosmed>li::before{content:none!important}
 
 
 REMOTE_PHP = r'''<?php
-// Dijalankan tema-klasik lewat wp eval-file <file> <folder>.
+// Dijalankan theme-paket-biasa lewat wp eval-file <file> <folder>.
 $dir = rtrim($args[0] ?? '', '/');
 $d = json_decode(file_get_contents("$dir/data.json"), true);
 if (!$d) { echo "tampilan: data_tidak_terbaca\n"; return; }
@@ -658,7 +658,7 @@ def foto_artikel(manifest, cfg, domain):
         isi = {}
     nama = cfg.get('site_title') or domain
     warna = (isi.get('warna') or {}).get('utama')
-    kerja = Path(tempfile.mkdtemp(prefix=f'tema-klasik-foto-{domain}-'))
+    kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-foto-{domain}-'))
     SEMENTARA.append(kerja)
     aset, klien, sampul = {}, [], {}
     for i, (p, _, _) in enumerate(foto_klien(domain)[:8], 1):
@@ -754,7 +754,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     coba = '--coba' in sys.argv
     if len(args) != 1:
-        print('usage: tema-klasik [--foto-artikel] <manifest> [--coba]', file=sys.stderr)
+        print('usage: theme-paket-biasa [--foto-artikel] <manifest> [--coba]', file=sys.stderr)
         return 2
     manifest = Path(args[0])
     cfg = read_manifest(manifest)
@@ -812,7 +812,7 @@ def main():
             data['cadangan'] = True
 
     # Gambar: foto klien dulu, lalu foto contoh bank foto, lalu banner polos.
-    kerja = Path(tempfile.mkdtemp(prefix=f'tema-klasik-{domain}-'))
+    kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-{domain}-'))
     SEMENTARA.append(kerja)
     layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
     klien = foto_klien(domain)

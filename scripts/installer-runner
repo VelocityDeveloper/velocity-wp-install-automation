@@ -135,16 +135,16 @@ cek_tema_referensi() {
   done
 }
 # Paket biasa (child theme klasik): beranda dari template child theme, halaman Layanan, blok
-# kontak, widget sidebar/footer, CSS (scripts/tema-klasik), lalu foto utama artikel. Harus
+# kontak, widget sidebar/footer, CSS (scripts/theme-paket-biasa), lalu foto utama artikel. Harus
 # SESUDAH site-finish: finishing menulis halaman Hubungi Kami (peta) dan CSS warna.
 tampilan_klasik() {
   echo "[$(date -Is)] Tampilan tema klasik" >> "$LOG"
-  /usr/bin/python3 "$SCRIPTS/tema-klasik" "$MANIFEST" >> "$LOG" 2>&1 || true
+  /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" "$MANIFEST" >> "$LOG" 2>&1 || true
   if ! portal_berita; then
     echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
     # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
-    /usr/bin/python3 "$SCRIPTS/tema-klasik" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+    /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
 }
 paket_g_isi() {
@@ -177,7 +177,7 @@ paket_g_isi() {
   fi
   # Sisa artikel tanpa foto (Pexels & bank foto tak memberi yang layak / API gagal): foto klien
   # bergilir atau sampul kategori, sama seperti paket biasa — tiap artikel pasti berfoto utama.
-  /usr/bin/python3 "$SCRIPTS/tema-klasik" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+  /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Permintaan user 2026-09-17: pastikan desain yang dibuat mirip referensi yang diminta,

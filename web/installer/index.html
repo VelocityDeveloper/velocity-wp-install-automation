@@ -1233,7 +1233,7 @@
           mulai: /Paket custom: foto seksi klinik/, selesai: /klinik: foto_di_media=|klinik: data_tidak_ada/,
           ketHasil: t => { const m = t.match(/klinik: slot:/g); return m ? m.length + ' slot foto' : null; },
           aktif: c => dan(tanpaDry(c), c.custom, c.klinik) },
-        // Paket biasa: tampilan child theme klasik (scripts/tema-klasik) lalu foto utama artikel.
+        // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
         { id: 'tampilan', kol: 14, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget',
           mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
           ketHasil: t => (/tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
