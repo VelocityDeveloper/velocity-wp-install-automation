@@ -44,6 +44,28 @@ velocity_theme_repo=https://github.com/VelocityDeveloper/velocity-theme.git
 
 Validasi: `target_host`, `domain` (FQDN), `da_user/ssh_user` (linux user), `db_name/db_user` (alnum+_), `admin_email`, `ssh_port` 1-65535. Repos harus `https://...`.
 
+### Staging untuk klien berhosting di luar (`docroot=` + `site_url=`)
+
+Klien yang hostingnya bukan milik kita (domain "LUAR" di catatan PM) tidak bisa dipasangi
+installer di tempatnya. Pekerjaannya dikerjakan di staging `velocitydeveloper.co/<domain>`
+dengan dua kunci tambahan:
+
+```ini
+docroot=/home/vdco/domains/velocitydeveloper.co/public_html/example.com
+site_url=https://velocitydeveloper.co/example.com
+```
+
+- `website-install-from-manifest` memasang WordPress di `docroot` itu (bukan
+  `/home/<da_user>/domains/<domain>/public_html`), memakai `site_url` untuk `wp core install`,
+  dan menulis `.htaccess` dengan `RewriteBase /<subfolder>/`. Dry-run juga memeriksa folder
+  dan sertifikat SSL milik host staging.
+- `installer-runner` menurunkan `VELOCITY_LOKAL_DOCROOT`, `VELOCITY_LOKAL_SSH` (skrip
+  pembungkus ssh yang dibuat otomatis) dan `VELOCITY_LOKAL_URL` dari kedua kunci itu, jadi
+  `fse-apply`, `site-finish`, `site-audit`, `paket-g-foto`, `paket-g-cek-visual`,
+  `fse-audit-kemiripan` dan `ai-content-generator.py` bekerja di staging — bukan di situs
+  klien yang asli.
+- Tanpa kedua kunci itu perilakunya persis seperti sebelumnya.
+
 Database harus sudah ada. `apply` menginstall WordPress di `public_html` target, membuat `wp-config.php` (tanpa `--skip-check`), `wp core install` idempoten (skip jika sudah installed), dan install plugin/theme via `git clone` + `wp plugin/theme activate` (bukan `wp plugin install <git-url>`).
 
 ## Manual dry run
@@ -215,7 +237,7 @@ Keputusan user 2026-09-16: **kalau `paket=Paket E`, child theme-nya sudah pasti 
 
 ### Paket G: child theme dibuat otomatis bernama project (TIDAK DIPAKAI LAGI)
 
-> **Sejak 2026-09-15 paket custom (Paket G & Portal Berita Custom) hanya FSE** — keputusan user "kedepan pakai FSE saja". Installer tidak lagi merender child theme ataupun memasang tema induk `velocity` untuk paket ini (log `child_theme:skipped_fse::`, `tema_induk_dilewati:fse`); lihat [Tema FSE](#tema-fse-untuk-desain-custom-scriptsfse-apply-templatestema-fse). Bagian ini tinggal sebagai catatan situs lama yang child theme klasiknya masih aktif (jasakontraktorindo.com, ptmitraajegselaras.com) — installer melewatinya sampai manifest diberi `tema_desain=fse`. Pencocokan child theme dari API di atas tetap berlaku untuk paket lain.
+> **Sejak 2026-09-15 paket custom (Paket G & Portal Berita Custom) hanya FSE** — keputusan user "kedepan pakai FSE saja". Installer tidak lagi merender child theme ataupun memasang tema induk `velocity` untuk paket ini (log `child_theme:skipped_fse::`, `tema_induk_dilewati:fse`); lihat [Tema FSE](#tema-fse-untuk-desain-custom-scriptsfse-apply-templatestema-fse). Bagian ini tinggal sebagai catatan situs lama yang child theme klasiknya masih aktif (jasakontraktorindo.com) — installer melewatinya sampai manifest diberi `tema_desain=fse` (ptmitraajegselaras.com dipindah ke velocity-fse 2026-09-17). Pencocokan child theme dari API di atas tetap berlaku untuk paket lain.
 
 Paket G tidak memilih template — desainnya custom per project, jadi form klien tidak pernah memuat referensi dan dulu situsnya berhenti di tema induk. Sekarang installer membuat child theme kosong sendiri (`paket=Paket G` di manifest memicunya; dibaca dari CRM saat manifest dibuat).
 
@@ -617,7 +639,9 @@ Permintaan user 2026-09-17 (sedotwcsrirejeki.com, rmbrentcar.com): paket non-cus
 
 `paket-g-foto` menolak calon foto berupa kartun/satire/karikatur/politik, gambar teknik/peta/denah, dan arsip lawas (`bukan_foto`). Mode `child-theme` untuk paket biasa ikut menjalankan langkah 1–3. Uji tanpa SSH: `scripts/theme-paket-biasa <manifest> --coba`.
 
-**Adaptor beranda buatan AI** (`scripts/adaptor_tema.py`, permintaan user 2026-09-17): tema yang belum punya adaptor buatan tangan tidak lagi dilewati. `theme-paket-biasa` mengambil semua file PHP child theme yang TERPASANG di situs (satu koneksi SSH), memberikannya ke AI (fungsi `tema` di halaman `/ai/`), lalu AI menjawab adaptor JSON: template beranda, pengaturan (`mods`) berpenanda data klien (`{{hero_judul}}`, `{{id:hero}}`, perulangan `{"__untuk__": "layanan", ...}`), nilai bawaan tema, dan teks contoh tema untuk diperiksa. Kode memvalidasi (nama pengaturan harus ada di kode tema, template harus ada, penanda dikenal) dan merapikan bentuk perulangan yang lazim ditulis AI. Sesudah diterapkan, beranda dibuka lewat pratinjau: nama/judul & judul layanan harus tampil, teks contoh tema tidak boleh tampil. Gagal -> pengaturan & template lama dikembalikan (`velocity_tampilan_klasik.cadangan`), adaptor ditandai gagal dan dibuat ulang di run berikutnya dengan alasannya (maks 3 kali). Adaptor tersimpan per tema + versi + sidik file di `/var/lib/velocity/tampilan/_adaptor/`, status `belum_diperiksa` / `terverifikasi` / `gagal`. Uji: `theme-paket-biasa <manifest> --coba --paksa-ai` (paksa AI walau tema punya adaptor buatan tangan; `--coba` menulis `mods.json` tanpa menerapkan).
+**Adaptor beranda buatan AI** (`scripts/adaptor_tema.py`, permintaan user 2026-09-17): tema yang belum punya adaptor buatan tangan tidak lagi dilewati. `theme-paket-biasa` mengambil semua file PHP child theme yang TERPASANG di situs (satu koneksi SSH), memberikannya ke AI (fungsi `tema` di halaman `/ai/`), lalu AI menjawab adaptor JSON: template beranda, pengaturan (`mods`) berpenanda data klien (`{{hero_judul}}`, `{{id:hero}}`, perulangan `{"__untuk__": "layanan", ...}`), nilai bawaan tema, dan teks contoh tema untuk diperiksa. Kode memvalidasi (nama pengaturan harus ada di kode tema, template harus ada, penanda dikenal) dan merapikan bentuk perulangan yang lazim ditulis AI. Sesudah diterapkan, beranda dibuka lewat pratinjau: nama/judul & judul layanan harus tampil, teks contoh tema tidak boleh tampil. Gagal -> pengaturan & template lama dikembalikan (`velocity_tampilan_klasik.cadangan`), adaptor ditandai gagal dan dibuat ulang di run berikutnya dengan alasannya (maks 3 kali). Adaptor tersimpan per tema + versi + sidik file di `/var/lib/velocity/tampilan/_adaptor/`, status `belum_diperiksa` / `terverifikasi` / `gagal`. Uji: `theme-paket-biasa <manifest> --coba --paksa-ai` (paksa AI walau tema punya adaptor buatan tangan; `--coba` menulis `mods.json` tanpa menerapkan). Selain hero/tentang/layanan, adaptor punya foto pendamping `{{id:foto1}}`..`{{id:foto3}}` (gambar kecil banner) dan perulangan `{"__untuk__": "galeri"}` berisi hingga 8 foto klien (`galeri-<n>.jpg`); tanpa foto klien daftar galeri kosong.
+
+**Paket tour** (`scripts/paket-tour`, sadewatourstravel.com 2026-09-17): child theme tour (`velocity-tour1`) menampilkan "Paket Wisata" dari CPT `paket-tour` milik plugin `velocity-tour-travel` (repo `VelocityDeveloper/velocity-tour-travel`, tidak ada di API plugin). Sesudah `theme-paket-biasa`, bila file tema aktif menyebut `paket-tour`: plugin dipasang dari clone GitHub (tembolok `/var/lib/velocity/packages/plugins/`) & diaktifkan, AI menyalin paket dari dokumen klien (tabel harga per peserta, fasilitas, tidak termasuk, rundown) ke `/var/lib/velocity/ai/generated/<domain>-paket-tour.json`, lalu tiap paket jadi post `paket-tour` (meta harga mulai/durasi/lokasi/itinerary/fasilitas/galeri, taksonomi kategori/destinasi/durasi, foto klien bergilir), `no_pemesanan` = WhatsApp bila kosong, menu "Paket Tour". Post yang sudah disunting (`_velocity_content_md5`) dibiarkan. Tema lain: `paket_tour: dilewati`. Uji tanpa SSH: `scripts/paket-tour <manifest> --coba`.
 
 Belum tercakup: kontak publik hanya dari "Kontak utk di web"/company profile — email & alamat biodata pemilik tidak pernah tampil, jadi situs tanpa data itu hanya menampilkan WhatsApp.
 

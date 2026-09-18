@@ -83,6 +83,20 @@ for rk in velocity_addons_repo velocity_theme_repo; do
   fi
 done
 
+# Lokasi pemasangan. Bawaan = docroot DirectAdmin milik domain sendiri. Klien dengan
+# hosting di luar (tidak bisa dipasangi installer) dikerjakan di staging
+# velocitydeveloper.co/<domain>: manifest menyebut `docroot=` + `site_url=`, dan
+# seluruh skrip lain memakai escape hatch VELOCITY_LOKAL_DOCROOT yang sama.
+DOCROOT_PATH=${cfg[docroot]:-/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html}
+SITE_URL=${cfg[site_url]:-https://${cfg[domain]}}
+[[ "$DOCROOT_PATH" =~ ^/home/[A-Za-z0-9._/-]+$ && "$DOCROOT_PATH" != *..* ]] || fail "invalid_docroot"
+[[ "$SITE_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~-]+)*$ ]] || fail "invalid_site_url"
+DOMAIN_DIR=$(dirname "$DOCROOT_PATH")
+SITE_HOST=${SITE_URL#https://}; SITE_HOST=${SITE_HOST%%/*}
+# RewriteBase untuk .htaccess: "/" di docroot domain, "/<subfolder>/" di staging.
+SITE_PATH=${SITE_URL#https://$SITE_HOST}
+REWRITE_BASE=${SITE_PATH%/}/
+
 # --- dry-run ---
 # Dulu dry-run berhenti di sini dan selalu "ok" karena hanya memvalidasi bentuk
 # manifest, tanpa menyentuh server tujuan sama sekali. Akibatnya apply tetap
@@ -99,19 +113,19 @@ if [[ "$MODE" == dry-run ]]; then
   probe=$(ssh -i "$WP_INSTALL_SSH_KEY_FILE" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
     -o ConnectTimeout=15 -p "$port" "${cfg[ssh_user]}@${cfg[target_host]}" \
     "test -d /home/${cfg[da_user]} && echo home_ok || echo home_missing;
-     test -d /home/${cfg[da_user]}/domains/${cfg[domain]} && echo domain_ok || echo domain_missing;
+     test -d $DOMAIN_DIR && echo domain_ok || echo domain_missing;
      # Webserver harus bisa menembus /home/<user>. Kalau grupnya menyimpang dari
      # konvensi DirectAdmin (user:access), situs membalas 404 untuk semua URL
      # walau file-nya lengkap — kasus nyata di birutourtravel.com.
      if id -u apache >/dev/null 2>&1; then
        runuser -u apache -- test -x /home/${cfg[da_user]} && echo traverse_ok || echo traverse_denied;
      else echo traverse_unknown; fi;
-     if test -e /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html/wp-config.php; then echo site:wordpress;
-     elif ls -A /home/${cfg[da_user]}/domains/${cfg[domain]}/public_html 2>/dev/null | grep -qvxE 'index\\.html|logo\\.png|cgi-bin|\\.well-known|\\.htaccess'; then echo site:not_empty;
+     if test -e $DOCROOT_PATH/wp-config.php; then echo site:wordpress;
+     elif ls -A $DOCROOT_PATH 2>/dev/null | grep -qvxE 'index\\.html|logo\\.png|cgi-bin|\\.well-known|\\.htaccess'; then echo site:not_empty;
      else echo site:empty; fi;
-     crt=\$(echo | timeout 10 openssl s_client -servername ${cfg[domain]} -connect ${cfg[domain]}:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null);
-     case \"\$crt\" in *${cfg[domain]}*) echo ssl_cert:match;; '') echo ssl_cert:none;; *) echo ssl_cert:mismatch;; esac;
-     test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/${cfg[domain]}.conf 2>/dev/null | tr '\n' ' ')\";
+     crt=\$(echo | timeout 10 openssl s_client -servername $SITE_HOST -connect $SITE_HOST:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null);
+     case \"\$crt\" in *$SITE_HOST*) echo ssl_cert:match;; '') echo ssl_cert:none;; *) echo ssl_cert:mismatch;; esac;
+     test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/$SITE_HOST.conf 2>/dev/null | tr '\n' ' ')\";
      for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
      df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
     || probe="ssh_failed:$probe"
@@ -198,6 +212,14 @@ set -Eeuo pipefail
 DOCROOT="__DOCROOT__"
 DA_USER="__DA_USER__"
 DOMAIN="__DOMAIN__"
+# Folder domain DirectAdmin yang menaungi docroot (di staging: docroot velocitydeveloper.co).
+DOMAIN_DIR="__DOMAIN_DIR__"
+# Awalan URL situs: "/" biasa, "/<subfolder>/" untuk staging.
+REWRITE_BASE="__REWRITE_BASE__"
+# Manifest `tanpa_halaman=`: array cfg hanya ada di sisi lokal, jadi nilainya ikut
+# disubstitusi ke sini (dulu `${cfg[...]}` di remote = "unbound variable" dan
+# daftar halaman yang sengaja dihapus selalu terabaikan).
+TANPA_HALAMAN="__TANPA_HALAMAN__"
 
 # Ensure PATH includes common binary locations for non-interactive SSH
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:$PATH"
@@ -224,7 +246,7 @@ mkdir -p "$DOCROOT" || { echo "docroot_create_failed:$DOCROOT" >&2; exit 11; }
 # TIDAK disentuh: DirectAdmin memberinya grup `access` supaya webserver bisa
 # menembusnya. chown user:user di sini dulu membuat semua URL 404
 # (gapcargoexpress.com & edytravelservices.com, 2026-09-11).
-chown "$DA_USER:$DA_USER" "/home/$DA_USER/domains" "/home/$DA_USER/domains/$DOMAIN" "$DOCROOT" 2>/dev/null || true
+chown "$DA_USER:$DA_USER" "/home/$DA_USER/domains" "$DOMAIN_DIR" "$DOCROOT" 2>/dev/null || true
 
 # create MySQL user + database via DA admin credentials (idempotent)
 DA_MYSQL_CONF="/usr/local/directadmin/conf/mysql.conf"
@@ -444,16 +466,16 @@ php -d memory_limit=512M "$WP_BIN" option update permalink_structure '/%category
 # webserver, WordPress mengira mod_rewrite tidak ada. Akibatnya permalink cantik
 # 404 di semua URL selain beranda. Jadi file-nya ditulis sendiri.
 if [[ ! -f "$DOCROOT/.htaccess" ]]; then
-  cat > "$DOCROOT/.htaccess" <<'HTACCESS'
+  cat > "$DOCROOT/.htaccess" <<HTACCESS
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-RewriteBase /
-RewriteRule ^index\.php$ - [L]
+RewriteBase ${REWRITE_BASE}
+RewriteRule ^index\.php\$ - [L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
+RewriteRule . ${REWRITE_BASE}index.php [L]
 </IfModule>
 # END WordPress
 HTACCESS
@@ -490,7 +512,7 @@ ensure_page() {
   local title=$1 content=$2
   local slug
   slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -dc 'a-z0-9-')
-  if [[ ",$(echo "${cfg[tanpa_halaman]:-}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')," == *",$slug,"* ]]; then
+  if [[ ",$(echo "$TANPA_HALAMAN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')," == *",$slug,"* ]]; then
     echo "page_skipped:${slug}" >&2
     return 1
   fi
@@ -668,13 +690,16 @@ else
 fi
 
 # substitute placeholders safely
-remote_script=${remote_script//__DOCROOT__/$(printf '%s' "/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html")}
+remote_script=${remote_script//__DOCROOT__/$(printf '%s' "$DOCROOT_PATH")}
+remote_script=${remote_script//__DOMAIN_DIR__/$(printf '%s' "$DOMAIN_DIR")}
+remote_script=${remote_script//__REWRITE_BASE__/$(printf '%s' "$REWRITE_BASE")}
+remote_script=${remote_script//__TANPA_HALAMAN__/$(printf '%s' "${cfg[tanpa_halaman]:-}")}
 remote_script=${remote_script//__DA_USER__/$(printf '%s' "${cfg[da_user]}")}
 remote_script=${remote_script//__DA_USER_Q__/$(q "${cfg[da_user]}")}
 remote_script=${remote_script//__DOMAIN__/$(printf '%s' "${cfg[domain]}")}
 remote_script=${remote_script//__DB_NAME_Q__/$(q "${cfg[db_name]}")}
 remote_script=${remote_script//__DB_USER_Q__/$(q "${cfg[db_user]}")}
-remote_script=${remote_script//__URL_Q__/$(q "https://${cfg[domain]}")}
+remote_script=${remote_script//__URL_Q__/$(q "$SITE_URL")}
 remote_script=${remote_script//__TITLE_Q__/$(q "${cfg[site_title]}")}
 remote_script=${remote_script//__ADMIN_USER_Q__/$(q "${cfg[admin_user]}")}
 remote_script=${remote_script//__ADMIN_EMAIL_Q__/$(q "${cfg[admin_email]}")}

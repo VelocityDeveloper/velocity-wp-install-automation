@@ -9,6 +9,7 @@ diserahkan (2026-09-11): sertifikat SSL milik domain lain, gambar 404 karangan
 AI, teks placeholder, menu kosong, artikel tanpa kategori.
 """
 import json
+import os
 import re
 import ssl
 import sys
@@ -20,6 +21,13 @@ from urllib.parse import urljoin, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from content_sanitize import has_placeholder  # noqa: E402
+
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
 
 UA = {'User-Agent': 'velocity-installer-qa/1.0'}
 INSECURE = ssl._create_unverified_context()
@@ -49,7 +57,7 @@ def main():
     if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
         print(json.dumps({'qa': 'issues', 'problems': ['domain_tidak_valid'], 'info': {}}))
         return 0
-    base = f'https://{domain}/'
+    base = situs_url(domain) + '/'
     problems, info = [], {}
 
     # Gangguan jaringan sesaat pernah membuat situs yang sehat terlapor tidak

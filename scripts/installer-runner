@@ -15,6 +15,27 @@ FSE_CEK_MAKS=${FSE_CEK_MAKS:-3}
 # Berapa kali tema + halaman FSE boleh digenerate (termasuk yang pertama) selama tampilan
 # situs jadi belum mirip referensi menurut audit kemiripan.
 FSE_MIRIP_MAKS=${FSE_MIRIP_MAKS:-3}
+# Klien dengan hosting di luar dikerjakan di staging velocitydeveloper.co/<domain>:
+# manifest menyebut `docroot=` + `site_url=`. Semua script pembantu (fse-apply,
+# site-finish, site-audit, paket-g-foto, ai-content-generator) memakai escape hatch
+# VELOCITY_LOKAL_SSH + VELOCITY_LOKAL_DOCROOT, jadi diisikan sekali di sini.
+SITE_URL="https://$DOMAIN"
+if [[ -f "$MANIFEST" ]]; then
+  _docroot=$(sed -n 's/^docroot=//p' "$MANIFEST" | head -1)
+  _site_url=$(sed -n 's/^site_url=//p' "$MANIFEST" | head -1)
+  if [[ -n "$_site_url" ]]; then SITE_URL="$_site_url"; export VELOCITY_LOKAL_URL="$_site_url"; fi
+  if [[ -n "$_docroot" ]]; then
+    export VELOCITY_LOKAL_DOCROOT="$_docroot"
+    export VELOCITY_LOKAL_SSH="/var/lib/velocity/installer/ssh-$DOMAIN.sh"
+    printf '#!/usr/bin/env bash\nexec ssh -i %q -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p %q %q@%q "$@"\n' \
+      "${WP_INSTALL_SSH_KEY_FILE:-/root/.ssh/id_ed25519}" \
+      "$(sed -n 's/^ssh_port=//p' "$MANIFEST" | head -1)" \
+      "$(sed -n 's/^ssh_user=//p' "$MANIFEST" | head -1)" \
+      "$(sed -n 's/^target_host=//p' "$MANIFEST" | head -1)" > "$VELOCITY_LOKAL_SSH"
+    chmod 700 "$VELOCITY_LOKAL_SSH"
+  fi
+fi
+
 STATE_DIR=/var/lib/velocity/installer
 STATE="$STATE_DIR/$DOMAIN.json"
 LOG="$STATE_DIR/$DOMAIN.log"
@@ -68,12 +89,19 @@ jalur_tema() {
   JALUR_TEMA=$(/usr/bin/python3 "$SCRIPTS/fse-apply" --deteksi "$MANIFEST" 2>>"$LOG" | tail -1 || true)
   printf '[%s] Jalur tema: %s\n' "$(date -Is)" "${JALUR_TEMA:-gagal}" >> "$LOG"
 }
+pasang_vd_store() {
+  echo "[$(date -Is)] VD Store" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/vd-store" "$MANIFEST" >> "$LOG" 2>&1 || true
+  echo "[$(date -Is)] VD Store settings (sesudah plugin/API)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/vd-store-settings" "$MANIFEST" >> "$LOG" 2>&1 || true
+}
 portal_berita() {
   grep -q '"jenis": *"berita"' "/var/lib/velocity/ai/generated/$DOMAIN-tema.json" 2>/dev/null
 }
 
 # Alur paket desain custom (Paket G, Portal Berita Custom, Toko Online Custom), disepakati
 # user 2026-09-13/14/15. Urutan adalah bagian dari kebenaran:
+#   (Toko Online Custom: VD Store dipasang & diatur SEBELUM paket_g_tema, keputusan user 2026-09-17)
 #   paket_g_tema  0. referensi_desain   cek isian website referensi di FORM ISIAN; kalau ada,
 #                                       tata letak & gaya referensi diukur = acuan utama FSE
 #                 1. compro-klien       baca company profile PDF
@@ -140,6 +168,10 @@ cek_tema_referensi() {
 tampilan_klasik() {
   echo "[$(date -Is)] Tampilan tema klasik" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Child theme tour (velocity-tour1, dst.): beranda membaca CPT paket-tour dari plugin
+  # velocity-tour-travel; langkah ini melewati tema lain sendiri.
+  echo "[$(date -Is)] Paket tour" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-tour" "$MANIFEST" >> "$LOG" 2>&1 || true
   if ! portal_berita; then
     echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
@@ -298,7 +330,7 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # sebagai COMPLETE padahal semua URL 404. File statis inti WordPress ini selalu
   # ada dan dilayani webserver langsung, tanpa bergantung tema/plugin.
   code=$(curl -sk -o /dev/null -m 30 -L --max-redirs 3 -w '%{http_code}' \
-    "https://$DOMAIN/wp-includes/css/dashicons.min.css" || true)
+    "$SITE_URL/wp-includes/css/dashicons.min.css" || true)
   printf '[%s] http_check: %s\n' "$(date -Is)" "$code" >> "$LOG"
   if [[ "$code" != 200 ]]; then
     state FAILED "http_check_$code"
@@ -310,21 +342,17 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
   refresh=0
   [[ "$MODE" == "finish" ]] && refresh=1
-  # Paket desain custom: referensi desain dibaca & diukur dulu, baru tema FSE (lihat paket_g_tema).
+  # Cabang paket (keputusan user 2026-09-17):
+  #   Paket G / Portal Berita Custom -> referensi desain & tema FSE (paket_g_tema)
+  #   Toko Online Custom             -> VD Store (plugin + setting) -> referensi desain & tema FSE
+  #   Toko Online biasa              -> child theme (saat install) -> VD Store -> konten AI, tanpa FSE
+  # vd-store & vd-store-settings melewati sendiri paket yang bukan toko online, jadi di Paket G,
+  # Portal Berita Custom & paket biasa non-toko pemanggilannya hanya mencetak "dilewati".
+  pasang_vd_store
   if paket_desain_custom; then
     jalur_tema
     paket_g_tema || true
   fi
-  # Paket toko online: plugin VD Store SESUDAH tema (keputusan user 2026-09-16). Toko Online Custom
-  # memakai tema FSE yang disusun dari referensi desain, jadi urutannya referensi -> tema -> plugin
-  # toko; toko online biasa tidak punya langkah tema di sini sehingga urutannya tidak berubah.
-  # Aman dibalik: fse-apply tidak memanggil WP-CLI dan membaca jenis paket dari manifest, bukan
-  # dari produk/plugin di database. WordPress awal tetap hanya memasang core; setting toko bukan
-  # bagian website-install-from-manifest.
-  echo "[$(date -Is)] VD Store" >> "$LOG"
-  /usr/bin/python3 "$SCRIPTS/vd-store" "$MANIFEST" >> "$LOG" 2>&1 || true
-  echo "[$(date -Is)] VD Store settings (sesudah plugin/API)" >> "$LOG"
-  /usr/bin/python3 "$SCRIPTS/vd-store-settings" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Paket biasa (child theme klasik): isi contoh terstruktur dulu — layanannya jadi kategori
   # artikel dan isi beranda/Layanan di langkah tampilan (permintaan user 2026-09-17).
   if ! paket_desain_custom; then

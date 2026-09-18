@@ -246,10 +246,14 @@ add_filter('render_block_core/group', function ($html, $block) {
         . substr($html, $tutup);
 }, 10, 2);
 
-/** Ikon sosmed (.vf-sosmed) gaya klinik dibuka di tab baru (permintaan user 2026-09-16). */
+/**
+ * Ikon sosmed installer (.vf-sosmed) dibuka di tab baru — semua gaya (klinik sejak 2026-09-16,
+ * semua situs sejak 2026-09-17, yukpergimancing.com). Markup baru memakai atribut openInNewTab;
+ * filter ini menutup konten/halaman lama yang dibuat sebelum atribut itu ada.
+ */
 add_filter('render_block_core/social-links', function ($html, $block) {
     $kelas = isset($block['attrs']['className']) ? (string) $block['attrs']['className'] : '';
-    if (strpos($kelas, 'vf-sosmed') === false || velocity_fse_situs('gaya') !== 'klinik') {
+    if (strpos($kelas, 'vf-sosmed') === false) {
         return $html;
     }
     return preg_replace('/<a (?![^>]*\btarget=)([^>]*class="wp-block-social-link-anchor")/',

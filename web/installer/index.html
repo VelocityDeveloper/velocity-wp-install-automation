@@ -301,21 +301,6 @@
         max-width: 760px;
         width: min(760px, 94vw);
       }
-.checklist-modal .modal-box { max-width: 600px; width: min(600px, 94vw); max-height: 80vh; overflow-y: auto; }
-.checklist { list-style: none; margin: 0; padding: 0; }
-.checklist li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-.checklist li:last-child { border: 0; }
-.checklist .check { width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; }
-.checklist .check.done { border-color: var(--green); background: #55e87918; color: var(--green); }
-.checklist .check.pending { border-color: var(--muted); color: var(--muted); }
-.checklist .task-name { flex: 1; }
-.checklist .task-name.done-text { color: var(--green); }
-.checklist .task-name.pending-text { color: var(--muted); }
-.checklist-summary { display: flex; gap: 16px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
-.checklist-summary .stat { text-align: center; }
-.checklist-summary .stat-num { font-size: 20px; font-weight: 700; color: var(--green); }
-.checklist-summary .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
-.checklist-loader{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;border:1px dashed var(--cyan);background:#0a0e0c;color:var(--cyan);font-size:12px}
 .spinner{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--cyan);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 .check.running{border-color:var(--cyan);color:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
@@ -591,17 +576,6 @@
         </div>
       </div>
     </div>
-    <div id="checklist-modal" class="modal checklist-modal" role="dialog" aria-modal="true">
-      <div class="modal-box">
-        <h3>Checklist: <span id="checklist-domain"></span></h3>
-        <div id="checklist-loader" class="checklist-loader" style="display:none"><span class="spinner"></span><span id="checklist-loader-text">Sedang berjalan, refresh otomatis...</span></div>
-        <div id="checklist-summary" class="checklist-summary"></div>
-        <ul class="checklist" id="checklist-items"></ul>
-        <div class="modal-actions" style="margin-top: 14px">
-          <button class="btn btn-cancel" onclick="closeChecklistModal()">Tutup</button>
-        </div>
-      </div>
-    </div>
     <div id="alur-modal" class="modal flow-modal" role="dialog" aria-modal="true" aria-labelledby="alur-judul">
       <div class="modal-box">
         <h3 id="alur-judul">Bagan proses: <span id="alur-domain"></span></h3>
@@ -626,14 +600,8 @@
         pageInfo = document.getElementById('page-info'),
         pagePrev = document.getElementById('page-prev'),
         pageNext = document.getElementById('page-next');
-        checklistModal = document.getElementById('checklist-modal'),
-        checklistDomainEl = document.getElementById('checklist-domain'),
-        checklistSummaryEl = document.getElementById('checklist-summary'),
-        checklistItemsEl = document.getElementById('checklist-items');
       let pendingDomain = null,
         pollTimer = null,
-        checklistPoll = null,
-        checklistDomain = null,
         serverList = [],
         localIps = [],
         allDomains = [],
@@ -826,7 +794,6 @@
               acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
             }
             acts.push({ label: 'Bagan proses', run: () => openFlowModal(x.domain) });
-            acts.push({ label: 'Checklist', run: () => openChecklistModal(x.domain, allDomains) });
             if (logLines) acts.push({ label: 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
             rowActions[x.domain] = acts;
             const siteUrl = 'https://' + x.domain;
@@ -1012,96 +979,11 @@
       function closeLogModal() { logModal.classList.remove('open'); }
       logModal.addEventListener('click', e => { if (e.target === logModal) closeLogModal(); });
 
-      const _checklistTasks = [
-          { id: "validate", label: "Validasi Manifest", patterns: ["VALIDATING", "dry_run", "ok"] },
-          { id: "connect", label: "Koneksi SSH", patterns: ["using DA password", "Transferring package", "Creating MySQL", "admin_user_updated", "admin_user_created", "admin_user_renamed"] },
-          { id: "db", label: "Setup Database MySQL", patterns: ["MySQL user/database ready", "Creating MySQL"] },
-          { id: "backup", label: "Backup Existing Files", patterns: ["backup_created", "backup_skip"] },
-          { id: "download_wp", label: "Download WordPress", patterns: ["WordPress downloaded", "Using cached"] },
-          { id: "config", label: "Buat wp-config.php", patterns: ["Generated .wp-config.php.", "wp-config"] },
-          { id: "install_wp", label: "Install WordPress Core", patterns: ["WordPress installed", "already_installed", "core install"] },
-          { id: "admin_user", label: "Setup Admin User", patterns: ["admin_user_updated", "admin_user_created", "admin_user_renamed"] },
-          { id: "plugin", label: "Install Plugin Velocity Addons", patterns: ["velocity-addons", "Plugin already activated", "plugin activate"] },
-          { id: "theme", label: "Install Theme Velocity", patterns: ["velocity-theme", "theme activate", "velocity"] },
-          { id: "permalink", label: "1-Click: Set Permalink /%category%/%postname%/", patterns: ["permalink_set", "permalink_structure"] },
-          { id: "timezone", label: "1-Click: Set Timezone Asia/Jakarta", patterns: ["timezone_set", "Asia/Jakarta"] },
-          { id: "datetime", label: "1-Click: Set Format Tanggal & Waktu", patterns: ["date_format_set", "time_format_set"] },
-          { id: "media", label: "1-Click: Set Media Settings", patterns: ["media_settings_set"] },
-          { id: "admin_profile", label: "1-Click: Setup Admin Profile", patterns: ["admin_profile_set", "display_name"] },
-          { id: "standard_pages", label: "1-Click: Create Standard Pages", patterns: ["standard_pages", "page_created"] },
-          { id: "primary_menu", label: "1-Click: Set Primary Menu (pakai menu yang ada)", patterns: ["primary_menu", "primary_menu_set", "menu_created", "nav_menu"] },
-          { id: "privacy_policy", label: "1-Click: Setup Privacy Policy", patterns: ["privacy_policy", "wp_page_for_privacy_policy"] },
-          { id: "reading_home", label: "1-Click: Set Reading → Home/Beranda", patterns: ["reading_home_set", "home_set", "page_on_front", "show_on_front"] },
-          { id: "ai_content", label: "AI: Generate Pages & Articles", patterns: ["ai_content", "pages_created", "articles_created", "AI generation completed", "article_created"] },
-          { id: "rename_index", label: "Rename index.html DA", patterns: ["renamed index.html"] },
-          { id: "referensi_desain", label: "Baca & ukur referensi desain dari form (sebelum tema FSE)", patterns: ["referensi: ada:", "referensi: tidak_ada", "referensi: gagal:"] },
-          { id: "child_theme", label: "Tema desain (child theme referensi; paket custom: FSE velocity-fse)", patterns: ["child_theme_installed", "child_theme_kept", "child_theme:matched", "child_theme:generated", "child_theme:not_found", "child_theme:no_ref", "child_theme:skipped_fse", "fse: tema_siap"] },
-          { id: "content_clean", label: "Konten AI bersih terpasang (tanpa gambar/placeholder palsu)", patterns: ["page_filled", "page_created", "page_kept", "Artikel terbit", "article_exists"] },
-          { id: "client_assets", label: "Finishing: logo, galeri, tagline, warna, WhatsApp, peta", patterns: ["finish_done"] },
-          { id: "cleanup", label: "Hapus tema & plugin bawaan yang tidak dipakai", patterns: ["cleanup: cleanup_done"] },
-          { id: "kemiripan", label: "Audit kemiripan desain vs referensi (header, footer, beranda, halaman dalam)", patterns: ["kemiripan: sesuai", "kemiripan: belum_mirip:", "kemiripan: tidak_ada_referensi", "kemiripan: gagal:"] },
-          { id: "qa", label: "Pemeriksaan akhir (SSL, gambar, placeholder, menu, kategori)", patterns: ["qa_result"] },
-          { id: "maintenance", label: "Maintenance mode (velocity-addons)", patterns: ["maintenance: maintenance_"] },
-          { id: "complete", label: "Install Complete", patterns: ["install_complete", "COMPLETE", "SUCCESS"] }
-        ];
-
-      function _renderChecklist(row) {
-        const logLines = row && row.log ? row.log : [];
-        const logText = logLines.join("\n");
-        const isRunning = row && (row.status === "RUNNING" || (row.stage && String(row.stage).includes("RUNNING")));
-        let doneCount = 0;
-        let firstPendingIdx = -1;
-        const items = _checklistTasks.map((t, idx) => {
-          const done = t.patterns.some(p => logText.includes(p));
-          if (done) doneCount++;
-          else if (firstPendingIdx === -1) firstPendingIdx = idx;
-          const isActive = isRunning && !done && idx === firstPendingIdx;
-          const checkCls = done ? "done" : isActive ? "running" : "pending";
-          const icon = done ? "✓" : isActive ? '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>' : "○";
-          return `<li><span class="check ${checkCls}">${icon}</span><span class="task-name ${done ? "done-text" : isActive ? "" : "pending-text"}" style="${isActive ? "color:var(--cyan)" : ""}">${esc(t.label)}${isActive ? ", berjalan..." : ""}</span></li>`;
-        }).join("");
-        const statusColor = isRunning ? "var(--cyan)" : (row && row.status === "FAILED" ? "var(--red)" : "var(--green)");
-        checklistSummaryEl.innerHTML = `<div class="stat"><div class="stat-num">${doneCount}/${_checklistTasks.length}</div><div class="stat-label">Tasks</div></div><div class="stat"><div class="stat-num" style="color:${statusColor}">${row && row.status ? esc(row.status) : "-"}${row && row.stage ? "/" + esc(row.stage) : ""}</div><div class="stat-label">Status</div></div>`;
-        checklistItemsEl.innerHTML = items;
-        const loader = document.getElementById("checklist-loader");
-        const loaderText = document.getElementById("checklist-loader-text");
-        if (isRunning) {
-          loader.style.display = "flex";
-          if (loaderText) loaderText.textContent = `Sedang berjalan ${doneCount}/${_checklistTasks.length}, auto-refresh 2s (refresh tidak hentikan proses)`;
-        } else {
-          loader.style.display = "none";
-        }
-        return isRunning;
-      }
-
-      function openChecklistModal(domain, domains) {
-        checklistDomain = domain;
-        checklistDomainEl.textContent = domain;
-        const row = (domains || []).find(x => x.domain === domain);
-        const running = _renderChecklist(row || { domain, log: [], status: "-" });
-        checklistModal.classList.add("open");
-        if (checklistPoll) clearInterval(checklistPoll);
-        if (running) {
-          checklistPoll = setInterval(async () => {
-            try {
-              const d = await fetch("/api/installer", { cache: "no-store" }).then(r => r.json());
-              const r2 = (d.domains || []).find(x => x.domain === checklistDomain);
-              if (r2) {
-                const stillRunning = _renderChecklist(r2);
-                if (!stillRunning) { clearInterval(checklistPoll); checklistPoll = null; load(); }
-              }
-            } catch (e) {}
-          }, 2000);
-        }
-      }
-      function closeChecklistModal() { checklistModal.classList.remove("open"); if (checklistPoll) { clearInterval(checklistPoll); checklistPoll = null; } }
-      checklistModal.addEventListener("click", e => { if (e.target === checklistModal) closeChecklistModal(); });
-
       // ---------- bagan alur installer ala n8n ----------
       // Kanvas simpul langkah (kotak) dan simpul pengecekan (belah ketupat) dengan garis bercabang
       // berlabel, mengikuti percabangan scripts/installer-runner: mode run (dry run / apply / finish),
-      // cek paket (Paket G, Portal Berita Custom & Toko Online Custom ke referensi desain + tema FSE,
-      // toko custom lanjut ke VD Store; Paket E ke child theme baku velocity-pakete; Paket F dan paket
+      // cek paket (Paket G & Portal Berita Custom ke referensi desain + tema FSE; Toko Online Custom
+      // ke VD Store dulu, lalu referensi desain + tema FSE; Paket E ke child theme baku velocity-pakete; Paket F dan paket
       // lain ke child theme referensi form; toko online biasa ke child theme lalu VD Store), WordPress
       // baru, paket custom, dan masa pembelajaran maintenance. Status dibaca dari penanda log run
       // terakhir; cabang dari mode run & paket manifest.
@@ -1171,16 +1053,16 @@
         // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
         // di installer-runner): hasilnya (fse-rencana/<domain>/desain-referensi.json) jadi acuan utama
         // tata letak & gaya beranda, jadi langkah ini berdiri sendiri di bagan.
-        { id: 'referensi', kol: 5, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah (juga domain polos)',
+        { id: 'referensi', kol: 6, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah (juga domain polos)',
           mulai: /Paket custom: cek referensi desain di form/, selesai: /referensi: (ada:|tidak_ada|gagal:)/,
           gagal: /referensi: gagal:/, ketHasil: hasilReferensi, aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'fse', kol: 6, jalur: 0, nama: 'Tema FSE', ket0: 'compro, isi contoh, velocity-fse',
+        { id: 'fse', kol: 7, jalur: 0, nama: 'Tema FSE', ket0: 'compro, isi contoh, velocity-fse',
           mulai: /Paket custom: (tema FSE|tema dilewati)/,
           selesai: /fse: tema_siap|tema dilewati/, lewati: /Paket custom: tema dilewati/, aktif: c => dan(tanpaDry(c), c.custom) },
         // Gerbang sebelum konten AI (keputusan user 2026-09-16): hasil langkah tema dibandingkan dengan
         // rencana referensi desain klien (scripts/fse-cek-referensi). Belum sesuai -> balik ke langkah
         // tema (maks FSE_CEK_MAKS percobaan), sesuai -> lanjut. Log: `fse_cek: sesuai|belum_sesuai:...`.
-        { id: 'cekTema', kol: 7, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse: tema_siap|fse_cek: |tema dilewati/,
+        { id: 'cekTema', kol: 8, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse: tema_siap|fse_cek: |tema dilewati/,
           aktif: c => dan(tanpaDry(c), c.custom),
           ket: (c, row) => {
             const t = (row.log || []).join('\n');
@@ -1191,25 +1073,31 @@
             if (/fse_cek: (gagal|tidak bisa)/.test(t)) return 'tidak bisa diperiksa';
             return 'menunggu';
           } },
-        { id: 'childF', kol: 5, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form lewat API tema', mulai: CHILD_THEME,
+        { id: 'childF', kol: 6, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form lewat API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
-        { id: 'childToko', kol: 5, jalur: 2, nama: 'Child theme toko', ket0: 'toko biasa: referensi form via API', mulai: CHILD_THEME,
+        { id: 'childToko', kol: 6, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
         // Paket E: temanya ditentukan paketnya sendiri (velocity-pakete), bukan referensi di form,
         // dan sudah aktif sebelum konten AI ditulis (keputusan user 2026-09-16).
-        { id: 'childE', kol: 5, jalur: 4, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
+        { id: 'childE', kol: 6, jalur: 2, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.e) },
-        { id: 'childLain', kol: 5, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi cocok', mulai: CHILD_THEME,
+        { id: 'childLain', kol: 6, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi cocok', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko)) },
-        // Plugin toko dipasang SESUDAH tema: di Toko Online Custom tema FSE dibangun dari referensi
-        // desain lebih dulu (keputusan user 2026-09-16), toko biasa masuk dari cabang child theme.
-        { id: 'vdstore', kol: 8, jalur: 2, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
+        // VD Store (keputusan user 2026-09-17): Toko Online Custom memasang & mengatur VD Store DULU,
+        // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
+        // Dua simpul berpenanda log sama, dibedakan cabang paketnya. Simpul toko custom di baris -1
+        // supaya garis Paket G / Portal ke "Baca referensi" tidak menembus kotak.
+        { id: 'vdstoreCustom', kol: 5, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
           selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
           ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
-            : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.toko) },
+            : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoCustom) },
+        { id: 'vdstore', kol: 7, jalur: 4, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
+          selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
+          ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
+            : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
         // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
         // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
-        { id: 'isiKlasik', kol: 8, jalur: 4, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
+        { id: 'isiKlasik', kol: 8, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
           mulai: /\] Isi contoh \(tema klasik\)/, selesai: /konten: (isi contoh dibuat|memakai isi contoh|isi tersimpan|gagal)/,
           gagal: /konten: gagal/, ketHasil: t => { const m = /konten: isi contoh dibuat \(([^)]*)\)/.exec(t); return m ? m[1] : null; },
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
@@ -1222,7 +1110,7 @@
         { id: 'bersih', kol: 12, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
           selesai: /cleanup_done/, aktif: c => dan(tanpaDry(c), c.installBaru) },
         { id: 'isi', kol: 13, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
-          ket: c => (c.custom === null ? 'paket tidak terbaca' : c.custom ? 'ya: G / Portal / Toko Custom' : 'tidak') },
+          ket: c => (c.custom === null ? 'paket tidak terbaca' : c.custom ? 'ya: G / Portal / Toko Online Custom' : 'tidak') },
         { id: 'fotoSlot', kol: 14, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
           mulai: /Paket custom: foto per slot desain/, aktif: c => dan(tanpaDry(c), c.custom) },
         { id: 'dealerUnit', kol: 15, jalur: 0, nama: 'Unit mobil & foto dealer', ket0: 'CPT mobil, foto seksi',
@@ -1238,6 +1126,13 @@
           mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
           ketHasil: t => (/tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
             : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null),
+          aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+        // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
+        { id: 'paketTour', kol: 16, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
+          mulai: /\] Paket tour$/, selesai: /paket_tour: (selesai|dilewati)/, gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)/,
+          ketHasil: t => { if (/paket_tour: dilewati/.test(t)) return 'dilewati (bukan tema tour)';
+            const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
+            return m ? (+m[1] + +m[2]) + ' paket' : null; },
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         { id: 'fotoKlasik', kol: 17, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul',
           mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
@@ -1289,17 +1184,17 @@
         ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'server', 'dry run'],
         ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
         ['http', 'paket'],
-        ['paket', 'referensi', 'G / Portal / Toko Custom'], ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
-        ['paket', 'childToko', 'Toko Online'], ['paket', 'childLain', 'lainnya'],
+        ['paket', 'referensi', 'G / Portal', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
+        ['paket', 'vdstoreCustom', 'Toko Online Custom'], ['vdstoreCustom', 'referensi'],
+        ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
+        ['paket', 'childToko', 'Toko Online Biasa'], ['paket', 'childLain', 'lainnya'],
         ['referensi', 'fse'], ['fse', 'cekTema'],
         // Belum sesuai referensi: kembali ke langkah tema sebelum konten AI ditulis.
         ['cekTema', 'fse', 'belum, ulangi tema'],
-        // Toko Online Custom: tema FSE dulu, plugin VD Store sesudahnya. Paket custom lain langsung ke konten.
-        ['cekTema', 'vdstore', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
-        ['cekTema', 'konten', 'sesuai', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
+        // Semua paket custom lanjut ke konten (VD Store toko custom sudah terpasang sebelum tema).
+        ['cekTema', 'konten', 'sesuai', c => dan(tanpaDry(c), c.custom)],
         ['childF', 'isiKlasik'], ['childE', 'isiKlasik'], ['childToko', 'vdstore'], ['childLain', 'isiKlasik'],
-        ['vdstore', 'konten', 'toko custom', c => dan(tanpaDry(c), c.tokoCustom)],
-        ['vdstore', 'isiKlasik', 'toko biasa', c => dan(tanpaDry(c), c.tokoBiasa)],
+        ['vdstore', 'isiKlasik'],
         ['isiKlasik', 'konten'],
         ['konten', 'finishing'], ['finishing', 'baru'],
         ['baru', 'bersih', 'ya'], ['bersih', 'isi'], ['baru', 'isi', 'tidak', c => dan(tanpaDry(c), c.installBaru === null ? null : !c.installBaru)],
@@ -1314,7 +1209,7 @@
         // Belum mirip: kembali ke tema FSE (generate ulang tema + halaman), lalu diaudit lagi.
         ['mirip', 'fse', 'belum mirip, generate ulang', c => dan(tanpaDry(c), c.custom, c.miripUlang)],
         ['mirip', 'qa', 'mirip / dilaporkan'],
-        ['isi', 'tampilan', 'tidak'], ['tampilan', 'fotoKlasik'], ['fotoKlasik', 'qa'],
+        ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'qa'],
         ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
         ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ];
@@ -1363,8 +1258,8 @@
           // Paket E punya child theme baku (velocity-pakete), tidak lewat referensi form.
           e: paket ? paket === 'pakete' : null,
           toko,
-          // Toko Online Custom ikut jalur FSE: referensi desain diukur, tema FSE dipasang, baru
-          // plugin VD Store. Toko online biasa tetap child theme dari referensi form, lalu VD Store.
+          // Toko Online Custom: VD Store dulu, lalu referensi desain & tema FSE. Toko online biasa:
+          // child theme dari referensi form, lalu VD Store, lalu konten AI (tanpa FSE).
           tokoCustom: paket ? custom && toko : null,
           tokoBiasa: paket ? toko && !custom : null,
           installBaru: /\] Bersihkan tema & plugin bawaan/.test(teks) ? true : lewatFinishing ? false : null,
@@ -1435,6 +1330,8 @@
         return hasil || 'selesai' + (s.lama !== null ? ', ' + lamanya(s.lama) : '');
       }
 
+      // Baris bisa negatif (VD Store toko custom di atas baris paket custom).
+      const JALUR_MIN = Math.min(...SIMPUL.map(s => s.jalur));
       const UKURAN = { lebar: 188, tinggi: 74, cek: 96, jarak: 44, jalur: 108, tepi: 22, ketupat: 38 };
       function tataLetak() {
         const kolom = Math.max(...SIMPUL.map(s => s.kol)) + 1;
@@ -1443,10 +1340,10 @@
         let pos = UKURAN.tepi;
         lebarKol.forEach((l, k) => { x[k] = pos; pos += l + UKURAN.jarak; });
         const jalurMaks = Math.max(...SIMPUL.map(s => s.jalur));
-        return { x, lebarKol, lebar: pos - UKURAN.jarak + UKURAN.tepi, tinggi: UKURAN.tepi * 2 + jalurMaks * UKURAN.jalur + UKURAN.tinggi + 20 };
+        return { x, lebarKol, lebar: pos - UKURAN.jarak + UKURAN.tepi, tinggi: UKURAN.tepi * 2 + (jalurMaks - JALUR_MIN) * UKURAN.jalur + UKURAN.tinggi + 20 };
       }
       function jangkar(s, t) {
-        const cy = UKURAN.tepi + s.jalur * UKURAN.jalur + UKURAN.tinggi / 2;
+        const cy = UKURAN.tepi + (s.jalur - JALUR_MIN) * UKURAN.jalur + UKURAN.tinggi / 2;
         const x0 = t.x[s.kol], w = t.lebarKol[s.kol];
         if (!s.cek) return { cy, masuk: [x0, cy], keluar: [x0 + w, cy] };
         const r = UKURAN.ketupat * Math.SQRT2 / 2;

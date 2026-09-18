@@ -123,7 +123,7 @@ function velocity_fse_footer_toko()
         'vf-statistik');
 
     $kontak = render_block(array('blockName' => 'velocity/kontak', 'attrs' => array(), 'innerBlocks' => array(), 'innerHTML' => '', 'innerContent' => array()));
-    $sosmed = do_blocks('<!-- wp:social-links {"className":"is-style-logos-only vf-sosmed"} --><ul class="wp-block-social-links is-style-logos-only vf-sosmed">'
+    $sosmed = do_blocks('<!-- wp:social-links {"openInNewTab":true,"className":"is-style-logos-only vf-sosmed"} --><ul class="wp-block-social-links is-style-logos-only vf-sosmed">'
         . '<!-- wp:social-link {"url":"https://www.facebook.com/","service":"facebook"} /--><!-- wp:social-link {"url":"https://www.instagram.com/","service":"instagram"} /-->'
         . '<!-- wp:social-link {"url":"https://x.com/","service":"x"} /--><!-- wp:social-link {"url":"https://www.youtube.com/","service":"youtube"} /-->'
         . '<!-- wp:social-link {"url":"https://www.tiktok.com/","service":"tiktok"} /--></ul><!-- /wp:social-links -->');

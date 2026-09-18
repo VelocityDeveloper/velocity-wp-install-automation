@@ -31,6 +31,13 @@ sys.path.insert(0, str(HERE))
 import cari_logo  # noqa: E402
 from client_form import read_client_form  # noqa: E402
 
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
+
 ON_PROGRESS = Path('/home/On Progress')
 GENERATED = Path('/var/lib/velocity/ai/generated')
 IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
@@ -762,7 +769,7 @@ def enable_maintenance(cfg, domain, da_user, ssh):
         print(f'maintenance: {line[:200]}')
     if any('maintenance_enabled' in l for l in out):
         # Pastikan pengunjung tanpa login benar-benar melihat halaman perawatan.
-        req = urllib.request.Request(f'https://{domain}/', headers={'User-Agent': 'velocity-installer/1.0'})
+        req = urllib.request.Request(situs_url(domain) + '/', headers={'User-Agent': 'velocity-installer/1.0'})
         try:
             try:
                 with urllib.request.urlopen(req, timeout=25, context=ssl._create_unverified_context()) as resp:

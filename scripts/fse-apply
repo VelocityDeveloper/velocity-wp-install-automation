@@ -58,6 +58,14 @@ SHORTCODE_LAMA = re.compile(r'\[[a-z][a-z0-9]{0,11}_(?:redaksi|kontak|pemesanan|
                             r'|struktur|customer|legalitas|visimisi)\]')
 # Judul yang dulu ditambahkan paket-g-setup bersama shortcode di atas.
 JUDUL_LAMA = ('<h2>Kirim Pesan ke Redaksi</h2>', '<h2>Ajukan Pemesanan</h2>', '<h2>Alur Kerja</h2>')
+# Paragraf pembuka halaman Layanan/Produk/Pemesanan buatan paket-g-setup (tanpa md5).
+# Tanpa ini, situs child lama yang dipindah ke FSE menyisakan shortcode mentah
+# (ptmitraajegselaras.com, 2026-09-17).
+PEMBUKA_LAMA = ('<p>Kebutuhan Anda ditangani satu tim — mulai dari peninjauan, penawaran '
+                'tertulis, pengerjaan, sampai serah terima.</p>',
+                '<p>Pekerjaan yang paling sering diminta pelanggan.</p>',
+                '<p>Isi formulir di bawah ini untuk mengajukan pemesanan atau konsultasi. '
+                'Permintaan Anda kami terima langsung melalui email.</p>')
 # Isi awal halaman buatan installer (belum pernah diisi siapa pun).
 PLACEHOLDER = ('Selamat datang di website kami.', 'Halaman tentang kami.', 'Halaman galeri.',
                'Halaman hubungi kami.', 'Halaman arsip berita.')
@@ -997,7 +1005,7 @@ SOSMED = (('facebook', 'https://www.facebook.com/'), ('instagram', 'https://www.
 
 def ikon_sosmed():
     ikon = '\n\n'.join(blok('social-link', {'url': url, 'service': layanan}) for layanan, url in SOSMED)
-    return blok('social-links', {'className': 'is-style-logos-only vf-sosmed'},
+    return blok('social-links', {'openInNewTab': True, 'className': 'is-style-logos-only vf-sosmed'},
                 f'<ul class="wp-block-social-links is-style-logos-only vf-sosmed">{ikon}</ul>')
 
 
@@ -1308,9 +1316,12 @@ def beranda_perusahaan_foto(q, sd, isi, info, gaya):
                            layout={'type': 'constrained'}))
 
     # Katalog produk mengikuti referensi: tampil dekat setelah hero, bukan tersembunyi di halaman Produk.
-    bagian.append(grup([kepala_seksi(js.get('produk') or 'Produk Kami', 'Pilihan produk dan merchandise custom.'),
-                        query_produk(q, 8), tombol('Lihat Semua Produk', tautan('produk'))],
-                       kelas='vf-seksi vf-produk-unggulan', align='wide'))
+    # Hanya paket toko: query produk VD Store di situs perusahaan biasa tampil kosong
+    # (judul + tombol saja, ptmitraajegselaras.com 2026-09-17).
+    if info.get('toko'):
+        bagian.append(grup([kepala_seksi(js.get('produk') or 'Produk Kami', 'Pilihan produk dan merchandise custom.'),
+                            query_produk(q, 8), tombol('Lihat Semua Produk', tautan('produk'))],
+                           kelas='vf-seksi vf-produk-unggulan', align='wide'))
 
     # Ringkasan tentang: Data Situs, atau paragraf pertama halaman Tentang Kami tulisan AI
     # (glcagro.com: velocity_situs.tentang kosong, seksi tampil hanya judul + tombol).
@@ -2479,6 +2490,12 @@ def milik_installer(hal):
         bersih = bersih.replace(j, '')
     if not bersih.strip():
         return True
+    # Halaman paket-g-setup: pembuka baku + shortcode child (yang sudah dibuang di atas).
+    sisa = bersih
+    for p in PEMBUKA_LAMA:
+        sisa = sisa.replace(p, '')
+    if bersih != isi and not sisa.strip():
+        return True
     # _velocity_content_md5 dari generator AI/site-finish = md5 keluaran WP-CLI (isi + "\n").
     return bool(hal['isi_md5']) and hal['isi_md5'] in (md5(isi), md5(isi + '\n'), md5(bersih), md5(bersih + '\n'))
 
@@ -2598,6 +2615,15 @@ vfse_keluar(array('hasil' => $hasil, 'ubah' => $ubah));
 '''
 
 
+LABEL_MENU_BAKU = {'beranda': 'Beranda', 'tentang-kami': 'Tentang Kami', 'layanan': 'Layanan',
+                   'produk': 'Produk', 'galeri': 'Galeri', 'berita': 'Berita', 'faq': 'FAQ',
+                   'hubungi-kami': 'Hubungi Kami'}
+LABEL_MENU_INGGRIS = {'home', 'homepage', 'about', 'about us', 'company', 'who we are', 'profile',
+                      'services', 'service', 'solutions', 'products', 'product', 'shop', 'store',
+                      'gallery', 'portfolio', 'projects', 'news', 'blog', 'articles', 'insights',
+                      'contact', 'contact us', 'get in touch'}
+
+
 def menu_referensi(info, sd):
     """Menu mengikuti pohon menu web referensi (rencana VERSI 5), atau '' bila tidak berlaku.
 
@@ -2632,6 +2658,12 @@ def menu_referensi(info, sd):
         label = re.sub(r'\s+', ' ', m.get('label') or '').strip()[:30]
         # "PROFIL" -> "Profil", singkatan pendek (FAQ) tetap huruf besar.
         label = (label if re.fullmatch(r'[A-Z]{2,4}', label) else label.title()) or slug.replace('-', ' ').title()
+        # Referensi berbahasa Inggris: labelnya tidak boleh ikut ke situs klien yang
+        # berbahasa Indonesia (solusicerdasconsulting.com, 2026-09-18 — menunya
+        # terbaca "Home / Services / Company / Contact"). Susunan referensi tetap
+        # dipakai, hanya kata-katanya yang dikembalikan ke label baku.
+        if label.lower() in LABEL_MENU_INGGRIS:
+            label = LABEL_MENU_BAKU.get(slug, label)
         if slug == 'produk' and info.get('toko'):
             butir.append(menu_produk(info, label))
             dipakai.add(slug)

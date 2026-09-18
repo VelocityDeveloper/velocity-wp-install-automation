@@ -331,6 +331,10 @@ def buang_data_pemilik(konten, client_data):
         if not BIODATA_KUNCI.match(str(kunci).strip()):
             continue
         teks = re.sub(r'\s+', ' ', str(isi or '')).strip().lower()
+        # "Alamat lengkap: Balikpapan" hanyalah nama kota (allikan.com 2026-09-17): menyaringnya
+        # membuang 32 paragraf yang menyebut kota usaha. Alamat rumah punya angka atau >=3 kata.
+        if re.match(r'alamat', str(kunci).strip(), re.I) and not re.search(r'\d', teks) and len(teks.split()) < 3:
+            continue
         angka = re.sub(r'\D', '', teks)
         if len(angka) >= 8 and len(angka) >= len(re.sub(r'\W', '', teks)) * 0.7:
             nilai.append(('angka', angka))

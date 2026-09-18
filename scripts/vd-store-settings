@@ -70,11 +70,28 @@ def main():
     if not origin:
         m = re.search(r'Pengiriman barang dari kota mana\?Kecamatan apa\?\s*([^\n]+)', text, re.I)
         origin = m.group(1).strip() if m else ''
+    # Kontak toko = kontak PUBLIK (sama dengan tema: velocity-child-theme data_klien), bukan
+    # biodata pemilik FORM 2 ("untuk pemberitahuan perpanjangan") yang dulu terambil ke
+    # store_wa/store_address (yukpergimancing.com, allikan.com 2026-09-17). Nilai kosong tidak
+    # dikirim sehingga isian PM di VD Store tidak terhapus.
+    klien = {}
+    try:
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader('velocity_child_theme', str(HERE / 'velocity-child-theme'))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        vct = importlib.util.module_from_spec(spec)
+        loader.exec_module(vct)
+        klien = vct.data_klien(domain, cfg.get('site_title', ''))
+    except Exception as e:
+        print(f'vd_store_settings: kontak_publik_gagal:{type(e).__name__}')
+    kontak = {
+        'address': klien.get('ALAMAT', '') or cfg.get('alamat_publik', ''),
+        'email': klien.get('EMAIL_PUBLIK', '') or cfg.get('email_publik', ''),
+        'phone': klien.get('TELP', ''),
+        'wa': klien.get('WA', ''),
+    }
     data = {
-        'address': field(f, r'^alamat( lengkap)?$'),
-        'email': field(f, r'^email$'),
-        'phone': field(f, r'^(telepon|telp|no[. ]?telp|nomor telepon)$'),
-        'wa': field(f, r'whatsapp|wa'),
+        **{k: v for k, v in kontak.items() if v},
         'banks': banks,
         'couriers': couriers,
         'categories': categories,
@@ -106,7 +123,17 @@ if (!empty($d["banks"])) {
     $ada=false; foreach($a as $x){ if(($x["bank_name"]??"")===$baru["bank_name"]&&(string)($x["custom_bank_name"]??"")===$baru["custom_bank_name"]){$ada=true;break;} }
     if(!$ada) $a[]=$baru+["bank_logo_id"=>0,"bank_account"=>"","bank_holder"=>""]; }
   $s["payment_methods"]=array_values(array_unique(array_merge((array)($s["payment_methods"]??[]),["bank_transfer"]))); $s["store_bank_accounts"]=$a; }
-if (!empty($d["couriers"])) { $map=["jne"=>"JNE","tiki"=>"TIKI","sicepat"=>"SiCepat","j&t"=>"J&T","jnt"=>"J&T"]; $c=[]; foreach($d["couriers"] as $n){$k=strtolower(trim($n)); if(isset($map[$k]))$c[$k=="j&t"||$k=="jnt"?"jnt":$k]=$map[$k];} if($c)$s["shipping_couriers"]=$c; }
+if (!empty($d["couriers"])) {
+  // shipping_couriers = DAFTAR KODE kurir VD Store (wp_store_courier_labels: jne, tiki, sicepat, jnt, ...).
+  // Dulu tersimpan {"jne":"JNE"}: admin mencentang lewat in_array(kode, nilai) -> semua kurir tampak mati,
+  // dan checkout mengirim label ke API ongkir (yukpergimancing.com 2026-09-17). Kurir yang sudah aktif dipertahankan.
+  $kl=function_exists("wp_store_courier_labels")?wp_store_courier_labels():["jne"=>"JNE","tiki"=>"TIKI","sicepat"=>"SiCepat","jnt"=>"J&T","pos"=>"POS Indonesia"];
+  $nk=function($v){return preg_replace("/[^a-z0-9]/","",str_replace(["&","express","parcel","indonesia","cargo"],["n","","","",""],strtolower(trim((string)$v))));};
+  $kode=function($n)use($kl,$nk){$x=$nk($n); if($x==="")return null; $alias=["jt"=>"jnt","jnt"=>"jnt","idexpress"=>"ide","id"=>"ide","posindo"=>"pos","ninjaxpress"=>"ninja","ninjax"=>"ninja"]; if(isset($alias[$x]))return $alias[$x]; foreach($kl as $k=>$l){ if($nk($k)===$x||$nk($l)===$x)return $k; } return null;};
+  $c=[]; $lama=(array)($s["shipping_couriers"]??[]);
+  foreach($lama as $k=>$v){ $kk=is_string($k)&&isset($kl[$k])?$k:$kode($v); if($kk)$c[]=$kk; }
+  foreach($d["couriers"] as $n){ $kk=$kode($n); if($kk)$c[]=$kk; else echo "kurir_tidak_dikenal:".$n."\n"; }
+  $c=array_values(array_unique($c)); if($c)$s["shipping_couriers"]=$c; }
 if ($d["province_id"]!=="" && $d["city_id"]!=="" && $d["subdistrict_id"]!=="") { $s["shipping_origin_province"]=(string)$d["province_id"]; $s["shipping_origin_city"]=(string)$d["city_id"]; $s["shipping_origin_subdistrict"]=(string)$d["subdistrict_id"]; echo "origin:manifest_ids\n"; }
 elseif ($d["origin_text"]!=="" && !empty($s["rajaongkir_api_key"])) {
   $base=rtrim((string)($s["rajaongkir_base_url"]??"https://ongkir.velocitydeveloper.co/api/v3"),"/"); $h=["headers"=>["key"=>$s["rajaongkir_api_key"]],"timeout"=>20];

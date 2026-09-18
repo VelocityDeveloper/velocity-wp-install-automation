@@ -45,7 +45,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from pathlib import Path
+
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path('/home/project')
@@ -327,6 +335,23 @@ def banding_gaya(ref, ukur):
     return n
 
 
+
+def layanan_detail_situs(folder_rencana, home):
+    """URL satu halaman layanan-detail milik situs. Sumber utama: rencana FSE
+    (`layanan__<slug>.html`); cadangan: tautan anak /layanan/ di halaman Layanan."""
+    for berkas in sorted(Path(folder_rencana).glob('layanan__*.html')):
+        return f"{home}layanan/{berkas.stem.split('__', 1)[1]}/"
+    kode, badan = http(f'{home}layanan/')
+    if kode != 200:
+        return ''
+    for tautan in re.findall(r'href="([^"]+)"', badan):
+        jalur = urllib.parse.urlparse(tautan).path.strip('/')
+        bagian = jalur.split('/')
+        if len(bagian) >= 2 and bagian[-2] == 'layanan' and bagian[-1]:
+            return f'{home}layanan/{bagian[-1]}/'
+    return ''
+
+
 def banding_halaman(nama, ref_hal, ukur):
     n = Nilai(f'halaman_{nama}')
     if ukur is None:
@@ -428,7 +453,7 @@ def main():
     except (OSError, ValueError):
         dilewati = []
 
-    home = f'https://{domain}/'
+    home = situs_url(domain) + '/'
     kode, badan = http(home)
     if kode == 0:
         print('kemiripan: gagal:situs_tidak_terjangkau')
@@ -450,6 +475,14 @@ def main():
         if nama in (ref.get('halaman') or {}):
             # Toko online: katalog di arsip VD Store /produk/ (bukan halaman).
             halaman[nama] = f'{home}{slug}/'
+    # `layanan_detail` tidak punya slug tetap: halamannya anak dari /layanan/ dan
+    # namanya ikut layanan klien. Tanpa ini audit selalu mencatat "tidak_ada" dan
+    # nilainya 0, sehingga gerbang kemiripan tidak pernah bisa lulus
+    # (solusicerdasconsulting.com, 2026-09-18).
+    if 'layanan_detail' in (ref.get('halaman') or {}):
+        jalur = layanan_detail_situs(folder_rencana, home)
+        if jalur:
+            halaman['layanan_detail'] = jalur
     folder = folder_rencana / 'audit'
     folder.mkdir(parents=True, exist_ok=True)
     try:

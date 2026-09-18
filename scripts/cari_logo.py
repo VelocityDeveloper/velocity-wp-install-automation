@@ -153,6 +153,56 @@ def _muat_compro():
     return modul
 
 
+def _render_pdf_vektor(pdf, tujuan):
+    """Logo vektor: PDF tanpa gambar tertanam (mis. hasil Vectorizer.AI) tidak
+    menghasilkan apa pun lewat pdfimages, jadi halamannya dirender lalu dipangkas
+    ke area bertinta. Kasus nyata: solusicerdasconsulting.com/logo.pdf (2026-09-18)."""
+    if not shutil.which('pdftocairo'):
+        return None
+    try:
+        from PIL import Image, ImageChops
+    except ImportError:
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            dasar = Path(tmp) / 'render'
+            subprocess.run(['pdftocairo', '-png', '-r', '400', '-singlefile', str(pdf), str(dasar)],
+                           check=True, capture_output=True, timeout=120)
+            berkas = dasar.with_suffix('.png')
+            if not berkas.is_file():
+                return None
+            im = Image.open(berkas).convert('RGB')
+            latar = Image.new('RGB', im.size, (255, 255, 255))
+            kotak = ImageChops.difference(im, latar).convert('L').point(
+                lambda v: 255 if v > 12 else 0).getbbox()
+            if not kotak:
+                return None
+            lebar, tinggi = kotak[2] - kotak[0], kotak[3] - kotak[1]
+            # Halaman penuh tinta = pindaian/latar berwarna, bukan logo lepas.
+            if lebar < 40 or tinggi < 40 or (lebar * tinggi) > 0.92 * im.width * im.height:
+                return None
+            sisa = 24
+            im = Image.open(berkas).convert('RGBA').crop((
+                max(kotak[0] - sisa, 0), max(kotak[1] - sisa, 0),
+                min(kotak[2] + sisa, im.width), min(kotak[3] + sisa, im.height)))
+            # Halaman PDF hampir selalu mengecat kotak putih dulu, jadi `-transp`
+            # tidak menghasilkan apa-apa: putihnya dijadikan tembus pandang sendiri
+            # (logo di header tema harus tanpa latar, dan `mirip_logo` menolak
+            # gambar tanpa transparansi berwarna banyak).
+            merah, hijau, biru, _ = im.split()
+            paling_gelap = ImageChops.darker(ImageChops.darker(merah, hijau), biru)
+            # 250 ke atas = latar, 235 ke bawah = tinta, di antaranya tepi halus.
+            im.putalpha(paling_gelap.point(
+                lambda v: 0 if v >= 250 else 255 if v <= 235 else round((250 - v) * 255 / 15)))
+            if im.height > 400:
+                im = im.resize((round(im.width * 400 / im.height), 400), Image.LANCZOS)
+            tujuan.parent.mkdir(parents=True, exist_ok=True)
+            im.save(tujuan)
+            return tujuan
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def _dari_pdf(pdf, tujuan):
     """Potong logo dari halaman pertama sebuah PDF (pakai pemotong compro-klien)."""
     if not shutil.which('pdfimages') or not shutil.which('pdfinfo'):
@@ -162,9 +212,11 @@ def _dari_pdf(pdf, tujuan):
         with tempfile.TemporaryDirectory() as tmp:
             gambar = ck.ekstrak_gambar(pdf, 1, Path(tmp))
             hasil = ck.potong_logo(gambar, tujuan)
-            return Path(hasil['berkas']) if hasil else None
+            if hasil:
+                return Path(hasil['berkas'])
     except Exception:
-        return None
+        pass
+    return _render_pdf_vektor(pdf, tujuan)
 
 
 def _dari_office(berkas, tujuan_dir):

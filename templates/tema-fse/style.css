@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.10.36
+Version: 1.10.39
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -2503,6 +2503,15 @@ body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: c
 .vf-kartu-ringkas .wp-block-post-excerpt { margin-top: .4rem; font-size: .88rem; color: var(--wp--preset--color--teks); }
 .vf-kartu-ringkas .wp-block-post-excerpt__more-text { margin-top: .7rem; }
 .vf-kartu-ringkas .wp-block-post-excerpt__more-link { color: var(--wp--preset--color--ink); font-weight: 600; text-decoration: none; }
+/* Kartu artikel ringkas di pita gelap (allikan.com 2026-09-17): judul, ringkasan & tautan
+   memakai warna teks pita, bukan ink/teks yang hilang di latar primary. */
+.vf-ref .vf-pita--gelap .vf-kepala-baris h2,
+.vf-ref .vf-pita--gelap .vf-kepala-baris a,
+.vf-pita--gelap .vf-kartu-ringkas .wp-block-post-title a,
+.vf-pita--gelap .vf-kartu-ringkas .wp-block-post-excerpt,
+.vf-pita--gelap .vf-kartu-ringkas .wp-block-post-excerpt__more-link,
+.vf-pita--gelap .vf-kartu-ringkas .wp-block-post-date { color: inherit; }
+.vf-pita--gelap .vf-kartu-ringkas .wp-block-post-excerpt { opacity: .88; }
 @media (min-width: 782px) {
   .vf-kartu-ringkas.wp-block-post-template { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
 }
@@ -2546,6 +2555,8 @@ body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: c
 .vf-ref.vf-footer-logo .vf-footer__logo-img { width: auto; max-width: 220px; max-height: 64px; height: auto; }
 /* Logo berwarna gelap tetap terbaca di footer gelap. */
 .vf-ref.vf-footer-logo.vf-footer-gelap .vf-footer__logo { padding: .45rem .7rem; border-radius: var(--vf-kartu-radius, 6px); background: var(--wp--preset--color--putih); }
+/* Filter pemutih logo footer bawaan tidak dipakai di atas alas putih (logo sempat tak terlihat). */
+.vf-ref.vf-footer-logo.vf-footer-gelap .vf-footer__logo-img { filter: none; }
 .vf-ref.vf-footer-judul-biasa .vf-footer__judul { text-transform: none; letter-spacing: 0; }
 .vf-ref.vf-hak-cipta-terbelah .vf-footer__bawah { justify-content: space-between !important; }
 .vf-ref.vf-hak-cipta-tengah .vf-footer__bawah { justify-content: center !important; text-align: center; }
@@ -2790,3 +2801,18 @@ body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: c
   .vf-ref.vf-header-keranjang .vf-header .wp-block-site-logo img { height: 36px !important; }
   .vf-ref.vf-header-keranjang .vf-topbar__cari input[type="search"] { width: 58vw; }
 }
+
+/* Tombol & aksen VD Store memakai palet situs, bukan biru bawaan plugin (allikan.com 2026-09-17).
+   Hanya build baru (vf-tampilan-2) supaya toko lama tidak berubah warna. */
+body.vf-tampilan-2 {
+  --primary-color: var(--wp--preset--color--primary);
+  --primary-color-hover: var(--wp--preset--color--primary-gelap);
+  --blue-500: var(--wp--preset--color--primary);
+  --blue-600: var(--wp--preset--color--primary);
+  --blue-700: var(--wp--preset--color--primary-gelap);
+  --callout-title-color: var(--wp--preset--color--primary);
+}
+body.vf-tampilan-2 .wps-price-range .wps-slider .wps-progress,
+body.vf-tampilan-2 .wps-label-badge.label-recommended { background: var(--wp--preset--color--primary); }
+body.vf-tampilan-2 .carousel-nav .carousel-cell.is-nav-selected { border-color: var(--wp--preset--color--primary); }
+body.vf-tampilan-2 .wps-price-range input[type="range"] { accent-color: var(--wp--preset--color--primary); }

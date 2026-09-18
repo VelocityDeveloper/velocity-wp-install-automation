@@ -38,6 +38,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
+
 HERE = Path(__file__).resolve().parent
 OUT_ROOT = Path('/var/lib/velocity/visual')
 # UA biasa: aturan bot server menolak UA pendek/skrip dengan 403.
@@ -189,7 +196,7 @@ def main():
 
     daftar = [('beranda', '/', False), ('beranda-hp', '/', True)]
     for nama, path, hp in daftar:
-        url = f'https://{domain}{path}?cekvisual={int(time.time())}'
+        url = f'{situs_url(domain)}{path}?cekvisual={int(time.time())}'
         kode = http_kode(url)
         hasil = {'http': kode, 'potongan': 0, 'path': path}
         if kode == 404 and nama not in ('beranda', 'beranda-hp'):

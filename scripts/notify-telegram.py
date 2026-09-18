@@ -60,6 +60,23 @@ def load_config():
     return token.strip(), chats
 
 
+def manifest_situs_url(domain):
+    """Alamat situs untuk laporan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain> (manifest `site_url=`), jadi tautan di Telegram
+    harus menunjuk ke sana, bukan ke domain klien yang belum kita pegang."""
+    if not domain or '/' in domain or '..' in domain:
+        return f'https://{domain}'
+    try:
+        text = (MANIFEST_ROOT / domain / f'{domain}.txt').read_text()
+    except OSError:
+        return f'https://{domain}'
+    for line in text.splitlines():
+        key, _, value = line.partition('=')
+        if key.strip() == 'site_url' and value.strip():
+            return value.strip().rstrip('/')
+    return f'https://{domain}'
+
+
 def manifest_paket(domain):
     """Paket website dari manifest. Ditulis saat manifest dibuat dari data CRM,
     karena situs yang sudah terpasang tidak lagi muncul di antrean installer."""
@@ -238,7 +255,8 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
             head += f'Tema: <code>{html.escape(theme)}</code>\n'
         if maintenance:
             head += f'Maintenance: <b>{html.escape(maintenance)}</b>\n'
-        links = f'Situs: https://{domain}\nAdmin: https://{domain}/wp-admin'
+        situs = manifest_situs_url(domain)
+        links = f'Situs: {situs}\nAdmin: {situs}/wp-admin'
         user, password = login
         if user:
             links += f'\nUsername: <code>{html.escape(user)}</code>'

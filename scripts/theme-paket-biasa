@@ -688,7 +688,10 @@ def foto_artikel(manifest, cfg, domain):
     return 0 if keluar and 'diisi' in keluar else 1
 
 
-def konteks_adaptor(cfg, domain, isi, kontak):
+GALERI_MAKS = 8
+
+
+def konteks_adaptor(cfg, domain, isi, kontak, galeri=0):
     """Data untuk penanda adaptor AI (lihat adaptor_tema.PENANDA)."""
     nama = cfg.get('site_title') or domain
     js = isi.get('judul_seksi') or {}
@@ -713,6 +716,8 @@ def konteks_adaptor(cfg, domain, isi, kontak):
                          'link': f"/layanan/#{l['slug']}"} for l in isi.get('layanan') or [] if l.get('judul')],
             'keunggulan': [{'judul': k['judul'], 'teks': k.get('teks') or ''}
                            for k in isi.get('keunggulan') or [] if k.get('judul')],
+            # Galeri hanya dari foto klien sendiri (galeri-<n>.jpg), bukan foto bank.
+            'galeri': [{'slug': str(i), 'judul': f'Foto {nama} {i}'} for i in range(1, galeri + 1)],
         },
     }
 
@@ -794,7 +799,11 @@ def main():
     import adaptor_tema as at
     key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     finish = muat('site_finish', HERE / 'site-finish')
-    info, catatan_ai, ctx = None, None, konteks_adaptor(cfg, domain, isi, kontak)
+    klien = foto_klien(domain)
+    simpan = TEMBOLOK / domain
+    galeri = [f'galeri-{i}' for i in range(1, GALERI_MAKS + 1)
+              if i <= len(klien) or (simpan / f'galeri-{i}.jpg').is_file()]
+    info, catatan_ai, ctx = None, None, konteks_adaptor(cfg, domain, isi, kontak, len(galeri))
     if key and Path(key).is_file():
         try:
             info = at.baca_tema(finish.ssh_command(cfg, key), finish.docroot(domain, cfg.get('da_user', '')), cfg.get('da_user', ''))
@@ -815,9 +824,8 @@ def main():
     kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-{domain}-'))
     SEMENTARA.append(kerja)
     layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
-    klien = foto_klien(domain)
-    kunci_perlu = ['hero', 'tentang'] + [f'layanan-{l["slug"]}' for l in layanan]
-    simpan = TEMBOLOK / domain
+    pendamping = ['foto1', 'foto2', 'foto3']
+    kunci_perlu = ['hero', 'tentang'] + [f'layanan-{l["slug"]}' for l in layanan] + pendamping + galeri
     if all((simpan / f'{k}.jpg').is_file() for k in kunci_perlu):
         klien = []  # semua gambar sudah pernah disiapkan
         sumber = {k: simpan / f'{k}.jpg' for k in kunci_perlu}
@@ -827,8 +835,10 @@ def main():
     if klien:
         # Foto klien dipakai bergilir untuk semua slot: foto bank yang mengisi sisa slot pernah
         # berupa pindaian arsip tua di situs yang punya lima foto armada sendiri.
-        for i, kunci in enumerate(['hero', 'tentang'] + [f'layanan-{l["slug"]}' for l in layanan]):
+        for i, kunci in enumerate(k for k in kunci_perlu if k not in galeri):
             sumber[kunci] = klien[i % len(klien)][0]
+        for i, kunci in enumerate(galeri):
+            sumber[kunci] = klien[i][0]
     slot = []
     if 'hero' in sumber and 'tentang' in sumber and all(k in sumber for k in kunci_perlu):
         pass
@@ -838,13 +848,14 @@ def main():
         slot.append(('tentang', isi.get('tentang_foto') or '', 'Foto tentang kami'))
     slot += [(f'layanan-{l["slug"]}', l.get('foto') or l['judul'], l['judul'])
              for l in layanan if f'layanan-{l["slug"]}' not in sumber]
+    slot += [(k, isi.get('hero_foto') or '', f'Foto {i}') for i, k in enumerate(pendamping, 1) if k not in sumber]
     slot = [s for s in slot if s[1]]
     if klien:
         print(f'tampilan: foto_klien={len(klien)}')
     slot = [s for s in slot if s[0] not in sumber]
     sumber.update({k: v for k, v in foto_contoh(manifest, isi, slot).items() if k not in sumber})
     aset = {}
-    ukuran = {'hero': (1800, 800), 'tentang': (800, 900)}
+    ukuran = {'hero': (1800, 800), 'tentang': (800, 900), **{k: (800, 800) for k in pendamping + galeri}}
     for kunci, berkas in sumber.items():
         w, h = ukuran.get(kunci, (600, 600))
         try:
@@ -860,6 +871,10 @@ def main():
     if 'hero' not in aset:
         aset['hero'] = banner_polos(data['nama'], (isi.get('warna') or {}).get('utama'), kerja / 'hero.jpg')
         print('tampilan: banner_polos')
+    for i, kunci in enumerate(pendamping):
+        cadangan = [k for k in ['tentang'] + [f'layanan-{l["slug"]}' for l in layanan] + ['hero'] if k in aset]
+        if kunci not in aset and cadangan:
+            aset[kunci] = potong(aset[cadangan[i % len(cadangan)]], 800, 800, kerja / f'{kunci}.jpg')
     if not coba:
         simpan.mkdir(parents=True, exist_ok=True)
         for kunci, berkas in aset.items():
@@ -867,6 +882,8 @@ def main():
                 (simpan / f'{kunci}.jpg').write_bytes(Path(berkas).read_bytes())
     judul = {'hero': f"Banner {data['nama']}", 'tentang': f"Tentang {data['nama']}"}
     judul.update({f'layanan-{l["slug"]}': l['judul'] for l in layanan})
+    judul.update({k: f"Foto {data['nama']}" for k in pendamping})
+    judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
     data['aset'] = {k: {'file': f'{k}.jpg', 'judul': judul.get(k, k),
                         'sidik': f"{domain}:{k}:{hashlib.md5(p.read_bytes()).hexdigest()}"} for k, p in aset.items()}
     (kerja / 'data.json').write_text(json.dumps(data, ensure_ascii=False))

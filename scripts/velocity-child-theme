@@ -400,6 +400,17 @@ def data_klien(domain, nama=''):
     wa, telp = nomor_wa(kontak_web)
     if not wa:
         wa, telp = nomor_wa(dokumen)
+    # Form paket toko online tidak punya "Kontak utk di web": HP/Telp & Email toko ada di
+    # FORM 1 "DATA WEBSITE" (sebelum BIODATA PEMILIK). Dipakai hanya bila kontak web & dokumen
+    # klien kosong, supaya situs toko yang sudah jadi tidak berubah kontaknya (allikan.com).
+    if not kontak_web and not wa and not EMAIL_RE.search(dokumen):
+        m_toko = re.search(r'DATA WEBSITE(.*?)(?:FORM 2\.|BIO\s*A?DATA)', teks_form, re.S | re.I)
+        if m_toko and re.search(r'Nama Toko', m_toko.group(1), re.I):
+            kontak_web = '\n'.join(re.findall(r'^\s*(?:HP|Telp|WA|WhatsApp)\b.*$|^\s*[^\s"]+@[^\s"]+\s*$',
+                                              m_toko.group(1), re.I | re.M))
+            # "+62 857 ..." (spasi sesudah kode negara) tidak dikenali NOMOR_RE.
+            wa, telp = nomor_wa(re.sub(r'\+62[\s.-]+(?=8)', '+62', kontak_web))
+            telp = re.sub(r'^\+62(?=8)', '+62 ', telp)
 
     calon_email = [e for e in EMAIL_RE.findall(kontak_web) + EMAIL_RE.findall(dokumen)
                    if not re.search(r'velocity|example', e, re.I)]

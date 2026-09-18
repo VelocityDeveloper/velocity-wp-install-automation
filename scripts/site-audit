@@ -25,6 +25,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
+
 HERE = Path(__file__).resolve().parent
 ROOT = Path('/home/project')
 CHILD_THEME = HERE / 'velocity-child-theme'
@@ -423,7 +430,7 @@ def http(url, method='GET', timeout=20):
 
 def ssl_valid(domain):
     try:
-        urllib.request.urlopen(urllib.request.Request(f'https://{domain}/', headers=UA), timeout=20)
+        urllib.request.urlopen(urllib.request.Request(situs_url(domain) + '/', headers=UA), timeout=20)
         return True, ''
     except urllib.error.HTTPError:
         return True, ''          # 503 maintenance tetap berarti SSL-nya lolos
@@ -507,7 +514,7 @@ def main():
 
     # --- tampilan mengikuti company profile & tombol WhatsApp ---
     if paket_custom:
-        kode_beranda, beranda = http(f'https://{domain}/?audit={int(time.time())}')
+        kode_beranda, beranda = http(f'{situs_url(domain)}/?audit={int(time.time())}')
         try:
             compro = json.loads((Path('/var/lib/velocity/compro') / domain / 'compro.json').read_text())
         except (OSError, ValueError):
@@ -658,7 +665,7 @@ def main():
     # Situs maintenance (503) jatuh ke isi halaman + Data Situs FSE.
     tampil = ''
     for jalur in ('/', f"/{cari_halaman('hubungi-kami') or 'hubungi-kami'}/"):
-        kode_h, isi_h = http(f'https://{domain}{jalur}?audit={int(time.time())}')
+        kode_h, isi_h = http(f'{situs_url(domain)}{jalur}?audit={int(time.time())}')
         if kode_h == 200:
             tampil += isi_h.decode('utf-8', 'replace')
     if not tampil:
@@ -814,7 +821,7 @@ def main():
     info['ssl'] = 'valid' if ok_ssl else pesan_ssl
     if not ok_ssl:
         temuan.append('ssl_tidak_valid')
-    kode, _ = http(f'https://{domain}/wp-includes/css/dashicons.min.css', method='HEAD')
+    kode, _ = http(f'{situs_url(domain)}/wp-includes/css/dashicons.min.css', method='HEAD')
     info['aset_http'] = kode
     if kode != 200:
         temuan.append(f'aset_inti_http_{kode}')

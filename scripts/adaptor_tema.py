@@ -17,6 +17,8 @@ Bahasa nilai adaptor:
   "{{id:hero}}" / "{{url:hero}}"        gambar (hero, tentang, logo) sebagai ID lampiran / URL
   {"__untuk__": "layanan", "isi": {..}} daftar berulang per layanan ({{l.judul}}, {{id:layanan}}, ...)
   {"__untuk__": "keunggulan", "isi": {..}}  per keunggulan ({{k.judul}}, {{k.teks}})
+  {"__untuk__": "galeri", "isi": {..}}  per foto klien ({{g.judul}}, {{id:galeri}}, {{url:galeri}})
+  "{{id:foto1}}" .. "{{url:foto3}}"     foto pendamping (gambar kecil banner, dsb.)
   {"__json__": nilai}                   disimpan sebagai string JSON (repeater yang menyimpan teks JSON)
 """
 import hashlib
@@ -28,6 +30,13 @@ import subprocess
 import tarfile
 import urllib.request
 from pathlib import Path
+
+def situs_url(domain: str) -> str:
+    """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
+    velocitydeveloper.co/<domain>; runner mengisinya lewat VELOCITY_LOKAL_URL supaya
+    pemeriksaan tidak nyasar ke situs klien yang asli."""
+    return (os.environ.get('VELOCITY_LOKAL_URL') or f'https://{domain}').rstrip('/')
+
 
 FOLDER = Path('/var/lib/velocity/tampilan/_adaptor')
 BUKAN_ANAK = ('velocity', 'velocity-fse')
@@ -56,8 +65,11 @@ PENANDA_ITEM = {
     'layanan': {'l.judul': 'judul layanan', 'l.teks': 'penjelasan layanan', 'l.teks_pendek': 'penjelasan <= 110 karakter',
                 'l.rincian': 'rincian layanan dipisah koma', 'l.link': 'tautan ke bagian layanan itu'},
     'keunggulan': {'k.judul': 'judul keunggulan', 'k.teks': 'penjelasan keunggulan'},
+    'galeri': {'g.judul': 'keterangan foto'},
 }
-GAMBAR = ('hero', 'tentang', 'logo')
+GAMBAR = ('hero', 'tentang', 'logo', 'foto1', 'foto2', 'foto3')
+# Gambar per butir daftar: {{id:layanan}} di dalam "__untuk__": "layanan", {{id:galeri}} di dalam "galeri".
+GAMBAR_ITEM = ('layanan', 'galeri')
 # Pengaturan seluruh situs, bukan isi beranda: tidak boleh diubah adaptor (AI sempat menulis
 # custom_logo "" yang akan menghapus logo klien, juga warna utama & tipe container).
 GLOBAL_RE = re.compile(r'^(custom_logo|site_icon|nav_menu_locations|sidebars_widgets|custom_css_post_id|'
@@ -172,7 +184,7 @@ def minta_ai(gen, model, info, gagal_sebelumnya=''):
     daftar = sorted(pengaturan_tema(info))
     penanda = '\n'.join(f'  {{{{{k}}}}}  {v}' for k, v in PENANDA.items())
     item = '\n'.join(f'  dalam "__untuk__": "{j}": ' + ', '.join(f'{{{{{k}}}}} ({v})' for k, v in d.items())
-                     + (', {{id:layanan}} / {{url:layanan}} (gambar layanan itu)' if j == 'layanan' else '')
+                     + (f', {{{{id:{j}}}}} / {{{{url:{j}}}}} (gambar butir itu)' if j in GAMBAR_ITEM else '')
                      for j, d in PENANDA_ITEM.items())
     sistem = ('You are a senior WordPress theme developer. You read classic child theme PHP code and map a '
               'company\'s content onto the theme\'s homepage settings. Output ONLY one valid JSON object.')
@@ -189,6 +201,7 @@ Penanda data yang tersedia:
 {penanda}
 {item}
   gambar: {{{{id:hero}}}} {{{{url:hero}}}} {{{{id:tentang}}}} {{{{url:tentang}}}} {{{{id:logo}}}} {{{{url:logo}}}}
+          {{{{id:foto1}}}} {{{{id:foto2}}}} {{{{id:foto3}}}} (dan versi url:) foto pendamping, SELALU tersedia
 Nilai boleh gabungan teks & penanda, mis. "<p>{{{{profil}}}}</p>". Daftar berulang:
   {{"__untuk__": "layanan", "isi": {{"<nama field repeater>": "{{{{l.judul}}}}", ...}}}}
 Kalau tema menyimpan repeater sebagai TEKS JSON, bungkus: {{"__json__": <nilai>}}.
@@ -199,8 +212,11 @@ ATURAN:
   widget, latar. Pengaturan header yang berisi data usaha (alamat, telepon, email, tagline) boleh.
 - Pakai format yang diharapkan kode (lihat sanitize_callback & cara template membaca nilainya): gambar sebagai ID
   kalau kode memakai wp_get_attachment_*/absint, sebagai URL kalau langsung dipakai di src/url().
-- Isi SEMUA bagian beranda yang punya data. Bagian yang tidak ada datanya (logo klien, testimoni, galeri, slider
-  tambahan, dsb.) kosongkan ("" atau []) supaya teks/gambar contoh bawaan tema tidak tampil.
+- Isi SEMUA bagian beranda yang punya data. Bagian yang tidak ada datanya (logo klien, testimoni, dsb.)
+  kosongkan ("" atau []) supaya teks/gambar contoh bawaan tema tidak tampil.
+- Galeri/portofolio foto di beranda SELALU diisi dengan {{"__untuk__": "galeri", ...}} (daftarnya boleh kosong
+  saat dipasang; installer yang menentukan). Gambar pendamping/gambar kecil banner/slider tambahan diisi
+  {{{{id:foto1}}}}..{{{{id:foto3}}}}, jangan dikosongkan.
 - Nilai ditulis dengan set_theme_mod() LANGSUNG, TANPA sanitize_callback Customizer. Simpan dalam bentuk yang
   DIBACA template (hasil sesudah sanitize): repeater yang di-json_decode oleh sanitize tetap ditulis sebagai array,
   bukan {{"__json__"}}. Pakai {{"__json__"}} hanya kalau template sendiri yang melakukan json_decode atas nilainya.
@@ -263,9 +279,9 @@ def _penanda_dalam(nilai, konteks):
             salah += _penanda_dalam(v, konteks)
     elif isinstance(nilai, str):
         for p in POLA.findall(nilai):
-            gambar = re.fullmatch(r'(id|url):([a-z]+)', p)
+            gambar = re.fullmatch(r'(id|url):([a-z]+[0-9]*)', p)
             if gambar:
-                ok = gambar.group(2) in GAMBAR or (gambar.group(2) == 'layanan' and konteks == 'layanan')
+                ok = gambar.group(2) in GAMBAR or (gambar.group(2) in GAMBAR_ITEM and konteks == gambar.group(2))
                 if ok and gambar.group(0) != nilai.strip('{} '):
                     salah.append(f'penanda gambar harus berdiri sendiri: {p}')
                 elif not ok:
@@ -286,7 +302,7 @@ def rapikan(nilai):
             teks = json.dumps(satu, ensure_ascii=False)
             jenis = next((j for j, d in PENANDA_ITEM.items()
                           if any('{{' + k in teks or '{{ ' + k in teks for k in d)
-                          or (j == 'layanan' and re.search(r'\{\{\s*(id|url):layanan', teks))), None)
+                          or (j in GAMBAR_ITEM and re.search(r'\{\{\s*(id|url):' + j + r'\b', teks))), None)
             if jenis:
                 return {'__untuk__': jenis, 'isi': rapikan(satu)}
         return [rapikan(v) for v in nilai]
@@ -333,9 +349,9 @@ def isi_nilai(nilai, data, item=None):
 
     def ganti(m):
         p = m.group(1).strip()
-        if re.fullmatch(r'(id|url):layanan', p) and item and item[0] == 'layanan':
-            return '{{%s:layanan-%s}}' % (p.split(':')[0], item[1]['slug'])
-        if re.fullmatch(r'(id|url):[a-z]+', p):
+        if re.fullmatch(r'(id|url):(layanan|galeri)', p) and item and item[0] == p.split(':')[1]:
+            return '{{%s:%s-%s}}' % (p.split(':')[0], item[0], item[1]['slug'])
+        if re.fullmatch(r'(id|url):[a-z]+[0-9]*', p):
             return m.group(0)
         if item and '.' in p:
             return _teks(item[1].get(p.split('.', 1)[1], ''))
@@ -347,7 +363,8 @@ def isi_nilai(nilai, data, item=None):
 
 def periksa_beranda(domain, slug, data, adaptor):
     """(lulus, alasan). Beranda dibuka lewat pratinjau (maintenance mode meloloskan is_preview)."""
-    url = f'https://{domain}/{slug}/?preview=true' if slug else f'https://{domain}/'
+    url = (f'{situs_url(domain)}/{slug}/?preview=true' if slug
+           else situs_url(domain) + '/')
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=40) as r:
             halaman = r.read().decode(errors='replace')

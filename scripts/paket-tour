@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Paket Tour (plugin velocity-tour-travel) untuk child theme tour dari dokumen klien.
+
+Pemakaian: paket-tour <manifest> [--coba]      (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Permintaan user 2026-09-17 (sadewatourstravel.com, child theme velocity-tour1): beranda
+tema tour menampilkan "Paket Wisata" dari CPT paket-tour, yang didaftarkan plugin
+velocity-tour-travel (github.com/VelocityDeveloper/velocity-tour-travel, tidak ada di API
+plugin Velocity). Tanpa plugin + isi, bagian itu tidak tampil sama sekali.
+
+Langkah ini hanya berjalan kalau child theme aktif memakai post type paket-tour:
+- plugin velocity-tour-travel dipasang (zip dari repo GitHub, tembolok
+  /var/lib/velocity/packages/plugins/) dan diaktifkan; plugin yang sudah ada dibiarkan
+- paket dibaca AI dari dokumen klien (harga per jumlah peserta, fasilitas, rundown) dan
+  disimpan di /var/lib/velocity/ai/generated/<domain>-paket-tour.json (run ulang tanpa AI)
+- tiap paket jadi post paket-tour: harga mulai, durasi, lokasi, itinerary, fasilitas,
+  kategori-paket/destinasi-paket/durasi-paket, foto utama + galeri dari foto klien
+- nomor WhatsApp pemesanan (opsi no_pemesanan) diisi bila masih kosong; menu "Paket Tour"
+Post yang sudah disunting orang tidak ditimpa (_velocity_content_md5).
+"""
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+REPO = 'https://github.com/VelocityDeveloper/velocity-tour-travel.git'
+SLUG = 'velocity-tour-travel'
+CACHE = Path('/var/lib/velocity/packages/plugins')
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+ON_PROGRESS = Path('/home/On Progress')
+
+CEK_PHP = ('$d = get_stylesheet_directory(); $pakai = false;'
+           ' foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($d, FilesystemIterator::SKIP_DOTS)) as $f) {'
+           ' if (substr($f, -4) === ".php" && strpos((string) file_get_contents($f), "paket-tour") !== false) { $pakai = true; break; } }'
+           ' echo "tema=" . get_stylesheet() . " pakai=" . ($pakai ? 1 : 0) . "\\n";')
+
+REMOTE_PHP = r'''<?php
+// Dijalankan paket-tour lewat wp eval-file <file> <folder>.
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+if (!$d) { echo "paket_tour: data_tidak_terbaca\n"; return; }
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+require_once ABSPATH . 'wp-admin/includes/plugin.php';
+require_once ABSPATH . 'wp-admin/includes/nav-menu.php';
+$admins = get_users(['role' => 'administrator', 'number' => 1, 'orderby' => 'ID']);
+wp_set_current_user($admins ? $admins[0]->ID : 1);
+kses_remove_filters();
+
+// 1. Plugin
+$berkas = 'velocity-tour-travel/velocity-tour-travel.php';
+if (!file_exists(WP_PLUGIN_DIR . '/' . $berkas)) {
+    $zip = new ZipArchive();
+    if ($zip->open("$dir/plugin.zip") !== true || !$zip->extractTo(WP_PLUGIN_DIR)) { echo "paket_tour: plugin_gagal_dibongkar\n"; return; }
+    $zip->close();
+    echo "paket_tour: plugin_dipasang\n";
+}
+if (!is_plugin_active($berkas)) {
+    $h = activate_plugin($berkas);
+    if (is_wp_error($h)) { echo 'paket_tour: plugin_gagal_aktif:' . $h->get_error_message() . "\n"; return; }
+    echo "paket_tour: plugin_aktif\n";
+}
+// Plugin baru aktif di proses ini: daftarkan CPT & taksonomi sekarang.
+if (!post_type_exists('paket-tour')) {
+    include_once WP_PLUGIN_DIR . '/' . $berkas;
+    if (function_exists('velocity_tour_travel_admin_init')) { velocity_tour_travel_admin_init(); }
+}
+if (!post_type_exists('paket-tour')) { echo "paket_tour: cpt_tidak_terdaftar\n"; return; }
+if (!get_option('no_pemesanan') && $d['wa'] !== '') { update_option('no_pemesanan', $d['wa']); echo "paket_tour: no_pemesanan_diisi\n"; }
+
+// 2. Media (dipakai ulang lewat sidik berkas)
+$media = [];
+foreach ($d['aset'] as $kunci => $a) {
+    $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_tampilan_aset', 'meta_value' => $a['sidik']]);
+    if ($ada) { $media[$kunci] = (int) $ada[0]; continue; }
+    $tmp = wp_tempnam($a['file']); copy("$dir/{$a['file']}", $tmp);
+    $id = media_handle_sideload(['name' => $a['file'], 'tmp_name' => $tmp], 0, $a['judul']);
+    if (is_wp_error($id)) { echo "paket_tour: media_gagal:$kunci\n"; continue; }
+    update_post_meta($id, '_velocity_tampilan_aset', $a['sidik']);
+    update_post_meta($id, '_wp_attachment_image_alt', $a['judul']);
+    $media[$kunci] = (int) $id;
+}
+
+// 3. Post paket-tour
+$istilah = function ($tax, $nama) {
+    if ($nama === '') { return []; }
+    $t = term_exists($nama, $tax);
+    if (!$t) { $t = wp_insert_term($nama, $tax); }
+    return is_wp_error($t) ? [] : [(int) $t['term_id']];
+};
+$baru = $diperbarui = $dibiarkan = 0;
+foreach ($d['paket'] as $urut => $p) {
+    $ada = get_posts(['post_type' => 'paket-tour', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_paket_kunci', 'meta_value' => $p['kunci']]);
+    $id = $ada ? (int) $ada[0] : 0;
+    if ($id) {
+        $m = get_post_meta($id, '_velocity_content_md5', true);
+        if (!$m || $m !== md5(get_post_field('post_content', $id) . "\n")) { $dibiarkan++; continue; }
+    }
+    $post = ['post_type' => 'paket-tour', 'post_status' => 'publish', 'post_title' => $p['judul'],
+             'post_content' => $p['konten'], 'post_excerpt' => $p['ringkasan'], 'menu_order' => $urut,
+             // Beranda tema mengurutkan terbaru dulu: paket pertama dokumen diberi tanggal terbaru.
+             'post_date' => gmdate('Y-m-d H:i:s', time() + 7 * 3600 - $urut * 60)];
+    if ($id) { $post['ID'] = $id; unset($post['post_date']); wp_update_post($post); $diperbarui++; }
+    else { $post['post_name'] = $p['slug']; $id = wp_insert_post($post); $baru++; }
+    if (!$id || is_wp_error($id)) { echo "paket_tour: gagal:{$p['slug']}\n"; continue; }
+    update_post_meta($id, '_velocity_paket_kunci', $p['kunci']);
+    update_post_meta($id, '_velocity_content_md5', md5(get_post_field('post_content', $id) . "\n"));
+    foreach (['harga', 'durasi', 'lokasi', 'itinerary', 'fasilitas', 'waktu'] as $k) {
+        if (($p[$k] ?? '') !== '') { update_post_meta($id, $k, $p[$k]); } else { delete_post_meta($id, $k); }
+    }
+    $galeri = [];
+    foreach ($p['galeri'] as $kunci) {
+        if (!empty($media[$kunci])) { $galeri[$media[$kunci]] = wp_get_attachment_url($media[$kunci]); }
+    }
+    if ($galeri) { update_post_meta($id, 'galeri', $galeri); }
+    if (!empty($media[$p['foto']])) { set_post_thumbnail($id, $media[$p['foto']]); }
+    wp_set_object_terms($id, $istilah('kategori-paket', $p['kategori']), 'kategori-paket');
+    wp_set_object_terms($id, $istilah('destinasi-paket', $p['destinasi']), 'destinasi-paket');
+    wp_set_object_terms($id, $istilah('durasi-paket', $p['durasi']), 'durasi-paket');
+}
+echo "paket_tour: paket baru=$baru diperbarui=$diperbarui dibiarkan=$dibiarkan\n";
+
+// 4. Menu utama: "Paket Tour" sesudah Beranda
+$lokasi = get_nav_menu_locations(); $menu_id = (int) ($lokasi['primary'] ?? 0);
+$arsip = get_post_type_archive_link('paket-tour');
+if ($menu_id && $arsip) {
+    $ada = false; $posisi = 1;
+    foreach ((array) wp_get_nav_menu_items($menu_id) as $it) {
+        if ($it->type === 'post_type_archive' && $it->object === 'paket-tour') { $ada = true; }
+        if ((int) $it->object_id === (int) get_option('page_on_front')) { $posisi = $it->menu_order + 1; }
+    }
+    if (!$ada) {
+        wp_update_nav_menu_item($menu_id, 0, ['menu-item-title' => 'Paket Tour', 'menu-item-type' => 'post_type_archive',
+            'menu-item-object' => 'paket-tour', 'menu-item-status' => 'publish', 'menu-item-position' => $posisi]);
+        echo "paket_tour: menu_ditambah\n";
+    }
+}
+flush_rewrite_rules(false);
+echo "paket_tour: selesai\n";
+'''
+
+
+def muat(nama, berkas):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def ssh_jalankan(cfg, domain, perintah_wp, masukan=None, pra=''):
+    finish = muat('site_finish', HERE / 'site-finish')
+    ssh = finish.ssh_command(cfg, os.environ['WP_INSTALL_SSH_KEY_FILE'])
+    docroot = finish.docroot(domain, cfg.get('da_user', ''))
+    user = cfg.get('da_user', '')
+    wp = f'php -d memory_limit=512M /usr/local/bin/wp {perintah_wp}'
+    jalankan = (f'set -e; {pra}cd {shlex.quote(docroot)}; '
+                f'if id {shlex.quote(user)} >/dev/null 2>&1; then runuser -u {shlex.quote(user)} -- {wp} 2>&1 | grep -v Deprecated || true; '
+                f'else {wp} --allow-root 2>&1 | grep -v Deprecated || true; fi')
+    return subprocess.run(ssh + [jalankan], input=masukan, capture_output=True, timeout=600)
+
+
+def zip_plugin():
+    """Zip plugin dari repo GitHub (kredensial git server); tembolok bila GitHub tak terjangkau."""
+    CACHE.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as t:
+        hasil = subprocess.run(['git', 'clone', '-q', '--depth', '1', REPO, f'{t}/{SLUG}'],
+                               capture_output=True, timeout=180)
+        utama = Path(t) / SLUG / f'{SLUG}.php'
+        if hasil.returncode == 0 and utama.is_file():
+            versi = (re.search(r'Version:\s*([0-9][0-9.]*)', utama.read_text(errors='replace')) or [None, '0'])[1]
+            tujuan = CACHE / f'{SLUG}-{versi}.zip'
+            if not tujuan.is_file():
+                sementara = tujuan.with_suffix('.part')
+                with zipfile.ZipFile(sementara, 'w', zipfile.ZIP_DEFLATED) as z:
+                    for f in sorted((Path(t) / SLUG).rglob('*')):
+                        rel = f.relative_to(t)
+                        if f.is_file() and '.git' not in rel.parts[1:2] and not rel.parts[1].startswith('.git'):
+                            z.write(f, str(rel))
+                sementara.rename(tujuan)
+            return tujuan
+        print(f"paket_tour: github_gagal:{hasil.stderr.decode(errors='replace').strip()[:120]}")
+    ada = sorted(CACHE.glob(f'{SLUG}-*.zip'))
+    return ada[-1] if ada else None
+
+
+def slugify(teks):
+    return re.sub(r'[^a-z0-9]+', '-', teks.lower()).strip('-')[:70]
+
+
+def e(teks):
+    import html
+    return html.escape(str(teks or ''), quote=False)
+
+
+def daftar_html(butir):
+    butir = [b for b in (butir or []) if str(b).strip()]
+    return '<ul>' + ''.join(f'<li>{e(b)}</li>' for b in butir) + '</ul>' if butir else ''
+
+
+def minta_paket(manifest, cfg, domain):
+    simpanan = GENERATED_DIR / f'{domain}-paket-tour.json'
+    try:
+        data = json.loads(simpanan.read_text())
+        if data.get('paket'):
+            print('paket_tour: isi_tersimpan')
+            return data
+    except (OSError, ValueError):
+        pass
+    argv = sys.argv
+    sys.argv = [argv[0], str(manifest)]
+    try:
+        gen = muat('acg_paket', HERE / 'ai-content-generator.py')
+    finally:
+        sys.argv = argv
+    from client_docs import collect_client_docs, format_for_prompt
+    folder = ON_PROGRESS / domain
+    client_data = gen.read_client_data(folder) if folder.is_dir() else {}
+    docs = collect_client_docs(folder) if folder.is_dir() else {'sources': [], 'unreadable': [], 'skipped': []}
+    model = gen.get_model('konten')
+    if not model:
+        print('paket_tour: tanpa_model_ai')
+        return None
+    sistem = ('Anda penulis konten situs biro perjalanan Indonesia. Anda menyalin data paket tour dari dokumen '
+              'klien secara SETIA (tanpa mengarang harga, fasilitas, atau jadwal). Jawab HANYA satu objek JSON.')
+    permintaan = f"""Situs: {cfg.get('site_title') or domain} ({domain}).
+Dari dokumen klien di bawah, susun daftar PAKET TOUR yang ditawarkan (satu paket = satu kombinasi tujuan + durasi
++ moda yang punya daftar harga sendiri). Jangan gabungkan paket berbeda; jangan membuat paket yang tidak ada.
+
+Bentuk jawaban:
+{{"paket": [{{
+  "judul": "Paket Pulau Tidung 2D 1N via Kali Adem",   // rapi, ejaan diperbaiki
+  "kategori": "Pulau Tidung",          // pengelompokan (tujuan utama)
+  "destinasi": "Kepulauan Seribu",     // wilayah
+  "durasi": "2 Hari 1 Malam",
+  "lokasi": "Pulau Tidung, Kepulauan Seribu",
+  "berangkat": "Pelabuhan Kali Adem",  // titik kumpul bila disebut, "" bila tidak
+  "harga_mulai": 350000,               // harga per orang TERMURAH di tabel, angka bulat; 0 bila tidak ada
+  "harga": [["2 orang", "Rp1.150.000/orang"], ...],   // tabel harga apa adanya (ejaan & format rupiah dirapikan)
+  "ringkasan": "1-2 kalimat (<= 180 karakter)",
+  "pembuka": "paragraf pembuka 50-90 kata yang menjelaskan paket ini berdasarkan isi dokumen",
+  "fasilitas": ["..."],                // termasuk dalam paket
+  "tidak_termasuk": ["..."],           // di luar paket (bila disebut)
+  "itinerary": [["Hari Pertama", [["06.30-07.00", "Peserta tiba di Pelabuhan Kali Adem"], ...]], ...],  // [] bila tidak ada
+  "catatan": ["..."]                   // NB / catatan penting
+}}]}}
+
+ATURAN: bahasa Indonesia baku, perbaiki salah ketik (transfortasi -> transportasi, spedboad -> speedboat,
+snorkling -> snorkeling, sanset -> sunset, dsb.). JANGAN menulis nama, alamat rumah, nomor pribadi, atau data
+pribadi pemilik. Bila dokumen memuat rundown untuk paket tertentu, pasangkan ke paket itu saja.
+
+DOKUMEN KLIEN:
+{format_for_prompt(client_data, docs)}"""
+    for _ in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model, timeout=420, max_tokens=12000)
+        try:
+            data = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1], strict=False)
+        except (TypeError, ValueError):
+            continue
+        paket = [p for p in data.get('paket') or [] if isinstance(p, dict) and str(p.get('judul') or '').strip()]
+        if paket:
+            hasil = {'paket': paket, 'model': model.get('id')}
+            # Biodata pemilik tidak boleh ikut tampil (aturan yang sama dengan konten AI).
+            teks = json.dumps(hasil, ensure_ascii=False)
+            if any(v and len(str(v)) >= 8 and str(v).lower() in teks.lower()
+                   for k, v in client_data.items() if gen.BIODATA_KUNCI.match(str(k).strip())):
+                print('paket_tour: peringatan_biodata_di_isi_ai')
+            GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+            simpanan.write_text(json.dumps(hasil, indent=1, ensure_ascii=False))
+            return hasil
+    print('paket_tour: ai_gagal')
+    return None
+
+
+def susun_paket(p, foto, galeri):
+    judul = re.sub(r'\s+', ' ', str(p['judul'])).strip()
+    bagian = []
+    if p.get('pembuka'):
+        bagian.append(f"<p>{e(p['pembuka'])}</p>")
+    info = [(k, p.get(v)) for k, v in (('Durasi', 'durasi'), ('Lokasi', 'lokasi'), ('Titik kumpul', 'berangkat'))]
+    info = [(k, v) for k, v in info if v]
+    if info:
+        bagian.append('<ul class="paket-info">' + ''.join(f'<li><strong>{k}:</strong> {e(v)}</li>' for k, v in info) + '</ul>')
+    harga = [h for h in p.get('harga') or [] if isinstance(h, (list, tuple)) and len(h) >= 2]
+    if harga:
+        bagian.append('<h2>Harga Paket</h2><figure class="wp-block-table"><table class="table table-striped">'
+                      '<thead><tr><th>Jumlah Peserta</th><th>Harga</th></tr></thead><tbody>'
+                      + ''.join(f'<tr><td>{e(a)}</td><td>{e(b)}</td></tr>' for a, b, *_ in harga)
+                      + '</tbody></table></figure>')
+    if p.get('tidak_termasuk'):
+        bagian.append('<h2>Tidak Termasuk</h2>' + daftar_html(p['tidak_termasuk']))
+    if p.get('catatan'):
+        bagian.append('<h2>Catatan</h2>' + daftar_html(p['catatan']))
+    itinerary = ''
+    for hari in p.get('itinerary') or []:
+        if not (isinstance(hari, (list, tuple)) and len(hari) == 2):
+            continue
+        baris = ''.join(f'<li><strong>{e(j)}</strong> {e(k)}</li>' if j else f'<li>{e(k)}</li>'
+                        for j, k, *_ in (x if isinstance(x, (list, tuple)) and len(x) >= 2 else ['', x] for x in hari[1]))
+        itinerary += f'<h4>{e(hari[0])}</h4><ul>{baris}</ul>'
+    try:
+        harga_mulai = int(re.sub(r'\D', '', str(p.get('harga_mulai') or 0)) or 0)
+    except ValueError:
+        harga_mulai = 0
+    return {
+        'kunci': slugify(judul), 'slug': slugify(judul), 'judul': judul,
+        'ringkasan': str(p.get('ringkasan') or '')[:250], 'konten': '\n'.join(bagian),
+        'harga': str(harga_mulai) if harga_mulai else '', 'durasi': str(p.get('durasi') or ''),
+        'lokasi': str(p.get('lokasi') or ''), 'waktu': '',
+        'fasilitas': daftar_html(p.get('fasilitas')), 'itinerary': itinerary,
+        'kategori': str(p.get('kategori') or ''), 'destinasi': str(p.get('destinasi') or ''),
+        'foto': foto, 'galeri': galeri,
+    }
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: paket-tour <manifest> [--coba]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    tpb = muat('theme_paket_biasa', HERE / 'theme-paket-biasa')
+    cfg = tpb.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('paket_tour: manifest_tidak_valid')
+        return 2
+    if not coba:
+        if not Path(os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')).is_file():
+            print('paket_tour: kunci SSH tidak ada')
+            return 1
+        cek = ssh_jalankan(cfg, domain, f'eval {shlex.quote(CEK_PHP)}').stdout.decode(errors='replace')
+        m = re.search(r'tema=(\S+) pakai=(\d)', cek)
+        if not m:
+            print(f'paket_tour: cek_tema_gagal:{cek.strip()[:200]}')
+            return 1
+        if m.group(2) != '1':
+            print(f'paket_tour: dilewati:tema_{m.group(1)}_tanpa_paket_tour')
+            return 0
+        print(f'paket_tour: tema={m.group(1)}')
+    data = minta_paket(manifest, cfg, domain)
+    if not data:
+        return 1
+
+    # Foto: foto klien bergilir (utama + 3 galeri per paket), dipotong 1200x800.
+    vct = muat('velocity_child_theme', HERE / 'velocity-child-theme')
+    wa = vct.data_klien(domain, cfg.get('site_title', '')).get('WA', '')
+    klien = tpb.foto_klien(domain)
+    kerja = Path(tempfile.mkdtemp(prefix=f'paket-tour-{domain}-'))
+    aset = {}
+    for i, (berkas, _, _) in enumerate(klien[:12], 1):
+        kunci = f'paket-foto-{i}'
+        tujuan = tpb.potong(berkas, 1200, 800, kerja / f'{kunci}.jpg')
+        aset[kunci] = {'file': tujuan.name, 'judul': f"Foto {cfg.get('site_title') or domain} {i}",
+                       'sidik': f"{domain}:{kunci}:{hashlib.md5(tujuan.read_bytes()).hexdigest()}"}
+    kunci_foto = list(aset)
+    paket = []
+    for n, p in enumerate(data['paket']):
+        if kunci_foto:
+            urutan = [kunci_foto[(n + j) % len(kunci_foto)] for j in range(min(4, len(kunci_foto)))]
+            paket.append(susun_paket(p, urutan[0], urutan[1:]))
+        else:
+            paket.append(susun_paket(p, '', []))
+    kunci_ada = set()
+    for p in paket:  # judul kembar diberi akhiran
+        while p['kunci'] in kunci_ada:
+            p['kunci'] = p['slug'] = p['kunci'] + '-2'
+        kunci_ada.add(p['kunci'])
+    (kerja / 'data.json').write_text(json.dumps({'paket': paket, 'aset': aset, 'wa': wa}, ensure_ascii=False))
+    print(f"paket_tour: paket={len(paket)} foto={len(aset)} folder={kerja}")
+    if coba:
+        return 0
+    plugin = zip_plugin()
+    if not plugin:
+        print('paket_tour: plugin_tidak_tersedia')
+        return 1
+    (kerja / 'plugin.zip').write_bytes(plugin.read_bytes())
+    (kerja / 'terapkan.php').write_text(REMOTE_PHP)
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        for f in kerja.iterdir():
+            tar.add(f, arcname=f.name)
+    pra = 'T=$(mktemp -d /tmp/velocity-paket.XXXXXX); trap \'rm -rf "$T"\' EXIT; tar xzf - -C "$T"; chmod 755 "$T"; chmod 644 "$T"/*; '
+    hasil = ssh_jalankan(cfg, domain, 'eval-file "$T/terapkan.php" "$T"', buf.getvalue(), pra)
+    keluar = hasil.stdout.decode(errors='replace')
+    print(keluar.strip())
+    import shutil
+    shutil.rmtree(kerja, ignore_errors=True)
+    if hasil.returncode != 0 or 'paket_tour: selesai' not in keluar:
+        print(f"paket_tour: gagal (kode {hasil.returncode}) {hasil.stderr.decode(errors='replace').strip()[:200]}")
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
