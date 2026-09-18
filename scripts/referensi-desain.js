@@ -74,6 +74,14 @@ function ukur() {
   };
   const hex = (c) => '#' + c.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
   const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  // Tautan menu di dalam `akar`: wadah nav/…menu… harus berada DI DALAM akar. Selektor
+  // akar.querySelectorAll('[class*="menu"] a') ikut mencocokkan leluhur di luar akar — <body>
+  // tema velocity-fse berkelas vf-menu-tengah/vf-menu-kapital, sehingga logo, kotak cari & email
+  // header terhitung menu dan audit header situs FSE selalu salah (ptutamateknikpersada.com 2026-09-18).
+  const tautanMenu = (akar, sel = 'a') => [...akar.querySelectorAll(sel)].filter((a) => {
+    const wadah = a.closest('nav, [class*="menu" i]');
+    return !!wadah && (wadah === akar || akar.contains(wadah));
+  });
   const tampak = (el) => {
     const r = el.getBoundingClientRect();
     const g = getComputedStyle(el);
@@ -207,7 +215,7 @@ function ukur() {
     const g = getComputedStyle(header);
     const logo = [...header.querySelectorAll('img, svg, [class*="logo" i]')].filter(tampak)
       .map(kotak).sort((a, b) => a.x - b.x)[0];
-    const tautan = [...header.querySelectorAll('nav a, [class*="menu" i] a')].filter(tampak).map(kotak);
+    const tautan = tautanMenu(header).filter(tampak).map(kotak);
     const tengahMenu = tautan.length ? tautan.reduce((s, t) => s + t.x + t.w / 2, 0) / tautan.length : 0;
     // Ikon keranjang & lencana jumlahnya (kreditmotor.rmg.asia) bukan tombol ajakan.
     const RE_KERANJANG = /cart|keranjang|basket|minicart|badge|count/i;
@@ -225,7 +233,7 @@ function ukur() {
     });
     const tombol = calonTombol.length > 0;
     const barisMenu = new Set(tautan.map((t) => Math.round(t.y / 12))).size;
-    const menuEl = header.querySelector('nav a, [class*="menu" i] a');
+    const menuEl = tautanMenu(header).find(tampak) || null;
     const gMenu = menuEl ? getComputedStyle(menuEl) : null;
     const atasMenu = tautan.length ? Math.min(...tautan.map((t) => t.y)) : 0;
     const urutX = tautan.filter((t) => Math.abs(t.y - atasMenu) < 12).sort((a, b) => a.x - b.x);
@@ -293,7 +301,7 @@ function ukur() {
       menu_posisi: !tautan.length ? '' : tengahMenu > vw * 0.6 ? 'kanan' : tengahMenu > vw * 0.4 ? 'tengah' : 'kiri',
       jumlah_menu: tautan.length,
       tombol_ajakan: tombol,
-      huruf_menu_kapital: tautan.length ? getComputedStyle(header.querySelector('nav a, [class*="menu" i] a') || header).textTransform === 'uppercase' : false,
+      huruf_menu_kapital: tautan.length ? getComputedStyle(tautanMenu(header).find(tampak) || header).textTransform === 'uppercase' : false,
     };
   }
   // Topbar: baris tipis selebar layar di puncak halaman. Page builder (Beaver Builder,
@@ -702,7 +710,7 @@ function ukur() {
         ukuran: parseFloat(getComputedStyle(h).fontSize),
       };
     })(),
-    tautan_menu: header ? [...header.querySelectorAll('nav a[href], [class*="menu" i] a[href]')]
+    tautan_menu: header ? tautanMenu(header, 'a[href]')
       .filter((a) => tampak(a) && teks(a))
       .map((a) => ({ teks: teks(a).slice(0, 40), url: a.href }))
       .filter((a) => { try { const u = new URL(a.url); return u.hostname.replace(/^www\./, '') === host && !u.hash; } catch (e) { return false; } })
@@ -731,7 +739,7 @@ function ukur() {
     seksi: hasilSeksi,
     font: {
       menu: (() => {
-        const a = header && [...header.querySelectorAll('nav a, [class*="menu" i] a')].find((x) => tampak(x) && teks(x));
+        const a = header && tautanMenu(header).find((x) => tampak(x) && teks(x));
         return a ? getComputedStyle(a).fontFamily.split(',')[0].replace(/["']/g, '').trim() : '';
       })(),
       teks: fontTeksDominan(),

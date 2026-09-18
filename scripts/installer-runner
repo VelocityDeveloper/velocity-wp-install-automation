@@ -15,6 +15,15 @@ FSE_CEK_MAKS=${FSE_CEK_MAKS:-3}
 # Berapa kali tema + halaman FSE boleh digenerate (termasuk yang pertama) selama tampilan
 # situs jadi belum mirip referensi menurut audit kemiripan.
 FSE_MIRIP_MAKS=${FSE_MIRIP_MAKS:-3}
+# Agen desain Claude (scripts/desain-claude, keputusan user 2026-09-18): 1 = situs paket custom
+# yang belum mirip referensi dikerjakan Claude (desain + audit + ulang sendiri) menggantikan
+# putaran generate ulang generator. Bawaan 0 sampai uji manual selesai.
+# Saklar dibaca dari /etc/velocity/installer-autopilot.env: runner dijalankan installer-status.service
+# (tanpa EnvironmentFile itu), jadi run manual & autopilot memakai nilai yang sama.
+if [[ -z "${DESAIN_CLAUDE:-}" ]]; then
+  DESAIN_CLAUDE=$(sed -n 's/^DESAIN_CLAUDE=//p' /etc/velocity/installer-autopilot.env 2>/dev/null | tail -1)
+fi
+DESAIN_CLAUDE=${DESAIN_CLAUDE:-0}
 # Klien dengan hosting di luar dikerjakan di staging velocitydeveloper.co/<domain>:
 # manifest menyebut `docroot=` + `site_url=`. Semua script pembantu (fse-apply,
 # site-finish, site-audit, paket-g-foto, ai-content-generator) memakai escape hatch
@@ -240,6 +249,13 @@ audit_kemiripan() {
       && kode=0 || kode=$?
     # 0 mirip / tanpa referensi, 2 tidak bisa diperiksa: tidak ada yang bisa diulang.
     [[ "$kode" == 1 ]] || return 0
+    if [[ "$DESAIN_CLAUDE" == 1 ]]; then
+      # Generator deterministik tidak membaik bila diulang: Claude mengambil alih desain,
+      # mengaudit & mengulang sendiri; hasil yang skornya turun dicabut oleh desain-claude.
+      printf '[%s] Paket custom: belum mirip, desain diambil alih agen Claude\n' "$(date -Is)" >> "$LOG"
+      /usr/bin/python3 "$SCRIPTS/desain-claude" "$MANIFEST" >> "$LOG" 2>&1 || true
+      return 0
+    fi
     skor=$(skor_kemiripan)
     if (( percobaan >= FSE_MIRIP_MAKS )); then
       printf '[%s] kemiripan_ulang: masih belum mirip setelah %s kali generate, dilaporkan\n' \

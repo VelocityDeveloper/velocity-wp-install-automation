@@ -62,8 +62,13 @@ const tautanTerlihat = () => [...document.querySelectorAll('a[href]')].filter((a
       isMobile: hp,
       hasTouch: hp,
     });
+    // Situs maintenance: cookie login admin (sama dengan referensi-desain.js).
+    if (process.env.VELOCITY_UKUR_COOKIE) await page.context().addCookies(JSON.parse(process.env.VELOCITY_UKUR_COOKIE));
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    if (process.env.VELOCITY_UKUR_COOKIE) {
+      await page.addStyleTag({ content: '#wpadminbar{display:none!important}html{margin-top:0!important}' }).catch(() => {});
+    }
     await page.evaluate(async () => {
       const tunggu = (ms) => new Promise((r) => setTimeout(r, ms));
       for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < 120; y += 400, i += 1) {

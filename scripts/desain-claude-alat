@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Alat kerja agen desain Claude (scripts/desain-claude) — satu-satunya perintah shell yang
+boleh dijalankan agen. Situs yang dikerjakan diambil dari VELOCITY_DESAIN_MANIFEST (diisi
+desain-claude), jadi agen tidak bisa menyentuh situs lain, SSH, atau berkas rahasia.
+
+  desain-claude-alat cek                   validasi markup blok halaman/bagian + CSS (tanpa menulis)
+  desain-claude-alat pasang                cek, lalu pasang isi folder claude/ ke situs
+  desain-claude-alat audit                 fse-audit-kemiripan + ringkasan beda per bagian/seksi
+  desain-claude-alat potret <slug|/path/> [--hp]    screenshot halaman situs (desktop / HP)
+  desain-claude-alat potret-ref <url> [--hp]        screenshot halaman referensi
+  desain-claude-alat potong <png> <y> <tinggi>      potong PNG panjang supaya bisa dilihat
+  desain-claude-alat ukuran <png>
+
+Isi folder fse-rencana/<domain>/claude/ (ditulis agen):
+  <slug>.html           isi halaman (beranda, tentang-kami, layanan, galeri, hubungi-kami, ...;
+                        halaman anak: layanan__<anak>.html) — dipasang lewat `fse-apply --isi`,
+                        jadi validasi blok, md5 "sudah disunting orang", menu & cek HTTP tetap sama
+  bagian-header.html    template part header (wp_template_part situs, bukan berkas tema)
+  bagian-footer.html    template part footer
+  gaya.css              CSS tambahan situs (Site Editor → Gaya → CSS tambahan)
+
+Semua hasil pasang bisa disunting orang di wp-admin/Site Editor; yang sudah disunting orang
+tidak ditimpa (penanda md5). Berkas yang dihapus dari claude/ = pasangannya di situs dicabut
+(kembali ke hasil generator/tema) selama belum disunting orang.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+BAGIAN = ('header', 'footer')
+CSS_MAKS = 80_000
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+FA = muat('fse_apply', HERE / 'fse-apply')
+MANIFEST = os.environ.get('VELOCITY_DESAIN_MANIFEST', '')
+
+
+def konteks():
+    if not MANIFEST or not Path(MANIFEST).is_file():
+        sys.exit('alat: VELOCITY_DESAIN_MANIFEST tidak ada (jalankan lewat scripts/desain-claude)')
+    cfg = FA.read_manifest(MANIFEST)
+    domain = cfg['domain'].lower()
+    return cfg, domain, FA.RENCANA_DIR / domain
+
+
+def catat(domain, pesan):
+    """Progres agen ke log domain: panel pantau & bagan /installer/ ikut bergerak tiap putaran."""
+    from datetime import datetime
+    try:
+        with open(f'/var/lib/velocity/installer/{domain}.log', 'a') as f:
+            f.write(f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] desain_claude: {pesan}\n')
+    except OSError:
+        pass
+
+
+def keluaran_fse(teks):
+    """Baris fse: dari fse-apply, tanpa ocehan WP-CLI."""
+    return '\n'.join(b for b in teks.splitlines() if b.startswith(('fse:', 'kemiripan:'))) or teks[-1500:]
+
+
+# ---------------------------------------------------------------------------
+# Template part & CSS tambahan
+# ---------------------------------------------------------------------------
+
+PHP_GAYA = r'''
+// Isi global styles/template part tidak boleh disaring kses (CSS tambahan butuh edit_css).
+kses_remove_filters();
+$hasil = array();
+$tema = 'velocity-fse';
+
+// CSS tambahan di wp_global_styles pengguna — kunci styles.css, di samping palet dari fse-apply.
+$gaya = WP_Theme_JSON_Resolver::get_user_data_from_wp_global_styles(wp_get_theme($tema), true);
+$gid = isset($gaya['ID']) ? (int) $gaya['ID'] : 0;
+if (!$gid) {
+    $hasil[] = 'css_gagal:global_styles_tidak_ada';
+} else {
+    $isi = json_decode((string) get_post_field('post_content', $gid), true);
+    $isi = is_array($isi) ? $isi : array();
+    $isi += array('version' => 3, 'isGlobalStylesUserThemeJSON' => true);
+    $kini = isset($isi['styles']['css']) ? (string) $isi['styles']['css'] : '';
+    $baru = (string) $d['css'];
+    if ($kini === $baru) {
+        $hasil[] = 'css_sama';
+    } elseif ($kini !== '' && (string) get_option('velocity_claude_css_md5') !== md5($kini)) {
+        $hasil[] = 'css_disunting_orang_dipertahankan';
+    } else {
+        if ($baru === '') { unset($isi['styles']['css']); } else { $isi['styles']['css'] = $baru; }
+        wp_update_post(array('ID' => $gid, 'post_content' => wp_slash(wp_json_encode($isi))));
+        $baca = json_decode((string) get_post_field('post_content', $gid), true);
+        $tulis = isset($baca['styles']['css']) ? (string) $baca['styles']['css'] : '';
+        update_option('velocity_claude_css_md5', md5($tulis), false);
+        $hasil[] = $tulis === $baru ? ($baru === '' ? 'css_dicabut' : 'css_ditulis') : 'css_gagal_terbaca';
+    }
+    if (function_exists('wp_clean_theme_json_cache')) { wp_clean_theme_json_cache(); }
+}
+
+// Template part header/footer sebagai kustomisasi situs (seperti simpan dari Site Editor).
+foreach ((array) $d['bagian'] as $slug => $baru) {
+    $baru = (string) $baru;
+    $ada = get_posts(array('post_type' => 'wp_template_part', 'name' => $slug, 'post_status' => 'any', 'numberposts' => 1,
+        'tax_query' => array(array('taxonomy' => 'wp_theme', 'field' => 'name', 'terms' => $tema))));
+    $post = $ada ? $ada[0] : null;
+    if ($post) {
+        $kini = (string) $post->post_content;
+        if ($kini === $baru) { $hasil[] = 'bagian_sama:' . $slug; continue; }
+        if ((string) get_post_meta($post->ID, '_velocity_claude_md5', true) !== md5($kini)) {
+            $hasil[] = 'bagian_disunting_orang_dipertahankan:' . $slug;
+            continue;
+        }
+        if ($baru === '') {
+            wp_delete_post($post->ID, true);
+            $hasil[] = 'bagian_dicabut:' . $slug;
+            continue;
+        }
+        wp_update_post(array('ID' => $post->ID, 'post_content' => wp_slash($baru)));
+        $id = $post->ID;
+    } else {
+        if ($baru === '') { continue; }
+        $id = wp_insert_post(array('post_type' => 'wp_template_part', 'post_status' => 'publish', 'post_name' => $slug,
+            'post_title' => ucfirst($slug), 'post_content' => wp_slash($baru)), true);
+        if (is_wp_error($id) || !$id) { $hasil[] = 'bagian_gagal:' . $slug; continue; }
+        wp_set_post_terms($id, array($tema), 'wp_theme');
+        wp_set_post_terms($id, array($slug), 'wp_template_part_area');
+    }
+    $simpan = (string) get_post_field('post_content', $id, 'raw');
+    update_post_meta($id, '_velocity_claude_md5', md5($simpan));
+    $hasil[] = ($simpan === $baru ? 'bagian_ditulis:' : 'bagian_diubah_wp:') . $slug . ':' . $id;
+}
+vfse_keluar(array('hasil' => $hasil));
+'''
+
+
+def baca_css(folder):
+    berkas = folder / 'claude' / 'gaya.css'
+    css = berkas.read_text().strip() if berkas.is_file() else ''
+    masalah = []
+    if len(css) > CSS_MAKS:
+        masalah.append(f'css_terlalu_besar:{len(css)}>{CSS_MAKS}')
+    if re.search(r'</\s*style|<script|javascript:|expression\s*\(', css, re.I):
+        masalah.append('css_berisi_markup_terlarang')
+    if re.search(r'@import', css, re.I):
+        masalah.append('css_@import_dilarang (font referensi sudah dimuat tema)')
+    if css.count('{') != css.count('}'):
+        masalah.append(f"css_kurung_tidak_seimbang:{css.count('{')}/{css.count('}')}")
+    return css, masalah
+
+
+def baca_bagian(folder):
+    return {s: ((folder / 'claude' / f'bagian-{s}.html').read_text().strip()
+                if (folder / 'claude' / f'bagian-{s}.html').is_file() else '') for s in BAGIAN}
+
+
+def cek(cfg, folder):
+    ok = True
+    bagian = [folder / 'claude' / f'bagian-{s}.html' for s in BAGIAN if (folder / 'claude' / f'bagian-{s}.html').is_file()]
+    if bagian:
+        tidak_valid, teks = FA.cek_markup(bagian)
+        print(teks.strip())
+        ok = ok and not tidak_valid
+    css, masalah = baca_css(folder)
+    for m in masalah:
+        print(f'tidak_valid gaya.css: {m}')
+    ok = ok and not masalah
+    run = subprocess.run([sys.executable, str(HERE / 'fse-apply'), '--isi', MANIFEST, '--coba'],
+                         capture_output=True, text=True, timeout=600)
+    teks = keluaran_fse(run.stdout + run.stderr)
+    print(teks)
+    ok = ok and 'tidak_valid' not in teks and run.returncode == 0
+    print('cek: ' + ('ok' if ok else 'ADA_MASALAH (perbaiki dulu, pasang ditolak)'))
+    return ok
+
+
+def pasang(cfg, folder):
+    if not cek(cfg, folder):
+        return 1
+    css, _ = baca_css(folder)
+    situs = FA.Situs(cfg)
+    hasil = situs.php(PHP_GAYA, {'css': css, 'bagian': baca_bagian(folder)})
+    for baris in hasil['hasil']:
+        print(f'pasang: {baris}')
+    run = subprocess.run([sys.executable, str(HERE / 'fse-apply'), '--isi', MANIFEST],
+                         capture_output=True, text=True, timeout=900)
+    teks = keluaran_fse(run.stdout + run.stderr)
+    print(teks)
+    halaman = [b.split(':')[2] for b in teks.splitlines() if b.startswith('fse: halaman_diisi:') or b.startswith('fse: halaman_dibuat:')]
+    catat(cfg['domain'].lower(), f"agen memasang desain: halaman={','.join(halaman) or '-'} "
+          + ' '.join(b for b in hasil['hasil'] if not b.endswith('_sama') and 'sama:' not in b))
+    return run.returncode
+
+
+# ---------------------------------------------------------------------------
+# Audit & gambar
+# ---------------------------------------------------------------------------
+
+def audit(cfg, folder):
+    run = subprocess.run([sys.executable, str(HERE / 'fse-audit-kemiripan'), MANIFEST],
+                         capture_output=True, text=True, timeout=1200)
+    print(keluaran_fse(run.stdout + run.stderr))
+    try:
+        d = json.loads((folder / 'audit-kemiripan.json').read_text())
+    except (OSError, ValueError):
+        print('audit: hasil tidak terbaca')
+        return 2
+    print('skor: ' + ' '.join(f'{k}={v}' for k, v in (d.get('skor') or {}).items()))
+    catat(cfg['domain'].lower(), 'agen audit: ' + ' '.join(f'{k}={v}' for k, v in (d.get('skor') or {}).items())
+          + (' -> sesuai' if d.get('sesuai') else ' -> belum_mirip:' + ','.join(d.get('belum_mirip') or [])))
+    print('belum_mirip: ' + (','.join(d.get('belum_mirip') or []) or '-'))
+    for nama, b in (d.get('bagian') or {}).items():
+        beda = [f"{c['kunci']}(bobot {c['bobot']}): situs={c.get('situs')!r} ref={c.get('referensi')!r}"
+                for c in b.get('cek') or [] if float(c.get('skor', 1)) < 1]
+        if beda:
+            print(f'[{nama}] ' + '; '.join(beda)[:1500])
+    for s in d.get('seksi_beranda') or []:
+        if s.get('beda') or s.get('urutan_situs') is None:
+            print(f"[seksi beranda] {s.get('jenis')} ref#{s.get('urutan_ref')} situs#{s.get('urutan_situs')} "
+                  f"skor={s.get('skor')} beda={','.join(s.get('beda') or []) or '-'}")
+    if d.get('seksi_dilewati_tanpa_data'):
+        print('seksi referensi dilewati (klien tak punya datanya, tidak dihitung): '
+              + ','.join(map(str, d['seksi_dilewati_tanpa_data'])))
+    print(f"potret situs: {d.get('potret')}/situs-*.png | potret referensi: {folder}/referensi-potret*.png")
+    return run.returncode
+
+
+def cookie_admin(cfg, domain):
+    """Cookie admin 15 menit untuk situs maintenance (mekanisme fse-audit-kemiripan)."""
+    fak = muat('fse_audit_kemiripan', HERE / 'fse-audit-kemiripan')
+    kode, badan = fak.http(fak.situs_url(domain) + '/')
+    if 'maintenance-shell' not in (badan or ''):
+        return None, None
+    situs = FA.Situs(cfg)
+    sesi = situs.php(fak.PHP_COOKIE)
+    if not sesi.get('nilai'):
+        return None, None
+    cookie = [{'name': sesi['nama'], 'value': sesi['nilai'], 'domain': sesi['host'], 'path': '/',
+               'secure': True, 'httpOnly': True, 'expires': sesi['exp']}]
+    return cookie, lambda: situs.php(fak.PHP_HAPUS_TOKEN, {'id': sesi['id'], 'token': sesi['token']})
+
+
+def potret(cfg, domain, folder, sasaran, hp, referensi=False):
+    kerja = folder / 'claude' / 'kerja'
+    kerja.mkdir(parents=True, exist_ok=True)
+    if referensi:
+        if not re.match(r'^https?://', sasaran):
+            print('potret-ref: butuh URL lengkap')
+            return 2
+        url, cookie, hapus = sasaran, None, None
+    else:
+        fak = muat('fse_audit_kemiripan', HERE / 'fse-audit-kemiripan')
+        jalur = sasaran if sasaran.startswith('/') else ('/' if sasaran in ('', 'beranda') else f"/{sasaran.strip('/')}/")
+        url = fak.situs_url(domain) + jalur
+        cookie, hapus = cookie_admin(cfg, domain)
+    nama = re.sub(r'[^a-z0-9]+', '-', url.lower().split('//', 1)[-1]).strip('-')[:70] + ('-hp' if hp else '')
+    tujuan = kerja / f"{'ref-' if referensi else ''}{nama}.png"
+    env = dict(os.environ)
+    if cookie:
+        env['VELOCITY_UKUR_COOKIE'] = json.dumps(cookie)
+    try:
+        run = subprocess.run(['node', str(HERE / 'potret-halaman'), url, str(tujuan)] + (['--hp', '--cek'] if hp else ['--cek']),
+                             capture_output=True, text=True, timeout=200, env=env)
+        print(run.stdout.strip()[-1500:])
+    finally:
+        if hapus:
+            try:
+                hapus()
+            except Exception:
+                pass
+    if tujuan.is_file():
+        ukuran(tujuan)
+    return 0 if tujuan.is_file() else 1
+
+
+def ukuran(berkas):
+    from PIL import Image
+    with Image.open(berkas) as g:
+        print(f'{berkas} {g.width}x{g.height} — lihat per potongan: potong {berkas} <y> <tinggi> (tinggi ≤ 1600)')
+
+
+def potong(berkas, y, tinggi):
+    from PIL import Image
+    berkas = Path(berkas)
+    with Image.open(berkas) as g:
+        y = max(0, min(int(y), g.height - 1))
+        tinggi = max(50, min(int(tinggi), 2400))
+        bagian = g.crop((0, y, g.width, min(g.height, y + tinggi)))
+        if bagian.width > 1400:
+            bagian = bagian.resize((1400, round(bagian.height * 1400 / bagian.width)))
+        _, _, folder = konteks()
+        tujuan = folder / 'claude' / 'kerja' / f'{berkas.stem}-y{y}-{tinggi}.png'
+        tujuan.parent.mkdir(parents=True, exist_ok=True)
+        bagian.convert('RGB').save(tujuan)
+        print(f'{tujuan} (dari {g.width}x{g.height}, y={y}..{min(g.height, y + tinggi)})')
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        print(__doc__)
+        return 2
+    perintah, sisa = a[0], a[1:]
+    hp = '--hp' in sisa
+    sisa = [x for x in sisa if x != '--hp']
+    if perintah == 'potong' and len(sisa) == 3:
+        return potong(*sisa)
+    if perintah == 'ukuran' and len(sisa) == 1:
+        ukuran(sisa[0])
+        return 0
+    cfg, domain, folder = konteks()
+    if perintah == 'cek':
+        return 0 if cek(cfg, folder) else 1
+    if perintah == 'pasang':
+        return pasang(cfg, folder)
+    if perintah == 'audit':
+        return audit(cfg, folder)
+    if perintah in ('potret', 'potret-ref') and len(sisa) == 1:
+        return potret(cfg, domain, folder, sisa[0], hp, referensi=perintah == 'potret-ref')
+    print(__doc__)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

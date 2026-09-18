@@ -8,7 +8,7 @@ WEB_ROOT=${WEB_ROOT:-/usr/share/nginx/html}
 cd "$REPO_DIR"
 git pull --ff-only origin main
 bash -n scripts/website-install-from-manifest scripts/installer-runner
-python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto scripts/compro-klien scripts/cek-fungsi-tema scripts/paket-g-cek-visual scripts/fse-apply scripts/fse-dealer scripts/fse-klinik scripts/referensi_desain.py scripts/fse-cek-referensi scripts/fse-audit-kemiripan services/installer_status.py
+python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scripts/velocity-logo scripts/paket-g-setup scripts/site-audit scripts/velocity-map scripts/paket-g-konten scripts/paket-g-foto scripts/compro-klien scripts/cek-fungsi-tema scripts/paket-g-cek-visual scripts/fse-apply scripts/fse-dealer scripts/fse-klinik scripts/referensi_desain.py scripts/fse-cek-referensi scripts/fse-audit-kemiripan scripts/desain-claude scripts/desain-claude-alat services/installer_status.py
 node --check scripts/referensi-desain.js
 node --check scripts/potret-halaman
 node --check scripts/banding-potret

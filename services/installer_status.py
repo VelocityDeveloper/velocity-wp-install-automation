@@ -619,6 +619,19 @@ def domains():
     # digerakkan oleh folder di disk, jadi project yang foldernya belum
     # tersinkron dari Drive tidak pernah muncul sama sekali — padahal itu justru
     # pekerjaan yang perlu dikejar. Tampilkan, dengan tanda folder belum ada.
+    # Situs COMPLETE yang sedang dikerjakan agen desain Claude tetap tampil (paling atas).
+    for name in sorted(done):
+        if agen_desain(name):
+            manifest = ROOT / name / f'{name}.txt'
+            row = domain_row(name, manifest if manifest.is_file() else None)
+            try:
+                row['paket'] = next((l.partition('=')[2].strip() for l in manifest.read_text(errors='replace').splitlines()
+                                     if l.startswith('paket=')), '') or None
+            except OSError:
+                row['paket'] = None
+            crm = antrean.get(name) or {}
+            row.update({'deadline': crm.get('deadline') or None, 'claim': claims.get(name), 'source': 'agen'})
+            rows.insert(0, row)
     emitted = {r['domain'].lower() for r in rows}
     done_lower = {d.lower() for d in done}
     for name in sorted(antrean):
@@ -645,6 +658,31 @@ def domains():
     return rows
 
 
+# Agen desain Claude (scripts/desain-claude) menulis penanda <domain>.json selama berjalan. Situs
+# yang sudah COMPLETE tetap tampil di daftar & panel pantau selama agennya bekerja.
+DESAIN_CLAUDE_AKTIF = STATE / 'desain-claude'
+FSE_RENCANA = Path('/var/lib/velocity/fse-rencana')
+
+
+def agen_desain(domain):
+    """Keadaan agen desain Claude yang sedang berjalan untuk domain, atau None."""
+    try:
+        d = json.loads((DESAIN_CLAUDE_AKTIF / f'{domain}.json').read_text())
+        pid = int(d.get('pid') or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    if not pid or not Path(f'/proc/{pid}').exists():
+        return None
+    try:
+        audit = json.loads((FSE_RENCANA / domain / 'audit-kemiripan.json').read_text())
+        d['skor_kini'] = audit.get('skor') or {}
+        d['belum_mirip'] = audit.get('belum_mirip') or []
+        d['audit_pada'] = audit.get('waktu', '')
+    except (OSError, ValueError):
+        pass
+    return d
+
+
 def domain_row(domain, manifest):
     if manifest:
         ok, detail = validate_manifest(manifest)
@@ -666,6 +704,12 @@ def domain_row(domain, manifest):
         row['log'] = log.read_text(errors='replace').splitlines()[-200:]
     except OSError:
         row['log'] = []
+    agen = agen_desain(domain)
+    if agen:
+        skor = agen.get('skor_kini') or {}
+        row.update({'status': 'RUNNING', 'stage': 'AGEN DESAIN CLAUDE', 'agen': agen,
+                    'message': 'skor ' + ' '.join(f'{k}={v}' for k, v in skor.items())
+                    + (' | belum mirip: ' + ','.join(agen.get('belum_mirip') or []) if agen.get('belum_mirip') else '')})
     return row
 
 

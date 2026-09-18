@@ -303,6 +303,8 @@
       }
 .spinner{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--cyan);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
+.stat-spinner{display:inline-block;vertical-align:middle}
+.log-jalan{display:inline-flex;align-items:center;gap:6px;margin-left:10px;font-size:12px;font-weight:400;color:var(--cyan)}
 .check.running{border-color:var(--cyan);color:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.55}}
 
@@ -466,7 +468,7 @@
         <p class="meta">
           $ scan --path
           <code>/home/On Progress/</code> (Google Drive) --watch
-          10s &nbsp;|&nbsp; yang sudah terinstall disembunyikan &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
+          realtime 4s &nbsp;|&nbsp; yang sudah terinstall disembunyikan (kecuali sedang dikerjakan agen Claude) &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
         </p>
         <section class="server-select">
           <label for="target-server"
@@ -742,7 +744,7 @@
             rows.innerHTML = '<tr><td colspan="6" class="empty">Tidak ada domain cocok.</td></tr>';
             return;
           }
-          // Polling 10s menggambar ulang tabel; menu yang masih terbuka akan
+          // Polling 4s menggambar ulang tabel; menu yang masih terbuka akan
           // menunjuk baris lama, jadi tutup dulu.
           closeRowMenu();
           rowActions = {};
@@ -754,15 +756,15 @@
             // kegagalan — jangan diberi warna merah/hijau yang menyesatkan.
             const dikerjakanWm = x.status === 'dikerjakan webmaster';
             const pillClass = isFailed ? 'failed' : isReady ? 'ready' : 'missing';
-            const statusFull = x.status + (x.stage ? ' / ' + x.stage : '')
+            const statusFull = x.status + (x.stage ? ' / ' + x.stage : '') + (x.agen && x.message ? ' — ' + x.message : '')
               + (dikerjakanWm && x.webmaster ? ' (' + x.webmaster + ')' : '');
             const statusIcon = isFailed ? '✗'
-              : isRunning ? '◐'
+              : isRunning ? '<span class="spinner stat-spinner"></span>'
               : isReady ? '✓'
               : x.status === 'belum diambil' ? '○'
               : dikerjakanWm ? '◑'
               : '!';
-            const logLines = (x.log || []).join('\\n');
+            const logLines = (x.log || []).join('\n');
             const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
             const canRun = (isReady || isFailed) && !isRunning;
             const acts = [{
@@ -794,7 +796,7 @@
               acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
             }
             acts.push({ label: 'Bagan proses', run: () => openFlowModal(x.domain) });
-            if (logLines) acts.push({ label: 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
+            if (logLines || isRunning) acts.push({ label: isRunning ? 'Lihat log (live)' : 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
             rowActions[x.domain] = acts;
             const siteUrl = 'https://' + x.domain;
             const adminUrl = siteUrl + '/wp-admin';
@@ -806,10 +808,14 @@
             const wmBadge = dikerjakanWm
               ? ` <span class="badge warn" title="Status CRM: Dalam pengerjaan">WM${x.webmaster ? ': ' + esc(String(x.webmaster).toUpperCase()) : ''}</span>`
               : '';
+            // Agen desain Claude sedang bekerja (situs COMPLETE tetap tampil selama itu).
+            const agenBadge = x.agen
+              ? ` <span class="badge local" title="Agen desain Claude sejak ${esc(x.agen.mulai || '')}${x.message ? ' — ' + esc(x.message) : ''}">AGEN CLAUDE</span>`
+              : '';
             const claimBadge = x.claim
               ? ` <span class="badge ${x.claim.by === 'autopilot' ? 'local' : 'ok'}" title="Diambil alih ${esc(x.claim.at || '')}">DIAMBIL: ${x.claim.by === 'autopilot' ? 'AUTOPILOT' : 'MANUAL'}</span>`
               : '';
-            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${wmBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${wmBadge}${agenBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
             const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
             const dash = '<span style="color:var(--muted)">-</span>';
             const paketCell = x.paket ? esc(x.paket) : dash;
@@ -969,14 +975,35 @@
 
       modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
+      // Modal log mengikuti run yang sedang berjalan (installer maupun agen desain Claude): dibaca
+      // ulang tiap 3 detik selama terbuka; gulir tetap di bawah kecuali pengguna sedang menggulir ke atas.
+      let logPoll = null, logDomainAktif = '';
+      function tampilLog(domain, row) {
+        const diBawah = logViewEl.scrollHeight - logViewEl.scrollTop - logViewEl.clientHeight < 40;
+        const jalan = row && row.status === 'RUNNING';
+        logDomainEl.innerHTML = esc(domain) + (jalan
+          ? ` <span class="log-jalan"><span class="spinner"></span>${esc(row.stage === 'AGEN DESAIN CLAUDE' ? 'agen Claude bekerja' : 'berjalan' + (row.stage ? ': ' + row.stage : ''))}</span>`
+          : '');
+        logViewEl.textContent = row && row.log && row.log.length ? row.log.join('\n') : '(log kosong)';
+        if (diBawah) logViewEl.scrollTop = logViewEl.scrollHeight;
+      }
+      async function segarkanLog() {
+        if (!logModal.classList.contains('open')) { clearInterval(logPoll); logPoll = null; return; }
+        if (document.hidden) return;
+        try { tampilLog(logDomainAktif, await ambilDomain(logDomainAktif)); } catch (e) { /* coba lagi di detak berikut */ }
+      }
       function openLogModal(domain, domains) {
         const row = (domains || []).find(x => x.domain === domain);
-        logDomainEl.textContent = domain;
-        logViewEl.textContent = row && row.log && row.log.length ? row.log.join('\\n') : '(log kosong)';
+        logDomainAktif = domain;
+        logViewEl.textContent = '';
         logModal.classList.add('open');
+        tampilLog(domain, row);
         logViewEl.scrollTop = logViewEl.scrollHeight;
+        if (logPoll) clearInterval(logPoll);
+        logPoll = setInterval(segarkanLog, 3000);
+        segarkanLog();
       }
-      function closeLogModal() { logModal.classList.remove('open'); }
+      function closeLogModal() { logModal.classList.remove('open'); clearInterval(logPoll); logPoll = null; }
       logModal.addEventListener('click', e => { if (e.target === logModal) closeLogModal(); });
 
       // ---------- bagan alur installer ala n8n ----------
@@ -1166,16 +1193,30 @@
           mulai: /Paket custom: audit kemiripan/, selesai: /kemiripan: (sesuai|belum_mirip:|tidak_ada_referensi|gagal:)/,
           ket: (c, row) => hasilMirip(segmenRun(row).join('\n')) || 'menunggu',
           aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'qa', kol: 20, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
-        { id: 'maint', kol: 21, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
+        // Agen desain Claude (keputusan user 2026-09-18, scripts/desain-claude, DESAIN_CLAUDE=1): situs yang
+        // belum mirip dikerjakan Claude Code — baca referensi, susun halaman/header/footer/CSS, audit & ulangi
+        // sendiri; skor turun dibanding generator -> hasilnya dicabut.
+        { id: 'agenClaude', kol: 20, jalur: 0, nama: 'Agen desain Claude', ket0: 'desain + audit + ulang sendiri',
+          mulai: /desain diambil alih agen Claude|desain_claude: audit awal/, selesai: /desain_claude: (sesuai|belum_mirip|ditolak|lewati|gagal)/,
+          gagal: /desain_claude: gagal/,
+          ketHasil: t => {
+            const m = /desain_claude: (\S+).*?skor=(\d+)->(\d+) menit=([\d.]+)/.exec(t);
+            if (m) return (m[1] === 'sesuai' ? 'mirip' : m[1].startsWith('ditolak') ? 'ditolak (skor turun), kembali ke generator'
+              : 'belum mirip') + ': skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit';
+            const l = /desain_claude: (lewati|gagal):(\S+)/.exec(t);
+            return l ? l[1] + ': ' + l[2] : null;
+          },
+          aktif: c => dan(tanpaDry(c), c.custom, c.agenClaude) },
+        { id: 'qa', kol: 21, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
+        { id: 'maint', kol: 22, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
           ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
             : c.maintLewat !== null ? (c.maintLewat ? 'ya' : 'tidak') : c.custom === null ? 'menunggu' : c.custom ? 'ya: paket custom' : 'tidak') },
-        { id: 'maintLewat', kol: 22, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
+        { id: 'maintLewat', kol: 23, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
           selesai: /maintenance_dilewati/, aktif: c => dan(hanyaMode('apply')(c), c.maintLewat ?? c.custom) },
-        { id: 'maintOn', kol: 22, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
+        { id: 'maintOn', kol: 23, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
           selesai: /maintenance: maintenance_(enabled|active|skip)/,
           aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
-        { id: 'selesai', kol: 23, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
+        { id: 'selesai', kol: 24, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
       ];
       // [dari, ke, label, syarat]. Tanpa syarat: garis dari simpul pengecekan aktif kalau tujuannya
       // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
@@ -1208,6 +1249,8 @@
         ['halaman', 'fotoArtikel'], ['fotoArtikel', 'visual'], ['visual', 'mirip'],
         // Belum mirip: kembali ke tema FSE (generate ulang tema + halaman), lalu diaudit lagi.
         ['mirip', 'fse', 'belum mirip, generate ulang', c => dan(tanpaDry(c), c.custom, c.miripUlang)],
+        ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude)],
+        ['agenClaude', 'qa'],
         ['mirip', 'qa', 'mirip / dilaporkan'],
         ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'qa'],
         ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
@@ -1273,6 +1316,8 @@
             : /Paket custom: halaman blok & menu/.test(teks) ? false : null,
           // Audit kemiripan menyatakan belum mirip dan tema + halaman FSE digenerate ulang.
           miripUlang: /tema & halaman FSE digenerate ulang/.test(teks),
+          // Belum mirip dan DESAIN_CLAUDE=1: agen Claude mengambil alih (bukan generate ulang).
+          agenClaude: /desain diambil alih agen Claude|desain_claude: audit awal/.test(teks),
         };
       }
 
@@ -1583,7 +1628,7 @@
 
       function startPoll() {
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(() => { if (!document.hidden) load(); }, 10000);
+        pollTimer = setInterval(() => { if (!document.hidden) load(); }, 4000);
         document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
       }
 

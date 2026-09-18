@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Agen desain Claude untuk paket custom (keputusan user 2026-09-18, opsi B).
+
+Generator deterministik (fse-apply) hanya punya komponen tetap, jadi situs yang belum mirip
+referensi tidak membaik walau diulang. Di sini Claude Code (headless, mode agen) mengambil alih
+pembacaan referensi & penyusunan desain di atas tema velocity-fse, lalu mengaudit dan mengulang
+sendiri sampai mirip:
+
+  1. prasyarat: referensi ada, tema velocity-fse aktif, bukan portal berita / gaya_beranda manual
+  2. bahan: hasil generator sekarang (titik awal), template part tema, palet, isi & foto situs
+  3. audit awal (fse-audit-kemiripan) = skor pembanding
+  4. `claude -p` dengan templates/desain-claude/tugas.md; alat shell satu-satunya =
+     scripts/desain-claude-alat (cek/pasang/audit/potret/potong) yang terkunci ke situs ini
+  5. audit akhir; skor total TURUN dibanding awal -> hasil Claude dicabut (folder dipindah ke
+     claude.ditolak-<waktu>, situs kembali ke hasil generator)
+
+Hasil kerja ada di fse-rencana/<domain>/claude/ dan dipakai lagi oleh `fse-apply --isi` pada run
+berikutnya (halaman_claude:<slug>). Satu agen berjalan dalam satu waktu (kunci berkas).
+
+  desain-claude <manifest> [--paksa] [--putaran=N] [--menit=N]
+     --paksa   jalan walau audit awal sudah sesuai
+Env: DESAIN_CLAUDE_MODEL (bawaan opus), DESAIN_CLAUDE_MENIT (90), DESAIN_CLAUDE_PUTARAN (8).
+Biaya: login langganan Claude di server; /etc/velocity/secrets/anthropic_api_key (600) ada = pakai API key itu.
+Keluaran baris terakhir: desain_claude: <status> ... ; kode 0 selesai (apa pun hasilnya), 2 gagal jalan.
+"""
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+ALAT = HERE / 'desain-claude-alat'
+TEMA = ROOT / 'templates' / 'tema-fse'
+TUGAS = ROOT / 'templates' / 'desain-claude' / 'tugas.md'
+KUNCI = Path('/var/lib/velocity/desain-claude.lock')
+AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
+CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
+KUNCI_API = Path('/etc/velocity/secrets/anthropic_api_key')
+STATE = Path('/var/lib/velocity/installer')
+# Penanda "agen sedang berjalan" yang dibaca installer_status.py: situs tampil RUNNING di /installer/.
+AKTIF_DIR = STATE / 'desain-claude'
+# Dijalankan manual (bukan dari installer-runner yang sudah mengalirkan keluaran ke log domain):
+# baris log ikut ditulis ke <domain>.log supaya bagan & panel pantau /installer/ mengikutinya.
+LOG_DOMAIN = None
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+FA = muat('fse_apply', HERE / 'fse-apply')
+
+
+def log(pesan, tanpa_waktu=False):
+    baris = f'desain_claude: {pesan}' if tanpa_waktu else \
+        f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] desain_claude: {pesan}'
+    print(baris, flush=True)
+    if LOG_DOMAIN:
+        try:
+            with open(LOG_DOMAIN, 'a') as f:
+                f.write(baris + '\n')
+        except OSError:
+            pass
+
+
+PHP_BAHAN = r'''
+$palet = wp_get_global_settings(array('color', 'palette', 'theme'));
+$situs = (array) get_option('velocity_situs', array());
+// Email pemilik = penerima form (internal), bukan kontak publik.
+unset($situs['email']);
+$foto = array();
+foreach ((array) get_option('vfse_images', array()) as $k => $v) {
+    $u = is_numeric($v) ? wp_get_attachment_url((int) $v) : (string) $v;
+    if ($u) { $foto[$k] = $u; }
+}
+$halaman = array();
+foreach (get_pages(array('post_status' => 'publish')) as $p) {
+    $halaman[] = array('slug' => get_page_uri($p), 'judul' => $p->post_title, 'url' => get_permalink($p));
+}
+$logo = (int) get_option('site_logo');
+vfse_keluar(array('tema' => get_stylesheet(), 'palet' => $palet, 'situs' => $situs, 'foto' => $foto,
+    'halaman' => $halaman, 'logo' => $logo ? wp_get_attachment_url($logo) : '', 'nama' => get_bloginfo('name'),
+    'slogan' => get_bloginfo('description'), 'home' => home_url('/')));
+'''
+
+
+def skor_total(folder):
+    try:
+        d = json.loads((folder / 'audit-kemiripan.json').read_text())
+    except (OSError, ValueError):
+        return None, {}
+    s = d.get('skor') or {}
+    return sum(int(v) for v in s.values()), d
+
+
+def jalankan_alat(env, *argumen, timeout=1500):
+    run = subprocess.run([sys.executable, str(ALAT)] + list(argumen), capture_output=True, text=True,
+                         timeout=timeout, env=env)
+    return run.returncode, run.stdout + run.stderr
+
+
+def siapkan(cfg, folder):
+    """Bahan kerja agen. Titik awal (kerja/awal) hanya dibuat sekali: run berikutnya melanjutkan."""
+    kerja = folder / 'claude' / 'kerja'
+    awal = kerja / 'awal'
+    (awal / 'tema-parts').mkdir(parents=True, exist_ok=True)
+    for berkas in folder.glob('*.html'):
+        if not berkas.name.endswith('.tersimpan.html') and not (awal / berkas.name).exists():
+            shutil.copy2(berkas, awal / berkas.name)
+    for bagian in ('header', 'footer'):
+        shutil.copy2(TEMA / 'parts' / f'{bagian}.html', awal / 'tema-parts' / f'{bagian}.html')
+    bahan = FA.Situs(cfg).php(PHP_BAHAN)
+    (kerja / 'palet.json').write_text(json.dumps(bahan.pop('palet'), ensure_ascii=False, indent=1))
+    (kerja / 'isi.json').write_text(json.dumps(bahan, ensure_ascii=False, indent=1))
+    return bahan
+
+
+def prompt_tugas(cfg, domain, folder, putaran, referensi):
+    blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
+    target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
+    ganti = {
+        '{{DOMAIN}}': domain, '{{PAKET}}': cfg.get('paket', ''), '{{REFERENSI}}': referensi,
+        '{{FOLDER}}': str(folder / 'claude'), '{{RENCANA}}': str(folder), '{{ALAT}}': str(ALAT),
+        '{{TEMA}}': str(TEMA), '{{BLOK_TEMA}}': blok_tema, '{{PUTARAN}}': str(putaran),
+        '{{HALAMAN}}': ', '.join(t.replace('__', '/') for t in target) or 'beranda, tentang-kami, galeri, hubungi-kami',
+    }
+    prompt = TUGAS.read_text()
+    for k, v in ganti.items():
+        prompt = prompt.replace(k, v)
+    return prompt
+
+
+def ringkas_langkah(blok):
+    """Satu baris log untuk satu langkah agen (stream-json): yang dibaca, ditulis, dijalankan."""
+    if blok.get('type') == 'text':
+        teks = ' '.join(str(blok.get('text') or '').split())
+        return f'agen › {teks[:220]}' if teks else None
+    if blok.get('type') != 'tool_use':
+        return None
+    alat, masuk = blok.get('name', ''), blok.get('input') or {}
+    berkas = Path(str(masuk.get('file_path') or '')).name
+    if alat == 'Read':
+        return f"agen › {'melihat gambar' if berkas.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')) else 'membaca'} {berkas}"
+    if alat in ('Write', 'Edit', 'MultiEdit'):
+        return f'agen › menulis {berkas}'
+    if alat == 'Bash':
+        perintah = str(masuk.get('command') or '').replace(str(ALAT), 'alat')
+        return f"agen › {' '.join(perintah.split())[:200]}"
+    if alat in ('Glob', 'Grep'):
+        return f"agen › mencari {masuk.get('pattern', '')}"
+    return f'agen › {alat}'
+
+
+def jalankan_claude(folder, env, menit, prompt):
+    perintah = [
+        CLAUDE, '-p', prompt,
+        '--model', os.environ.get('DESAIN_CLAUDE_MODEL', 'opus'),
+        # stream-json: tiap langkah agen langsung masuk log domain (modal log /installer/ live).
+        '--output-format', 'stream-json', '--verbose',
+        '--no-session-persistence',
+        '--permission-mode', 'acceptEdits',
+        '--add-dir', str(folder), str(TEMA),
+        '--allowedTools', 'Read', 'Write', 'Edit', 'Glob', 'Grep', f'Bash({ALAT}:*)',
+        # Rahasia klien (password DA/DB/WP, kunci SSH, token) & kredensial Claude tidak boleh dibaca.
+        '--disallowedTools', 'WebFetch', 'WebSearch', 'Agent', 'Read(//etc/**)', 'Read(//root/**)',
+        'Read(//home/**)', 'Read(//var/lib/velocity/secret/**)', 'Read(//var/lib/velocity/installer/**)',
+    ]
+    mulai = time.time()
+    hasil, kode = {}, None
+    proses = subprocess.Popen(perintah, cwd=folder / 'claude', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, env=env)
+    # Batas waktu: readline bisa menunggu lama, jadi penjaga terpisah yang mematikan proses.
+    habis = threading.Timer(menit * 60, proses.kill)
+    habis.start()
+    try:
+        for baris in proses.stdout:
+            try:
+                ev = json.loads(baris)
+            except ValueError:
+                continue
+            if ev.get('type') == 'assistant':
+                for blok in (ev.get('message') or {}).get('content') or []:
+                    ringkas = ringkas_langkah(blok)
+                    if ringkas:
+                        log(ringkas)
+            elif ev.get('type') == 'result':
+                hasil = ev
+        kode = proses.wait()
+    finally:
+        habis.cancel()
+    if not hasil and kode not in (0, None):
+        kode = 'timeout' if time.time() - mulai >= menit * 60 - 5 else kode
+    durasi = round((time.time() - mulai) / 60, 1)
+    (folder / 'claude' / 'sesi.json').write_text(json.dumps(
+        dict(hasil, kode_keluar=kode, menit=durasi), ensure_ascii=False, indent=1))
+    return kode, durasi, hasil
+
+
+def catat_pemakaian(domain, hasil):
+    """Pemakaian token ke usage.jsonl yang sama dengan halaman /ai/ (peran desain_claude)."""
+    u = hasil.get('usage') or {}
+    masuk = sum(int(u.get(k) or 0) for k in ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'))
+    keluar = int(u.get('output_tokens') or 0)
+    baris = {
+        'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain,
+        'run': os.environ.get('VELOCITY_RUN_ID', ''), 'mode': os.environ.get('INSTALL_MODE', ''),
+        'peran': 'desain_claude', 'script': 'desain-claude', 'model_id': 'claude-code',
+        'model': os.environ.get('DESAIN_CLAUDE_MODEL', 'opus'), 'prompt_tokens': masuk,
+        'completion_tokens': keluar, 'total_tokens': masuk + keluar, 'ok': not hasil.get('is_error'),
+        'biaya_usd': hasil.get('total_cost_usd'), 'giliran': hasil.get('num_turns'),
+    }
+    try:
+        with open(AI_USAGE, 'a') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+    except OSError as e:
+        log(f'pemakaian_tidak_tercatat:{e}')
+
+
+def cabut(folder, env):
+    """Hasil Claude lebih buruk dari generator: situs dikembalikan, berkasnya disimpan untuk dipelajari."""
+    simpan = folder / f"claude.ditolak-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    (folder / 'claude').rename(simpan)
+    (folder / 'claude').mkdir()
+    _, teks = jalankan_alat(env, 'pasang')
+    log('cabut: ' + ' | '.join(b for b in teks.splitlines() if b.startswith(('pasang:', 'fse: halaman', 'cek:')))[:600])
+    jalankan_alat(env, 'audit')
+    return simpan
+
+
+def portal_berita(domain):
+    berkas = FA.GENERATED_DIR / f'{domain}-tema.json'
+    return berkas.is_file() and '"jenis": "berita"' in berkas.read_text()
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    opsi = dict(a[2:].split('=', 1) if '=' in a else (a[2:], '1') for a in sys.argv[1:] if a.startswith('--'))
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    manifest = str(Path(args[0]).resolve())
+    cfg = FA.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    folder = FA.RENCANA_DIR / domain
+    putaran = int(opsi.get('putaran') or os.environ.get('DESAIN_CLAUDE_PUTARAN') or 8)
+    menit = int(opsi.get('menit') or os.environ.get('DESAIN_CLAUDE_MENIT') or 90)
+
+    try:
+        ref = json.loads((folder / 'desain-referensi.json').read_text())
+    except (OSError, ValueError):
+        ref = {}
+    if not ref.get('url'):
+        print('desain_claude: lewati:tanpa_referensi')
+        return 0
+    if cfg.get('gaya_beranda') and cfg['gaya_beranda'] != 'referensi':
+        print(f"desain_claude: lewati:gaya_beranda_manual:{cfg['gaya_beranda']}")
+        return 0
+    if portal_berita(domain):
+        print('desain_claude: lewati:portal_berita')
+        return 0
+    if not Path(CLAUDE).exists():
+        print('desain_claude: gagal:claude_cli_tidak_ada')
+        return 2
+
+    global LOG_DOMAIN
+    if not os.environ.get('VELOCITY_RUN_ID'):
+        LOG_DOMAIN = STATE / f'{domain}.log'
+    env = dict(os.environ, VELOCITY_DESAIN_MANIFEST=manifest, VELOCITY_DOMAIN=domain)
+    # Biaya (keputusan user 2026-09-18): sementara langganan yang login di server ini; kalau berkas
+    # API key terpisah sudah ada, agen memakainya (tagihan per token, tidak menghabiskan limit langganan).
+    if KUNCI_API.is_file() and KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = KUNCI_API.read_text().strip()
+    KUNCI.parent.mkdir(parents=True, exist_ok=True)
+    with open(KUNCI, 'w') as kunci:
+        batas = time.time() + 3 * 3600
+        while True:
+            try:
+                fcntl.flock(kunci, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > batas:
+                    print('desain_claude: lewati:antrean_agen_penuh_3_jam')
+                    return 0
+                time.sleep(30)
+
+        aktif = AKTIF_DIR / f'{domain}.json'
+        AKTIF_DIR.mkdir(parents=True, exist_ok=True)
+        aktif.write_text(json.dumps({'pid': os.getpid(), 'domain': domain, 'mulai': datetime.now().astimezone()
+                                     .isoformat(timespec='seconds'), 'referensi': ref.get('url')}))
+        try:
+            return kerja(cfg, domain, folder, env, ref, opsi, putaran, menit)
+        finally:
+            aktif.unlink(missing_ok=True)
+
+
+def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
+    (folder / 'claude').mkdir(parents=True, exist_ok=True)
+    try:
+        bahan = siapkan(cfg, folder)
+    except Exception as e:
+        log(f'gagal:bahan:{type(e).__name__}:{e}'[:300], tanpa_waktu=True)
+        return 2
+    if bahan.get('tema') != FA.SLUG:
+        log(f"lewati:tema_aktif_{bahan.get('tema')}", tanpa_waktu=True)
+        return 0
+
+    log('audit awal')
+    jalankan_alat(env, 'audit')
+    awal, d_awal = skor_total(folder)
+    if awal is None:
+        log(f'gagal:audit_awal', tanpa_waktu=True)
+        return 2
+    if d_awal.get('sesuai') and 'paksa' not in opsi:
+        log(f'lewati:sudah_mirip skor={awal}', tanpa_waktu=True)
+        return 0
+    (folder / 'claude' / 'kerja' / 'tugas.json').write_text(json.dumps({
+        'domain': domain, 'referensi': ref.get('url'), 'skor_awal': d_awal.get('skor'),
+        'belum_mirip': d_awal.get('belum_mirip'), 'ambang': {'header/footer/beranda/gaya': 80, 'halaman_*': 70},
+        'maks_putaran': putaran, 'batas_menit': menit}, ensure_ascii=False, indent=1))
+
+    log(f'agen mulai (skor awal {awal}, maks {putaran} putaran / {menit} menit)')
+    kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url']))
+    catat_pemakaian(domain, hasil)
+    log(f"agen selesai kode={kode} menit={durasi} giliran={hasil.get('num_turns')} "
+        f"biaya_usd={hasil.get('total_cost_usd')}")
+
+    # Audit akhir sendiri: jawaban agen tidak dipercaya begitu saja.
+    jalankan_alat(env, 'audit')
+    akhir, d_akhir = skor_total(folder)
+    status = 'sesuai' if d_akhir.get('sesuai') else 'belum_mirip:' + '+'.join(d_akhir.get('belum_mirip') or [])
+    if akhir is None or akhir < awal:
+        simpan = cabut(folder, env)
+        status = f'ditolak_skor_turun (disimpan di {simpan.name})'
+    (folder / 'claude' / 'hasil.json').write_text(json.dumps({
+        'waktu': datetime.now().astimezone().isoformat(timespec='seconds'), 'status': status,
+        'skor_awal': d_awal.get('skor'), 'skor_akhir': d_akhir.get('skor'), 'menit': durasi,
+        'kode_agen': kode, 'ringkasan_agen': (hasil.get('result') or '')[:4000]}, ensure_ascii=False, indent=1))
+    log(f'{status} skor={awal}->{akhir} menit={durasi}', tanpa_waktu=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
