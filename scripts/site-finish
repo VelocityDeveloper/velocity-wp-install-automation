@@ -838,6 +838,9 @@ def main():
             wa = vct.data_klien(domain, title).get('WA', '')
         except Exception:
             wa = ''
+    # Manifest `wa_publik=`: nomor dari biodata pemilik yang sudah disetujui user.
+    if not wa:
+        wa = wa_number(cfg.get('wa_publik', ''))
     address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
     compro = data_compro(domain)
     # Slogan: tulisan klien di form → slogan di company profile → buatan AI.

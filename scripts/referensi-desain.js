@@ -49,9 +49,28 @@ const chrome = process.env.VELOCITY_CHROME
 // Dijalankan di dalam halaman. Tidak boleh memakai apa pun dari luar fungsi ini.
 function ukur() {
   const vw = document.documentElement.clientWidth;
+  // Warna CSS modern (oklab/oklch/color()) tidak cocok dengan pola rgb(): tombol
+  // "Contact" northseaaconsulting.com berwarna oklab sehingga headernya terbaca tanpa
+  // tombol ajakan (2026-09-18). Kanvas menerjemahkan sintaks apa pun ke sRGB.
+  let kanvas = null;
+  const lewatKanvas = (s) => {
+    try {
+      if (!kanvas) { kanvas = document.createElement('canvas').getContext('2d', { willReadFrequently: true }); }
+      kanvas.clearRect(0, 0, 1, 1);
+      kanvas.fillStyle = '#000';
+      kanvas.fillStyle = s;
+      if (kanvas.fillStyle === '#000' && !/^#0{3,6}$|black/i.test(String(s).trim())) return null;
+      kanvas.fillRect(0, 0, 1, 1);
+      const d = kanvas.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2], d[3] / 255];
+    } catch (e) { return null; }
+  };
   const rgba = (s) => {
     const m = String(s || '').match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
-    return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null;
+    if (m) return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]];
+    const t = String(s || '').trim();
+    if (!t || t === 'none' || t === 'transparent') return null;
+    return /^(oklab|oklch|lab|lch|color|hwb|hsl|#)/i.test(t) ? lewatKanvas(t) : null;
   };
   const hex = (c) => '#' + c.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
   const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -94,6 +113,34 @@ function ukur() {
       const q = m.getBoundingClientRect();
       const bg = m.matches('[style*="background-image"]') ? /url\(/.test(getComputedStyle(m).backgroundImage) : true;
       if (bg && q.width * q.height >= luas * 0.5) return true;
+    }
+    // Video latar dari YouTube/Vimeo dipasang sebagai <iframe> (Beaver Builder
+    // .fl-row-bg-video): hero northseaaconsulting.com karenanya terbaca "terang".
+    // Hanya iframe pemutar video yang dihitung — peta/lampiran tidak.
+    for (const f of el.querySelectorAll('iframe')) {
+      if (!tampak(f)) continue;
+      const src = (f.getAttribute('src') || '') + ' ' + (f.closest('[class]') || { className: '' }).className;
+      if (!/youtube|youtu\.be|vimeo|dailymotion|bg-video|video-bg|background-video/i.test(String(src))) continue;
+      const q = f.getBoundingClientRect();
+      if (q.width * q.height >= luas * 0.5) return true;
+    }
+    // Foto latar yang dipasang lewat KELAS css (bukan atribut style) tidak tertangkap
+    // pemindaian di atas: hero northseaaconsulting.com terbaca "terang" padahal banner
+    // berfoto bertulisan putih (2026-09-18).
+    for (const d of [...el.querySelectorAll('*')].slice(0, 400)) {
+      if (!tampak(d) || !/url\(/.test(getComputedStyle(d).backgroundImage)) continue;
+      const q = d.getBoundingClientRect();
+      if (q.width * q.height >= luas * 0.5) return true;
+    }
+    // Page builder (Beaver Builder: .fl-row > .fl-row-content-wrap) memasang foto latar
+    // di BARIS pembungkus, sedangkan yang terukur sebagai seksi adalah kotak isinya.
+    // Hanya induk sebesar seksi itu sendiri yang dianggap — bukan latar halaman.
+    let induk = el.parentElement;
+    for (let i = 0; i < 3 && induk && induk !== document.body && induk !== document.documentElement; i++) {
+      const q = induk.getBoundingClientRect();
+      if (q.height > r.height * 1.6) break;
+      if (/url\(/.test(getComputedStyle(induk).backgroundImage)) return true;
+      induk = induk.parentElement;
     }
     return false;
   };
@@ -170,8 +217,11 @@ function ukur() {
     };
     const bg = latarKotak(header);
     const calonTombol = [...header.querySelectorAll('a, button')].filter((a) => tampak(a) && !bukanTombol(a)).filter((a) => {
-      const c = rgba(getComputedStyle(a).backgroundColor);
-      return c && c[3] > 0.5 && Math.abs(lum(c) - lum(bg)) > 40 && kotak(a).w < 320;
+      // warnaLatar (bukan backgroundColor mentah) supaya tombol bergradien ikut terbaca:
+      // pil "Contact" di northseaaconsulting.com transparan menurut backgroundColor,
+      // sehingga headernya terbaca tanpa tombol ajakan (2026-09-18).
+      const c = warnaLatar(a);
+      return c && Math.abs(lum(c) - lum(bg)) > 40 && kotak(a).w < 320;
     });
     const tombol = calonTombol.length > 0;
     const barisMenu = new Set(tautan.map((t) => Math.round(t.y / 12))).size;
@@ -454,6 +504,9 @@ function ukur() {
       label, foto_posisi: fotoPosisi,
       kontras_rendah: kontrasRendah(el),
       latar: hex(bl), luminansi: Math.round(lum(bl)), foto_latar: fotoLatar,
+      // Lebar & tepi kiri seksi: membedakan seksi selebar layar dari seksi berwadah
+      // tetap (Beaver Builder .fl-row-fixed-width, 1320px di tengah layar 1366).
+      lebar: Math.round(kotak(el).w), kiri: Math.round(kotak(el).x),
       judul: judul.slice(0, 4).map((h) => teks(h).slice(0, 90)),
       judul_utama: utama ? Object.assign({ teks: teks(utama).slice(0, 90), tag: utama.tagName.toLowerCase() }, judulGaya(utama)) : null,
       kata: kataTeks, foto: foto.length, angka_besar: angka, tombol: tombol.length,

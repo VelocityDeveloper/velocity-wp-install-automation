@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.10.39
+Version: 1.11.1
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -54,6 +54,40 @@ img { height: auto; }
   .admin-bar .wp-site-blocks > header.wp-block-template-part { top: 0; }
 }
 .vf-header { box-shadow: 0 2px 14px rgba(0, 0, 0, .12); }
+/* Referensi tanpa garis/bayangan di bawah header. */
+.vf-header-tanpa-garis .vf-header { box-shadow: none; border-bottom: 0; }
+
+/* ---- Wadah tetap (vf-wadah-tetap) --------------------------------------------
+   Referensi bukan situs "full width": isinya kotak selebar wadah (1320px di
+   northseaaconsulting.com) dengan sudut kartu, bukan pita selebar layar. Header
+   tetap selebar layar karena memang begitu di referensi. (Permintaan user 2026-09-18) */
+.vf-ref.vf-wadah-tetap .wp-block-post-content > .alignfull:not(.vf-header),
+.vf-ref.vf-wadah-tetap .wp-site-blocks > .alignfull:not(.vf-header):not(.wp-block-template-part),
+.vf-ref.vf-wadah-tetap .vf-footer {
+  max-width: min(var(--vf-wadah, 1320px), calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+  margin-inline: auto;
+  border-radius: var(--vf-kartu-radius, 15px);
+  overflow: hidden;
+}
+/* Hero berfoto ikut menjadi kotak bersudut, seperti banner referensi. */
+.vf-ref.vf-wadah-tetap .vf-ref-hero { border-radius: var(--vf-kartu-radius, 15px); overflow: hidden; }
+/* Blok gambar & sampul: sudut kartu yang sama. */
+.vf-ref.vf-wadah-tetap :is(.wp-block-image img, .wp-block-image, .wp-block-cover, .vf-kartu img) {
+  border-radius: var(--vf-kartu-radius, 15px);
+}
+@media (max-width: 781px) {
+  /* Di layar kecil sisakan tepi 16px saja — wadah 1320px + padding bawaan membuat
+     kotaknya terlalu menjorok (solusicerdasconsulting.com 2026-09-18). */
+  .vf-ref.vf-wadah-tetap .wp-block-post-content > .alignfull:not(.vf-header),
+  .vf-ref.vf-wadah-tetap .wp-site-blocks > .alignfull:not(.vf-header):not(.wp-block-template-part),
+  .vf-ref.vf-wadah-tetap .vf-footer {
+    max-width: calc(100% - 32px);
+    border-radius: var(--vf-kartu-radius, 15px);
+  }
+}
+/* Hero dua kolom ikut referensi: judul kiri, keterangan & tombol kanan; menumpuk di HP. */
+.vf-ref-hero__baris { align-items: flex-end; gap: 2.5rem; width: 100%; }
+@media (max-width: 781px) { .vf-ref-hero__baris { gap: 1rem; } }
 .vf-header__bar { gap: 1.2rem; }
 /* Logo umumnya bertulisan gelap; tanpa alas putih tidak terbaca di header berwarna. */
 .vf-header .wp-block-site-logo a {
@@ -62,7 +96,13 @@ img { height: auto; }
   border-radius: 10px;
   background: var(--wp--preset--color--putih);
 }
-.vf-header .wp-block-site-logo img { max-height: 46px; width: auto; }
+/* Batas lebar & tinggi sekaligus supaya ukurannya ikut bentuk logo: wordmark
+   memanjang tetap ~46px seperti sebelumnya (tertahan lebar), sedangkan logo
+   bertumpuk (gambar di atas tulisan) boleh lebih tinggi agar tulisannya terbaca
+   — solusicerdasconsulting.com, 2026-09-18. */
+.vf-header .wp-block-site-logo img {
+  width: auto; height: auto; max-height: 64px; max-width: 170px; object-fit: contain;
+}
 /* Nama situs hanya tampil kalau logo belum dipasang (blok logo tidak mencetak apa pun). */
 .vf-header .wp-block-site-logo + .vf-nama-situs { display: none; }
 .vf-nama-situs { margin: 0; font-size: 1.2rem; font-weight: 800; }
@@ -463,6 +503,31 @@ img { height: auto; }
 .vf-kartu-foto .wp-block-image { margin: 0; }
 .vf-kartu-foto .wp-block-image img { display: block; width: 100%; }
 .vf-kartu-foto--tanpa { border-top: 4px solid var(--wp--preset--color--aksen); }
+/* Kartu polos ala referensi: latar abu muda, tanpa gambar, ikon panah di sudut
+   ("Our Services" northseaaconsulting.com — permintaan user 2026-09-18). */
+.vf-ref .vf-kartu-foto--polos {
+  background: var(--wp--preset--color--latar, #f3f4f6);
+  border-color: transparent;
+  border-radius: var(--vf-kartu-radius, 15px);
+}
+.vf-ref .vf-kartu-foto--polos .vf-kartu-foto__isi { padding: 1.6rem 1.7rem 1.9rem; }
+.vf-ref .vf-kartu-panah { position: relative; }
+.vf-ref .vf-kartu-panah::after {
+  content: "\2197";
+  position: absolute;
+  right: 1.1rem;
+  bottom: 1rem;
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  background: var(--wp--preset--color--putih);
+  color: var(--wp--preset--color--primary);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.vf-ref .vf-kartu-panah .vf-kartu-foto__isi { padding-bottom: 3.2rem; }
 .vf-kartu-foto__isi { padding: 1.1rem 1.25rem 1.35rem; }
 .vf-kartu-foto__isi > * { margin-block: 0 !important; }
 .vf-kartu-foto h3 { color: var(--wp--preset--color--ink); font-size: 1.12rem; line-height: 1.3; }

@@ -570,7 +570,9 @@ def data_situs(cfg, domain, isi, vct, ref=None):
         # Kontak publik biasanya dari "Kontak utk di web". Kalau klien hanya memberi email/alamat
         # di biodata, keputusannya ada di user (bukan otomatis) — hasilnya ditulis di manifest.
         'email_publik': klien.get('EMAIL_PUBLIK', '') or cfg.get('email_publik', ''),
-        'wa': klien.get('WA', ''),
+        # Nomor WA biodata pemilik hanya tampil kalau user memutuskannya (sama seperti
+        # email_publik/alamat_publik): keputusannya ditulis di manifest `wa_publik=`.
+        'wa': klien.get('WA', '') or cfg.get('wa_publik', ''),
         'telp': klien.get('TELP', ''),
         'alamat': klien.get('ALAMAT', '') or cfg.get('alamat_publik', ''),
         'area': '' if area == 'sekitarnya' else area,
@@ -789,6 +791,9 @@ def token_desain(ref):
         'footer_pita': bool(desain['footer'].get('pita')),
         # Rencana VERSI 4 (2026-09-17, centralimpex.com): kotak cari, logo & hak cipta footer,
         # banner judul halaman dalam. Kunci hanya ditulis bila rencananya memuatnya.
+        # Header referensi tanpa garis/bayangan pemisah (northseaaconsulting.com): bawaan
+        # tema memberi bayangan, jadi headernya terlihat lebih berat dari referensi.
+        **({'header_tanpa_garis': True} if 'garis_bawah' in h and not h['garis_bawah'] else {}),
         **({'tanpa_cari': True} if 'cari' in h and not h['cari'] else {}),
         **({'footer_logo': bool(desain['footer'].get('logo')),
             'footer_bawah_rata': desain['footer'].get('bawah_rata') or '',
@@ -820,6 +825,9 @@ def token_desain(ref):
             'kartu_jarak': int(desain['kartu'].get('jarak') or 0),
             'wadah': float(desain.get('wadah') or 0),
             'wadah_px': int(desain.get('wadah_px') or 0),
+            # Seksi berwadah tetap (kotak menjorok, bukan pita selebar layar):
+            # tema membuat seksi & footer jadi kartu selebar wadah bersudut kartu.
+            'wadah_tetap': bool(desain.get('wadah_tetap')),
             'wadah_maks': int(desain.get('wadah_maks') or 0),
             'header_melayang': h.get('melayang') or {}}
            if int(desain.get('versi') or 0) >= 5 else {}),
@@ -1259,19 +1267,26 @@ def _kepala_seksi(teks, sub='', label=''):
     return grup(anak, kelas='vf-kepala-seksi')
 
 
-def kartu_foto(daftar, foto, kunci, kolom_grid=None):
+def kartu_foto(daftar, foto, kunci, kolom_grid=None, tanpa_foto=False, panah=False):
     """Kartu berfoto (layanan/produk) dalam grid; kunci[i] = slot foto butir ke-i.
-    kolom_grid: jumlah kolom dari referensi klien (bawaan 4 untuk 4 butir, selain itu 3)."""
+    kolom_grid: jumlah kolom dari referensi klien (bawaan 4 untuk 4 butir, selain itu 3).
+
+    tanpa_foto/panah: referensi berkartu polos (latar abu, tanpa gambar) dengan ikon panah
+    di sudut — northseaaconsulting.com "Our Services" (permintaan user 2026-09-18)."""
     kartu = []
     for i, b in enumerate(daftar):
-        g = gambar(foto.get(kunci[i]) if i < len(kunci) else None, 'vf-kartu-foto__gambar')
+        g = None if tanpa_foto else gambar(foto.get(kunci[i]) if i < len(kunci) else None, 'vf-kartu-foto__gambar')
         isi_kartu = [judul(esc(b.get('judul')), 3)]
         if b.get('teks'):
             isi_kartu.append(paragraf(esc(b['teks'])))
         if b.get('rincian'):
             isi_kartu.append(daftar_poin([esc(r) for r in b['rincian'][:4]]))
-        kartu.append(grup(([g] if g else []) + [grup(isi_kartu, kelas='vf-kartu-foto__isi')],
-                          kelas='vf-kartu-foto' + ('' if g else ' vf-kartu-foto--tanpa')))
+        kelas = 'vf-kartu-foto'
+        if not g:
+            kelas += ' vf-kartu-foto--polos' if tanpa_foto else ' vf-kartu-foto--tanpa'
+        if panah:
+            kelas += ' vf-kartu-panah'
+        kartu.append(grup(([g] if g else []) + [grup(isi_kartu, kelas='vf-kartu-foto__isi')], kelas=kelas))
     return grup(kartu, kelas='vf-grid-kartu', align='wide',
                 layout={'type': 'grid', 'columnCount': kolom_grid or (4 if len(daftar) == 4 else 3), 'minimumColumnWidth': '15rem'})
 
@@ -1699,9 +1714,12 @@ def beranda_referensi(q, sd, isi, info):
 
     def hero(s):
         teks_hero = []
-        if sd.get('slogan'):
+        # Label kecil di atas judul hanya kalau referensinya memang berlabel; dulu slogan
+        # klien selalu dicetak sehingga hero kita punya baris yang tidak ada di referensi.
+        berlabel = s.get('label', True) or not s.get('terukur', True)
+        if berlabel and sd.get('slogan'):
             teks_hero.append(paragraf_kelas(esc(sd['slogan']), 'vf-label-seksi'))
-        elif s.get('label') and isi.get('hero_judul'):
+        elif berlabel and isi.get('hero_judul'):
             # Referensi berlabel di atas judul hero: nama usaha klien sebagai label.
             teks_hero.append(paragraf_kelas(esc(sd['nama']), 'vf-label-seksi'))
         teks_hero.append(judul(esc(isi.get('hero_judul') or sd['nama']), 1))
@@ -1715,7 +1733,14 @@ def beranda_referensi(q, sd, isi, info):
             aksi = [('Hubungi Kami', kontak, False)]
         teks_hero.append(tombol_ganda(aksi))
         varian = s.get('varian') or 'foto'
-        rata = ' vf-rata-tengah' if s.get('rata') == 'tengah' or varian == 'terang' else ''
+        # Hero referensi yang teksnya tercatat `kontras_rendah` = tulisan putih di atas
+        # foto: pengukur hanya melihat warna latar pembungkusnya (putih) lalu menyebutnya
+        # "terang", sehingga hero kita jadi kotak polos padahal referensinya banner berfoto
+        # (northseaaconsulting.com, solusicerdasconsulting.com 2026-09-18).
+        if varian == 'terang' and foto.get('hero') and s.get('kontras_rendah'):
+            varian = 'foto'
+        # Rata teks mengikuti referensi; dulu hero terang SELALU dipaksa rata tengah.
+        rata = ' vf-rata-tengah' if s.get('rata') == 'tengah' else ''
         slide = [k for k in ('hero-2', 'hero-3', 'hero-4') if foto.get(k)]
         if varian == 'foto' and foto.get('hero') and slide and (s.get('slider') or not s.get('terukur', True)):
             # Lapisan gelap tipis (20): foto slide berupa banner produk yang sisi teksnya sudah gelap.
@@ -1740,6 +1765,13 @@ def beranda_referensi(q, sd, isi, info):
                 tinggi = max(560, min(int(s.get('tinggi') or 0), 800))
                 return sampul(foto['hero'], teks_hero + [grup(bar_isi, kelas='vf-ref-hero-bar', align='wide')],
                               'vf-hero-foto vf-ref-hero' + rata, 40, tinggi)
+            # Hero dua kolom seperti referensi: judul di kiri, keterangan & tombol di
+            # kanan (northseaaconsulting.com). Tanpa ini semuanya menumpuk di satu kolom.
+            if s.get('kolom') == 2 and len(teks_hero) >= 3:
+                pisah = next(i for i, b in enumerate(teks_hero) if '<h1' in b) + 1
+                isi_hero = [barisan([kolom(teks_hero[:pisah]), kolom(teks_hero[pisah:])],
+                                    kelas='vf-ref-hero__baris', align='wide')]
+                return sampul(foto['hero'], isi_hero, 'vf-hero-foto vf-ref-hero' + rata, 60, 560)
             return sampul(foto['hero'], teks_hero, 'vf-hero-foto vf-ref-hero' + rata, 60, 560)
         if varian == 'terbelah':
             kol = [kolom(teks_hero, '55%')] + ([kolom([gambar(foto['hero'], 'vf-foto-bingkai', '4/3')])] if foto.get('hero') else [])
@@ -1761,7 +1793,9 @@ def beranda_referensi(q, sd, isi, info):
             teks.append(paragraf(esc(ringkas)))
         teks.append(tombol('Selengkapnya', tautan('tentang-kami')))
         kol = [kolom([gambar(foto['tentang'], 'vf-foto-bingkai', '4/3')])] if foto.get('tentang') else []
-        return seksi_berlatar([barisan(kol + [kolom(teks)], kelas='vf-tentang', align='wide')], s)
+        # Foto di sisi yang sama dengan referensi (`foto_posisi`); dulu selalu di kiri.
+        baris = (kol + [kolom(teks)]) if s.get('foto_posisi') != 'kanan' else ([kolom(teks)] + kol)
+        return seksi_berlatar([barisan(baris, kelas='vf-tentang', align='wide')], s)
 
     def layanan(s):
         if not sd['layanan']:
@@ -1813,9 +1847,12 @@ def beranda_referensi(q, sd, isi, info):
                                    tombol('Lihat Semua Produk', produk_url)], s)
         if not isi.get('produk'):
             return ''
+        # Kartu mengikuti referensi: berfoto atau polos berpanah (rencana VERSI >= 4).
+        polos = 'kartu_foto' in s and not s.get('kartu_foto')
         return seksi_berlatar([kepala_seksi(js.get('produk') or 'Produk Kami'),
                                kartu_foto(isi['produk'], foto, [p.get('slug', '') for p in isi['produk']],
-                                          kolom_ref(s, 3, len(isi['produk'])))], s)
+                                          kolom_ref(s, 3, len(isi['produk'])),
+                                          tanpa_foto=polos, panah=polos and bool(s.get('kartu_ikon')))], s)
 
     def keunggulan(s):
         if not isi.get('keunggulan'):
@@ -2722,26 +2759,34 @@ def halaman_menu_referensi(desain, sd, isi):
             anak.append(blok('velocity/form-kirim'))
             hasil[f"layanan/{slug_teks(l['judul'])}"] = (l['judul'], '\n\n'.join(anak))
     if 'faq' in ada:
-        tanya = []
-        if sd['layanan']:
-            tanya.append((f"Apa saja layanan {sd['nama']}?",
-                          'Layanan kami meliputi ' + ', '.join(l['judul'] for l in sd['layanan']) + '.'))
-        if sd.get('area'):
-            tanya.append(('Wilayah mana saja yang dilayani?', f"Kami melayani wilayah {sd['area']}."))
-        if isi.get('alur'):
-            tanya.append(('Bagaimana alur pemesanannya?',
-                          ' '.join(f"{i + 1}. {a.get('judul')}: {a.get('teks')}" for i, a in enumerate(isi['alur'][:6]))))
-        if sd.get('wa') or sd.get('email_publik'):
-            cara = ' atau '.join(x for x in (f"WhatsApp {sd['telp'] or sd['wa']}" if sd.get('wa') else '',
-                                             f"email {sd['email_publik']}" if sd.get('email_publik') else '') if x)
-            tanya.append(('Bagaimana cara menghubungi kami?', f'Hubungi kami melalui {cara}, atau isi formulir di halaman Kontak.'))
-        for l in sd['layanan'][:4]:
-            if l.get('rincian'):
-                tanya.append((f"Apa saja cakupan {l['judul']}?", ', '.join(l['rincian'][:6]) + '.'))
+        tanya = faq_butir(sd, isi)
         if len(tanya) >= 3:
             hasil['faq'] = ('FAQ', '\n\n'.join([paragraf('Jawaban atas pertanyaan yang sering diajukan seputar layanan kami.'),
                                                   akordeon(tanya, 'vf-akordeon-grup vf-faq-grup')]))
     return hasil
+
+
+def faq_butir(sd, isi):
+    """[(pertanyaan, jawaban)] dari FAKTA klien saja — layanan, cakupan, area, alur, kontak.
+    Tidak pernah mengarang pertanyaan. Dipakai halaman FAQ tersendiri maupun seksi FAQ di
+    halaman Kontak (referensi northseaaconsulting.com menaruhnya di sana)."""
+    tanya = []
+    if sd['layanan']:
+        tanya.append((f"Apa saja layanan {sd['nama']}?",
+                      'Layanan kami meliputi ' + ', '.join(l['judul'] for l in sd['layanan']) + '.'))
+    if sd.get('area'):
+        tanya.append(('Wilayah mana saja yang dilayani?', f"Kami melayani wilayah {sd['area']}."))
+    if isi.get('alur'):
+        tanya.append(('Bagaimana alur pemesanannya?',
+                      ' '.join(f"{i + 1}. {a.get('judul')}: {a.get('teks')}" for i, a in enumerate(isi['alur'][:6]))))
+    if sd.get('wa') or sd.get('email_publik'):
+        cara = ' atau '.join(x for x in (f"WhatsApp {sd['telp'] or sd['wa']}" if sd.get('wa') else '',
+                                         f"email {sd['email_publik']}" if sd.get('email_publik') else '') if x)
+        tanya.append(('Bagaimana cara menghubungi kami?', f'Hubungi kami melalui {cara}, atau isi formulir di halaman Kontak.'))
+    for l in sd['layanan'][:4]:
+        if l.get('rincian'):
+            tanya.append((f"Apa saja cakupan {l['judul']}?", ', '.join(l['rincian'][:6]) + '.'))
+    return tanya
 
 
 def tautan_menu(info, sd, slugs_ada):
@@ -2905,6 +2950,12 @@ def langkah_isi(cfg, situs, coba):
     rencana = {}  # slug -> (id, judul, isi, tata)
 
     def rencanakan(slug, judul_hal, isi_baru, tata=False):
+        # Halaman susunan agen desain Claude (scripts/desain-claude) menggantikan hasil generator.
+        # Aturan md5 di bawah tetap berlaku: suntingan orang di wp-admin tidak ditimpa.
+        timpa = RENCANA_DIR / domain / 'claude' / f"{slug.replace('/', '__')}.html"
+        if timpa.is_file() and timpa.read_text().strip():
+            isi_baru = timpa.read_text().strip()
+            print(f'fse: halaman_claude:{slug}')
         if slug in info['tanpa_halaman']:
             print(f'fse: halaman_dikecualikan:{slug} (manifest tanpa_halaman)')
             return
@@ -2926,6 +2977,19 @@ def langkah_isi(cfg, situs, coba):
         if slug == 'tentang-kami' and not berita:
             profil, topik = profil_perusahaan(isi)
         dasar = lama.strip() if '<!-- wp:' in lama else html_ke_blok('' if lama.strip() in PLACEHOLDER else lama, topik)
+        if slug == 'hubungi-kami':
+            # Seksi FAQ milik installer disusun ulang tiap run (seperti galeri): tanpa ini
+            # `lanjutan` melihat penanda lama di halaman lalu melewati versi barunya. FAQ
+            # selalu bagian TERAKHIR halaman, jadi dipotong dari penanda pertamanya sampai
+            # habis — regex ber-`.*?` salah potong karena grup FAQ punya grup di dalamnya
+            # (menyisakan </div> yatim dan markup ditolak cek-blok).
+            potong = min([i for i in (dasar.find('vf-ref-faq'), dasar.find('vf-faq-grup')) if i >= 0] or [-1])
+            if potong >= 0:
+                awal = dasar.rfind('<!-- wp:', 0, potong)
+                kepala = dasar.rfind('Pertanyaan yang Sering Diajukan', 0, potong)
+                if kepala >= 0:
+                    awal = min(awal, dasar.rfind('<!-- wp:', 0, kepala))
+                dasar = dasar[:max(awal, 0)].strip()
         if slug == 'galeri':
             # Galeri foto slot milik installer (kelas vf-galeri) disusun ulang dari peta foto
             # terbaru; galeri buatan orang tidak punya kelas itu dan tidak disentuh.
@@ -2993,9 +3057,24 @@ def langkah_isi(cfg, situs, coba):
         # itu yang membuat halaman ini dianggap "sudah disunting orang" di run berikutnya.
         # Sekarang peta ikut disusun fse-apply, dan site-finish melewati halaman milik FSE.
         tambahan_kontak.insert(1, ('velocity-map', judul('Lokasi') + '\n\n' + petak))
+    # Seksi FAQ di halaman Kontak bila halaman kontak referensi memang punya
+    # (northseaaconsulting.com: kontak > faq). Pertanyaannya dari fakta klien.
+    faq_kontak = ''
+    seksi_kontak_ref = (((info.get('desain') or {}).get('halaman') or {}).get('kontak') or {}).get('seksi') or []
+    if any((x or {}).get('jenis') == 'faq' for x in seksi_kontak_ref):
+        butir_faq = faq_butir(sd, isi)
+        if len(butir_faq) >= 3:
+            # Dibungkus seksi berlatar abu supaya terbaca sebagai seksi tersendiri
+            # (seperti di referensi), bukan lanjutan blok kontak.
+            faq_kontak = seksi_berlatar([judul('Pertanyaan yang Sering Diajukan'),
+                                         akordeon(butir_faq, 'vf-akordeon-grup vf-faq-grup')],
+                                        {'jenis': 'faq', 'latar': 'abu', 'rata': 'kiri'})
     if kontak_dua and not berita:
-        rencanakan('hubungi-kami', 'Hubungi Kami', kontak_dua_kolom(info, blok_peta(info.get('peta'))))
+        isi_kontak = kontak_dua_kolom(info, blok_peta(info.get('peta')))
+        rencanakan('hubungi-kami', 'Hubungi Kami', isi_kontak + ('\n\n' + faq_kontak if faq_kontak else ''))
     else:
+        if faq_kontak:
+            tambahan_kontak.append(('vf-faq-grup', faq_kontak))
         rencanakan('hubungi-kami', 'Hubungi Kami', lanjutan('hubungi-kami', tambahan_kontak))
     if berita:
         rencanakan('redaksi', 'Redaksi', halaman_redaksi(sd, isi, info))

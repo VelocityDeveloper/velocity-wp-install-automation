@@ -594,6 +594,12 @@ def ambil_foto(pdf, gambar, keluar, tmp):
                 continue
             if (lebar, tinggi) != (g['lebar'], g['tinggi']) or hiasan(rgb, kanal, alpha, lebar, tinggi):
                 continue
+            # Potongan bermask juga bisa nyaris kosong (bidang putih dengan sedikit
+            # tepi tembus pandang): di kartu beranda hasilnya kotak putih tanpa isi
+            # — solusicerdasconsulting.com foto-04.png, 2026-09-18. Jalur foto biasa
+            # sudah menyaringnya dengan `polos`; jalur potongan belum.
+            if polos(rgb, kanal, lebar, tinggi):
+                continue
             baris = []
             for y in range(tinggi):
                 b = bytearray()
@@ -631,7 +637,10 @@ JENIS_SEKSI = (
     ('visimisi', r'\bVISI\b|\bMISI\b'),
     ('profil', r'INFORMASI PERUSAHAAN|TENTANG|PROFIL PERUSAHAAN|SEJARAH'),
     ('layanan', r'LAYANAN|\bJASA\b'),
-    ('customer', r'CUSTOMER|KLIEN|PELANGGAN'),
+    # Inggris ikut: compro solusicerdasconsulting.com memakai "Our Partner" &
+    # "Our Client", tidak tertangkap lalu logo mitranya dipakai sebagai foto kartu
+    # beranda (2026-09-18).
+    ('customer', r'CUSTOMER|KLIEN|PELANGGAN|CLIENTS?\b|PARTNERS?\b|MITRA'),
     ('legalitas', r'LEGALITAS|PERIZINAN|SERTIFIKAT'),
     ('target', r'TARGET|PENCAPAIAN'),
     ('penutup', r'PENUTUP|TERIMA KASIH'),

@@ -394,8 +394,16 @@ def data_klien(domain, nama=''):
     # Di .doc label, ":" dan isinya berada di baris terpisah sehingga tidak masuk `fields`.
     m_nama = re.search(r'NAMA\s+PERUSAHAAN\s*/\s*INSTANSI\s*\n\s*:?\s*\n?\s*([^\n]{3,80})', teks_form)
     nama_form1 = m_nama.group(1).strip() if m_nama and not re.match(r'^[.\s]*$|^SLOGAN', m_nama.group(1), re.I) else ''
-    nama = (nama.strip() or field(r'nama perusahaan\s*/\s*instansi|nama instansi') or nama_form1 or field(r'nama perusahaan|nama media')
+    nama_form2 = field(r'nama perusahaan|nama media')
+    nama = (nama.strip() or field(r'nama perusahaan\s*/\s*instansi|nama instansi') or nama_form1 or nama_form2
             or domain.split('.')[0].replace('-', ' ').title())
+    # Nama badan hukum menang atas kalimat bidang usaha. solusicerdasconsulting.com
+    # (2026-09-18): FORM 1 diisi "Consultant Insurance & Tax Insurance" sedangkan FORM 2
+    # memuat "PT Solusi Cerdas Consulting", sehingga hak cipta footer memakai bidang usaha.
+    # Kalau keduanya (atau tidak satu pun) berbentuk badan hukum, FORM 1 tetap menang.
+    badan = lambda t: bool(re.match(r'\s*(pt|cv|ud|pd|perum|koperasi|yayasan|firma)[\s.]', t or '', re.I))
+    if nama_form2 and badan(nama_form2) and not badan(nama):
+        nama = nama_form2.strip()
     kontak_web = field(r'kontak utk di web|kontak untuk di web')
     wa, telp = nomor_wa(kontak_web)
     if not wa:

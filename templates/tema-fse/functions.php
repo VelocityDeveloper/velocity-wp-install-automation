@@ -151,6 +151,8 @@ add_filter('body_class', function ($kelas) {
             if (!empty($desain['header_keranjang']) && velocity_fse_toko()) { $kelas[] = 'vf-header-keranjang'; }
             // Token rencana VERSI 4 (2026-09-17, centralimpex.com): kotak cari, logo & baris hak
             // cipta footer, judul kolom footer, banner judul halaman dalam.
+            if (!empty($desain['header_tanpa_garis'])) { $kelas[] = 'vf-header-tanpa-garis'; }
+            if (!empty($desain['wadah_tetap'])) { $kelas[] = 'vf-wadah-tetap'; }
             if (!empty($desain['tanpa_cari'])) { $kelas[] = 'vf-tanpa-cari'; }
             if (!empty($desain['footer_logo'])) { $kelas[] = 'vf-footer-logo'; }
             $bawah = (string) ($desain['footer_bawah_rata'] ?? '');

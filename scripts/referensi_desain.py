@@ -44,7 +44,7 @@ UA = 'velocity-installer/1.0 (+https://velocitydeveloper.com)'
 # (versi 2: warna tombol WhatsApp mengambang dibuang dari warna referensi;
 #  versi 4: detail header/topbar/footer/seksi + halaman dalam;
 #  versi 5: pohon menu, font menu, detail kartu/tombol/wadah, halaman FAQ & halaman jasa).
-VERSI = 5
+VERSI = 11
 # Halaman dalam referensi yang diukur, dikenali dari alamat/teks menu -> slug halaman situs klien.
 HALAMAN_DALAM = [
     ('tentang', r'about|tentang|profil|profile|company|who-we-are|sejarah', 'tentang-kami'),
@@ -537,6 +537,16 @@ def jenis_wadah(ukur, persen):
     return {'wadah': persen if persen >= 0.9 else 0, 'wadah_px': 0}
 
 
+def wadah_tetap(seksi, layar):
+    """True bila seksi-seksi isi memang kotak berwadah tetap (tepinya menjorok ke dalam),
+    bukan pita selebar layar. Dipakai tema untuk membuat seksi jadi kartu berwadah."""
+    kotak = [s for s in seksi if int(s.get('lebar') or 0) >= 400 and int(s.get('tinggi') or 0) >= 150]
+    if len(kotak) < 2:
+        return False
+    menjorok = [s for s in kotak if int(s['lebar']) <= layar * 0.985 and int(s.get('kiri') or 0) >= 8]
+    return len(menjorok) >= max(2, len(kotak) // 2)
+
+
 def lebar_wadah(seksi, layar):
     """Lebar isi khas (persentil 75 lebar isi seksi) dibanding lebar layar, 0..1."""
     nilai = sorted(min(x.get('lebar_isi') or 0, layar) for x in seksi if (x.get('lebar_isi') or 0) > layar * 0.3)
@@ -594,6 +604,10 @@ def rencana_global(ukur, ref, h, seksi, susunan, catatan):
                   'jarak': int(kartu_pertama.get('jarak') or 0)},
         # Lebar isi terlebar dibanding layar (kontraktorhijau.com 95%, situs Bootstrap ~1140px).
         **jenis_wadah(ukur, lebar_wadah(seksi, ukur.get('lebar_layar') or 1366)),
+        # Seksi berwadah TETAP: kotaknya sendiri lebih sempit dari layar (bukan selebar
+        # layar berisi wadah). Beaver Builder `.fl-row-fixed-width` — northseaaconsulting.com
+        # hero 1320px di tengah layar 1366 (2026-09-18).
+        'wadah_tetap': wadah_tetap(seksi, ukur.get('lebar_layar') or 1366),
         'judul_ukuran': {'h1': round(float(font.get('ukuran_h1') or 0), 1), 'h2': round(float(font.get('ukuran_h2') or 0), 1)},
         'menu': rencana_menu(ukur),
         'footer': rencana_footer(ukur),

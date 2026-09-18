@@ -305,10 +305,15 @@ def foto_compro(domain):
     except (OSError, ValueError):
         return []
     hasil = []
+    # Halaman daftar klien/mitra berisi logo perusahaan lain: bukan foto klien ini.
+    logo_mitra = {n for x in data.get('seksi') or [] if x.get('jenis') == 'customer'
+                  for n in x.get('foto') or []}
     for f in data.get('foto') or []:
         path = Path(f.get('berkas', ''))
         lebar, tinggi = f.get('lebar') or 0, f.get('tinggi') or 0
         if not path.is_file() or lebar < 400 or tinggi < 300 or tinggi < lebar * 0.4 or lebar < tinggi * 0.4:
+            continue
+        if path.name in logo_mitra:
             continue
         hasil.append({'url': f'compro:{path.name}', 'path': str(path), 'title': f.get('judul_halaman') or '',
                       'halaman': f.get('halaman'), 'width': lebar, 'height': tinggi, 'license': 'klien',
@@ -398,7 +403,9 @@ def rencana_compro(domain, isi):
     info = {Path(f['berkas']).name: f for f in data.get('foto') or [] if Path(f.get('berkas', '')).is_file()}
     per = {}
     for x in seksi:
-        if x.get('jenis') in ('legalitas', 'penutup', 'struktur'):
+        # 'customer' = halaman daftar klien/mitra: isinya logo perusahaan lain,
+        # tidak boleh jadi ilustrasi kartu layanan/galeri klien (2026-09-18).
+        if x.get('jenis') in ('legalitas', 'penutup', 'struktur', 'customer'):
             continue
         for nama in x.get('foto') or []:
             if nama in info and nama not in per.setdefault(x['kunci'], []):
@@ -515,7 +522,16 @@ def pasang_compro(domain, isi, keadaan, ssh, docroot, rencana):
           f"({diganti} diganti{', dijaga: ' + ', '.join(dijaga) if dijaga else ''}), "
           f"{len(seksi_ids)} bagian foto, {len(potongan)} potongan transparan, "
           f"{simpan.stdout.count('dihapus:')} media lama dihapus")
-    return 0
+    # Company profile jarang punya foto untuk SEMUA slot desain (solusicerdasconsulting.com:
+    # 5 foto layak untuk 10 slot). Sisanya dikembalikan ke jalur bank foto dengan slot yang
+    # sudah terisi ditandai, supaya foto klien tidak ikut ditimpa.
+    keadaan['terisi'] = dict(peta)
+    keadaan['compro_terpakai'] = sorted({n for n in rencana['slot'].values()})
+    kosong = [k for k, _, _ in slot_dari_isi(isi) if k not in peta]
+    if not kosong:
+        return 0
+    print(f'foto: {len(kosong)} slot belum berfoto, dilanjutkan ke bank foto: {", ".join(kosong[:6])}')
+    return None
 
 
 def muat_ai(manifest):
@@ -535,6 +551,24 @@ def muat_ai(manifest):
 def ringkas_foto(r):
     tag = [str(t.get('name') or '') for t in (r.get('tags') or [])][:10]
     return {'judul': str(r.get('title') or '')[:80], 'tag': tag}
+
+
+class BankFotoSlot:
+    """Sumber foto slot desain: Pexels dulu, Openverse/Commons sebagai cadangan.
+
+    Keputusan user 2026-09-18 (solusicerdasconsulting.com): slot yang tidak kebagian
+    foto company profile diisi dari Pexels — lisensinya sama-sama bebas dipakai situs
+    komersial, dan hasilnya jauh lebih relevan daripada bank foto CC0."""
+
+    def __init__(self):
+        self.px, self.ov = Pexels(), Openverse()
+
+    @property
+    def jumlah(self):
+        return self.px.jumlah + self.ov.jumlah
+
+    def cari(self, query):
+        return self.px.cari(query) or self.ov.cari(query)
 
 
 def kandidat_slot(slot, isi, ov):
@@ -670,17 +704,26 @@ def pilih_foto(slot, isi, ov, ai=None):
     if kosong and disetujui:
         # Galeri tidak boleh berisi foto yang sama (alamat maupun judul) — foto yang sudah tampil
         # di hero/tentang/layanan juga dihindari; slot galeri tanpa foto unik dibiarkan kosong.
-        dipakai_galeri = {x for k in hasil for x in (hasil[k][0]['url'], judul_foto(hasil[k][0]))}
+        dipakai = {x for k in hasil for x in (hasil[k][0]['url'], judul_foto(hasil[k][0]))}
         putar = 0
         for kunci, _, _ in kosong:
+            # Foto yang belum terpakai didahulukan untuk SEMUA slot: kartu layanan yang
+            # berjajar dengan gambar kembar terlihat seperti salah pasang
+            # (solusicerdasconsulting.com 2026-09-18). Galeri tidak boleh kembar sama
+            # sekali; slot lain baru memakai ulang kalau memang tidak ada yang tersisa.
+            pilihan = None
             for langkah in range(len(disetujui)):
                 r = disetujui[(putar + langkah) % len(disetujui)]
-                if not (kunci.startswith('galeri-') and {r['url'], judul_foto(r)} & dipakai_galeri):
-                    hasil[kunci] = (r, 'ulang')
-                    if kunci.startswith('galeri-'):
-                        dipakai_galeri.update({r['url'], judul_foto(r)})
-                    putar += langkah + 1
+                if not ({r['url'], judul_foto(r)} & dipakai):
+                    pilihan, maju = r, langkah + 1
                     break
+            if pilihan is None and not kunci.startswith('galeri-'):
+                pilihan, maju = disetujui[putar % len(disetujui)], 1
+            if pilihan is None:
+                continue
+            hasil[kunci] = (pilihan, 'ulang')
+            dipakai.update({pilihan['url'], judul_foto(pilihan)})
+            putar += maju
     return hasil
 
 
@@ -952,8 +995,10 @@ $klien = array_values(array_filter($klien, function ($id) {
     $s = (string) get_post_meta($id, '_velocity_source', true);
     // Logo/ikon (termasuk logo potongan company profile) bukan foto; foto compro
     // dibagikan ke slot oleh pilih_foto_klien, jadi tidak ikut antrean ini.
+    // 'favicon-klien:...' lolos saringan lama dan sempat dipasang sebagai foto galeri
+    // (solusicerdasconsulting.com 2026-09-18).
     return $s !== '' && strpos($s, 'logo') !== 0 && strpos($s, 'icon') !== 0
-        && strpos($s, 'compro-logo') !== 0 && strpos($s, 'compro:') !== 0;
+        && strpos($s, 'favicon') !== 0 && strpos($s, 'compro-logo') !== 0 && strpos($s, 'compro:') !== 0;
 }));
 $terisi = $prefix ? (array) get_option($prefix . '_images', array()) : array();
 // Slot berisi foto contoh bank foto boleh digeser foto asli klien.
@@ -991,7 +1036,10 @@ echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => 
             return 0
         rencana = rencana_compro(domain, isi)
         if rencana:
-            return pasang_compro(domain, isi, keadaan, ssh, docroot, rencana)
+            hasil = pasang_compro(domain, isi, keadaan, ssh, docroot, rencana)
+            # None = foto compro sudah dipasang, tapi masih ada slot kosong: lanjut ke bank foto.
+            if hasil is not None:
+                return hasil
 
     terisi = {k: v for k, v in (keadaan.get('terisi') or {}).items() if v}
     if '--bersihkan-contoh' in sys.argv:
@@ -1024,8 +1072,8 @@ echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => 
             continue
         perlu.append((kunci, kata, judul))
 
-    ov = Openverse()
-    # Semua slot sudah terisi: jangan menghabiskan jatah harian Openverse.
+    ov = BankFotoSlot()
+    # Semua slot sudah terisi: jangan menghabiskan jatah harian bank foto.
     ai = muat_ai(args[0]) if perlu else None
     # Foto asli dari company profile klien didahulukan sebelum bank foto.
     terpakai = set(keadaan.get('compro_terpakai') or [])
@@ -1049,7 +1097,7 @@ echo wp_json_encode(array('prefix' => $prefix, 'terisi' => $terisi, 'contoh' => 
               f"[{dari}] {str(r.get('title') or '')[:44]}")
     print(f'foto: {len(dari_compro)} slot dari foto company profile klien')
     print(f'foto: {len(peta) + len(rencana)}/{len(slot_dari_isi(isi))} slot punya foto, '
-          f'{ov.jumlah} pencarian Openverse, penilai: {"AI" if ai else "kata kunci"}')
+          f'{ov.jumlah} pencarian bank foto, penilai: {"AI" if ai else "kata kunci"}')
     if coba:
         return 0
 
