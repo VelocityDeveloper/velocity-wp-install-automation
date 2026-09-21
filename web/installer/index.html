@@ -1130,7 +1130,7 @@
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         { id: 'konten', kol: 9, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
           selesai: /AI content generation completed/, aktif: tanpaDry },
-        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta', mulai: /\] Finishing: aset/,
+        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta, galeri popup', mulai: /\] Finishing: aset/,
           selesai: /finish_done/, aktif: tanpaDry },
         { id: 'baru', kol: 11, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
           ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },

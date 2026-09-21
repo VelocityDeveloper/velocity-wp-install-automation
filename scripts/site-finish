@@ -548,9 +548,22 @@ chown --reference="$DOCROOT/wp-content" "$MU" "$MU/velocity-footer-credit.php" 2
 chmod 644 "$MU/velocity-footer-credit.php"
 php -l "$MU/velocity-footer-credit.php" >/dev/null 2>&1 && echo "footer_credit_set" >&2 || { rm -f "$MU/velocity-footer-credit.php"; echo "footer_credit_gagal:php_lint" >&2; }
 
+# Galeri: foto bisa diklik -> popup dengan tombol Previous/Next (keputusan user 2026-09-21,
+# minionscooterrentallombok.com). Lightbox core WP 7.x (navigasi per galleryId) dinyalakan saat
+# render untuk SEMUA gambar dalam blok Galeri (termasuk galeri tambahan klien di editor), dan
+# shortcode [gallery] tema klasik dirender sebagai blok Galeri yang sama. Berlaku untuk semua
+# jenis tema. Sumber: templates/mu-plugins/velocity-galeri-popup.php. Ditimpa setiap finishing.
+cat > "$MU/velocity-galeri-popup.php" <<'PHP'
+@@GALERI_POPUP@@
+PHP
+chown --reference="$DOCROOT/wp-content" "$MU/velocity-galeri-popup.php" 2>/dev/null || true
+chmod 644 "$MU/velocity-galeri-popup.php"
+php -l "$MU/velocity-galeri-popup.php" >/dev/null 2>&1 && echo "galeri_popup_set" >&2 || { rm -f "$MU/velocity-galeri-popup.php"; echo "galeri_popup_gagal:php_lint" >&2; }
+
 rm -rf "$M"
 echo "finish_done" >&2
 '''
+REMOTE = REMOTE.replace('@@GALERI_POPUP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-galeri-popup.php').read_text().rstrip('\n'))
 
 
 REMOTE_MAINT = r'''

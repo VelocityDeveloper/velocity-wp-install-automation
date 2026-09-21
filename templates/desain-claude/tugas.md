@@ -21,6 +21,8 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
    email + ikon sosmed (Facebook/Instagram/X/YouTube/TikTok, buka tab baru) di footer & Hubungi Kami,
    blok `velocity/kontak`, `velocity/form-kirim` (kecuali situs tanpa pemesanan) dan peta di Hubungi Kami,
    menu utama `core/navigation` (jangan menulis ulang menunya sendiri — menu disusun installer).
+   Galeri foto wajib `core/gallery` berisi `core/image` (tanpa tautan) — installer menjadikannya
+   popup ber-tombol Previous/Next; jangan membuat grid foto dari HTML/kolom biasa atau `<a href>` ke file.
 5. Rapi di desktop (1366) **dan HP (390)**: tidak ada scroll horizontal, padding/margin konsisten,
    teks terbaca (kontras), gambar tidak pecah, latar video/foto menutupi seksi penuh.
 
