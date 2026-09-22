@@ -33,7 +33,8 @@ today = datetime.date.today()
 grace = datetime.timedelta(days=int(os.environ.get("AUTOPILOT_DEADLINE_GRACE_DAYS", "10")))
 for r in json.load(sys.stdin).get("domains", []):
     status = r.get("status")
-    if status == "RUNNING":
+    # Situs COMPLETE ikut tampil di halaman installer (source=selesai), foldernya tak perlu disinkron lagi.
+    if status == "RUNNING" or r.get("source") == "selesai":
         continue
     if status == "belum diambil" and r.get("deadline"):
         # Tanpa deadline tidak dianggap terlewat, sama seperti halaman installer.

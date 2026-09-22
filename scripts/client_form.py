@@ -103,6 +103,20 @@ def parse_fields(lines):
     """Ambil pasangan 'Label: nilai', buang yang dibiarkan kosong klien."""
     fields = {}
     for ln in lines:
+        # Form Portal Berita menulis isian berbutir ("-nama media: Mulawarman TV"); tanpa ini
+        # baris itu tidak terbaca dan nama situs jatuh ke biodata (mulawarmantv.com 2026-09-18).
+        ln = re.sub(r'^\s*[-•*]+\s*(?=[A-Za-z])', '', ln)
+        # "Kontak untuk diweb 0811..." tanpa titik dua / tanpa spasi di "di web"
+        # (wisesayasatidar.com 2026-09-18) lolos dari pola label umum, sehingga widget
+        # Hubungi Kami & tombol WhatsApp kosong. Disimpan dengan label baku.
+        m = re.match(r'^\s*kontak\s+(?:utk|untuk)\s+di\s*web\b\s*:?\s*(.*)$', ln, re.I)
+        if m:
+            # Baris .doc bisa menempel ke teks panduan berikutnya ("0821...Pada gambar di atas, ...").
+            value = re.split(r'\.{3,}|\*|Pada gambar di atas', m.group(1), flags=re.I)[0].strip()
+            value = re.sub(r'\s*\((silahkan|wajib|untuk|jika)[^)]*\)\s*$', '', value, flags=re.I).strip()
+            if value and not BLANK.match(value):
+                fields.setdefault('Kontak untuk di web', value)
+            continue
         m = re.match(r'^([A-Za-z][A-Za-z0-9 /_()-]{2,40}?)\s*:\s*(.*)$', ln)
         if not m:
             continue

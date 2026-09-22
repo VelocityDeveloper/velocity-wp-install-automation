@@ -17,9 +17,19 @@ sendiri sampai mirip:
 Hasil kerja ada di fse-rencana/<domain>/claude/ dan dipakai lagi oleh `fse-apply --isi` pada run
 berikutnya (halaman_claude:<slug>). Satu agen berjalan dalam satu waktu (kunci berkas).
 
-  desain-claude <manifest> [--paksa] [--putaran=N] [--menit=N]
+Dua tahap (keputusan user 2026-09-21: agen hadir sejak referensi dibaca, langkah Tema FSE
+dikerjakan agen):
+  tema     langsung sesudah `fse-apply --tema` (velocity-fse + palet + data situs sebagai dasar):
+           agen menyusun header, footer & gaya.css dari referensi. Halaman belum ada, jadi `pasang`
+           tidak menyentuh halaman dan skor hanya header+footer+gaya. Log berawalan
+           `desain_claude_tema:` supaya bagan tidak mengira tahap halaman sudah berjalan.
+  halaman  (bawaan) sesudah konten, foto & halaman generator siap: beranda + halaman dalam,
+           melanjutkan header/footer/CSS dari tahap tema (catatan di claude/kerja/rencana.md).
+
+  desain-claude <manifest> [--tahap=tema|halaman] [--paksa] [--putaran=N] [--menit=N]
      --paksa   jalan walau audit awal sudah sesuai
-Env: DESAIN_CLAUDE_MODEL (bawaan opus), DESAIN_CLAUDE_MENIT (90), DESAIN_CLAUDE_PUTARAN (8).
+Env: DESAIN_CLAUDE_MODEL (bawaan opus), DESAIN_CLAUDE_MENIT (90; tahap tema 45),
+DESAIN_CLAUDE_PUTARAN (8; tahap tema 5).
 Biaya: login langganan Claude di server; /etc/velocity/secrets/anthropic_api_key (600) ada = pakai API key itu.
 Keluaran baris terakhir: desain_claude: <status> ... ; kode 0 selesai (apa pun hasilnya), 2 gagal jalan.
 """
@@ -45,12 +55,28 @@ KUNCI = Path('/var/lib/velocity/desain-claude.lock')
 AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
 CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
 KUNCI_API = Path('/etc/velocity/secrets/anthropic_api_key')
+# Model agen (keputusan user 2026-09-18): Opus, tidak boleh lebih rendah. Nilai selain Opus
+# di DESAIN_CLAUDE_MODEL diabaikan, dan model kecil internal Claude Code (judul, ringkasan —
+# bawaannya Haiku) ikut dipaksa ke Opus lewat env di bawah.
+MODEL_OPUS = os.environ.get('DESAIN_CLAUDE_MODEL_ID', 'claude-opus-5')
+
+
+def model_agen():
+    pilihan = os.environ.get('DESAIN_CLAUDE_MODEL', 'opus').strip()
+    return pilihan if 'opus' in pilihan.lower() else 'opus'
 STATE = Path('/var/lib/velocity/installer')
 # Penanda "agen sedang berjalan" yang dibaca installer_status.py: situs tampil RUNNING di /installer/.
 AKTIF_DIR = STATE / 'desain-claude'
 # Dijalankan manual (bukan dari installer-runner yang sudah mengalirkan keluaran ke log domain):
 # baris log ikut ditulis ke <domain>.log supaya bagan & panel pantau /installer/ mengikutinya.
 LOG_DOMAIN = None
+# Run manual (bukan dari installer-runner) tetap satu kelompok run sendiri di halaman /ai/.
+RUN_MANUAL = 'desain-claude-' + datetime.now().strftime('%Y%m%d-%H%M%S')
+# Tahap kerja (lihat docstring). Diisi main() dari --tahap; alat membacanya dari VELOCITY_DESAIN_TAHAP.
+TAHAP = 'halaman'
+# Bagian yang dinilai di tahap tema: halaman belum disusun, jadi beranda & halaman dalam diabaikan.
+BAGIAN_TEMA = ('header', 'footer', 'gaya')
+AMBANG = 80
 
 
 def muat(nama, path):
@@ -64,9 +90,13 @@ def muat(nama, path):
 FA = muat('fse_apply', HERE / 'fse-apply')
 
 
+def awalan():
+    return 'desain_claude_tema' if TAHAP == 'tema' else 'desain_claude'
+
+
 def log(pesan, tanpa_waktu=False):
-    baris = f'desain_claude: {pesan}' if tanpa_waktu else \
-        f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] desain_claude: {pesan}'
+    baris = f'{awalan()}: {pesan}' if tanpa_waktu else \
+        f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] {awalan()}: {pesan}'
     print(baris, flush=True)
     if LOG_DOMAIN:
         try:
@@ -103,6 +133,11 @@ def skor_total(folder):
     except (OSError, ValueError):
         return None, {}
     s = d.get('skor') or {}
+    if TAHAP == 'tema':
+        # Beranda & halaman dalam belum disusun: yang dinilai hanya header, footer, gaya.
+        s = {k: v for k, v in s.items() if k in BAGIAN_TEMA}
+        d = dict(d, skor=s, belum_mirip=[k for k, v in s.items() if int(v) < AMBANG])
+        d['sesuai'] = bool(s) and not d['belum_mirip']
     return sum(int(v) for v in s.values()), d
 
 
@@ -128,6 +163,32 @@ def siapkan(cfg, folder):
     return bahan
 
 
+TAHAP_TEKS = {
+    'tema': """## Tahap ini: TEMA (awal instalasi, langsung sesudah referensi dibaca)
+
+Kamu yang mengerjakan langkah Tema FSE. Dasarnya sudah terpasang: tema velocity-fse, palet warna
+klien, data situs. Halaman, konten, foto, dan menu BELUM ada — installer membuatnya sesudah tahap ini,
+lalu memanggilmu lagi (tahap halaman) untuk beranda & halaman dalam.
+
+- Kerjakan HANYA `bagian-header.html`, `bagian-footer.html`, dan `gaya.css` (tipografi, jarak, wadah,
+  tombol, kartu, judul seksi, header & footer) semirip referensi. JANGAN menulis `<slug>.html`.
+- `pasang` di tahap ini hanya memasang header, footer & CSS. Menu utama masih kosong/sementara —
+  jangan menilai isi menunya; nilai bentuk header-nya.
+- Dari audit, yang dinilai hanya header, footer, gaya. Abaikan skor beranda & halaman.
+- Wajib tulis `kerja/rencana.md`: keputusan desain (font, ukuran, jarak, bentuk tombol/kartu, gaya
+  header/footer) + rencana per seksi beranda & halaman dalam dari referensi. Tahap halaman nanti
+  melanjutkan dari catatan ini.
+- Berhenti lebih cepat: maksimal {{PUTARAN}} putaran pasang+audit.
+""",
+    'halaman': """## Tahap ini: HALAMAN (akhir instalasi)
+
+Konten, foto, menu, dan halaman generator sudah terpasang. Bila `kerja/rencana.md` sudah ada, header,
+footer & `gaya.css` sudah kamu susun di tahap tema: pertahankan dan lanjutkan dari catatan itu
+(sesuaikan seperlunya, mis. menu kini sudah terisi). Fokus: beranda dan halaman dalam.
+""",
+}
+
+
 def prompt_tugas(cfg, domain, folder, putaran, referensi):
     blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
     target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
@@ -137,7 +198,7 @@ def prompt_tugas(cfg, domain, folder, putaran, referensi):
         '{{TEMA}}': str(TEMA), '{{BLOK_TEMA}}': blok_tema, '{{PUTARAN}}': str(putaran),
         '{{HALAMAN}}': ', '.join(t.replace('__', '/') for t in target) or 'beranda, tentang-kami, galeri, hubungi-kami',
     }
-    prompt = TUGAS.read_text()
+    prompt = TUGAS.read_text().replace('{{TAHAP}}', TAHAP_TEKS[TAHAP])
     for k, v in ganti.items():
         prompt = prompt.replace(k, v)
     return prompt
@@ -167,7 +228,7 @@ def ringkas_langkah(blok):
 def jalankan_claude(folder, env, menit, prompt):
     perintah = [
         CLAUDE, '-p', prompt,
-        '--model', os.environ.get('DESAIN_CLAUDE_MODEL', 'opus'),
+        '--model', model_agen(),
         # stream-json: tiap langkah agen langsung masuk log domain (modal log /installer/ live).
         '--output-format', 'stream-json', '--verbose',
         '--no-session-persistence',
@@ -180,6 +241,9 @@ def jalankan_claude(folder, env, menit, prompt):
     ]
     mulai = time.time()
     hasil, kode = {}, None
+    permintaan = {}  # model -> id respons API (satu id = satu request)
+    env = dict(env, ANTHROPIC_DEFAULT_HAIKU_MODEL=MODEL_OPUS, ANTHROPIC_DEFAULT_SONNET_MODEL=MODEL_OPUS,
+               ANTHROPIC_SMALL_FAST_MODEL=MODEL_OPUS, CLAUDE_CODE_SUBAGENT_MODEL=MODEL_OPUS)
     proses = subprocess.Popen(perintah, cwd=folder / 'claude', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, env=env)
     # Batas waktu: readline bisa menunggu lama, jadi penjaga terpisah yang mematikan proses.
@@ -192,6 +256,8 @@ def jalankan_claude(folder, env, menit, prompt):
             except ValueError:
                 continue
             if ev.get('type') == 'assistant':
+                pesan = ev.get('message') or {}
+                permintaan.setdefault(pesan.get('model') or '-', set()).add(pesan.get('id'))
                 for blok in (ev.get('message') or {}).get('content') or []:
                     ringkas = ringkas_langkah(blok)
                     if ringkas:
@@ -204,37 +270,76 @@ def jalankan_claude(folder, env, menit, prompt):
     if not hasil and kode not in (0, None):
         kode = 'timeout' if time.time() - mulai >= menit * 60 - 5 else kode
     durasi = round((time.time() - mulai) / 60, 1)
+    hasil['permintaan_per_model'] = {m: len(i) for m, i in permintaan.items()}
     (folder / 'claude' / 'sesi.json').write_text(json.dumps(
         dict(hasil, kode_keluar=kode, menit=durasi), ensure_ascii=False, indent=1))
     return kode, durasi, hasil
 
 
 def catat_pemakaian(domain, hasil):
-    """Pemakaian token ke usage.jsonl yang sama dengan halaman /ai/ (peran desain_claude)."""
-    u = hasil.get('usage') or {}
-    masuk = sum(int(u.get(k) or 0) for k in ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'))
-    keluar = int(u.get('output_tokens') or 0)
-    baris = {
-        'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain,
-        'run': os.environ.get('VELOCITY_RUN_ID', ''), 'mode': os.environ.get('INSTALL_MODE', ''),
-        'peran': 'desain_claude', 'script': 'desain-claude', 'model_id': 'claude-code',
-        'model': os.environ.get('DESAIN_CLAUDE_MODEL', 'opus'), 'prompt_tokens': masuk,
-        'completion_tokens': keluar, 'total_tokens': masuk + keluar, 'ok': not hasil.get('is_error'),
-        'biaya_usd': hasil.get('total_cost_usd'), 'giliran': hasil.get('num_turns'),
-    }
-    try:
-        with open(AI_USAGE, 'a') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            f.write(json.dumps(baris, ensure_ascii=False) + '\n')
-    except OSError as e:
-        log(f'pemakaian_tidak_tercatat:{e}')
+    """Pemakaian agen ke usage.jsonl (halaman /ai/): satu baris per model yang benar-benar dipakai,
+    sumber=claude (dibedakan dari endpoint custom), jumlah request API, rincian token & biaya."""
+    per_model = hasil.get('modelUsage') or {}
+    minta = hasil.get('permintaan_per_model') or {}
+    if not per_model:
+        u = hasil.get('usage') or {}
+        per_model = {model_agen(): {'inputTokens': u.get('input_tokens'), 'outputTokens': u.get('output_tokens'),
+                                     'cacheReadInputTokens': u.get('cache_read_input_tokens'),
+                                     'cacheCreationInputTokens': u.get('cache_creation_input_tokens'),
+                                     'costUSD': hasil.get('total_cost_usd')}}
+    bukan_opus = [m for m in per_model if 'opus' not in m.lower()]
+    if bukan_opus:
+        log('PERINGATAN model_bukan_opus:' + ','.join(bukan_opus))
+    for model, u in per_model.items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        n = minta.get(model) or (1 if masuk + baca + buat + keluar else 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain,
+            'run': os.environ.get('VELOCITY_RUN_ID') or RUN_MANUAL, 'mode': os.environ.get('INSTALL_MODE', '') or 'desain-claude',
+            'peran': 'desain_claude', 'script': 'desain-claude', 'sumber': 'claude', 'model_id': 'claude-code',
+            'tahap': TAHAP,
+            'model': model, 'permintaan': n, 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar,
+            'total_tokens': masuk + baca + buat + keluar, 'input_tokens': masuk, 'cache_read_tokens': baca,
+            'cache_creation_tokens': buat, 'biaya_usd': round(float(u.get('costUSD') or 0), 4),
+            'ok': not hasil.get('is_error'), 'giliran': hasil.get('num_turns'),
+        }
+        try:
+            with open(AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError as e:
+            log(f'pemakaian_tidak_tercatat:{e}')
+
+
+BERKAS_TEMA = ('bagian-header.html', 'bagian-footer.html', 'gaya.css')
+
+
+def simpan_tema_lama(folder):
+    """Tahap tema pada situs yang sudah pernah dikerjakan agen: header/footer/CSS sebelumnya
+    disalin dulu supaya pencabutan hanya mengembalikan tiga berkas itu, bukan halaman."""
+    cadang = folder / 'claude' / 'kerja' / 'sebelum-tema'
+    shutil.rmtree(cadang, ignore_errors=True)
+    cadang.mkdir(parents=True)
+    for nama in BERKAS_TEMA:
+        if (folder / 'claude' / nama).is_file():
+            shutil.copy2(folder / 'claude' / nama, cadang / nama)
 
 
 def cabut(folder, env):
     """Hasil Claude lebih buruk dari generator: situs dikembalikan, berkasnya disimpan untuk dipelajari."""
     simpan = folder / f"claude.ditolak-{datetime.now().strftime('%Y%m%d-%H%M')}"
-    (folder / 'claude').rename(simpan)
-    (folder / 'claude').mkdir()
+    if TAHAP == 'tema':
+        simpan.mkdir(parents=True, exist_ok=True)
+        cadang = folder / 'claude' / 'kerja' / 'sebelum-tema'
+        for nama in BERKAS_TEMA:
+            if (folder / 'claude' / nama).is_file():
+                shutil.move(str(folder / 'claude' / nama), simpan / nama)
+            if (cadang / nama).is_file():
+                shutil.copy2(cadang / nama, folder / 'claude' / nama)
+    else:
+        (folder / 'claude').rename(simpan)
+        (folder / 'claude').mkdir()
     _, teks = jalankan_alat(env, 'pasang')
     log('cabut: ' + ' | '.join(b for b in teks.splitlines() if b.startswith(('pasang:', 'fse: halaman', 'cek:')))[:600])
     jalankan_alat(env, 'audit')
@@ -252,34 +357,40 @@ def main():
     if len(args) != 1:
         print(__doc__)
         return 2
+    global TAHAP
+    TAHAP = opsi.get('tahap') or 'halaman'
+    if TAHAP not in TAHAP_TEKS:
+        print(f'desain_claude: gagal:tahap_tidak_dikenal:{TAHAP}')
+        return 2
     manifest = str(Path(args[0]).resolve())
     cfg = FA.read_manifest(manifest)
     domain = cfg.get('domain', '').lower()
     folder = FA.RENCANA_DIR / domain
-    putaran = int(opsi.get('putaran') or os.environ.get('DESAIN_CLAUDE_PUTARAN') or 8)
-    menit = int(opsi.get('menit') or os.environ.get('DESAIN_CLAUDE_MENIT') or 90)
+    tema = TAHAP == 'tema'
+    putaran = int(opsi.get('putaran') or os.environ.get('DESAIN_CLAUDE_PUTARAN') or (5 if tema else 8))
+    menit = int(opsi.get('menit') or os.environ.get('DESAIN_CLAUDE_MENIT') or (45 if tema else 90))
 
     try:
         ref = json.loads((folder / 'desain-referensi.json').read_text())
     except (OSError, ValueError):
         ref = {}
     if not ref.get('url'):
-        print('desain_claude: lewati:tanpa_referensi')
+        print(f'{awalan()}: lewati:tanpa_referensi')
         return 0
     if cfg.get('gaya_beranda') and cfg['gaya_beranda'] != 'referensi':
-        print(f"desain_claude: lewati:gaya_beranda_manual:{cfg['gaya_beranda']}")
+        print(f"{awalan()}: lewati:gaya_beranda_manual:{cfg['gaya_beranda']}")
         return 0
     if portal_berita(domain):
-        print('desain_claude: lewati:portal_berita')
+        print(f'{awalan()}: lewati:portal_berita')
         return 0
     if not Path(CLAUDE).exists():
-        print('desain_claude: gagal:claude_cli_tidak_ada')
+        print(f'{awalan()}: gagal:claude_cli_tidak_ada')
         return 2
 
     global LOG_DOMAIN
     if not os.environ.get('VELOCITY_RUN_ID'):
         LOG_DOMAIN = STATE / f'{domain}.log'
-    env = dict(os.environ, VELOCITY_DESAIN_MANIFEST=manifest, VELOCITY_DOMAIN=domain)
+    env = dict(os.environ, VELOCITY_DESAIN_MANIFEST=manifest, VELOCITY_DOMAIN=domain, VELOCITY_DESAIN_TAHAP=TAHAP)
     # Biaya (keputusan user 2026-09-18): sementara langganan yang login di server ini; kalau berkas
     # API key terpisah sudah ada, agen memakainya (tagihan per token, tidak menghabiskan limit langganan).
     if KUNCI_API.is_file() and KUNCI_API.read_text().strip():
@@ -293,14 +404,14 @@ def main():
                 break
             except BlockingIOError:
                 if time.time() > batas:
-                    print('desain_claude: lewati:antrean_agen_penuh_3_jam')
+                    print(f'{awalan()}: lewati:antrean_agen_penuh_3_jam')
                     return 0
                 time.sleep(30)
 
         aktif = AKTIF_DIR / f'{domain}.json'
         AKTIF_DIR.mkdir(parents=True, exist_ok=True)
         aktif.write_text(json.dumps({'pid': os.getpid(), 'domain': domain, 'mulai': datetime.now().astimezone()
-                                     .isoformat(timespec='seconds'), 'referensi': ref.get('url')}))
+                                     .isoformat(timespec='seconds'), 'referensi': ref.get('url'), 'tahap': TAHAP}))
         try:
             return kerja(cfg, domain, folder, env, ref, opsi, putaran, menit)
         finally:
@@ -329,14 +440,18 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
         return 0
     (folder / 'claude' / 'kerja' / 'tugas.json').write_text(json.dumps({
         'domain': domain, 'referensi': ref.get('url'), 'skor_awal': d_awal.get('skor'),
-        'belum_mirip': d_awal.get('belum_mirip'), 'ambang': {'header/footer/beranda/gaya': 80, 'halaman_*': 70},
+        'tahap': TAHAP, 'belum_mirip': d_awal.get('belum_mirip'),
+        'ambang': {'header/footer/gaya': AMBANG} if TAHAP == 'tema' else {'header/footer/beranda/gaya': AMBANG, 'halaman_*': 70},
         'maks_putaran': putaran, 'batas_menit': menit}, ensure_ascii=False, indent=1))
 
+    if TAHAP == 'tema':
+        simpan_tema_lama(folder)
     log(f'agen mulai (skor awal {awal}, maks {putaran} putaran / {menit} menit)')
     kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url']))
     catat_pemakaian(domain, hasil)
-    log(f"agen selesai kode={kode} menit={durasi} giliran={hasil.get('num_turns')} "
-        f"biaya_usd={hasil.get('total_cost_usd')}")
+    minta = hasil.get('permintaan_per_model') or {}
+    log(f"agen selesai kode={kode} menit={durasi} model={','.join(hasil.get('modelUsage') or minta) or '-'} "
+        f"request={sum(minta.values())} biaya_usd={round(float(hasil.get('total_cost_usd') or 0), 2)}")
 
     # Audit akhir sendiri: jawaban agen tidak dipercaya begitu saja.
     jalankan_alat(env, 'audit')
@@ -345,7 +460,8 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
     if akhir is None or akhir < awal:
         simpan = cabut(folder, env)
         status = f'ditolak_skor_turun (disimpan di {simpan.name})'
-    (folder / 'claude' / 'hasil.json').write_text(json.dumps({
+    (folder / 'claude' / ('hasil-tema.json' if TAHAP == 'tema' else 'hasil.json')).write_text(json.dumps({
+        'tahap': TAHAP,
         'waktu': datetime.now().astimezone().isoformat(timespec='seconds'), 'status': status,
         'skor_awal': d_awal.get('skor'), 'skor_akhir': d_akhir.get('skor'), 'menit': durasi,
         'kode_agen': kode, 'ringkasan_agen': (hasil.get('result') or '')[:4000]}, ensure_ascii=False, indent=1))

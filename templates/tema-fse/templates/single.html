@@ -1,13 +1,19 @@
 <!-- wp:template-part {"slug":"header","tagName":"header"} /-->
 
-<!-- wp:group {"tagName":"main","style":{"spacing":{"padding":{"top":"var:preset|spacing|40","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
-<main class="wp-block-group" style="padding-top:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60)"><!-- wp:columns {"align":"wide","className":"vf-tata"} -->
-<div class="wp-block-columns alignwide vf-tata"><!-- wp:column {"width":"68%"} -->
-<div class="wp-block-column" style="flex-basis:68%"><!-- wp:post-terms {"term":"category","className":"vf-label"} /-->
+<!-- wp:group {"tagName":"main","className":"vf-artikel","style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
+<main class="wp-block-group vf-artikel" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--60)"><!-- wp:velocity/balik /-->
 
 <!-- wp:post-title {"level":1,"className":"vf-artikel__judul"} /-->
 
-<!-- wp:post-date {"className":"vf-artikel__tanggal"} /-->
+<!-- wp:group {"className":"vf-artikel__meta","layout":{"type":"flex","flexWrap":"wrap","justifyContent":"space-between"}} -->
+<div class="wp-block-group vf-artikel__meta"><!-- wp:group {"className":"vf-artikel__meta-kiri","layout":{"type":"flex","flexWrap":"wrap"}} -->
+<div class="wp-block-group vf-artikel__meta-kiri"><!-- wp:post-terms {"term":"category","className":"vf-label"} /-->
+
+<!-- wp:post-date {"className":"vf-artikel__tanggal"} /--></div>
+<!-- /wp:group -->
+
+<!-- wp:velocity/bagikan /--></div>
+<!-- /wp:group -->
 
 <!-- wp:post-featured-image {"className":"vf-artikel__foto"} /-->
 
@@ -31,13 +37,7 @@
 <!-- wp:post-date /-->
 <!-- /wp:post-template --></div>
 <!-- /wp:query --></div>
-<!-- /wp:group --></div>
-<!-- /wp:column -->
-
-<!-- wp:column {"width":"32%"} -->
-<div class="wp-block-column" style="flex-basis:32%"><!-- wp:template-part {"slug":"sidebar"} /--></div>
-<!-- /wp:column --></div>
-<!-- /wp:columns --></main>
+<!-- /wp:group --></main>
 <!-- /wp:group -->
 
 <!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->

@@ -275,6 +275,11 @@ function ukur() {
       keranjang,
       kontras_rendah: kontrasRendah(header),
       transparan_di_atas_hero: (rgba(g.backgroundColor) || [0, 0, 0, 0])[3] < 0.1 && kh.y < 10,
+      // Header MELAYANG transparan di atas hero lalu berubah jadi bar berlatar saat digulir
+      // (habercafeandresto.co.id 2026-09-20): posisinya fixed/absolute sejak di puncak halaman
+      // dan latarnya sendiri tembus pandang, jadi hero terlihat sampai ke tepi atas layar.
+      transparan: ['fixed', 'absolute'].includes(g.position)
+        && (rgba(g.backgroundColor) || [0, 0, 0, 0])[3] < 0.2 && kh.y < 10,
       // Bar header melayang (kontraktorhijau.com): pembungkus transparan berisi kotak berlatar
       // yang lebih sempit dari layar, bersudut, dan berjarak dari tepi atas.
       melayang: (() => {
@@ -515,6 +520,15 @@ function ukur() {
       // Lebar & tepi kiri seksi: membedakan seksi selebar layar dari seksi berwadah
       // tetap (Beaver Builder .fl-row-fixed-width, 1320px di tengah layar 1366).
       lebar: Math.round(kotak(el).w), kiri: Math.round(kotak(el).x),
+      // Latar seksi berupa VIDEO (YouTube/Vimeo/<video>) — dibedakan dari foto supaya
+      // hero situs klien juga memakai video latar seperti referensi.
+      video_latar: [...el.querySelectorAll('video, iframe')].some((v) => {
+        if (!tampak(v)) return false;
+        const src = (v.getAttribute('src') || '') + ' ' + ((v.closest('[class]') || {}).className || '');
+        if (v.tagName === 'IFRAME' && !/youtube|youtu\.be|vimeo|dailymotion|bg-video|video-bg|background-video/i.test(String(src))) return false;
+        const q = v.getBoundingClientRect();
+        return q.width * q.height >= kotak(el).w * kotak(el).h * 0.5;
+      }),
       judul: judul.slice(0, 4).map((h) => teks(h).slice(0, 90)),
       judul_utama: utama ? Object.assign({ teks: teks(utama).slice(0, 90), tag: utama.tagName.toLowerCase() }, judulGaya(utama)) : null,
       kata: kataTeks, foto: foto.length, angka_besar: angka, tombol: tombol.length,

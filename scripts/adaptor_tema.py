@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import re
+import os
 import shlex
 import subprocess
 import tarfile

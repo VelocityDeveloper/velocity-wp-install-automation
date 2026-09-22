@@ -145,23 +145,15 @@
         cursor: pointer;
       }
       .refresh:hover { text-decoration: underline; color: #fff; }
-      .server-select {
+      .action-note {
         margin-bottom: 20px;
-        padding: 16px;
+        padding: 10px 14px;
         border: 1px solid var(--line);
         background: var(--panel);
-      }
-      .server-select label {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        color: var(--yellow);
-      }
-      .local-info {
-        margin: 8px 0 0;
-        color: var(--muted);
+        color: var(--cyan);
         font-size: 12px;
       }
+      .action-note:empty { display: none; }
       .target-cell { font-size: 12px; }
       .deadline-cell { font-size: 12px; white-space: nowrap; }
       /* Ikon status: warnanya menumpang kelas .ready/.missing/.failed yang sama
@@ -446,7 +438,6 @@
         body { padding: 0; }
         .terminal { min-height: 100vh; border: 0; border-radius: 0; }
         .screen { padding: 22px 15px; }
-        .server-select label { display: grid; gap: 8px; }
         select { width: 100%; min-width: 0; }
         th, td { padding: 11px 9px; }
         .hide-mobile { display: none; }
@@ -468,29 +459,9 @@
         <p class="meta">
           $ scan --path
           <code>/home/On Progress/</code> (Google Drive) --watch
-          realtime 4s &nbsp;|&nbsp; yang sudah terinstall disembunyikan (kecuali sedang dikerjakan agen Claude) &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
+          realtime 4s &nbsp;|&nbsp; yang sudah terinstall tampil di paling bawah (badge SELESAI) &nbsp;|&nbsp; install via n8n (dry-run → confirm → apply)
         </p>
-        <section class="server-select">
-          <label for="target-server"
-            >Server tujuan
-            <select id="target-server" required>
-              <option value="">Memuat server...</option>
-            </select></label
-          >
-          <div id="server-note" class="meta" style="margin: 8px 0 0">
-            Pilih server untuk instalasi.
-          </div>
-          <div id="local-note" class="local-info">Server ini: memuat...</div>
-        </section>
-        <section class="panel flow-panel" aria-labelledby="alur-judul-panel">
-          <div class="flow-head">
-            <h2 id="alur-judul-panel">Alur installer</h2>
-            <span>run yang berjalan diperbarui tiap 3 detik; saat installer diam tampil run terakhir</span>
-          </div>
-          <div class="flow-body" id="alur-berjalan" aria-live="polite">
-            <p class="empty">Memuat status installer...</p>
-          </div>
-        </section>
+        <div id="server-note" class="action-note" aria-live="polite"></div>
         <section class="filters" aria-label="Filter domain">
           <input id="domain-filter" type="search" placeholder="filter domain..." autocomplete="off" />
           <select id="status-filter"><option value="">semua status</option></select>
@@ -556,6 +527,7 @@
           <div class="mode-choice">
             <label><input type="radio" name="run-mode" value="dry-run" checked /> Dry run: validasi manifest saja (aman)</label>
             <label><input type="radio" name="run-mode" value="apply" /> Apply: eksekusi nyata (timpa public_html & tulis DB)</label>
+            <label><input type="radio" name="run-mode" value="finish" /> Finish: rapikan ulang situs terpasang (konten, aset klien, QA) tanpa install ulang</label>
           </div>
           <p class="meta" style="margin: 10px 0 0">Apply destruktif: backup otomatis dibuat di <code>/home/&lt;da_user&gt;/backup/</code>.</p>
         </div>
@@ -588,8 +560,7 @@
       </div>
     </div>
     <script>
-      const serverSelect = document.getElementById('target-server'),
-        serverNote = document.getElementById('server-note'),
+      const serverNote = document.getElementById('server-note'),
         detailEl = document.getElementById('detail'),
         modal = document.getElementById('confirm-modal'),
         confirmText = document.getElementById('confirm-text'),
@@ -628,27 +599,6 @@
         return `<code>${esc(t)}</code><br><span class="badge warn">! TIDAK TERDAFTAR</span>`;
       }
 
-      async function loadServers() {
-        try {
-          const d = await fetch('/api/servers', { cache: 'no-store' }).then(r => {
-            if (!r.ok) throw new Error(r.status);
-            return r.json();
-          });
-          const servers = d.servers || [];
-          serverList = servers;
-          serverSelect.innerHTML = servers.length
-            ? servers.map(x => `<option value="${esc(x.host)}:${esc(String(x.port))}">${esc(x.name || x.host)} (${esc(x.host)}:${esc(String(x.port))})</option>`).join('')
-            : '<option value="">Belum ada server terhubung</option>';
-          serverNote.textContent = servers.length ? 'Server tujuan siap dipilih.' : 'Tambahkan server di config/servers.json.';
-        } catch (e) {
-          serverSelect.innerHTML = '<option value="">API server tidak tersedia</option>';
-          serverNote.textContent = 'Gagal membaca daftar server.';
-        }
-      }
-      serverSelect.addEventListener('change', () => {
-        serverNote.textContent = serverSelect.value ? 'Target: ' + serverSelect.options[serverSelect.selectedIndex].text : 'Pilih server untuk instalasi.';
-      });
-
       function showDetail(obj) {
         detailEl.style.display = 'block';
         detailEl.innerHTML = '<strong>Detail:</strong> ' + esc(JSON.stringify(obj, null, 2));
@@ -660,9 +610,11 @@
 
       const rowMenu = document.getElementById('row-menu');
 
+      let tombolMenu = null;
       function closeRowMenu() { rowMenu.classList.remove('open'); }
 
       function openRowMenu(btn, domain) {
+        tombolMenu = btn;
         const acts = rowActions[domain] || [];
         rowMenu.innerHTML = acts.map((a, i) =>
           `<button type="button" role="menuitem" data-act="${i}"${a.disabled ? ' disabled' : ''}` +
@@ -693,10 +645,25 @@
       });
       document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRowMenu(); });
       window.addEventListener('resize', closeRowMenu);
-      window.addEventListener('scroll', closeRowMenu, true);
+      // Hanya scroll halaman / wadah tombol yang menutup menu. Modal bagan & log yang menggulir
+      // sendiri tiap 3 detik selama ada situs RUNNING dulu ikut menutup menu (scroll ditangkap
+      // di fase capture dari elemen mana pun).
+      window.addEventListener('scroll', e => {
+        if (!rowMenu.classList.contains('open')) return;
+        const t = e.target;
+        if (t === document || t === document.documentElement || t === document.body
+            || (tombolMenu && t instanceof Element && t.contains(tombolMenu))) closeRowMenu();
+      }, true);
 
+      // Pembaruan tabel (permintaan user 2026-09-18): data dibaca tiap detak, tetapi tabel hanya
+      // digambar ulang bila (1) tidak ada jendela terbuka — menu aksi atau modal; pembaruan
+      // ditahan lalu dijalankan begitu jendela ditutup — dan (2) data/pilihan tampilannya berubah.
+      let htmlBaris = '', tandaTerakhir = '', tampilanTertunda = false;
+      const jendelaTerbuka = () => rowMenu.classList.contains('open') || !!document.querySelector('.modal.open');
       async function load() {
         const rows = document.getElementById('rows');
+        // Isi tabel selain baris domain (kosong/galat) membuat pembanding lama tidak berlaku.
+        const isiLain = (html) => { htmlBaris = ''; rows.innerHTML = html; };
         try {
           const d = await fetch('/api/installer', { cache: 'no-store' }).then(r => {
             if (!r.ok) throw new Error(r.status);
@@ -705,10 +672,16 @@
           localIps = d.local_ips || localIps;
           if (d.servers && d.servers.length) serverList = d.servers;
           defaultTarget = d.default_target || defaultTarget;
-          const ln = document.getElementById('local-note');
-          if (ln) ln.textContent = 'Server ini: ' + (localIps.length ? localIps.join(', ') : '(tidak terdeteksi)');
           allDomains = d.domains || [];
-          pantauYangBerjalan(allDomains, d.terakhir);
+          if (jendelaTerbuka()) { tampilanTertunda = true; return; }
+          const tanda = JSON.stringify([
+            allDomains.map(x => [x.domain, x.status, x.stage, x.message, x.paket, x.deadline, x.webmaster, x.target_host,
+              x.folder, x.manifest, x.source, x.claim ? x.claim.by + x.claim.at : '', !!x.agen, !!(x.log && x.log.length), !!x.ada_log]),
+            serverList, localIps, defaultTarget,
+            domainFilter.value, statusFilter.value, deadlineFilter.value, currentPage,
+          ]);
+          if (tanda === tandaTerakhir) return;
+          tandaTerakhir = tanda;
           const q = (domainFilter.value || '').trim().toLowerCase();
           const status = statusFilter.value;
           // Tanggal lokal, bukan toISOString() yang memakai UTC — di WIB itu
@@ -731,24 +704,26 @@
           const pageDomains = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
           const knownStatuses = [...new Set(allDomains.map(x => x.status).filter(Boolean))].sort();
           const oldStatus = statusFilter.value;
-          statusFilter.innerHTML = '<option value="">semua status</option>' + knownStatuses.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
-          statusFilter.value = knownStatuses.includes(oldStatus) ? oldStatus : '';
+          // Pilihan status hanya diganti bila daftarnya berubah: dropdown yang sedang dibuka tidak tertutup.
+          const opsiStatus = '<option value="">semua status</option>' + knownStatuses.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+          if (statusFilter.dataset.opsi !== opsiStatus) {
+            statusFilter.innerHTML = opsiStatus;
+            statusFilter.dataset.opsi = opsiStatus;
+            statusFilter.value = knownStatuses.includes(oldStatus) ? oldStatus : '';
+          }
           pageInfo.textContent = filtered.length ? `${(currentPage - 1) * pageSize + 1}-${Math.min(currentPage * pageSize, filtered.length)} dari ${filtered.length} domain` : '0 domain';
           pagePrev.disabled = currentPage <= 1;
           pageNext.disabled = currentPage >= pageCount;
           if (!allDomains.length) {
-            rows.innerHTML = '<tr><td colspan="6" class="empty">Belum ada file domain.txt</td></tr>';
+            isiLain('<tr><td colspan="6" class="empty">Belum ada file domain.txt</td></tr>');
             return;
           }
           if (!pageDomains.length) {
-            rows.innerHTML = '<tr><td colspan="6" class="empty">Tidak ada domain cocok.</td></tr>';
+            isiLain('<tr><td colspan="6" class="empty">Tidak ada domain cocok.</td></tr>');
             return;
           }
-          // Polling 4s menggambar ulang tabel; menu yang masih terbuka akan
-          // menunjuk baris lama, jadi tutup dulu.
-          closeRowMenu();
           rowActions = {};
-          rows.innerHTML = pageDomains.map(x => {
+          const htmlBaru = pageDomains.map(x => {
             const isReady = x.status === 'READY' || x.status === 'SUCCESS';
             const isRunning = x.status === 'RUNNING';
             const isFailed = x.status === 'FAILED' || x.status === 'installer_error';
@@ -767,12 +742,18 @@
             const logLines = (x.log || []).join('\n');
             const canGenerate = x.status === 'NO_MANIFEST' || x.manifest === null || x.status.startsWith('missing_') || x.status.startsWith('invalid_');
             const canRun = (isReady || isFailed) && !isRunning;
+            // Situs COMPLETE (source=selesai) tetap tampil supaya bisa dijalankan ulang / dilihat baganya.
+            const selesai = x.source === 'selesai';
             const acts = [{
-              label: isFailed ? 'Retry install' : 'Set up install',
-              danger: isFailed,
+              label: isFailed ? 'Retry install' : selesai ? 'Jalankan ulang' : 'Set up install',
+              danger: isFailed || selesai,
               disabled: !canRun,
               title: canRun ? '' : 'generate manifest dulu',
-              run: () => onInstallClick(x.domain, x.status),
+              run: () => {
+                if (selesai && !confirm(x.domain + ' sudah terpasang (' + (x.updated_at || '').slice(0, 10) + ').\n'
+                  + 'Mode apply memasang ulang & menimpa situs; pakai mode finish untuk merapikan saja. Lanjut?')) return;
+                onInstallClick(x.domain, x.status);
+              },
             }];
             const noFolder = x.folder === false;
             if (canGenerate) acts.push({
@@ -796,13 +777,11 @@
               acts.push({ label: 'Lepas klaim', danger: true, run: () => claimAction(x.domain, 'release') });
             }
             acts.push({ label: 'Bagan proses', run: () => openFlowModal(x.domain) });
-            if (logLines || isRunning) acts.push({ label: isRunning ? 'Lihat log (live)' : 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
+            if (logLines || isRunning || x.ada_log) acts.push({ label: isRunning ? 'Lihat log (live)' : 'Lihat log', run: () => openLogModal(x.domain, allDomains) });
             rowActions[x.domain] = acts;
             const siteUrl = 'https://' + x.domain;
             const adminUrl = siteUrl + '/wp-admin';
-            const srcBadge = x.source === 'onprogress'
-              ? ' <span class="badge local" title="Folder dari Google Drive On Progress">DRIVE</span>'
-              : x.source === 'crm'
+            const srcBadge = x.source === 'crm'
               ? ' <span class="badge warn" title="Ada di CRM tapi folder Drive belum tersinkron, jadi manifest belum bisa dibuat">TANPA FOLDER</span>'
               : '';
             const wmBadge = dikerjakanWm
@@ -812,21 +791,28 @@
             const agenBadge = x.agen
               ? ` <span class="badge local" title="Agen desain Claude sejak ${esc(x.agen.mulai || '')}${x.message ? ' — ' + esc(x.message) : ''}">AGEN CLAUDE</span>`
               : '';
-            const claimBadge = x.claim
+            const selesaiBadge = selesai
+              ? ` <span class="badge ok" title="Terpasang ${esc(x.updated_at || '')}${x.crm_status ? ' — CRM: ' + esc(x.crm_status) : ''}">SELESAI${x.updated_at ? ' ' + esc(x.updated_at.slice(0, 10)) : ''}</span>`
+              : '';
+            const claimBadge = x.claim && !selesai
               ? ` <span class="badge ${x.claim.by === 'autopilot' ? 'local' : 'ok'}" title="Diambil alih ${esc(x.claim.at || '')}">DIAMBIL: ${x.claim.by === 'autopilot' ? 'AUTOPILOT' : 'MANUAL'}</span>`
               : '';
-            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${wmBadge}${agenBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
+            const domainLink = `<a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--cyan);text-decoration:none" title="Buka site: ${esc(x.domain)}">${esc(x.domain)}</a>${srcBadge}${wmBadge}${agenBadge}${selesaiBadge}${claimBadge} <a href="${esc(adminUrl)}" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:11px;text-decoration:none" title="Buka wp-admin">⚙</a>`;
             const targetCell = targetBadge(x, serverList, localIps, defaultTarget);
             const dash = '<span style="color:var(--muted)">-</span>';
             const paketCell = x.paket ? esc(x.paket) : dash;
             const deadlineCell = x.deadline ? esc(x.deadline) : dash;
             return `<tr><td><strong class="domain">${domainLink}</strong></td><td class="hide-mobile paket-cell">${paketCell}</td><td class="hide-mobile deadline-cell">${deadlineCell}</td><td class="hide-mobile target-cell">${targetCell}</td><td><span class="stat ${pillClass}" title="${esc(statusFull)}" aria-label="Status: ${esc(statusFull)}">${statusIcon}</span></td><td><button class="action" type="button" data-menu-domain="${esc(x.domain)}">[ aksi ▾ ]</button></td></tr>`;
           }).join('');
+          if (htmlBaru === htmlBaris) return;
+          htmlBaris = htmlBaru;
+          rows.innerHTML = htmlBaru;
           rows.querySelectorAll('[data-menu-domain]').forEach(b =>
             b.addEventListener('click', () => openRowMenu(b, b.dataset.menuDomain))
           );
         } catch (e) {
-          rows.innerHTML = '<tr><td colspan="6" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
+          tandaTerakhir = '';
+          isiLain('<tr><td colspan="6" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>');
         }
       }
 
@@ -886,6 +872,10 @@
         document.getElementById('wizard-btn-next').textContent = 'Lanjut';
         document.getElementById('wizard-btn-next').disabled = false;
         document.getElementById('wizard-manifest-status').textContent = 'Memeriksa manifest...';
+        // checkManifest menyembunyikan/mematikan pilihan ini per domain; kembalikan untuk domain berikutnya.
+        document.getElementById('wizard-gen-label').style.display = 'flex';
+        document.getElementById('wizard-gen-check').checked = true;
+        document.querySelector('input[name="run-mode"][value="dry-run"]').checked = true;
         modal.classList.add('open');
         checkManifest();
       }
@@ -925,7 +915,11 @@
           const r = await fetch('/api/installer', { cache: 'no-store' });
           const d = await r.json();
           const domain = d.domains.find(x => x.domain === wizardData.domain);
-          if (domain && domain.status === 'READY') {
+          if (domain && domain.source === 'selesai') {
+            document.getElementById('wizard-manifest-status').innerHTML = '<span style="color: var(--yellow)">⚠ Situs sudah terpasang. Pilih mode finish untuk merapikan tanpa install ulang.</span>';
+            document.getElementById('wizard-gen-label').style.display = 'none';
+            document.getElementById('wizard-gen-check').checked = false;
+          } else if (domain && domain.status === 'READY') {
             document.getElementById('wizard-manifest-status').innerHTML = '<span style="color: var(--green)">✓ Manifest sudah valid</span>';
             document.getElementById('wizard-gen-label').style.display = 'none';
           } else if (domain && (domain.status === 'FAILED' || domain.status === 'installer_error')) {
@@ -962,7 +956,6 @@
           if (r.ok && j.status === 'started') {
             serverNote.textContent = wizardData.mode + ' "' + wizardData.domain + '" dimulai (PID ' + j.pid + ').';
             showDetail({ info: wizardData.mode + ' dimulai', ...j });
-            mulaiPantau(wizardData.domain);
             setTimeout(load, 1500);
           } else {
             serverNote.textContent = 'Gagal memulai: ' + (j.error || r.status);
@@ -1023,6 +1016,26 @@
       function hanyaMode(m) { return c => (c.mode === null ? null : c.mode === m); }
       function dan(...nilai) { return nilai.some(x => x === false) ? false : nilai.some(x => x === null) ? null : true; }
       const CHILD_THEME = /child_theme:(?!skipped_fse)/;
+      const SELESAI_AGEN = /desain_claude: (sesuai|belum_mirip|ditolak|lewati|gagal)/;
+      // Jejak run yang desainnya diambil alih agen Claude (lihat agen_langsung & audit_kemiripan di runner).
+      const AMBIL_ALIH_AGEN = /fse_cek: dilewati:agen_claude|desain (langsung )?diambil alih agen Claude/;
+      function hasilAgen(t) {
+        const m = /desain_claude: (\S+).*?skor=(\d+)->(\d+) menit=([\d.]+)/.exec(t);
+        if (m) return (m[1] === 'sesuai' ? 'mirip' : m[1].startsWith('ditolak') ? 'ditolak (skor turun), kembali ke generator'
+          : 'belum mirip') + ': skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit';
+        const l = /desain_claude: (lewati|gagal):(\S+)/.exec(t);
+        return l ? l[1] + ': ' + l[2] : null;
+      }
+      // Langkah Tema FSE: hasil agen tahap tema, atau keterangan run lama (agen hanya di akhir).
+      function hasilTemaAgen(t) {
+        const m = /desain_claude_tema: (\S+).*?skor=(\d+)->(\d+) menit=([\d.]+)/.exec(t);
+        if (m) return 'agen Claude: ' + (m[1] === 'sesuai' ? 'mirip' : m[1].startsWith('ditolak') ? 'ditolak, dasar generator'
+          : 'belum mirip') + ', skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit';
+        const l = /desain_claude_tema: (lewati|gagal):(\S+)/.exec(t);
+        if (l) return 'agen Claude ' + l[1] + ': ' + l[2] + ' (dasar generator)';
+        if (/Paket custom: tema FSE oleh agen Claude/.test(t)) return 'agen Claude selesai';
+        return AMBIL_ALIH_AGEN.test(t) ? 'titik awal, desain akhir oleh agen Claude' : null;
+      }
       function hasilChild(teks) {
         const m = /child_theme:(matched|generated|not_found|no_ref|api_error|download_failed|error):([^:\n]*)/.exec(teks);
         if (!m) return null;
@@ -1066,7 +1079,7 @@
           ket: c => ({ 'dry-run': 'dry run', apply: 'apply', finish: 'finish' }[c.mode] || 'menunggu') },
         { id: 'terpasang', kol: 2, jalur: 0, nama: 'WordPress sudah ada', ket0: 'mode finish, tanpa install', mulai: /\] RUNNING: RUNNING_INSTALLER/,
           selesai: /http_check:/, aktif: hanyaMode('finish') },
-        { id: 'install', kol: 2, jalur: 1, nama: 'Install WordPress', ket0: 'SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+        { id: 'install', kol: 2, jalur: 1, nama: 'Install WordPress', ket0: 'paket terbaru (API/GitHub), SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
           selesai: /install_complete|http_check:/, gagal: /remote_failed/, aktif: hanyaMode('apply') },
         { id: 'server', kol: 2, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
           selesai: /"dry_run":"ok"|\] SUCCESS: DRY_RUN_OK/, gagal: /remote_not_ready|"status":"error"/,
@@ -1080,19 +1093,27 @@
         // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
         // di installer-runner): hasilnya (fse-rencana/<domain>/desain-referensi.json) jadi acuan utama
         // tata letak & gaya beranda, jadi langkah ini berdiri sendiri di bagan.
-        { id: 'referensi', kol: 6, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah (juga domain polos)',
+        { id: 'referensi', kol: 6, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah — bahan agen Claude',
           mulai: /Paket custom: cek referensi desain di form/, selesai: /referensi: (ada:|tidak_ada|gagal:)/,
           gagal: /referensi: gagal:/, ketHasil: hasilReferensi, aktif: c => dan(tanpaDry(c), c.custom) },
-        { id: 'fse', kol: 7, jalur: 0, nama: 'Tema FSE', ket0: 'compro, isi contoh, velocity-fse',
+        // Keputusan user 2026-09-21: DESAIN_CLAUDE=1 + referensi ada -> langkah ini dikerjakan agen
+        // Claude (desain-claude --tahap=tema): fse-apply --tema memasang dasar velocity-fse + palet,
+        // lalu agen menyusun header, footer & CSS dari referensi. Selesai = baris akhir
+        // `desain_claude_tema:`; tanpa agen, selesai saat gerbang "Sesuai referensi?" mulai.
+        { id: 'fse', kol: 7, jalur: 0, nama: 'Tema FSE', ket0: 'referensi ada: agen Claude; lainnya velocity-fse',
           mulai: /Paket custom: (tema FSE|tema dilewati)/,
-          selesai: /fse: tema_siap|tema dilewati/, lewati: /Paket custom: tema dilewati/, aktif: c => dan(tanpaDry(c), c.custom) },
+          selesai: /desain_claude_tema: (sesuai|belum_mirip|ditolak|lewati|gagal)|tema dilewati/,
+          lewati: /Paket custom: tema dilewati/, ketHasil: hasilTemaAgen,
+          aktif: c => dan(tanpaDry(c), c.custom) },
         // Gerbang sebelum konten AI (keputusan user 2026-09-16): hasil langkah tema dibandingkan dengan
         // rencana referensi desain klien (scripts/fse-cek-referensi). Belum sesuai -> balik ke langkah
         // tema (maks FSE_CEK_MAKS percobaan), sesuai -> lanjut. Log: `fse_cek: sesuai|belum_sesuai:...`.
-        { id: 'cekTema', kol: 8, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse: tema_siap|fse_cek: |tema dilewati/,
+        { id: 'cekTema', kol: 8, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse_cek: |tema dilewati/,
           aktif: c => dan(tanpaDry(c), c.custom),
           ket: (c, row) => {
             const t = (row.log || []).join('\n');
+            if (/fse_cek: dilewati:agen_claude \(tema disusun/.test(t)) return 'diaudit agen Claude';
+            if (/fse_cek: dilewati:agen_claude/.test(t)) return 'dilewati: agen Claude';
             if (/fse_cek: sesuai/.test(t)) return 'ya';
             if (/fse_cek: masih belum sesuai/.test(t)) return 'lanjut dengan catatan';
             if (/fse_cek: tidak_ada_referensi/.test(t)) return 'tanpa referensi';
@@ -1130,7 +1151,7 @@
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         { id: 'konten', kol: 9, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
           selesai: /AI content generation completed/, aktif: tanpaDry },
-        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta, galeri popup', mulai: /\] Finishing: aset/,
+        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
           selesai: /finish_done/, aktif: tanpaDry },
         { id: 'baru', kol: 11, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
           ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
@@ -1149,9 +1170,12 @@
           ketHasil: t => { const m = t.match(/klinik: slot:/g); return m ? m.length + ' slot foto' : null; },
           aktif: c => dan(tanpaDry(c), c.custom, c.klinik) },
         // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
-        { id: 'tampilan', kol: 14, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget',
+        // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
+        // blok berita per kategori (theme-paket-biasa, 2026-09-18).
+        { id: 'tampilan', kol: 14, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget; berita: menu kategori',
           mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
-          ketHasil: t => (/tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
+          ketHasil: t => (/tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori'
+            : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
             : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null),
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
@@ -1161,7 +1185,7 @@
             const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
             return m ? (+m[1] + +m[2]) + ' paket' : null; },
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-        { id: 'fotoKlasik', kol: 17, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul',
+        { id: 'fotoKlasik', kol: 17, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
           mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
           ketHasil: t => {
             const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
@@ -1171,6 +1195,11 @@
           },
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         { id: 'halaman', kol: 16, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda + halaman dari menu referensi', mulai: /Paket custom: halaman blok & menu/,
+          // Halaman susunan agen (fse-rencana/<domain>/claude/<slug>.html) menimpa hasil generator di
+          // fse-apply --isi (log `fse: halaman_claude:<slug>`).
+          ketHasil: t => { const m = t.match(/fse: halaman_claude:/g);
+            return m ? m.length + ' halaman dari agen Claude'
+              : AMBIL_ALIH_AGEN.test(t) ? 'titik awal, halaman akhir oleh agen Claude' : null; },
           aktif: c => dan(tanpaDry(c), c.custom) },
         { id: 'fotoArtikel', kol: 17, jalur: 0, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul', mulai: /Paket custom: foto utama artikel/,
           selesai: /foto_artikel: \d+\/\d+ diisi/,
@@ -1182,7 +1211,7 @@
           },
           aktif: c => dan(tanpaDry(c), c.custom) },
         { id: 'visual', kol: 18, jalur: 0, nama: 'Cek visual', ket0: 'desktop & HP + banding referensi ke Telegram', mulai: /Paket custom: cek visual/,
-          selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom) },
+          selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung) },
         // Audit kemiripan (permintaan user 2026-09-17, scripts/fse-audit-kemiripan): tampilan situs jadi
         // diukur dengan pengukur referensi lalu dinilai per bagian (header, footer, beranda per seksi,
         // gaya, halaman dalam). Belum mirip -> dilaporkan "perlu dicek" di Telegram, alur tetap lanjut.
@@ -1192,21 +1221,25 @@
         { id: 'mirip', kol: 19, jalur: 0, cek: true, nama: 'Mirip referensi?', ket0: 'header, footer, beranda per seksi',
           mulai: /Paket custom: audit kemiripan/, selesai: /kemiripan: (sesuai|belum_mirip:|tidak_ada_referensi|gagal:)/,
           ket: (c, row) => hasilMirip(segmenRun(row).join('\n')) || 'menunggu',
-          aktif: c => dan(tanpaDry(c), c.custom) },
+          aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung) },
         // Agen desain Claude (keputusan user 2026-09-18, scripts/desain-claude, DESAIN_CLAUDE=1): situs yang
         // belum mirip dikerjakan Claude Code — baca referensi, susun halaman/header/footer/CSS, audit & ulangi
-        // sendiri; skor turun dibanding generator -> hasilnya dicabut.
+        // sendiri; skor turun dibanding generator -> hasilnya dicabut. Sejak 2026-09-19 paket custom yang
+        // punya referensi langsung ke agen sesudah foto artikel (agen_langsung di runner): gerbang tema &
+        // audit kemiripan dilewati, cek visual dijalankan sesudah agen.
         { id: 'agenClaude', kol: 20, jalur: 0, nama: 'Agen desain Claude', ket0: 'desain + audit + ulang sendiri',
-          mulai: /desain diambil alih agen Claude|desain_claude: audit awal/, selesai: /desain_claude: (sesuai|belum_mirip|ditolak|lewati|gagal)/,
-          gagal: /desain_claude: gagal/,
-          ketHasil: t => {
-            const m = /desain_claude: (\S+).*?skor=(\d+)->(\d+) menit=([\d.]+)/.exec(t);
-            if (m) return (m[1] === 'sesuai' ? 'mirip' : m[1].startsWith('ditolak') ? 'ditolak (skor turun), kembali ke generator'
-              : 'belum mirip') + ': skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit';
-            const l = /desain_claude: (lewati|gagal):(\S+)/.exec(t);
-            return l ? l[1] + ': ' + l[2] : null;
-          },
-          aktif: c => dan(tanpaDry(c), c.custom, c.agenClaude) },
+          mulai: /belum mirip, desain diambil alih agen Claude|desain_claude: audit awal/, selesai: SELESAI_AGEN,
+          gagal: /desain_claude: gagal/, ketHasil: hasilAgen,
+          aktif: c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung) },
+        // Jalur agen langsung (keputusan user 2026-09-19, agen_langsung di runner): referensi ada +
+        // DESAIN_CLAUDE=1 -> sesudah foto artikel agen Claude langsung mengambil alih (gerbang tema &
+        // audit kemiripan dilewati), lalu cek visual desain akhir. Lajur 1 sendiri supaya tidak
+        // menumpang simpul jalur lama.
+        { id: 'agenLangsung', kol: 18, jalur: 1, nama: 'Agen desain Claude', ket0: 'langsung dari referensi: desain + audit sendiri',
+          mulai: /desain langsung diambil alih agen Claude/, selesai: SELESAI_AGEN,
+          gagal: /desain_claude: gagal/, ketHasil: hasilAgen, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
+        { id: 'visualAkhir', kol: 19, jalur: 1, nama: 'Cek visual', ket0: 'desain akhir agen, desktop & HP ke Telegram',
+          mulai: /Paket custom: cek visual/, selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
         { id: 'qa', kol: 21, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
         { id: 'maint', kol: 22, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
           ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
@@ -1217,6 +1250,18 @@
           selesai: /maintenance: maintenance_(enabled|active|skip)/,
           aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
         { id: 'selesai', kol: 24, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
+        // Trap EXIT runner (juga saat run gagal): berkas milik root dari WP-CLI dikembalikan ke user situs,
+        // supaya pasang plugin/tema dari wp-admin tidak gagal (scripts/pemilik_wp.py, 2026-09-18).
+        { id: 'pemilik', kol: 25, jalur: 1, nama: 'Kepemilikan wp-content', ket0: 'chown ke user situs',
+          mulai: /\] Kepemilikan wp-content/, selesai: /pemilik: (wp_content_dirapikan|sudah_benar|dilewati)/,
+          gagal: /pemilik: (gagal|chown_gagal)/,
+          ketHasil: t => {
+            // Skrip langkah juga mencetak "pemilik:"; yang dibaca hanya hasil trap akhir run.
+            t = t.slice(Math.max(0, t.lastIndexOf('] Kepemilikan wp-content')));
+            const m = /pemilik: wp_content_dirapikan:[^:]+:[^:]+:(\d+)/.exec(t);
+            return m ? m[1] + ' berkas dirapikan' : /pemilik: sudah_benar/.test(t) ? 'sudah sesuai' : null;
+          },
+          aktif: tanpaDry },
       ];
       // [dari, ke, label, syarat]. Tanpa syarat: garis dari simpul pengecekan aktif kalau tujuannya
       // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
@@ -1246,15 +1291,21 @@
         ['klinikFoto', 'halaman'],
         ['fotoSlot', 'halaman', '', c => dan(tanpaDry(c), c.custom,
           c.dealer === null || c.klinik === null ? null : !c.dealer && !c.klinik)],
-        ['halaman', 'fotoArtikel'], ['fotoArtikel', 'visual'], ['visual', 'mirip'],
+        ['halaman', 'fotoArtikel'],
+        ['fotoArtikel', 'visual', '', c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung)],
+        // Referensi ada + DESAIN_CLAUDE=1: agen Claude langsung, lalu cek visual desain akhir, lalu QA.
+        ['fotoArtikel', 'agenLangsung', 'referensi ada', c => dan(tanpaDry(c), c.custom, c.agenLangsung)],
+        ['agenLangsung', 'visualAkhir'], ['visualAkhir', 'qa'],
+        ['visual', 'mirip'],
         // Belum mirip: kembali ke tema FSE (generate ulang tema + halaman), lalu diaudit lagi.
         ['mirip', 'fse', 'belum mirip, generate ulang', c => dan(tanpaDry(c), c.custom, c.miripUlang)],
-        ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude)],
+        ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung)],
         ['agenClaude', 'qa'],
         ['mirip', 'qa', 'mirip / dilaporkan'],
         ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'qa'],
         ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
         ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
+        ['selesai', 'pemilik'],
       ];
       const IKON_ALUR = { selesai: '✓', berjalan: '●', gagal: '✗', dilewati: '-', menunggu: '○', cabang: '·' };
       const WAKTU_LOG = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d)\]/;
@@ -1317,7 +1368,10 @@
           // Audit kemiripan menyatakan belum mirip dan tema + halaman FSE digenerate ulang.
           miripUlang: /tema & halaman FSE digenerate ulang/.test(teks),
           // Belum mirip dan DESAIN_CLAUDE=1: agen Claude mengambil alih (bukan generate ulang).
-          agenClaude: /desain diambil alih agen Claude|desain_claude: audit awal/.test(teks),
+          agenClaude: /desain (langsung )?diambil alih agen Claude|desain_claude: audit awal/.test(teks),
+          // Referensi ada + DESAIN_CLAUDE=1 (2026-09-19): agen langsung, tanpa gerbang tema & audit.
+          agenLangsung: /fse_cek: dilewati:agen_claude|desain langsung diambil alih agen Claude/.test(teks) ? true
+            : /fse_cek: (sesuai|belum|masih|tidak|gagal)|Paket custom: audit kemiripan/.test(teks) ? false : null,
         };
       }
 
@@ -1492,94 +1546,6 @@
         return d.domain_row;
       }
 
-      // Panel "Proses berjalan": domain berstatus RUNNING dipantau lewat API satu domain
-      // (log lebih panjang, tanpa memuat ulang semua antrean). Domain yang sudah selesai
-      // hilang dari antrean /api/installer, jadi kartunya disimpan 10 menit di sini.
-      const pantau = new Map();
-      const panelAlur = document.getElementById('alur-berjalan');
-      let pantauTimer = null;
-
-      // Bagan tetap tampil saat installer diam: run terakhir (field `terakhir` dari /api/installer),
-      // atau templat alur kalau belum ada run sama sekali.
-      let rowTerakhir = null, kunciTerakhir = '';
-      function renderPanel() {
-        if (pantau.size) {
-          panelAlur.innerHTML = [...pantau.keys()].map(d => `<div class="flow-card" data-alur data-domain="${esc(d)}"></div>`).join('');
-          panelAlur.querySelectorAll('.flow-card').forEach(el => {
-            const v = pantau.get(el.dataset.domain);
-            renderAlur(el, v.row, { tutup: Boolean(v.selesaiPada), galat: v.galat });
-          });
-          return;
-        }
-        if (rowTerakhir) {
-          panelAlur.innerHTML = '<p class="flow-catatan">Tidak ada installer yang sedang berjalan. Di bawah ini run terakhir.</p>'
-            + `<div class="flow-card" data-alur data-domain="${esc(rowTerakhir.domain)}"></div>`;
-          renderAlur(panelAlur.querySelector('.flow-card'), rowTerakhir);
-          return;
-        }
-        panelAlur.innerHTML = '<div class="flow-card" data-alur></div>';
-        renderAlur(panelAlur.querySelector('.flow-card'), { domain: 'Alur installer', status: '', log: [] }, { templat: true });
-      }
-      async function perbaruiRunTerakhir(terakhir) {
-        const kunci = terakhir && terakhir.domain ? terakhir.domain + '|' + (terakhir.updated_at || '') : '';
-        if (!kunci || kunci === kunciTerakhir) return;
-        kunciTerakhir = kunci;
-        try {
-          rowTerakhir = await ambilDomain(terakhir.domain);
-        } catch (e) {
-          kunciTerakhir = '';
-          return;
-        }
-        if (!pantau.size) renderPanel();
-      }
-      function pantauYangBerjalan(domains, terakhir) {
-        let baru = false;
-        for (const x of domains) {
-          if (x.status === 'RUNNING' && !pantau.has(x.domain)) {
-            pantau.set(x.domain, { row: x, selesaiPada: 0, galat: '' });
-            baru = true;
-          }
-        }
-        if (baru || !panelAlur.querySelector('.flow-card')) renderPanel();
-        jadwalPantau();
-        perbaruiRunTerakhir(terakhir);
-      }
-      function mulaiPantau(domain) {
-        pantau.set(domain, { row: { domain, status: 'RUNNING', stage: 'dimulai', log: [] }, selesaiPada: 0, galat: '' });
-        renderPanel();
-        jadwalPantau();
-        detakPantau();
-      }
-      async function detakPantau() {
-        const aktif = [...pantau.entries()].filter(([, v]) => !v.selesaiPada);
-        await Promise.all(aktif.map(async ([domain, v]) => {
-          try {
-            v.row = await ambilDomain(domain);
-            v.galat = '';
-            if (v.row.status !== 'RUNNING') { v.selesaiPada = Date.now(); load(); }
-          } catch (e) {
-            v.galat = e.message;
-          }
-        }));
-        for (const [domain, v] of pantau) {
-          if (v.selesaiPada && Date.now() - v.selesaiPada > 600000) pantau.delete(domain);
-        }
-        renderPanel();
-      }
-      function jadwalPantau() {
-        if (pantauTimer || ![...pantau.values()].some(v => !v.selesaiPada)) return;
-        pantauTimer = setInterval(() => {
-          if (![...pantau.values()].some(v => !v.selesaiPada)) { clearInterval(pantauTimer); pantauTimer = null; return; }
-          if (!document.hidden) detakPantau();
-        }, 3000);
-      }
-      panelAlur.addEventListener('click', e => {
-        const b = e.target.closest('[data-tutup]');
-        if (!b) return;
-        pantau.delete(b.dataset.tutup);
-        renderPanel();
-      });
-
       const alurModal = document.getElementById('alur-modal'),
         alurIsi = document.getElementById('alur-isi');
       let alurPoll = null, alurDomainAktif = null, alurPemicu = null;
@@ -1626,6 +1592,12 @@
       pagePrev.addEventListener('click', () => { if (currentPage > 1) { currentPage--; load(); } });
       pageNext.addEventListener('click', () => { currentPage++; load(); });
 
+      const pantauJendela = new MutationObserver(() => {
+        if (tampilanTertunda && !jendelaTerbuka()) { tampilanTertunda = false; load(); }
+      });
+      [rowMenu, ...document.querySelectorAll('.modal')].forEach(el =>
+        pantauJendela.observe(el, { attributes: true, attributeFilter: ['class'] }));
+
       function startPoll() {
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(() => { if (!document.hidden) load(); }, 4000);
@@ -1635,7 +1607,6 @@
       function esc(s) {
         return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
       }
-      loadServers();
       load();
       startPoll();
     </script>

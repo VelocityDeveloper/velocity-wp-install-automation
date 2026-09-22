@@ -1,0 +1,17 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/geser",
+	"title": "Deret Geser (Carousel)",
+	"category": "design",
+	"icon": "images-alt2",
+	"description": "Deret gambar yang bisa digeser dengan panah. Isi dengan blok Gambar biasa — tambah, hapus, atau ganti gambarnya seperti biasa.",
+	"keywords": ["carousel", "slider", "geser", "logo", "mitra", "klien"],
+	"supports": { "html": false, "align": ["wide", "full"] },
+	"attributes": {
+		"tampilan": { "type": "string", "default": "logo" },
+		"align": { "type": "string", "default": "wide" }
+	},
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

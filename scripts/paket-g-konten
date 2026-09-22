@@ -45,6 +45,7 @@ ATURAN = """Aturan isi (wajib):
 - Abaikan teks panduan template form ("Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
 - Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau nomor pribadi pemilik.
 - Kalau ada company profile, 'layanan' hanya berisi layanan/produk yang TERTULIS di dokumen dengan nama yang sama. Jumlahnya mengikuti dokumen, jangan digenapkan dengan layanan karangan.
+- Begitu juga 'produk': kalau dokumen memuat DAFTAR produk/jenis (mis. halaman "TYPE OF INSURANCE"), salin SEMUA itemnya — jangan dipotong jadi empat dan jangan ditambah item karangan.
 - DATA PERUSAHAAN (slogan, profil, visi, misi, moto, struktur, customer, legalitas, target) DISALIN dari dokumen klien apa adanya — boleh merapikan ejaan dan huruf kapital, TIDAK boleh ditambah atau dicontohkan. Kalau tidak ada di dokumen, biarkan kosong. Semua yang dikirim klien memang untuk ditampilkan di situs.
 - "judul_seksi": judul & subjudul pendek tiap bagian beranda yang sesuai bidang usaha klien (mis. pabrik kemasan: "Produk & Layanan Kemasan", bukan kalimat untuk usaha lain). Maksimal 7 kata untuk judul, 16 kata untuk subjudul.
 - Tulis isi contoh sebagai kalimat biasa. JANGAN memberi label "CONTOH:", "(contoh)", atau penanda sejenis — teks ini tampil langsung ke pengunjung.
@@ -116,7 +117,9 @@ def rapikan(data):
             'rincian': [teks(r, 60) for r in (l.get('rincian') or []) if teks(r, 60)][:3],
             'foto': teks(l.get('foto'), 60),
         })
-    for i, p in enumerate((data.get('produk') or [])[:4], 1):
+    # Batas lama 4 memotong daftar produk/jenis yang ditulis lengkap di company profile
+    # (SCC INSURANCE COMPRO: 9 jenis asuransi, hanya 4 yang masuk — 2026-09-18).
+    for i, p in enumerate((data.get('produk') or [])[:12], 1):
         if teks(p.get('judul'), 60):
             hasil['produk'].append({'slug': f'produk-{i}', 'judul': teks(p.get('judul'), 60),
                                     'teks': teks(p.get('teks'), 160), 'foto': teks(p.get('foto'), 60)})
@@ -353,7 +356,7 @@ Kembalikan JSON dengan bentuk persis:
 "judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
 "slogan":"","profil":"","visi":"","misi":[""],"moto":"",
 "struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
-Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4, keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
+Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
         # Prompt isi contoh panjang: beri waktu lebih dari bawaan 120 detik.
         jawab = gen.ai_call(sistem, permintaan, model,
@@ -662,4 +665,10 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)

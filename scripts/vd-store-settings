@@ -173,4 +173,10 @@ echo wp_json_encode(["address"=>$s["store_address"]??"","email"=>$s["store_email
     return run.returncode
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    raise SystemExit(kode)

@@ -429,7 +429,11 @@ fi
 # membuka /berita/ melihat halaman kosong. WordPress punya mekanismenya sendiri:
 # halaman itu ditunjuk sebagai "Posts page" (page_for_posts) supaya menjadi
 # arsip seluruh artikel. Hanya diisi kalau PM belum menentukannya.
-if [[ "$(wp option get page_for_posts 2>/dev/null || echo 0)" =~ ^0?$ ]]; then
+# Tema berita klasik memakai beranda = tulisan terbaru (diatur theme-paket-biasa); jangan
+# dikembalikan ke halaman statis saat finish dijalankan ulang (mulawarmantv.com 2026-09-18).
+if [[ "$(wp option get show_on_front 2>/dev/null)" == posts ]]; then
+  echo "posts_page_skip:beranda_tulisan_terbaru" >&2
+elif [[ "$(wp option get page_for_posts 2>/dev/null || echo 0)" =~ ^0?$ ]]; then
   berita=$(wp post list --post_type=page --name=berita --field=ID --format=ids 2>/dev/null | tr -d ' ')
   [[ -z "$berita" ]] && berita=$(page_by_title 'Berita' || true)
   if [[ -n "$berita" ]]; then
@@ -560,10 +564,62 @@ chown --reference="$DOCROOT/wp-content" "$MU/velocity-galeri-popup.php" 2>/dev/n
 chmod 644 "$MU/velocity-galeri-popup.php"
 php -l "$MU/velocity-galeri-popup.php" >/dev/null 2>&1 && echo "galeri_popup_set" >&2 || { rm -f "$MU/velocity-galeri-popup.php"; echo "galeri_popup_gagal:php_lint" >&2; }
 
+# IP kantor Velocity masuk ke "IP Whitelist" Maintenance Mode velocity-addons (>= 2.3.1), setiap
+# finishing (keputusan user 2026-09-22): pengunjung dari kantor tetap melihat situs walau maintenance
+# aktif. IP Telkom kantor dinamis -> dideteksi ulang tiap run di server installer (_ip_kantor).
+# Baris lain yang diisi PM/klien dibiarkan; baris bertanda "# Kantor Velocity" diganti yang terbaru.
+rm -f "$MU/velocity-bypass-kantor.php"
+IP_KANTOR='@@IP_KANTOR@@' wp eval '
+$d = get_option("maintenance_mode_data", array());
+if (!is_array($d)) { $d = array(); }
+$lain = array();
+foreach (preg_split("/\r\n|\r|\n/", (string) ($d["ip_whitelist"] ?? "")) as $b) {
+    if (trim($b) !== "" && stripos($b, "# Kantor Velocity") === false) { $lain[] = rtrim($b); }
+}
+$baru = array();
+foreach (array_filter(explode(",", (string) getenv("IP_KANTOR"))) as $x) {
+    list($ip, $ket) = array_pad(explode("=", $x, 2), 2, "");
+    if (filter_var($ip, FILTER_VALIDATE_IP)) { $baru[] = $ip . " # Kantor Velocity" . ($ket !== "" ? " (" . $ket . ")" : ""); }
+}
+$d["ip_whitelist"] = implode("\n", array_merge($baru, $lain));
+update_option("maintenance_mode_data", $d);
+echo "ip_kantor_whitelist:" . count($baru);
+' >&2 || echo "ip_kantor_whitelist_gagal" >&2
+
 rm -rf "$M"
 echo "finish_done" >&2
 '''
 REMOTE = REMOTE.replace('@@GALERI_POPUP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-galeri-popup.php').read_text().rstrip('\n'))
+
+
+def _ip_kantor_terkini():
+    """IP publik keluar server installer (ada di jaringan kantor) saat finishing berjalan.
+    IP Telkom kantor dinamis, jadi dicek setiap run (permintaan user 2026-09-22)."""
+    for url in ('https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'curl/8'}), timeout=6) as r:
+                ip = r.read(64).decode().strip()
+            if re.fullmatch(r'(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)', ip):
+                return ip
+        except (OSError, ValueError):
+            continue
+    return ''
+
+
+# MyRepublic kantor statis. Telkom kantor dinamis: yang dipakai IP keluar server installer saat
+# run; nilai cadangan hanya bila deteksi gagal (IP lama bisa sudah dipakai pelanggan lain).
+IP_KANTOR_TETAP = (('202.59.194.129', 'MyRepublic'),)
+IP_KANTOR_CADANGAN = ('125.166.141.111', 'Telkom, cadangan')
+
+
+def _ip_kantor():
+    ip = _ip_kantor_terkini()
+    daftar = [(ip, 'terdeteksi saat finishing')] if ip else [IP_KANTOR_CADANGAN]
+    daftar += [t for t in IP_KANTOR_TETAP if t[0] != ip]
+    return ','.join(f'{x}={k}' for x, k in daftar)
+
+
+REMOTE = REMOTE.replace('@@IP_KANTOR@@', _ip_kantor())
 
 
 REMOTE_MAINT = r'''
@@ -854,7 +910,25 @@ def main():
     # Manifest `wa_publik=`: nomor dari biodata pemilik yang sudah disetujui user.
     if not wa:
         wa = wa_number(cfg.get('wa_publik', ''))
-    address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
+    # Alamat untuk peta & footer: alamat KANTOR di company profile lebih dulu (data_klien
+    # sudah memilihnya), baru alamat biodata FORM ISIAN. solusicerdasconsulting.com sempat
+    # memetakan Bekasi (rumah pemilik) padahal kantornya Jakarta Selatan (2026-09-18).
+    address = ''
+    try:
+        import importlib.machinery
+        import importlib.util
+        _l = importlib.machinery.SourceFileLoader('velocity_child_theme', str(Path(__file__).resolve().parent / 'velocity-child-theme'))
+        _m = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
+        _l.exec_module(_m)
+        address = (_m.data_klien(domain, title).get('ALAMAT') or '').strip()
+    except Exception:
+        address = ''
+    # Manifest `alamat_publik=`: alamat biodata pemilik yang sudah disetujui user untuk tampil
+    # (sama jalurnya dengan wa_publik/email_publik di fse-apply).
+    if not address:
+        address = (cfg.get('alamat_publik') or '').strip()
+    if not address:
+        address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
     compro = data_compro(domain)
     # Slogan: tulisan klien di form → slogan di company profile → buatan AI.
     tagline = slogan(form['text']) or compro.get('slogan') or ai_tagline(domain)
@@ -969,4 +1043,10 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)

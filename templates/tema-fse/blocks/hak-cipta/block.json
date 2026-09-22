@@ -5,8 +5,16 @@
 	"title": "Hak Cipta",
 	"category": "theme",
 	"icon": "shield",
-	"description": "© tahun berjalan + nama situs.",
-	"supports": { "html": false },
+	"description": "Baris hak cipta. Ketik langsung; {tahun} = tahun berjalan, {situs} = nama situs. Kosong = \"© {tahun} {situs}.\"",
+	"supports": {
+		"html": false
+	},
 	"editorScript": "velocity-fse-blok",
-	"render": "file:./render.php"
+	"render": "file:./render.php",
+	"attributes": {
+		"teks": {
+			"type": "string",
+			"default": ""
+		}
+	}
 }

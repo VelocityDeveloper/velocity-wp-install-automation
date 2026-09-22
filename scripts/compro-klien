@@ -38,7 +38,7 @@ PROFIL_RE = re.compile(r'profil|profile|compro|company', re.I)
 EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
 # Naikkan bila bentuk compro.json berubah: hasil tersimpan versi lama dibaca ulang
 # otomatis (versi 2 menambah seksi, prakata, alamat, latar, sorot, foto transparan).
-VERSI = 2
+VERSI = 6
 
 
 # ---------- PNG minimal (tanpa PIL: tidak terpasang di server installer) ----------
@@ -255,6 +255,50 @@ def identitas_kaki(halaman, berulang, nama):
     if not email:
         email = next((m for t in halaman for m in EMAIL_RE.findall(t)), '')
     return subjudul, ', '.join(alamat), email
+
+
+def kontak_halaman(pdf, halaman, seksi):
+    """(alamat, telp) dari halaman "Contact Us" compro.
+
+    `identitas_kaki` hanya membaca baris kepala/kaki yang BERULANG; compro yang menaruh
+    alamat & telepon hanya di halaman kontak karenanya tidak terbaca sama sekali
+    (SCC INSURANCE COMPRO, 2026-09-18). Ini alamat & telepon usaha — memang untuk publik."""
+    nomor = [n for x in seksi if re.search(r'contact|kontak', f"{x.get('kunci', '')} {x.get('judul', '')}", re.I)
+             for n in x.get('halaman') or []]
+    alamat, telp = '', ''
+    for i in nomor:
+        if not 1 <= i <= len(halaman):
+            continue
+        # `-raw` (urutan aliran teks), BUKAN `-layout`: halaman kontak diberi letter-spacing
+        # sehingga mode layout mengembalikan "K AWA S A N" per huruf, sedangkan -raw
+        # mengembalikan "KAWASAN RASUNA" utuh.
+        mentah = jalankan(['pdftotext', '-raw', '-f', str(i), '-l', str(i), str(pdf), '-']).stdout or halaman[i - 1]
+        baris = [b.strip() for b in mentah.splitlines()]
+        if not telp:
+            m = re.search(r'(?:phone|telp|telepon|hp|wa|whatsapp)\s*[:.]?\s*(\+?[\d][\d\s().-]{7,20})',
+                          ' '.join(baris), re.I)
+            if m:
+                telp = re.sub(r'\s{2,}', ' ', m.group(1)).strip(' .-')
+        if not alamat:
+            # Alamat ditulis beberapa baris berurutan: ambil BLOKNYA (dari sesudah judul &
+            # nama usaha sampai baris Phone/Email), bukan hanya baris yang memuat kata
+            # "JL/RT/RW" — tanpa ini nama gedung & kota ikut hilang.
+            potong, mulai = [], False
+            for b in baris:
+                if not b:
+                    continue
+                if re.search(r'phone|telp|telepon|fax|^\s*email|@', b, re.I):
+                    break
+                if not mulai:
+                    # Lewati judul halaman & baris nama perusahaan.
+                    if re.search(r'contact|kontak', b, re.I) or b.upper().startswith('PT ') or '(' in b:
+                        continue
+                    mulai = True
+                potong.append(b)
+            gabung = re.sub(r'\s*,\s*', ', ', ' '.join(potong)).strip(' ,.')
+            if ALAMAT_RE.search(gabung):
+                alamat = gabung
+    return alamat, telp
 
 
 def isi_prakata(teks, berulang, judul, slogan):
@@ -549,14 +593,21 @@ def potong_logo(gambar, tujuan):
     return None
 
 
-def ambil_foto(pdf, gambar, keluar, tmp):
+def ambil_foto(pdf, gambar, keluar, tmp, halaman_logo=()):
     """Foto tertanam ≥300x250 tanpa duplikat. Yang bermask dijadikan PNG transparan.
 
     Batas lama 400x300 membuang foto karung sak (364x360) di halaman layanan,
     dan foto bermask disalin tanpa mask sehingga latar transparannya jadi hitam."""
     foto, sidik = [], set()
     for i, g in enumerate(gambar):
-        if g['jenis'] != 'image' or g['lebar'] < 300 or g['tinggi'] < 250:
+        # Halaman daftar mitra/klien berisi PULUHAN logo kecil (SCC INSURANCE COMPRO:
+        # 32 logo mitra, 16 logo klien) — batas foto biasa membuang hampir semuanya.
+        if g['halaman'] in halaman_logo:
+            if g['lebar'] < 90 or g['tinggi'] < 50:
+                continue
+        elif g['jenis'] != 'image' or g['lebar'] < 300 or g['tinggi'] < 250:
+            continue
+        if g['jenis'] != 'image':
             continue
         mentah = g['path'].read_bytes()
         kunci = hashlib.md5(mentah).hexdigest()
@@ -592,14 +643,19 @@ def ambil_foto(pdf, gambar, keluar, tmp):
                 lebar, tinggi, kanal, rgb = rgb_terurai(pdf, g, tmp)
             except (ValueError, OSError, IndexError, zlib.error):
                 continue
-            if (lebar, tinggi) != (g['lebar'], g['tinggi']) or hiasan(rgb, kanal, alpha, lebar, tinggi):
+            if (lebar, tinggi) != (g['lebar'], g['tinggi']):
                 continue
-            # Potongan bermask juga bisa nyaris kosong (bidang putih dengan sedikit
-            # tepi tembus pandang): di kartu beranda hasilnya kotak putih tanpa isi
-            # — solusicerdasconsulting.com foto-04.png, 2026-09-18. Jalur foto biasa
-            # sudah menyaringnya dengan `polos`; jalur potongan belum.
-            if polos(rgb, kanal, lebar, tinggi):
-                continue
+            # Halaman daftar mitra/klien: semua gambarnya memang logo datar — penyaring
+            # "hiasan"/"polos" (dibuat untuk membedakan foto dari bidang warna) membuang
+            # sebagian besar logo sah, jadi tidak dipakai di sana.
+            if g['halaman'] not in halaman_logo:
+                if hiasan(rgb, kanal, alpha, lebar, tinggi):
+                    continue
+                # Potongan bermask juga bisa nyaris kosong (bidang putih dengan sedikit
+                # tepi tembus pandang): di kartu beranda hasilnya kotak putih tanpa isi
+                # — solusicerdasconsulting.com foto-04.png, 2026-09-18.
+                if polos(rgb, kanal, lebar, tinggi):
+                    continue
             baris = []
             for y in range(tinggi):
                 b = bytearray()
@@ -620,7 +676,7 @@ def ambil_foto(pdf, gambar, keluar, tmp):
                 lebar, tinggi, kanal, rgb = rgb_terurai(pdf, g, tmp)
             except (ValueError, OSError, IndexError, zlib.error):
                 rgb = None
-            if rgb is not None and polos(rgb, kanal, lebar, tinggi):
+            if rgb is not None and g['halaman'] not in halaman_logo and polos(rgb, kanal, lebar, tinggi):
                 continue
             nama = f'foto-{nomor:02d}{ekstensi}'
             (keluar / nama).write_bytes(mentah)
@@ -732,13 +788,20 @@ def main():
                 sumber_warna = 'logo'
         sorot, sorot_2 = warna_sorot(rincian_warna, utama, aksen)
         latar = warna_latar(pdf, jumlah, tmp)
-        foto = ambil_foto(pdf, gambar, keluar, tmp)
+        # Halaman yang judulnya menyebut mitra/klien: logonya kecil-kecil, jadi batas
+        # ukurannya dilonggarkan (lihat ambil_foto).
+        pola_logo = next(p for j, p in JENIS_SEKSI if j == 'customer')
+        halaman_logo = {i for i, t in enumerate(halaman, 1)
+                        if re.search(pola_logo, judul_halaman(t, berulang) or '', re.I)}
+        foto = ambil_foto(pdf, gambar, keluar, tmp, halaman_logo)
 
     slogan = cari_slogan(halaman, nama)
     subjudul, alamat, email = identitas_kaki(halaman, berulang, nama)
     for f in foto:
         f['judul_halaman'] = judul_halaman(halaman[f['halaman'] - 1], berulang)
     seksi = susun_seksi(halaman, berulang, foto)
+    alamat_kontak, telp = kontak_halaman(pdf, halaman, seksi)
+    alamat = alamat or alamat_kontak
     prakata = {}
     for s in seksi:
         if s['jenis'] == 'prakata':
@@ -746,7 +809,7 @@ def main():
                                   judul_halaman(halaman[s['halaman'][0] - 1], berulang), slogan)
             break
     data = {'versi': VERSI, 'pdf': str(pdf), 'halaman': jumlah, 'nama': nama, 'slogan': slogan,
-            'subjudul': subjudul, 'alamat': alamat, 'email': email, 'latar': latar,
+            'subjudul': subjudul, 'alamat': alamat, 'telp': telp, 'email': email, 'latar': latar,
             'warna': {'utama': utama, 'aksen': aksen, 'sorot': sorot, 'sorot_2': sorot_2,
                       'sumber': sumber_warna, 'rincian': rincian_warna},
             'logo': logo, 'prakata': prakata, 'seksi': seksi, 'foto': foto}

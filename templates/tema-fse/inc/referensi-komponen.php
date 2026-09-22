@@ -26,6 +26,9 @@ add_filter('body_class', function ($kelas) {
     if (!empty($desain['terapkan_header']) && !empty($desain['header_melayang'])) {
         $kelas[] = 'vf-ref-melayang';
     }
+    if (!empty($desain['terapkan_header']) && !empty($desain['header_transparan'])) {
+        $kelas[] = 'vf-ref-header-transparan';
+    }
     if ((float) ($desain['wadah'] ?? 0) >= 0.5 || (int) ($desain['wadah_px'] ?? 0) >= 600) {
         $kelas[] = 'vf-ref-lebar';
     }
@@ -47,6 +50,40 @@ add_action('wp_enqueue_scripts', function () {
     if (!$desain) {
         return;
     }
+    // Header transparan di atas hero: penanda `vf-header-digulir` dipasang saat halaman
+    // digulir supaya headernya berubah jadi bar berlatar seperti web referensi.
+    if (!empty($desain['terapkan_header']) && !empty($desain['header_transparan'])) {
+        wp_add_inline_script('velocity-fse-slider', "(function(){var b=document.body,t=60;"
+            . "function u(){b.classList.toggle('vf-header-digulir',(window.scrollY||0)>t);}"
+            . "u();window.addEventListener('scroll',u,{passive:true});})();");
+    }
+    // Grid berhalaman: `.vf-paginasi` + kelas `.vf-per-<n>` menampilkan n item per halaman
+    // dan membuat tombol nomor halamannya sendiri (dipakai galeri foto yang panjang).
+    wp_add_inline_script('velocity-fse-slider', "(function(){document.querySelectorAll('.vf-paginasi').forEach(function(w){"
+        . "var n=parseInt((String(w.className).match(/vf-per-(\\d+)/)||[])[1]||'20',10);"
+        . "var it=[].slice.call(w.children).filter(function(e){return !e.classList.contains('vf-paginasi__nav');});"
+        . "if(it.length<=n)return;var jml=Math.ceil(it.length/n);"
+        . "var nav=document.createElement('div');nav.className='vf-paginasi__nav';"
+        . "function ke(h){it.forEach(function(e,i){e.hidden=(i<(h-1)*n||i>=h*n);});"
+        . "[].slice.call(nav.children).forEach(function(b,i){b.setAttribute('aria-current',i+1===h?'page':'false');});"
+        . "w.scrollIntoView({behavior:'smooth',block:'start'});}"
+        . "for(var h=1;h<=jml;h++){(function(x){var b=document.createElement('button');b.type='button';"
+        . "b.className='vf-paginasi__tombol';b.textContent=x;b.addEventListener('click',function(){ke(x);});"
+        . "nav.appendChild(b);})(h);}"
+        . "w.appendChild(nav);it.forEach(function(e,i){e.hidden=i>=n;});"
+        . "nav.children[0].setAttribute('aria-current','page');});})();");
+    // Chip penyaring kategori (mis. seksi produk bergaya "menu pilihan" web referensi):
+    // klik chip `.vf-chip--<slug>` di dalam `.vf-filter` menyembunyikan item yang bukan
+    // `.vf-kat-<slug>`. Tanpa `.vf-filter` di halaman, skrip ini tidak berbuat apa-apa.
+    wp_add_inline_script('velocity-fse-slider', "(function(){document.querySelectorAll('.vf-filter').forEach(function(w){"
+        . "var c=w.querySelectorAll('.vf-chip');if(!c.length)return;"
+        . "function pilih(k){var s=(String(k.className).match(/vf-chip--(?!aktif)([a-z0-9-]+)/)||[])[1]||'semua';"
+        . "c.forEach(function(x){x.classList.toggle('vf-chip--aktif',x===k);});"
+        . "w.querySelectorAll('[class*=\"vf-kat-\"]').forEach(function(i){"
+        . "i.hidden=!(s==='semua'||i.classList.contains('vf-kat-'+s));});}"
+        . "c.forEach(function(k){k.setAttribute('role','button');k.setAttribute('tabindex','0');"
+        . "k.addEventListener('click',function(){pilih(k);});"
+        . "k.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();pilih(k);}});});});})();");
     $var = '';
     $menu = velocity_fse_nama_font($desain['font_menu'] ?? '');
     if ($menu !== '') {

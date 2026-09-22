@@ -1,0 +1,14 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/bagikan",
+	"title": "Bagikan Artikel",
+	"category": "widgets",
+	"icon": "share",
+	"description": "Tautan bagikan artikel (Facebook, X, LinkedIn, WhatsApp, email). Terisi otomatis dari artikel yang sedang dibuka — tidak ada yang perlu diatur.",
+	"supports": {
+		"html": false
+	},
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

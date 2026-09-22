@@ -23,9 +23,12 @@ defined('ABSPATH') || exit;
 define('VELOCITY_FSE_VERSI', (string) wp_get_theme('velocity-fse')->get('Version'));
 
 require get_theme_file_path('inc/situs.php');
+require get_theme_file_path('inc/ikon.php');
 require get_theme_file_path('inc/form.php');
+require get_theme_file_path('inc/cf7.php');
 require get_theme_file_path('inc/pengaturan.php');
 require get_theme_file_path('inc/dealer.php');
+require get_theme_file_path('inc/produk.php');
 require get_theme_file_path('inc/referensi.php');
 
 add_action('after_setup_theme', function () {
@@ -99,7 +102,7 @@ add_action('init', function () {
     wp_register_script(
         'velocity-fse-blok',
         get_theme_file_uri('assets/js/editor.js'),
-        array('wp-blocks', 'wp-element', 'wp-server-side-render', 'wp-block-editor'),
+        array('wp-blocks', 'wp-element', 'wp-server-side-render', 'wp-block-editor', 'wp-components'),
         VELOCITY_FSE_VERSI,
         true
     );
@@ -218,3 +221,24 @@ add_filter('render_block_core/group', function ($html, $blok) {
     return $html;
 }, 10, 2);
 
+
+// Tautan root-relatif di berkas tema (mis. tombol "Hubungi Kami" di parts/header.html
+// href="/hubungi-kami/") menunjuk ke AKAR DOMAIN. Di situs yang dipasang dalam subfolder
+// — staging velocitydeveloper.co/<domain> — tautan itu keluar dari situsnya sama sekali
+// (solusicerdasconsulting.com, 2026-09-18). Jalur situs ditambahkan saat render.
+add_filter('render_block', function ($html) {
+    if ($html === '' || strpos($html, 'href="/') === false) {
+        return $html;
+    }
+    $jalur = rtrim((string) wp_parse_url(home_url('/'), PHP_URL_PATH), '/');
+    if ($jalur === '') {
+        return $html;
+    }
+    // Hanya jalur dalam situs: "//host" (protokol-relatif) dan jalur yang sudah berawalan
+    // jalur situs dibiarkan.
+    return preg_replace(
+        '#href="/(?!/)(?!' . preg_quote(ltrim($jalur, '/'), '#') . '/)#',
+        'href="' . $jalur . '/',
+        $html
+    );
+}, 5);

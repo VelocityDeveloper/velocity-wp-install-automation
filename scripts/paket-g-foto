@@ -433,7 +433,13 @@ def rencana_compro(domain, isi):
             if i < len(sumber):
                 slot[x['slug']] = sumber[i]
     judul = {n: x['judul'] or data.get('nama', '') for x in seksi for n in x.get('foto') or []}
-    return {'slot': slot, 'seksi': per, 'info': info, 'judul': judul}
+    # Logo mitra & klien (halaman "Our Partner"/"Our Client"): bukan foto seksi, tapi tetap
+    # data klien yang harus tampil — beranda referensi juga memuat deret logo mereka
+    # (permintaan user 2026-09-18).
+    mitra = [{'judul': x.get('judul') or '', 'berkas': [n for n in x.get('foto') or [] if n in info]}
+             for x in seksi if x.get('jenis') == 'customer']
+    mitra = [m for m in mitra if m['berkas']]
+    return {'slot': slot, 'seksi': per, 'info': info, 'judul': judul, 'mitra': mitra}
 
 
 def pasang_compro(domain, isi, keadaan, ssh, docroot, rencana):
@@ -442,7 +448,8 @@ def pasang_compro(domain, isi, keadaan, ssh, docroot, rencana):
     prefix = keadaan['prefix']
     terisi = {k: v for k, v in (keadaan.get('terisi') or {}).items() if v}
     asal = keadaan.get('asal') or {}
-    berkas = sorted(set(rencana['slot'].values()) | {n for d in rencana['seksi'].values() for n in d})
+    berkas = sorted(set(rencana['slot'].values()) | {n for d in rencana['seksi'].values() for n in d}
+                    | {n for m in rencana.get('mitra') or [] for n in m['berkas']})
     folder = f'/tmp/velocity-compro-{domain}'
     with tempfile.TemporaryDirectory() as tmp:
         for nama in berkas:
@@ -493,12 +500,17 @@ def pasang_compro(domain, isi, keadaan, ssh, docroot, rencana):
         diganti += 1
     seksi_ids = {k: [ids[n] for n in d if n in ids] for k, d in rencana['seksi'].items()}
     potongan = sorted({i for n, i in ids.items() if rencana['info'].get(n, {}).get('transparan')})
-    dipakai = sorted(set(peta.values()) | {i for d in seksi_ids.values() for i in d})
+    mitra_ids = [{'judul': m['judul'], 'ids': [ids[n] for n in m['berkas'] if n in ids]}
+                 for m in rencana.get('mitra') or []]
+    mitra_ids = [m for m in mitra_ids if m['ids']]
+    dipakai = sorted(set(peta.values()) | {i for d in seksi_ids.values() for i in d}
+                     | {i for m in mitra_ids for i in m['ids']})
     kode = lambda v: base64.b64encode(json.dumps(v).encode()).decode()
     php = (
         f"update_option('{prefix}_images', json_decode(base64_decode('{kode(peta)}'), true));"
         f"update_option('{prefix}_seksi_foto', json_decode(base64_decode('{kode(seksi_ids)}'), true));"
         f"update_option('{prefix}_foto_potongan', json_decode(base64_decode('{kode(potongan)}'), true));"
+        f"update_option('{prefix}_logo_mitra', json_decode(base64_decode('{kode(mitra_ids)}'), true));"
         "echo \"simpan:ok\\n\";"
         # Foto contoh & foto compro lama yang tidak dipakai lagi dihapus, hanya
         # bila tidak dirujuk konten/thumbnail/opsi lain.
@@ -521,6 +533,7 @@ def pasang_compro(domain, isi, keadaan, ssh, docroot, rencana):
     print(f"foto: mode company profile — {len(ids)} foto compro, {len(rencana['slot'])} slot "
           f"({diganti} diganti{', dijaga: ' + ', '.join(dijaga) if dijaga else ''}), "
           f"{len(seksi_ids)} bagian foto, {len(potongan)} potongan transparan, "
+          f"{sum(len(m['ids']) for m in mitra_ids)} logo mitra/klien, "
           f"{simpan.stdout.count('dihapus:')} media lama dihapus")
     # Company profile jarang punya foto untuk SEMUA slot desain (solusicerdasconsulting.com:
     # 5 foto layak untuk 10 slot). Sisanya dikembalikan ke jalur bank foto dengan slot yang
@@ -1204,4 +1217,10 @@ def bersihkan_contoh(ssh, docroot, yatim, peta):
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)

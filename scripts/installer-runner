@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Seluruh isi skrip dibungkus { ... exit; }: bash mem-parse semuanya dulu sebelum jalan,
+# jadi menyunting berkas ini saat ada run berjalan tidak lagi mematikan run itu
+# (minionscooterrentallombok.com 2026-09-18: "EOF tidak terduga" -> apply_macet).
+{
 set -Eeuo pipefail
 DOMAIN=${1:?domain_required}
 # dry-run | apply | finish (rapikan ulang situs terpasang: konten, aset klien,
@@ -71,6 +75,15 @@ notify() {
   [[ "$MODE" == "apply" ]] || return 0
   /usr/bin/python3 "$SCRIPTS/notify-telegram.py" "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
 }
+# Kepemilikan wp-content dikembalikan ke user situs di akhir setiap run (scripts/pemilik_wp.py;
+# tiap skrip langkah juga melakukannya sendiri). WP-CLI sebagai root meninggalkan berkas milik
+# root, mis. wp-content/upgrade yang membuat pasang plugin dari wp-admin gagal
+# (layananhipnoterapi.com 2026-09-18). Dry-run & audit tidak mengubah server.
+rapikan_pemilik() {
+  [[ "$MODE" != "dry-run" && "$MODE" != "audit" && -f "$MANIFEST" ]] || return 0
+  printf '[%s] Kepemilikan wp-content\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/pemilik_wp.py" "$MANIFEST" >> "$LOG" 2>&1 || true
+}
 # Mode child-theme hanya menambah tema desain ke situs yang sudah jadi: status
 # instalasi (COMPLETE) tidak boleh ikut berubah karenanya.
 paket_desain_custom() {
@@ -107,6 +120,21 @@ pasang_vd_store() {
 portal_berita() {
   grep -q '"jenis": *"berita"' "/var/lib/velocity/ai/generated/$DOMAIN-tema.json" 2>/dev/null
 }
+# Keputusan user 2026-09-19: paket custom yang punya referensi desain langsung diambil alih agen
+# Claude sesudah referensi dibaca — gerbang fse-cek-referensi (ulang tema) dan audit + generate
+# ulang dilewati; velocity-fse + halaman generator tetap dipasang sekali sebagai titik awal agen.
+# Syaratnya sama dengan prasyarat scripts/desain-claude (selain itu agen melewati situsnya sendiri):
+# DESAIN_CLAUDE=1, referensi terbaca, bukan portal berita, tanpa gaya_beranda manual.
+agen_langsung() {
+  [[ "$DESAIN_CLAUDE" == 1 ]] || return 1
+  python3 -c 'import json, sys
+sys.exit(0 if (json.load(open(sys.argv[1])).get("url") or "").strip() else 1)' \
+    "/var/lib/velocity/fse-rencana/$DOMAIN/desain-referensi.json" 2>/dev/null || return 1
+  ! portal_berita || return 1
+  local gaya
+  gaya=$(sed -n 's/^gaya_beranda=//p' "$MANIFEST" | head -1 | tr -d ' ')
+  [[ -z "$gaya" || "$gaya" == referensi ]]
+}
 
 # Alur paket desain custom (Paket G, Portal Berita Custom, Toko Online Custom), disepakati
 # user 2026-09-13/14/15. Urutan adalah bagian dari kebenaran:
@@ -128,6 +156,11 @@ portal_berita() {
 #                                       (header, footer, beranda, gaya, halaman dalam); belum mirip
 #                                       -> generate ulang tema + halaman FSE lalu audit lagi
 #                                       (audit_kemiripan, maks FSE_MIRIP_MAKS)
+#   DESAIN_CLAUDE=1 + referensi ada (agen_langsung, 2026-09-19): gerbang tema (3) & audit (8)
+#   dilewati; sesudah 6 agen Claude (desain-claude --paksa) mengambil alih, lalu 7 cek visual.
+#   Keputusan user 2026-09-21: agen hadir sejak referensi dibaca — langkah 3 dikerjakan agen
+#   (desain-claude --tahap=tema: header, footer, CSS di atas dasar velocity-fse), lalu tahap
+#   halaman di langkah 6 melanjutkan catatan tahap tema.
 paket_g_tema() {
   # Keputusan user 2026-09-15: setelah paket dicek, periksa desain referensi di form. Hasilnya
   # (fse-rencana/<domain>/desain-referensi.json) dibaca fse-apply --tema & --isi.
@@ -138,6 +171,15 @@ paket_g_tema() {
   /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
   if [[ "$JALUR_TEMA" != fse ]]; then
     printf '[%s] Paket custom: tema dilewati (jalur=%s)\n' "$(date -Is)" "${JALUR_TEMA:-gagal}" >> "$LOG"
+    return 0
+  fi
+  if agen_langsung; then
+    # fse-apply --tema tetap dijalankan sebagai dasar mekanis (aktifkan velocity-fse, palet klien,
+    # data situs, rubrik yang dibaca konten AI); desain header/footer/CSS-nya disusun agen.
+    printf '[%s] Paket custom: tema FSE oleh agen Claude (dasar velocity-fse)\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1
+    /usr/bin/python3 "$SCRIPTS/desain-claude" --tahap=tema --paksa "$MANIFEST" >> "$LOG" 2>&1 || true
+    printf '[%s] fse_cek: dilewati:agen_claude (tema disusun & diaudit agen Claude)\n' "$(date -Is)" >> "$LOG"
     return 0
   fi
   printf '[%s] Paket custom: tema FSE (velocity-fse)\n' "$(date -Is)" >> "$LOG"
@@ -181,12 +223,12 @@ tampilan_klasik() {
   # velocity-tour-travel; langkah ini melewati tema lain sendiri.
   echo "[$(date -Is)] Paket tour" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-tour" "$MANIFEST" >> "$LOG" 2>&1 || true
-  if ! portal_berita; then
-    echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
-    # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
-    /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
-  fi
+  # Portal berita biasa ikut (mulawarmantv.com 2026-09-18: dulu dilewati, semua artikel tampil
+  # sebagai kotak placeholder). paket-g-foto memilih mode berita sendiri dari jenis isi contoh.
+  echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
+  /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
 }
 paket_g_isi() {
   [[ "$JALUR_TEMA" == fse ]] || return 0
@@ -219,6 +261,15 @@ paket_g_isi() {
   # Sisa artikel tanpa foto (Pexels & bank foto tak memberi yang layak / API gagal): foto klien
   # bergilir atau sampul kategori, sama seperti paket biasa — tiap artikel pasti berfoto utama.
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+  if agen_langsung; then
+    # Agen mengaudit sendiri (awal & akhir; skor turun = hasilnya dicabut), jadi audit_kemiripan
+    # tidak dijalankan lagi. Cek visual sesudah agen supaya tangkapan layar = desain akhir.
+    printf '[%s] Paket custom: referensi ada, desain langsung diambil alih agen Claude\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/desain-claude" --paksa "$MANIFEST" >> "$LOG" 2>&1 || true
+    printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
+    return 0
+  fi
   printf '[%s] Paket custom: cek visual\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Permintaan user 2026-09-17: pastikan desain yang dibuat mirip referensi yang diminta,
@@ -322,6 +373,7 @@ if [[ "$MODE" == "child-theme" ]]; then
     /usr/bin/python3 "$SCRIPTS/paket-g-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
     tampilan_klasik
   fi
+  rapikan_pemilik
   exit $rc
 fi
 
@@ -336,8 +388,11 @@ state RUNNING RUNNING_INSTALLER
 run_start=$(( $(wc -l < "$LOG") + 1 ))
 # Penanda waktu awal run: hasil audit yang lebih tua dari ini bukan milik run ini.
 LOG_AWAL_RUN=$(mktemp /tmp/velocity-run.XXXXXX)
-trap 'rm -f "$LOG_AWAL_RUN"' EXIT
+# Juga saat run berhenti di tengah (exit 4, galat): berkas root dari langkah yang sempat jalan.
+trap 'rm -f "$LOG_AWAL_RUN"; rapikan_pemilik' EXIT
 if [[ "$MODE" != "finish" && "$MODE" != "maintenance" ]]; then
+  # Tema velocity & velocity-addons selalu versi terbaru (API atau rilis GitHub) sebelum dipasang.
+  printf '[%s] %s\n' "$(date -Is)" "$(timeout 180 /usr/bin/python3 "$SCRIPTS/sinkron-paket" 2>&1 | tail -1 || echo sinkron_paket_timeout)" >> "$LOG"
   INSTALL_MODE="$MODE" MANIFEST="$MANIFEST" "$SCRIPTS/website-install-from-manifest" >> "$LOG" 2>&1
 fi
 problems=""
@@ -437,3 +492,5 @@ else
     notify SUCCESS COMPLETE
   fi
 fi
+exit
+}

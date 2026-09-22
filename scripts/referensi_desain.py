@@ -44,7 +44,7 @@ UA = 'velocity-installer/1.0 (+https://velocitydeveloper.com)'
 # (versi 2: warna tombol WhatsApp mengambang dibuang dari warna referensi;
 #  versi 4: detail header/topbar/footer/seksi + halaman dalam;
 #  versi 5: pohon menu, font menu, detail kartu/tombol/wadah, halaman FAQ & halaman jasa).
-VERSI = 11
+VERSI = 13
 # Halaman dalam referensi yang diukur, dikenali dari alamat/teks menu -> slug halaman situs klien.
 HALAMAN_DALAM = [
     ('tentang', r'about|tentang|profil|profile|company|who-we-are|sejarah', 'tentang-kami'),
@@ -400,6 +400,9 @@ def butir_seksi(s, jenis):
         'ruang': ruang(s),
         'tinggi': int(s.get('tinggi') or 0),
         'kontras_rendah': list(s.get('kontras_rendah') or [])[:5],
+        # Latar seksi berupa video (bukan foto diam): hero situs klien memakai video
+        # latar juga, seperti referensi (permintaan user 2026-09-18).
+        'video_latar': bool(s.get('video_latar')),
     }
     if jenis == 'hero':
         butir['varian'] = hero_varian(s)
@@ -489,6 +492,7 @@ def rencana_header(ukur):
         'menu_berwarna': bool(h.get('menu_berwarna')),
         'keranjang': bool(h.get('keranjang')),
         'melayang': h.get('melayang') or None,
+        'transparan': bool(h.get('transparan')),
     }
 
 

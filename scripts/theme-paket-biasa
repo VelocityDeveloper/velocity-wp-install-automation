@@ -234,15 +234,18 @@ def susun(domain, cfg, isi, kontak):
     blok_kontak = (f'<div class="vk-kartu vk-kontak-utama">\n<h2>Informasi Kontak</h2>\n{daftar_kontak(kontak)}\n{ikon_sosial()}\n</div>')
     tentang = pendek(isi.get('profil') or isi.get('hero_teks'), 170)
     widget = {
+        # Tanpa kontak publik widget ini dilewati; dulu terpasang judul "Hubungi Kami" tanpa isi
+        # (wisesayasatidar.com, mulawarmantv.com 2026-09-18).
         'konsultasi': ('Hubungi Kami', daftar_kontak(kontak, alamat=False)
-                       + (f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{kontak["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>' if kontak['wa'] else '')),
+                       + (f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{kontak["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>' if kontak['wa'] else ''))
+                      if daftar_kontak(kontak, alamat=False) else None,
         'layanan': (js.get('layanan') or 'Layanan Kami',
                     '<ul>' + ''.join(f'<li><a href="/layanan/#{e(l["slug"])}">{e(l["judul"])}</a></li>' for l in layanan) + '</ul>') if layanan else None,
         'footer_tentang': (nama, f'<p>{e(tentang)}</p>'
                            + (f'<p class="vk-email"><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(kontak["email"])}</p>'
                               if kontak['email'] else '')
                            + ikon_sosial()),
-        'footer_kontak': ('Kontak', daftar_kontak({**kontak, 'email': ''})),
+        'footer_kontak': ('Kontak', daftar_kontak({**kontak, 'email': ''})) if daftar_kontak({**kontak, 'email': ''}) else None,
         'footer_statistik': ('Statistik Pengunjung', '[velocity-statistics style="list"]'),
     }
     widget = {k: v for k, v in widget.items() if v}
@@ -369,6 +372,8 @@ $tandai = function ($id) { update_post_meta($id, '_velocity_content_md5', md5(ge
 // 1. Media (dipakai ulang lewat sidik berkas)
 $media = [];
 foreach ($d['aset'] as $kunci => $a) {
+    // Potongan yang isinya sama persis dengan slot lain memakai lampiran slot itu.
+    if (!empty($a['sama']) && isset($media[$a['sama']])) { $media[$kunci] = $media[$a['sama']]; continue; }
     $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
                       'meta_key' => '_velocity_tampilan_aset', 'meta_value' => $a['sidik']]);
     if ($ada) { $media[$kunci] = (int) $ada[0]; continue; }
@@ -391,6 +396,11 @@ $ganti = function ($v) use (&$ganti, $media) {
     if (strpos($v, '/') === 0 && strpos($v, '//') !== 0) { return home_url($v); }
     return $v;
 };
+// Tautan berjalur akar ("/layanan/#...") di HTML widget/beranda ikut home_url: situs staging di
+// subfolder (velocitydeveloper.co/<domain>) kalau tidak menunjuk ke halaman milik situs lain.
+$akar = function ($h) {
+    return preg_replace_callback('#href="(/(?!/)[^"]*)"#', function ($m) { return 'href="' . esc_url(home_url($m[1])) . '"'; }, (string) $h);
+};
 
 // 2. Halaman Layanan + menu
 $lokasi = get_nav_menu_locations(); $menu_id = (int) ($lokasi['primary'] ?? 0);
@@ -398,10 +408,10 @@ if ($d['halaman_layanan'] !== '') {
     $hal = get_page_by_path('layanan', OBJECT, 'page');
     if (!$hal) {
         $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Layanan', 'post_name' => 'layanan',
-                              'post_content' => $d['halaman_layanan']], true);
+                              'post_content' => $akar($d['halaman_layanan'])], true);
         if (!is_wp_error($id)) { $tandai($id); echo "tampilan: layanan_dibuat:$id\n"; $hal = get_post($id); }
-    } elseif ($milik_installer($hal->ID) && $hal->post_content !== $d['halaman_layanan']) {
-        wp_update_post(['ID' => $hal->ID, 'post_content' => $d['halaman_layanan']]); $tandai($hal->ID); echo "tampilan: layanan_diperbarui\n";
+    } elseif ($milik_installer($hal->ID) && $hal->post_content !== $akar($d['halaman_layanan'])) {
+        wp_update_post(['ID' => $hal->ID, 'post_content' => $akar($d['halaman_layanan'])]); $tandai($hal->ID); echo "tampilan: layanan_diperbarui\n";
     } elseif (!$milik_installer($hal->ID)) { echo "tampilan: layanan_dibiarkan:disunting\n"; }
     if ($hal && $menu_id) {
         $items = wp_get_nav_menu_items($menu_id) ?: [];
@@ -419,9 +429,95 @@ if ($d['halaman_layanan'] !== '') {
     }
 }
 
+// 2b. Portal berita (mulawarmantv.com 2026-09-18). Tema berita klasik (velocity-berita*) menaruh
+// seluruh desain beranda (slider, grid, blok per kategori) di index.php/home.php, yang hanya
+// dipakai bila beranda = tulisan terbaru. Installer memasang halaman statis "Beranda", jadi yang
+// tampil cuma teks halaman. Pola situs berita buatan webmaster: show_on_front=posts, menu utama
+// Home + kategori, halaman profil di menu secondary, blok berita diisi kategori, banner iklan kosong.
+$sd = get_stylesheet_directory();
+$berita_depan = !empty($d['berita']) && !is_file("$sd/front-page.php") && (is_file("$sd/index.php") || is_file("$sd/home.php"));
+if ($berita_depan) {
+    $pof = (int) get_option('page_on_front');
+    if (get_option('show_on_front') !== 'posts' || $pof) {
+        if (!$pof || $milik_installer($pof)) {
+            update_option('show_on_front', 'posts'); update_option('page_on_front', 0); update_option('page_for_posts', 0);
+            echo "tampilan: berita_beranda_tulisan_terbaru\n";
+        } else { echo "tampilan: berita_beranda_dibiarkan:disunting\n"; }
+    }
+    // Terbanyak artikel dulu; sama banyak -> urutan dibuat (= urutan kategori di form klien).
+    $kategori = get_categories(['hide_empty' => true, 'exclude' => [(int) get_option('default_category')]]);
+    usort($kategori, fn($a, $b) => [$b->count, $a->term_id] <=> [$a->count, $b->term_id]);
+    // Blok berita: kontrol customizer bertipe select yang pilihannya kategori (cat_berita1..n).
+    // Nama pengaturannya dirangkai di kode tema ('cat_' . $id), jadi dibaca dari customizer.
+    require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+    $blok_kat = [];
+    try {
+        $wpc = new WP_Customize_Manager(); do_action('customize_register', $wpc);
+        $id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
+        foreach ($wpc->controls() as $c) {
+            $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['']);
+            if ($c->type === 'select' && count($pilih) > 1 && !array_diff($pilih, $id_kat) && $c->setting) { $blok_kat[] = $c->setting->id; }
+        }
+    } catch (Throwable $t) { echo 'tampilan: berita_customizer_gagal:' . $t->getMessage() . "\n"; }
+    $isi_kat = []; $i = 0;
+    foreach ($blok_kat as $k) {
+        $kini = (string) get_theme_mod($k, '');
+        if ($kini !== '' && $kini !== (string) ($st['berita_kat'][$k] ?? '')) { continue; }  // dipilih orang
+        if (!isset($kategori[$i])) { break; }
+        set_theme_mod($k, (string) $kategori[$i]->term_id); $st['berita_kat'][$k] = (string) $kategori[$i]->term_id;
+        $isi_kat[] = "$k=" . $kategori[$i]->slug; $i++;
+    }
+    if ($isi_kat) { echo 'tampilan: berita_blok_kategori:' . implode(',', $isi_kat) . "\n"; }
+    // Slot banner iklan (955x90 dsb.) untuk gambar iklan, bukan foto klien yang dipasang adaptor:
+    // dikosongkan hanya bila isinya aset installer (_velocity_tampilan_aset), bukan unggahan orang.
+    foreach ((array) get_theme_mods() as $k => $v) {
+        if (!preg_match('/^image_iklan/', (string) $k) || !is_string($v) || $v === '') { continue; }
+        $aid = attachment_url_to_postid($v);
+        if ($aid && get_post_meta($aid, '_velocity_tampilan_aset', true)) {
+            remove_theme_mod($k); remove_theme_mod(preg_replace('/^image_/', 'link_', $k));
+            echo "tampilan: berita_iklan_dikosongkan:$k\n";
+        }
+    }
+    // Menu: hanya menu buatan installer (halaman baku) yang disusun ulang.
+    $baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan', 'redaksi',
+             'pedoman media siber', 'privacy policy', 'kebijakan privasi'];
+    $lokasi = get_nav_menu_locations(); $utama_id = (int) ($lokasi['primary'] ?? 0);
+    $item_utama = $utama_id ? (wp_get_nav_menu_items($utama_id) ?: []) : [];
+    $menu_baku = $item_utama && !array_filter($item_utama, fn($it) => !in_array(strtolower(trim($it->title)), $baku, true)
+                                                              || !in_array($it->type, ['post_type', 'custom'], true));
+    $kat_menu = array_slice($kategori, 0, 8);
+    if ($menu_baku && $kat_menu && empty($st['berita_menu'])) {
+        $obj = wp_get_nav_menu_object('Menu Berita');
+        $mb = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Berita');
+        if ($mb && !$obj) {
+            wp_update_nav_menu_item($mb, 0, ['menu-item-title' => 'Home', 'menu-item-url' => home_url('/'),
+                'menu-item-type' => 'custom', 'menu-item-status' => 'publish', 'menu-item-position' => 1]);
+            $n = 2;
+            foreach ($kat_menu as $k) {
+                wp_update_nav_menu_item($mb, 0, ['menu-item-title' => $k->name, 'menu-item-object-id' => $k->term_id,
+                    'menu-item-object' => 'category', 'menu-item-type' => 'taxonomy', 'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
+            }
+        }
+        if ($mb) {
+            // Menu lama (halaman profil) pindah ke secondary, tanpa Beranda & Berita.
+            if (isset($GLOBALS['_wp_registered_nav_menus']['secondary']) && empty($lokasi['secondary'])) {
+                foreach ($item_utama as $it) {
+                    if (in_array(strtolower(trim($it->title)), ['beranda', 'home', 'berita'], true)) { wp_delete_post($it->ID, true); }
+                }
+                $lokasi['secondary'] = $utama_id;
+            }
+            $lokasi['primary'] = $mb; set_theme_mod('nav_menu_locations', $lokasi);
+            $st['berita_menu'] = $mb;
+            echo 'tampilan: berita_menu:' . count($kat_menu) . "_kategori\n";
+        }
+    } elseif (!$menu_baku && empty($st['berita_menu'])) { echo "tampilan: berita_menu_dibiarkan:disunting\n"; }
+}
+
 // 3. Beranda: template + pengaturan tema
-$depan = (int) get_option('page_on_front');
-if (isset($d['mods'][$tema]) && $depan) {
+$depan = $berita_depan ? 0 : (int) get_option('page_on_front');
+if ($berita_depan) {
+    echo "tampilan: beranda_tema_berita\n";
+} elseif (isset($d['mods'][$tema]) && $depan) {
     $tpl = get_post_meta($depan, '_wp_page_template', true);
     echo 'tampilan: beranda_slug=' . get_post_field('post_name', $depan) . "\n";
     $file = '';
@@ -462,7 +558,7 @@ if ($depan && $tanpa_template && $d['beranda_blok'] !== '') {
     if (!$milik_installer($depan)) { echo "tampilan: beranda_blok_dibiarkan:disunting\n"; }
     else {
         $isi_b = get_post_field('post_content', $depan);
-        $blok_b = "<!-- velocity-beranda -->\n" . $d['beranda_blok'] . "\n<!-- /velocity-beranda -->";
+        $blok_b = "<!-- velocity-beranda -->\n" . $akar($d['beranda_blok']) . "\n<!-- /velocity-beranda -->";
         $baru_b = strpos($isi_b, '<!-- velocity-beranda -->') !== false
             ? preg_replace('#<!-- velocity-beranda -->.*?<!-- /velocity-beranda -->#s', str_replace('$', '\\$', $blok_b), $isi_b)
             : rtrim($isi_b) . "\n" . $blok_b;
@@ -507,9 +603,9 @@ $boleh = function ($daftar) use ($bawaan, $milik) {
     return true;
 };
 $nomor = 300;
-$buat_html = function ($judul, $isi) use (&$ch, &$nomor) {
+$buat_html = function ($judul, $isi) use (&$ch, &$nomor, $akar) {
     while (isset($ch[$nomor])) { $nomor++; }
-    $ch[$nomor] = ['title' => $judul, 'content' => $isi]; return 'custom_html-' . $nomor++;
+    $ch[$nomor] = ['title' => $judul, 'content' => $akar($isi)]; return 'custom_html-' . $nomor++;
 };
 $hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, $milik) {
     foreach ((array) $daftar as $w) {
@@ -524,7 +620,7 @@ $W = $d['widget']; $semua = []; $ubah = [];
 $utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isset($wp_registered_sidebars['sidebar-1']) ? 'sidebar-1' : '');
 if ($utama && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
-    $baru = [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
+    $baru = empty($W['konsultasi']) ? [] : [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
     if (!empty($W['layanan'])) { $baru[] = $buat_html($W['layanan'][0], $W['layanan'][1]); }
     $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
     $baru[] = "recent-posts-$n";
@@ -532,7 +628,12 @@ if ($utama && $boleh($sb[$utama] ?? [])) {
 }
 $kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
 foreach ($kaki as [$id, $k]) {
-    if (!isset($wp_registered_sidebars[$id]) || empty($W[$k]) || !$boleh($sb[$id] ?? [])) { continue; }
+    if (!isset($wp_registered_sidebars[$id]) || !$boleh($sb[$id] ?? [])) { continue; }
+    if (empty($W[$k])) {
+        // Tanpa isi (mis. kontak publik tidak ada): widget buatan installer sebelumnya dicabut.
+        if (!empty($sb[$id])) { $hapus_bawaan($sb[$id]); $sb[$id] = []; $ubah[] = $id; echo "tampilan: widget_dikosongkan:$id\n"; }
+        continue;
+    }
     $hapus_bawaan($sb[$id] ?? []);
     if ($k === 'footer_statistik') {
         $n = 300; while (isset($tx[$n])) { $n++; }
@@ -792,6 +893,7 @@ def main():
     print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
           f"email={'publik' if kontak['email'] else 'tidak_ada'}")
     data = susun(domain, cfg, isi, kontak)
+    data['berita'] = isi.get('jenis') == 'berita'
     data['template'] = {}
 
     # Tema aktif dibaca dari server: adaptor buatan tangan dulu, AI untuk tema yang belum dikenal.
@@ -884,10 +986,26 @@ def main():
     judul.update({f'layanan-{l["slug"]}': l['judul'] for l in layanan})
     judul.update({k: f"Foto {data['nama']}" for k in pendamping})
     judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
-    data['aset'] = {k: {'file': f'{k}.jpg', 'judul': judul.get(k, k),
-                        'sidik': f"{domain}:{k}:{hashlib.md5(p.read_bytes()).hexdigest()}"} for k, p in aset.items()}
+    # Hanya slot yang dirujuk pengaturan tema yang diunggah, dan potongan yang isinya sama
+    # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
+    # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.
+    # Tema yang tidak terbaca: semua adaptor dipindai, karena server memilih mods dari tema aktifnya.
+    rujukan = json.dumps([data['mods'].get(tema), data['bawaan'].get(tema)] if tema in data['mods']
+                         else [data['mods'], data['bawaan']], ensure_ascii=False)
+    dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan))
+    data['aset'], per_md5 = {}, {}
+    for k, p in aset.items():
+        if k not in dipakai:
+            continue
+        md5 = hashlib.md5(p.read_bytes()).hexdigest()
+        data['aset'][k] = {'file': f'{k}.jpg', 'judul': judul.get(k, k), 'sidik': f'{domain}:{k}:{md5}'}
+        if md5 in per_md5:
+            data['aset'][k]['sama'] = per_md5[md5]
+        else:
+            per_md5[md5] = k
     (kerja / 'data.json').write_text(json.dumps(data, ensure_ascii=False))
     print(f"tampilan: siap aset={','.join(sorted(aset))} layanan={len(layanan)} folder={kerja}")
+    print(f"tampilan: aset_dipakai={','.join(sorted(data['aset'])) or '-'} unggah={len(per_md5)}")
     if coba:
         (kerja / 'mods.json').write_text(json.dumps(data['mods'].get(tema), indent=1, ensure_ascii=False))
         return 0
@@ -912,7 +1030,12 @@ def main():
 
 
 if __name__ == '__main__':
-    kode = main()
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
     if '--coba' not in sys.argv:
         import shutil
         for folder in SEMENTARA:

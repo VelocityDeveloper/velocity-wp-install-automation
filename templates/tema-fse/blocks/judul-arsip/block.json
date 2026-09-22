@@ -5,8 +5,10 @@
 	"title": "Judul Arsip",
 	"category": "theme",
 	"icon": "heading",
-	"description": "Judul halaman arsip: nama halaman berita, kategori/rubrik, atau kata pencarian.",
-	"supports": { "html": false },
+	"description": "Judul halaman arsip: nama halaman berita, kategori/rubrik, atau kata pencarian. Terisi otomatis.",
+	"supports": {
+		"html": false
+	},
 	"editorScript": "velocity-fse-blok",
 	"render": "file:./render.php"
 }

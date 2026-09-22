@@ -1,0 +1,22 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "velocity/kartu-ikon",
+	"title": "Kartu Ikon",
+	"category": "design",
+	"icon": "id-alt",
+	"description": "Ikon + judul + isi, bisa diberi tautan. Klik ikon di toolbar untuk mengganti ikon, klik ikon rantai untuk mengatur tautan, ketik judul & isinya langsung. Isi kosong = memakai data dari Tampilan → Data Situs (bila 'Ambil dari Data Situs' dipilih).",
+	"keywords": ["kontak", "ikon", "alamat", "telepon", "email", "whatsapp", "card", "icon"],
+	"supports": { "html": false },
+	"attributes": {
+		"ikon": { "type": "string", "default": "telepon" },
+		"judul": { "type": "string", "default": "" },
+		"isi": { "type": "string", "default": "" },
+		"tautan": { "type": "string", "default": "" },
+		"tabBaru": { "type": "boolean", "default": false },
+		"sumber": { "type": "string", "default": "" },
+		"tampilan": { "type": "string", "default": "kartu" }
+	},
+	"editorScript": "velocity-fse-blok",
+	"render": "file:./render.php"
+}

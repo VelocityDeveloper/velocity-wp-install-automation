@@ -43,6 +43,28 @@ const namaBlok = (fs.existsSync(blokTema) ? fs.readdirSync(blokTema) : [])
 for (const nama of namaBlok.length ? namaBlok : ['velocity/topbar', 'velocity/populer', 'velocity/kontak', 'velocity/form-kirim', 'velocity/hak-cipta', 'velocity/judul-arsip']) {
   blocks.registerBlockType(nama, { apiVersion: 3, title: nama, category: 'theme', edit: () => null, save: () => null });
 }
+// Blok Contact Form 7 (formulir situs sejak 2026-09-19): save() disalin dari plugin
+// (includes/block-editor/index.js) — div berisi shortcode form.
+const el = modul('@wordpress/element');
+blocks.registerBlockType('contact-form-7/contact-form-selector', {
+  apiVersion: 3, title: 'Contact Form 7', category: 'widgets',
+  attributes: { id: { type: 'integer' }, hash: { type: 'string' }, title: { type: 'string' },
+    htmlId: { type: 'string' }, htmlName: { type: 'string' }, htmlTitle: { type: 'string' },
+    htmlClass: { type: 'string' }, output: { enum: ['form', 'raw_form'], default: 'form' } },
+  edit: () => null,
+  save: ({ attributes: t }) => {
+    let e = '[contact-form-7]';
+    const tambah = (s) => { e = e.replace(/\]$/, ` ${s}]`); };
+    if (t.hash) tambah(`id="${t.hash}"`); else if (t.id) tambah(`id="${t.id}"`);
+    if (t.title) tambah(`title="${t.title}"`);
+    if (t.htmlId) tambah(`html_id="${t.htmlId}"`);
+    if (t.htmlName) tambah(`html_name="${t.htmlName}"`);
+    if (t.htmlTitle) tambah(`html_title="${t.htmlTitle}"`);
+    if (t.htmlClass) tambah(`html_class="${t.htmlClass}"`);
+    if (t.output === 'raw_form') tambah(`output="${t.output}"`);
+    return el.createElement('div', { className: 'wp-block-contact-form-7-contact-form-selector' }, e);
+  },
+});
 
 function periksa(daftar, jejak, masalah) {
   for (const b of daftar) {

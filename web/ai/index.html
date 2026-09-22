@@ -96,6 +96,16 @@
         font: inherit;
       }
       .row-status { grid-column: 2; min-height: 1.2em; font-size: 12px; }
+      .fungsi-tetap {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 8px 10px;
+        border: 1px dashed var(--line);
+        border-radius: 3px;
+        color: var(--muted);
+        font-size: 13px;
+      }
 
       .model {
         padding: 14px 0;
@@ -138,8 +148,14 @@
       .token-total b { color: var(--green); font-weight: 400; }
       .token-domain { border-bottom: 1px solid var(--line); }
       .token-domain:last-child { border-bottom: 0; }
-      .token-domain summary {
+      .token-baris {
         display: grid;
+        width: 100%;
+        border: 0;
+        background: none;
+        font: inherit;
+        color: inherit;
+        text-align: left;
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 2px 16px;
         padding: 12px 0;
@@ -148,11 +164,22 @@
       .token-nama { color: var(--cyan); overflow-wrap: anywhere; }
       .token-angka { color: var(--green); text-align: right; }
       .token-sub { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+      .token-baris:hover .token-nama { color: #fff; text-decoration: underline; }
       .token-tabel-wadah { overflow-x: auto; margin: 0 0 14px; }
+      /* Rincian per run dalam modal (permintaan user 2026-09-18), lebih lebar dari modal form. */
+      #modal-token .modal-box { width: min(1180px, 100%); border-color: var(--cyan); }
+      #modal-token h2 { color: var(--cyan); }
+      #modal-token .token-tabel td { white-space: normal; }
+      #modal-token .token-tabel td:first-child, #modal-token .token-tabel td.n { white-space: nowrap; }
+      #modal-token .token-tabel td.sumber { min-width: 200px; }
       .token-tabel { width: 100%; border-collapse: collapse; font-size: 12px; }
       .token-tabel th, .token-tabel td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: top; }
       .token-tabel th { color: var(--muted); font-weight: 400; }
       .token-tabel td.n, .token-tabel th.n { text-align: right; }
+      .token-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+      .token-pager span { display: flex; gap: 8px; }
+      .token-pager .action { white-space: nowrap; }
+      .token-pager .action:disabled { opacity: .4; cursor: not-allowed; }
 
       .nav { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 16px; color: var(--muted); }
       .nav button { padding: 0; border: 0; background: none; color: var(--cyan); font: inherit; cursor: pointer; }
@@ -214,7 +241,9 @@
         <section class="panel" aria-labelledby="judul-pemakaian">
           <div class="panel-head">
             <h2 id="judul-pemakaian">Pemakaian per fungsi</h2>
-            <p>Pilihan tersimpan begitu diganti.</p>
+            <p>Pilihan tersimpan begitu diganti. Baris bergaris putus-putus dikerjakan agen Claude Code,
+              bukan model endpoint, jadi tidak bisa diganti di sini (matikan lewat DESAIN_CLAUDE di
+              <code>/etc/velocity/installer-autopilot.env</code>).</p>
           </div>
           <div class="panel-body" id="pemakaian" aria-live="polite">
             <p class="empty">Memuat pemakaian model...</p>
@@ -235,7 +264,7 @@
         <section class="panel" aria-labelledby="judul-token">
           <div class="panel-head">
             <h2 id="judul-token">Pemakaian token per domain</h2>
-            <p>Dijumlah dari setiap panggilan AI installer (<code>usage.jsonl</code>). Klik domain untuk rincian per run.</p>
+            <p>Dijumlah dari setiap panggilan AI installer (<code>usage.jsonl</code>): model endpoint custom dan agen desain Claude (Opus) dipisah per run. Klik domain untuk rincian per run (popup).</p>
           </div>
           <div class="panel-body" id="token" aria-live="polite">
             <p class="empty">Memuat pemakaian token...</p>
@@ -253,6 +282,14 @@
       </section>
     </main>
 
+    <div id="modal-token" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-token-judul">
+      <div class="modal-box">
+        <h2 id="modal-token-judul">Rincian token</h2>
+        <p class="token-total" id="modal-token-ringkas"></p>
+        <div class="token-tabel-wadah" id="modal-token-isi"></div>
+        <div class="modal-actions"><span></span><span><button class="action" type="button" id="modal-token-tutup">[ tutup ]</button></span></div>
+      </div>
+    </div>
     <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-judul">
       <form class="modal-box" id="form-model" novalidate>
         <h2 id="modal-judul">Tambah model</h2>
@@ -290,7 +327,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-      let data = { models: [], pemakaian: {}, peran: [] };
+      let data = { models: [], pemakaian: {}, peran: [], peranTetap: [] };
       let pemicuModal = null;
 
       async function api(path, body) {
@@ -328,7 +365,18 @@
             + '<span class="row-status' + (hilang ? ' err' : '') + '" id="status-' + esc(p.kunci) + '">'
             + (hilang ? 'Model "' + esc(pilih) + '" sudah dihapus, memakai default.' : '') + '</span>'
             + '</div>';
-        }).join('');
+        }).join('') + barisTetap();
+      }
+
+      // Fungsi yang tidak memakai model endpoint: desain FSE paket custom dikerjakan agen Claude
+      // Code (scripts/desain-claude). Modelnya ditentukan CLI Claude, jadi hanya ditampilkan.
+      function barisTetap() {
+        return (data.peranTetap || []).map((p) => '<div class="row">'
+          + '<div><span class="fungsi-nama">' + esc(p.label) + '</span><span class="fungsi-script">' + esc(p.script) + '</span></div>'
+          + '<span class="fungsi-tetap">' + esc(p.model) + '</span>'
+          + '<span class="row-status">' + (p.aktif ? 'Aktif (DESAIN_CLAUDE=1), tidak memakai model endpoint.'
+            : 'Mati (DESAIN_CLAUDE=0), desain memakai generator.') + '</span>'
+          + '</div>').join('');
       }
 
       function dipakaiOleh(m) {
@@ -373,7 +421,25 @@
       const rincianPeran = (per) => Object.entries(per || {}).sort((a, b) => b[1] - a[1])
         .map(([k, v]) => esc(labelPeran(k)) + ' ' + angka(v)).join(' · ');
 
+      // Sumber pemakaian (permintaan user 2026-09-18): endpoint custom (model di halaman ini) vs agen
+      // desain Claude (Claude Code, Opus). "req" = request API; biaya Claude = setara harga API
+      // (selama pakai langganan, tidak ditagih per token).
+      const sumberSel = (ps, k) => {
+        const v = (ps || {})[k];
+        if (!v || !v.panggilan) return '<span class="token-sub">-</span>';
+        return angka(v.panggilan) + ' req · ' + angka(v.total_tokens) + ' token'
+          + (k === 'claude' ? '<br><span class="token-sub">' + esc((v.model || []).join(', ')) + ' · cache baca '
+            + angka(v.cache_read_tokens) + ' · keluaran ' + angka(v.completion_tokens)
+            + (v.biaya_usd ? ' · setara US$' + Number(v.biaya_usd).toFixed(2) : '') + '</span>' : '');
+      };
+      const sumberRingkas = (ps) => ['endpoint', 'claude'].filter((k) => (ps || {})[k] && ps[k].panggilan)
+        .map((k) => (k === 'claude' ? 'Claude ' : 'endpoint ') + angka(ps[k].panggilan) + ' req / ' + angka(ps[k].total_tokens) + ' token'
+          + (k === 'claude' && ps[k].biaya_usd ? ' (setara US$' + Number(ps[k].biaya_usd).toFixed(2) + ')' : '')).join(' · ');
+      const TOKEN_PER_HALAMAN = 10;
+      let tokenData = null, tokenHalaman = 1;
+
       function renderToken(j) {
+        if (j) tokenData = j; else j = tokenData || {};
         const wadah = $('token');
         const daftar = j.domains || [];
         if (!daftar.length) {
@@ -381,25 +447,58 @@
           return;
         }
         const t = j.total || {};
+        const jmlHalaman = Math.ceil(daftar.length / TOKEN_PER_HALAMAN);
+        tokenHalaman = Math.min(Math.max(1, tokenHalaman), jmlHalaman);
+        const awal = (tokenHalaman - 1) * TOKEN_PER_HALAMAN;
         wadah.innerHTML = '<p class="token-total">total <b>' + angka(t.total_tokens) + '</b> token · '
-          + angka(t.panggilan) + ' panggilan · ' + daftar.length + ' domain'
+          + angka(t.panggilan) + ' request · ' + daftar.length + ' domain'
+          + (sumberRingkas(t.per_sumber) ? '<br><span class="token-sub">' + sumberRingkas(t.per_sumber) + '</span>' : '')
           + (t.gagal ? ' · <span class="err">' + angka(t.gagal) + ' gagal</span>' : '') + '</p>'
-          + daftar.map((d) => '<details class="token-domain">'
-            + '<summary><span class="token-nama">' + esc(d.domain) + '</span>'
+          + daftar.slice(awal, awal + TOKEN_PER_HALAMAN).map((d) => '<div class="token-domain">'
+            + '<button type="button" class="token-baris" data-domain="' + esc(d.domain) + '" title="Lihat rincian per run">'
+            + '<span class="token-nama">' + esc(d.domain) + '</span>'
             + '<span class="token-angka">' + angka(d.total_tokens) + ' token</span>'
-            + '<span class="token-sub">' + d.runs.length + ' run · ' + angka(d.panggilan) + ' panggilan'
+            + '<span class="token-sub">' + d.runs.length + ' run · ' + angka(d.panggilan) + ' request'
+            + (d.per_sumber && d.per_sumber.claude ? ' · ' + sumberRingkas(d.per_sumber) : '')
             + (d.gagal ? ' · <span class="err">' + angka(d.gagal) + ' gagal</span>' : '')
-            + ' · terakhir ' + waktu(d.terakhir) + '</span></summary>'
-            + '<div class="token-tabel-wadah"><table class="token-tabel"><thead><tr>'
-            + '<th>run</th><th>mode</th><th class="n">prompt</th><th class="n">jawaban</th><th class="n">total</th>'
-            + '<th class="n">panggilan</th><th>per fungsi</th><th>model</th></tr></thead><tbody>'
-            + d.runs.map((r) => '<tr><td>' + waktu(r.mulai) + '</td><td>' + esc(r.mode) + '</td>'
-              + '<td class="n">' + angka(r.prompt_tokens) + '</td><td class="n">' + angka(r.completion_tokens) + '</td>'
-              + '<td class="n ok">' + angka(r.total_tokens) + '</td>'
-              + '<td class="n">' + angka(r.panggilan) + (r.gagal ? ' <span class="err">(' + r.gagal + ' gagal)</span>' : '') + '</td>'
-              + '<td>' + rincianPeran(r.per_peran) + '</td><td>' + esc((r.model || []).join(', ')) + '</td></tr>').join('')
-            + '</tbody></table></div></details>').join('');
+            + ' · terakhir ' + waktu(d.terakhir) + '</span></button></div>').join('')
+          + (jmlHalaman > 1 ? '<div class="token-pager"><span>' + (awal + 1) + '-' + Math.min(awal + TOKEN_PER_HALAMAN, daftar.length)
+            + ' dari ' + daftar.length + ' domain · halaman ' + tokenHalaman + '/' + jmlHalaman + '</span><span>'
+            + '<button class="action" type="button" data-halaman="' + (tokenHalaman - 1) + '"' + (tokenHalaman <= 1 ? ' disabled' : '') + '>[ prev ]</button>'
+            + '<button class="action" type="button" data-halaman="' + (tokenHalaman + 1) + '"' + (tokenHalaman >= jmlHalaman ? ' disabled' : '') + '>[ next ]</button>'
+            + '</span></div>' : '');
       }
+      function bukaRincianToken(domain) {
+        const d = ((tokenData || {}).domains || []).find((x) => x.domain === domain);
+        if (!d) return;
+        $('modal-token-judul').textContent = d.domain;
+        $('modal-token-ringkas').innerHTML = '<b>' + angka(d.total_tokens) + '</b> token · ' + d.runs.length + ' run · '
+          + angka(d.panggilan) + ' request' + (sumberRingkas(d.per_sumber) ? '<br>' + sumberRingkas(d.per_sumber) : '')
+          + (d.gagal ? ' · <span class="err">' + angka(d.gagal) + ' gagal</span>' : '');
+        $('modal-token-isi').innerHTML = '<table class="token-tabel"><thead><tr>'
+          + '<th>run</th><th>mode</th><th>endpoint custom</th><th>agen Claude</th><th class="n">total token</th>'
+          + '<th class="n">request</th><th>per fungsi</th><th>model</th></tr></thead><tbody>'
+          + d.runs.map((r) => '<tr><td>' + waktu(r.mulai) + '</td><td>' + esc(r.mode) + '</td>'
+            + '<td class="sumber">' + sumberSel(r.per_sumber, 'endpoint') + '</td><td class="sumber">' + sumberSel(r.per_sumber, 'claude') + '</td>'
+            + '<td class="n ok">' + angka(r.total_tokens) + '</td>'
+            + '<td class="n">' + angka(r.panggilan) + (r.gagal ? ' <span class="err">(' + r.gagal + ' gagal)</span>' : '') + '</td>'
+            + '<td>' + rincianPeran(r.per_peran) + '</td><td>' + esc((r.model || []).join(', ')) + '</td></tr>').join('')
+          + '</tbody></table>';
+        $('modal-token').classList.add('open');
+      }
+      const tutupRincianToken = () => $('modal-token').classList.remove('open');
+      $('modal-token-tutup').addEventListener('click', tutupRincianToken);
+      $('modal-token').addEventListener('click', (ev) => { if (ev.target === $('modal-token')) tutupRincianToken(); });
+      document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') tutupRincianToken(); });
+      $('token').addEventListener('click', (e) => {
+        const baris = e.target.closest('button[data-domain]');
+        if (baris) { bukaRincianToken(baris.dataset.domain); return; }
+        const b = e.target.closest('button[data-halaman]');
+        if (!b || b.disabled) return;
+        tokenHalaman = Number(b.dataset.halaman);
+        renderToken();
+        $('judul-token').scrollIntoView({ block: 'start' });
+      });
 
       async function muatToken() {
         $('token').innerHTML = '<p class="empty">Memuat pemakaian token...</p>';
@@ -416,7 +515,7 @@
         $('daftar-model').innerHTML = '<p class="empty">Memuat daftar model...</p>';
         try {
           const j = await api('/api/ai/models');
-          data = { models: j.models || [], pemakaian: j.pemakaian || {}, peran: j.peran || [] };
+          data = { models: j.models || [], pemakaian: j.pemakaian || {}, peran: j.peran || [], peranTetap: j.peran_tetap || [] };
           renderPemakaian();
           renderModel();
         } catch (e) {

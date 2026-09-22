@@ -104,9 +104,6 @@
         cursor: pointer;
       }
       .action:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
-      .action.danger { border-color: var(--red); color: var(--red); }
-      .action.danger:hover { background: #ff737318; }
-      .action + .action { margin-left: 6px; }
       .empty { padding: 28px; text-align: center; color: var(--muted); }
       .nav {
         display: flex;
@@ -124,86 +121,26 @@
         cursor: pointer;
       }
       .refresh:hover { text-decoration: underline; color: #fff; }
-      form { display: grid; gap: 14px; }
-      label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      input, select {
-        padding: 10px 12px;
-        border: 1px solid var(--line);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--text);
-        font: inherit;
-      }
-      input:focus, select:focus { outline: 1px solid var(--green); border-color: var(--green); }
-      .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      .btn {
-        padding: 10px 16px;
-        border: 1px solid var(--cyan);
-        border-radius: 3px;
-        background: transparent;
-        color: var(--cyan);
-        font: inherit;
-        font-size: 13px;
-        cursor: pointer;
-        justify-self: start;
-      }
-      .btn:hover { border-color: var(--green); color: var(--green); background: #55e87918; }
-      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .tabs {
-        display: flex;
-        gap: 0;
-        margin-bottom: 0;
-      }
-      .tab {
-        padding: 10px 18px;
-        border: 1px solid var(--line);
-        border-bottom: 0;
-        background: var(--panel);
-        color: var(--muted);
-        cursor: pointer;
-        font: inherit;
-        font-size: 13px;
-      }
-      .tab.active { color: var(--green); background: var(--bg); }
-      .tab:hover { color: var(--text); }
-      .tab-content { display: none; }
-      .tab-content.active { display: block; }
-      .status-msg {
-        padding: 10px 14px;
-        border: 1px solid var(--line);
-        border-radius: 3px;
-        background: var(--bg);
-        color: var(--muted);
-        font-size: 12px;
-        margin-top: 12px;
-      }
-      .status-msg.ok { border-color: var(--green); color: var(--green); }
-      .status-msg.err { border-color: var(--red); color: var(--red); }
-      .progress {
-        height: 4px;
-        background: var(--line);
-        border-radius: 2px;
-        overflow: hidden;
-        margin-top: 8px;
-      }
-      .progress-bar {
-        height: 100%;
-        background: var(--cyan);
-        width: 0%;
-        transition: width 0.3s;
-      }
+      .ok { color: var(--green); }
+      .err { color: var(--red); }
+      .muted { color: var(--muted); }
+      .note { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+      .note:empty { display: none; }
+      .note.err { color: var(--red); }
+      .tabel-wadah { overflow-x: auto; }
+      td { vertical-align: top; }
+      td a { color: var(--cyan); text-decoration: none; }
+      td a:hover { color: #fff; text-decoration: underline; }
+      .pill.pakai { border-color: var(--green); color: var(--green); }
+      .refresh:disabled { opacity: .5; cursor: wait; }
+      .nav a, .nav button { white-space: nowrap; }
       @media (max-width: 600px) {
         body { padding: 0; }
         .terminal { min-height: 100vh; border: 0; border-radius: 0; }
         .screen { padding: 22px 15px; }
         th, td { padding: 11px 9px; }
         .hide-mobile { display: none; }
-        .form-row { grid-template-columns: 1fr; }
+        .nav { flex-direction: column; }
       }
     </style>
   </head>
@@ -220,97 +157,51 @@
         </p>
         <h1 class="heading">Package Manager</h1>
         <p class="meta">
-          $ manage --plugins-themes &nbsp;|&nbsp; upload zip or fetch from URL
+          $ sync --from <code>api.velocitydeveloper.co</code> &nbsp;|&nbsp; tema &amp; plugin dikelola di API Velocity,
+          versi baru otomatis dipakai installer (cek tiap 10 menit)
         </p>
 
         <section class="panel">
-          <h3>Tambah Package</h3>
-          <div class="panel-body">
-            <div class="tabs">
-              <div class="tab active" onclick="switchTab('upload')">Upload ZIP</div>
-              <div class="tab" onclick="switchTab('url')">From URL</div>
-            </div>
-
-            <div id="tab-upload" class="tab-content active" style="padding-top: 16px">
-              <form id="upload-form" onsubmit="return uploadFile(event)" enctype="multipart/form-data">
-                <label>
-                  File ZIP
-                  <input type="file" id="file-input" accept=".zip" required />
-                </label>
-                <div class="form-row">
-                  <label>
-                    Tipe
-                    <select id="upload-type">
-                      <option value="plugin">Plugin</option>
-                      <option value="theme">Theme</option>
-                    </select>
-                  </label>
-                  <label>
-                    Slug (opsional)
-                    <input type="text" id="upload-slug" placeholder="auto dari nama file" />
-                  </label>
-                </div>
-                <button type="submit" class="btn" id="upload-btn">[ upload ]</button>
-                <div id="upload-status" class="status-msg" style="display:none"></div>
-              </form>
-            </div>
-
-            <div id="tab-url" class="tab-content" style="padding-top: 16px">
-              <form id="url-form" onsubmit="return addFromUrl(event)">
-                <label>
-                  URL ZIP
-                  <input type="url" id="url-input" placeholder="https://example.com/plugin.zip" required />
-                </label>
-                <div class="form-row">
-                  <label>
-                    Tipe
-                    <select id="url-type">
-                      <option value="plugin">Plugin</option>
-                      <option value="theme">Theme</option>
-                    </select>
-                  </label>
-                  <label>
-                    Slug
-                    <input type="text" id="url-slug" placeholder="my-plugin" required />
-                  </label>
-                </div>
-                <label>
-                  Nama (opsional)
-                  <input type="text" id="url-name" placeholder="My Plugin" />
-                </label>
-                <button type="submit" class="btn" id="url-btn">[ add from url ]</button>
-                <div id="url-status" class="status-msg" style="display:none"></div>
-                <div class="progress" id="url-progress" style="display:none">
-                  <div class="progress-bar" id="url-progress-bar"></div>
-                </div>
-              </form>
-            </div>
+          <h3>Dipakai installer</h3>
+          <div class="note" id="sync-note"></div>
+          <div class="tabel-wadah">
+            <table>
+              <thead>
+                <tr><th>Slug</th><th>Versi</th><th>Status zip</th><th class="hide-mobile">Ukuran</th><th class="hide-mobile">Tersinkron</th></tr>
+              </thead>
+              <tbody id="installer-rows"><tr><td colspan="5" class="empty">Memuat...</td></tr></tbody>
+            </table>
           </div>
         </section>
 
         <section class="panel">
-          <h3>Daftar Package</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Slug</th>
-                <th>Nama</th>
-                <th class="hide-mobile">Tipe</th>
-                <th class="hide-mobile">Ukuran</th>
-                <th class="hide-mobile">Source</th>
-                <th>Aksi</th>
-              </tr>
-            </thead>
-            <tbody id="pkg-rows">
-              <tr><td colspan="6" class="empty">Memuat...</td></tr>
-            </tbody>
-          </table>
+          <h3>Tema di API</h3>
+          <div class="tabel-wadah">
+            <table>
+              <thead>
+                <tr><th>Nama</th><th>Versi</th><th class="hide-mobile">Jenis</th><th class="hide-mobile">Paket</th><th class="hide-mobile">Sumber</th></tr>
+              </thead>
+              <tbody id="theme-rows"><tr><td colspan="5" class="empty">Memuat...</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3>Plugin di API</h3>
+          <div class="tabel-wadah">
+            <table>
+              <thead>
+                <tr><th>Nama</th><th>Versi</th><th class="hide-mobile">Butuh</th><th class="hide-mobile">Sumber</th></tr>
+              </thead>
+              <tbody id="plugin-rows"><tr><td colspan="4" class="empty">Memuat...</td></tr></tbody>
+            </table>
+          </div>
         </section>
 
         <nav class="nav">
-          <span>storage: <code>/var/lib/velocity/packages/</code></span
+          <span>tembolok zip: <code>/var/lib/velocity/packages/</code></span
           ><span
-            ><button class="refresh" onclick="load()">[ refresh ]</button>
+            ><button class="refresh" type="button" id="sync-btn">[ sinkron sekarang ]</button>
             <a href="/installer/">[ installer ]</a>
             <a href="/">[ home ]</a></span
           >
@@ -319,141 +210,71 @@
     </main>
 
     <script>
+      const PAKAI = ['velocity', 'velocity-addons'];
+      const $ = (id) => document.getElementById(id);
       function esc(s) {
-        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
-      }
-      function switchTab(name) {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        document.getElementById('tab-' + name).classList.add('active');
-        event.target.classList.add('active');
+        return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
       }
       function fmtSize(b) {
+        b = Number(b || 0);
+        if (!b) return '-';
         if (b < 1024) return b + ' B';
         if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
         return (b/1048576).toFixed(1) + ' MB';
       }
-      async function load() {
-        const rows = document.getElementById('pkg-rows');
-        try {
-          const d = await fetch('/api/packages', { cache: 'no-store' }).then(r => r.json());
-          const pkgs = Object.values(d.packages || {});
-          if (!pkgs.length) {
-            rows.innerHTML = '<tr><td colspan="6" class="empty">Belum ada package. Upload atau tambah dari URL.</td></tr>';
-            return;
-          }
-          rows.innerHTML = pkgs.map(p => {
-            const src = (p.source || '').length > 40 ? (p.source || '').slice(0,37) + '...' : (p.source || '');
-            return `<tr>
-              <td><strong class="slug">${esc(p.slug)}</strong></td>
-              <td>${esc(p.name || p.slug)}</td>
-              <td class="hide-mobile"><span class="pill ${p.type}">${esc(p.type)}</span></td>
-              <td class="hide-mobile">${esc(fmtSize(p.size || 0))}</td>
-              <td class="hide-mobile"><code title="${esc(p.source || '')}">${esc(src)}</code></td>
-              <td><button class="action danger" type="button" onclick="removePkg('${esc(p.slug)}')">[ hapus ]</button></td>
-            </tr>`;
-          }).join('');
-        } catch(e) {
-          rows.innerHTML = '<tr><td colspan="6" class="empty">API tidak tersedia: ' + esc(String(e.message || e)) + '</td></tr>';
-        }
+      const waktu = (ts) => {
+        const d = new Date(ts);
+        return ts && !isNaN(d) ? d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      };
+      function sumber(x) {
+        const url = x.github_url || x.package_file_url || x.package_external_url || '';
+        if (!url) return '<span class="muted">-</span>';
+        const label = url.replace(/^https:\/\/(www\.)?/, '').replace(/\.git$/, '');
+        return '<a href="' + esc(url.replace(/\.git$/, '')) + '" target="_blank" rel="noopener noreferrer">' + esc(label.length > 48 ? label.slice(0, 45) + '...' : label) + '</a>';
       }
-      async function removePkg(slug) {
-        if (!confirm('Hapus package "' + slug + '"?')) return;
-        try {
-          const r = await fetch('/api/packages/' + encodeURIComponent(slug), { method: 'DELETE' });
-          if (r.ok) { load(); }
-          else { alert('Gagal menghapus: ' + r.status); }
-        } catch(e) {
-          alert('Error: ' + e.message);
-        }
+      function namaSel(x) {
+        return '<strong class="slug">' + esc(x.name || x.slug) + '</strong><br><span class="muted">' + esc(x.slug) + '</span>'
+          + (PAKAI.includes(x.slug) ? ' <span class="pill pakai" title="Dipasang oleh installer">INSTALLER</span>' : '');
       }
-      async function uploadFile(e) {
-        e.preventDefault();
-        const fileInput = document.getElementById('file-input');
-        const slugInput = document.getElementById('upload-slug');
-        const typeInput = document.getElementById('upload-type');
-        const statusEl = document.getElementById('upload-status');
-        const btn = document.getElementById('upload-btn');
-        if (!fileInput.files.length) return false;
-        const file = fileInput.files[0];
-        const slug = slugInput.value.trim() || file.name.replace(/\.zip$/i, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+      function render(d) {
+        const note = $('sync-note');
+        note.className = 'note' + (d.error ? ' err' : '');
+        note.textContent = (d.error ? 'Sebagian sinkron gagal (zip terakhir tetap dipakai): ' + d.error + ' · ' : '')
+          + 'cek API terakhir: ' + waktu(d.synced_at);
+        const inst = d.installer || [];
+        $('installer-rows').innerHTML = inst.map(p => '<tr><td><strong class="slug">' + esc(p.slug) + '</strong> <span class="pill ' + esc(p.type) + '">' + esc(p.type) + '</span></td>'
+          + '<td>' + (p.version ? esc(p.version) : '<span class="muted">-</span>') + '</td>'
+          + '<td>' + (!p.ada ? '<span class="err">belum ada</span>' : p.source === 'api' ? '<span class="ok">dari API</span>' : '<span class="err">unggahan lama</span>') + '</td>'
+          + '<td class="hide-mobile">' + fmtSize(p.size) + '</td><td class="hide-mobile">' + waktu(p.added_at) + '</td></tr>').join('')
+          || '<tr><td colspan="5" class="empty">-</td></tr>';
+        const themes = d.themes || [];
+        $('theme-rows').innerHTML = themes.length ? themes.map(x => '<tr><td>' + namaSel(x) + '</td><td>' + esc(x.version || '-') + '</td>'
+          + '<td class="hide-mobile">' + (x.type === 'wp_theme' ? 'tema induk' : x.type === 'wp_theme_child' ? 'child theme' : esc(x.type || '-')) + '</td>'
+          + '<td class="hide-mobile">' + esc(x.paket || '-') + '</td><td class="hide-mobile">' + sumber(x) + '</td></tr>').join('')
+          : '<tr><td colspan="5" class="empty">API tema tidak terjangkau.</td></tr>';
+        const plugins = d.plugins || [];
+        $('plugin-rows').innerHTML = plugins.length ? plugins.map(x => '<tr><td>' + namaSel(x) + '</td><td>' + esc(x.version || '-') + '</td>'
+          + '<td class="hide-mobile">' + (x.requires_php ? 'PHP ' + esc(x.requires_php) : '-') + (x.requires ? ' · WP ' + esc(x.requires) : '') + '</td>'
+          + '<td class="hide-mobile">' + sumber(x) + '</td></tr>').join('')
+          : '<tr><td colspan="4" class="empty">API plugin tidak terjangkau.</td></tr>';
+      }
+      async function load(sync) {
+        const btn = $('sync-btn');
         btn.disabled = true;
-        statusEl.style.display = 'block';
-        statusEl.className = 'status-msg';
-        statusEl.textContent = 'Mengupload ' + file.name + ' (' + fmtSize(file.size) + ')...';
+        if (sync) $('sync-note').textContent = 'Menyinkronkan dengan API...';
         try {
-          const fd = new FormData();
-          fd.append('file', file);
-          fd.append('slug', slug);
-          fd.append('type', typeInput.value);
-          const r = await fetch('/api/packages', { method: 'POST', body: fd });
-          const j = await r.json().catch(() => ({}));
-          if (r.ok && j.status === 'ok') {
-            statusEl.className = 'status-msg ok';
-            statusEl.textContent = '✓ Package "' + slug + '" berhasil ditambahkan.';
-            fileInput.value = '';
-            slugInput.value = '';
-            load();
-          } else {
-            statusEl.className = 'status-msg err';
-            statusEl.textContent = 'Gagal: ' + (j.error || r.status);
-          }
-        } catch(err) {
-          statusEl.className = 'status-msg err';
-          statusEl.textContent = 'Error: ' + err.message;
+          const r = await fetch(sync ? '/api/packages/sync' : '/api/packages', { method: sync ? 'POST' : 'GET', cache: 'no-store' });
+          if (!r.ok) throw new Error(r.status);
+          render(await r.json());
+        } catch (e) {
+          $('sync-note').className = 'note err';
+          $('sync-note').textContent = 'API tidak tersedia: ' + (e.message || e);
         } finally {
           btn.disabled = false;
         }
-        return false;
       }
-      async function addFromUrl(e) {
-        e.preventDefault();
-        const urlInput = document.getElementById('url-input');
-        const slugInput = document.getElementById('url-slug');
-        const typeInput = document.getElementById('url-type');
-        const nameInput = document.getElementById('url-name');
-        const statusEl = document.getElementById('url-status');
-        const progressEl = document.getElementById('url-progress');
-        const progressBar = document.getElementById('url-progress-bar');
-        const btn = document.getElementById('url-btn');
-        const url = urlInput.value.trim();
-        const slug = slugInput.value.trim();
-        if (!url || !slug) return false;
-        btn.disabled = true;
-        progressEl.style.display = 'block';
-        progressBar.style.width = '30%';
-        statusEl.style.display = 'block';
-        statusEl.className = 'status-msg';
-        statusEl.textContent = 'Mengunduh dari ' + url + '...';
-        try {
-          const r = await fetch('/api/packages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, slug, type: typeInput.value, name: nameInput.value.trim() }),
-          });
-          const j = await r.json().catch(() => ({}));
-          progressBar.style.width = '100%';
-          if (r.ok && j.status === 'ok') {
-            statusEl.className = 'status-msg ok';
-            statusEl.textContent = '✓ Package "' + slug + '" berhasil ditambahkan (' + fmtSize(j.package?.size || 0) + ').';
-            urlInput.value = '';
-            slugInput.value = '';
-            nameInput.value = '';
-            load();
-          } else {
-            statusEl.className = 'status-msg err';
-            statusEl.textContent = 'Gagal: ' + (j.error || r.status);
-          }
-        } catch(err) {
-          statusEl.className = 'status-msg err';
-          statusEl.textContent = 'Error: ' + err.message;
-        } finally {
-          btn.disabled = false;
-          setTimeout(() => { progressEl.style.display = 'none'; progressBar.style.width = '0%'; }, 2000);
-        }
-        return false;
-      }
-      load();
+      $('sync-btn').addEventListener('click', () => load(true));
+      load(false);
     </script>
   </body>
 </html>

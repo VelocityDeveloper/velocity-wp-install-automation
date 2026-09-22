@@ -246,9 +246,14 @@ def ai_json_list(system_prompt, user_prompt, model, jenis):
             user_prompt + '\n\nIMPORTANT: your previous answer was not valid JSON. Return ONLY a complete, '
             'valid JSON array: escape every double quote inside strings as \\", no trailing commas, '
             'and keep each content within the requested length so the array is not cut off.')
-        response = ai_call(system_prompt, prompt, model)
+        # Jatah 4096 bawaan habis dipakai model penalar untuk berpikir sehingga array
+        # halaman terpotong di dua percobaan (ruangdesaininteriorku.com 2026-09-21,
+        # completion_tokens=4096 tepat di batas).
+        response = ai_call(system_prompt, prompt, model,
+                           max_tokens=int(os.environ.get('VELOCITY_AI_MAX_TOKENS_JSON', '16384')))
         if not response:
-            return None
+            # Jawaban kosong (finish_reason=stop tanpa isi) juga sesekali terjadi — ulang.
+            continue
         try:
             # strict=False: baris baru/tab mentah di dalam teks HTML jawaban AI membuat
             # json.loads gagal "Invalid control character" (sobirin-advokat.com 2026-09-16).
@@ -927,4 +932,9 @@ def main():
         sys.exit(4)
 
 if __name__ == '__main__':
-    main()
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()

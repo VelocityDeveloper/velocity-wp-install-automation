@@ -5,6 +5,7 @@ Tugasmu: bangun tampilan situs ini supaya **tata letak & gayanya semirip mungkin
 lalu audit sendiri dan ulangi sampai mirip. Kamu bekerja sendiri tanpa manusia; tidak ada yang
 menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhir.
 
+{{TAHAP}}
 ## Aturan dari pemilik (wajib)
 
 1. Referensi = acuan utama untuk **susunan, tata letak, alur seksi, header, footer, bentuk kartu,
@@ -16,6 +17,9 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
 3. **Isi jujur.** Teks, foto, kontak hanya dari isi yang sudah ada di situs (`kerja/awal/*.html`,
    `kerja/isi.json`). Jangan mengarang testimoni, angka/statistik, nama klien, sertifikat, harga.
    Seksi referensi yang datanya tidak dimiliki klien dilewati (lihat `seksi_dilewati_tanpa_data`).
+   Halaman yang KINI terpasang bisa memuat seksi tambahan atas permintaan pemilik situs
+   (mis. seksi video, katalog produk, bar ajakan). Seksi seperti itu DIPERTAHANKAN — boleh
+   dirapikan atau dipindah supaya lebih mirip referensi, tetapi jangan dihapus.
 4. Wajib tetap ada: footer berkredit "Design by Velocity Developer" (blok `velocity/hak-cipta`),
    kolom footer **Statistik Pengunjung** (shortcode `[velocity-statistics ...]` seperti di tema),
    email + ikon sosmed (Facebook/Instagram/X/YouTube/TikTok, buka tab baru) di footer & Hubungi Kami,

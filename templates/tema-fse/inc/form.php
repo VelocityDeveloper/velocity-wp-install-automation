@@ -105,6 +105,15 @@ function velocity_fse_form_tombol()
 }
 
 add_action('init', function () {
+    // Sejak formulir situs memakai Contact Form 7 (keputusan user 2026-09-19), pesan tidak lagi
+    // masuk ke CPT ini. Menu "Pesan Masuk" yang selalu kosong hanya menambah kebingungan, jadi
+    // CPT-nya dilewati kalau CF7 yang dipakai DAN belum ada satu pun pesan tersimpan.
+    if (defined('VELOCITY_FSE_CF7_OPSI') && (int) get_option(VELOCITY_FSE_CF7_OPSI)) {
+        global $wpdb;
+        if (!(int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'velocity_pesan'")) {
+            return;
+        }
+    }
     register_post_type('velocity_pesan', array(
         'labels'              => array('name' => 'Pesan Masuk', 'singular_name' => 'Pesan', 'menu_name' => 'Pesan Masuk'),
         'public'              => false,

@@ -494,7 +494,9 @@ def hitung_palet(vct, primary, aksen, gelap=False, versi=1):
     `versi` = versi aturan palet (manifest `velocity_palet_versi`). Versi 2 menambah
     aturan permukaan penuh warna di `permukaan_terang()`."""
     utama, di_primary = vct.perbaiki_kontras(primary)
-    aksen, di_aksen = vct.perbaiki_kontras(aksen)
+    # Tombol memakai warna aksen: teksnya putih, warnanya digelapkan secukupnya
+    # (permintaan user 2026-09-18 — tombol hijau bertulisan gelap terlihat pudar).
+    aksen, di_aksen = vct.perbaiki_kontras_putih(aksen)
     if versi >= PALET_VERSI_BARU:
         utama, di_primary = permukaan_terang(vct, utama, di_primary)
         aksen, di_aksen = permukaan_terang(vct, aksen, di_aksen)
@@ -601,6 +603,14 @@ def data_situs(cfg, domain, isi, vct, ref=None):
                                  if re.match(r'^/[a-z0-9/-]*$', str(b))]
     if isinstance(khusus.get('logo_footer'), bool):
         hasil['logo_footer'] = khusus['logo_footer']
+    # Manifest `logo_footer=1`: nama situs di kolom pertama footer diganti logo situs
+    # (logonya sudah bertulisan nama perusahaan, jadi teksnya tidak perlu diulang).
+    if str(cfg.get('logo_footer', '')).strip().lower() in ('1', 'ya', 'true'):
+        hasil['logo_footer'] = True
+    # Manifest `cpt_produk=1`: katalog barang jadi CPT `produk` + taksonomi kategori
+    # (tema inc/produk.php), bukan halaman anak biasa.
+    if str(cfg.get('cpt_produk', '')).strip().lower() in ('1', 'ya', 'true'):
+        hasil['cpt_produk'] = True
     if isinstance(khusus.get('katalog_produk'), bool):
         hasil['katalog_produk'] = khusus['katalog_produk']
     if isinstance(khusus.get('ganti_tautan'), dict):
@@ -829,7 +839,10 @@ def token_desain(ref):
             # tema membuat seksi & footer jadi kartu selebar wadah bersudut kartu.
             'wadah_tetap': bool(desain.get('wadah_tetap')),
             'wadah_maks': int(desain.get('wadah_maks') or 0),
-            'header_melayang': h.get('melayang') or {}}
+            'header_melayang': h.get('melayang') or {},
+            # Header referensi melayang transparan di atas hero, lalu jadi bar berlatar
+            # saat digulir (habercafeandresto.co.id).
+            'header_transparan': bool(h.get('transparan'))}
            if int(desain.get('versi') or 0) >= 5 else {}),
     }
 
@@ -918,6 +931,49 @@ def blok(nama, attrs=None, isi=None):
     if isi is None:
         return f'<!-- wp:{nama}{a} /-->'
     return f'<!-- wp:{nama}{a} -->\n{isi}\n<!-- /wp:{nama} -->'
+
+
+# Form situs = Contact Form 7 (keputusan user 2026-09-19: kolom bisa ditambah/diubah/dihapus
+# sendiri, captcha tetap velocity-addons). Diisi siapkan_cf7(); kosong = blok form tema lama.
+FORM_CF7 = {}
+PHP_CF7 = r'''
+vfse_keluar(function_exists('velocity_fse_cf7_pastikan') ? velocity_fse_cf7_pastikan() : null);
+'''
+
+
+def siapkan_cf7(situs, coba):
+    """Pasang & aktifkan Contact Form 7, lalu form bawaan situs (dibuat tema, inc/cf7.php)."""
+    FORM_CF7.clear()
+    if coba:
+        return
+    wp = f'php /usr/local/bin/wp --path={shlex.quote(situs.docroot)} --allow-root'
+    run = situs.bash(f'{wp} plugin is-installed contact-form-7 || {wp} plugin install contact-form-7 >/dev/null 2>&1\n'
+                     f'{wp} plugin is-active contact-form-7 || {wp} plugin activate contact-form-7 >/dev/null 2>&1\n'
+                     f'{wp} plugin is-active contact-form-7 && echo CF7_AKTIF\n', timeout=300)
+    if 'CF7_AKTIF' not in run.stdout:
+        print('fse: cf7_gagal_dipasang (form tema lama dipakai)')
+        return
+    hasil = situs.php(PHP_CF7)
+    if isinstance(hasil, dict) and hasil.get('id') and hasil.get('hash'):
+        FORM_CF7.update(hasil)
+        print(f"fse: cf7_form:{hasil['id']}")
+    else:
+        print('fse: cf7_form_gagal (form tema lama dipakai)')
+
+
+def blok_form():
+    """Blok formulir: Contact Form 7 bila siap, selain itu blok form tema lama."""
+    if not FORM_CF7:
+        return blok('velocity/form-kirim')
+    attrs = {'id': int(FORM_CF7['id']), 'hash': FORM_CF7['hash']}
+    kode = f'[contact-form-7 id="{FORM_CF7["hash"]}"'
+    # Judul hanya ikut kalau aman ditulis apa adanya: markup simpanan blok CF7 harus sama
+    # persis dengan hasil editor, kalau tidak blok dianggap rusak.
+    if re.fullmatch(r"[\w .,()-]+", FORM_CF7.get('title') or ''):
+        attrs['title'] = FORM_CF7['title']
+        kode += f' title="{FORM_CF7["title"]}"'
+    return blok('contact-form-7/contact-form-selector', attrs,
+                f'<div class="wp-block-contact-form-7-contact-form-selector">{kode}]</div>')
 
 
 def esc(teks):
@@ -1227,17 +1283,95 @@ def tombol_ganda(daftar):
     return blok('buttons', None, '<div class="wp-block-buttons">' + '\n\n'.join(anak) + '</div>')
 
 
-def gambar(foto, kelas=None, aspek='4/3'):
-    """core/image dari foto slot (opsi vfse_images, diisi paket-g-foto); '' kalau slot kosong."""
+def gambar(foto, kelas=None, aspek='4/3', perbesar=False):
+    """core/image dari foto slot (opsi vfse_images, diisi paket-g-foto); '' kalau slot kosong.
+    perbesar=True: klik untuk popup (lightbox bawaan core; WP 7.1 bisa berpindah antar-gambar
+    dalam satu galeri). Markup simpanan tidak berubah — lightbox ditambahkan core saat render."""
     if not foto:
         return ''
     attrs = {'id': int(foto['id']), 'sizeSlug': 'large', 'linkDestination': 'none', 'aspectRatio': aspek, 'scale': 'cover'}
+    if perbesar:
+        attrs['lightbox'] = {'enabled': True}
     cls = 'wp-block-image size-large'
     if kelas:
         attrs['className'] = kelas
         cls += f' {kelas}'
     return blok('image', attrs, f'<figure class="{cls}"><img src="{esc_attr(foto["url"])}" alt="{esc_attr(foto.get("alt"))}" '
                                f'class="wp-image-{int(foto["id"])}" style="aspect-ratio:{aspek};object-fit:cover"/></figure>')
+
+
+# Video latar contoh saat klien belum mengirim videonya sendiri. Diganti lewat manifest
+# `hero_video=<URL YouTube>` (permintaan user 2026-09-18: hero memakai video autoplay
+# seperti web referensi; "cari sample dulu sembarang").
+VIDEO_HERO_CONTOH = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
+
+
+# Video klien dipasang sebagai TAUTAN EMBED, berkas videonya tidak pernah diunggah ke
+# situs (keputusan user 2026-09-20; batas unggah hosting 8 MB dan video WhatsApp klien
+# jauh lebih besar). Sumbernya: manifest `video_embed=<url,url>` lebih dulu, lalu berkas
+# teks berisi tautan di folder klien Drive (mis. "video/link embet video.txt").
+VIDEO_RE = re.compile(r'https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|shorts/|embed/|live/)'
+                      r'|youtu\.be/)([A-Za-z0-9_-]{6,})', re.I)
+# Shorts = video tegak 9:16; watch/embed biasa dianggap 16:9.
+VIDEO_TEGAK_RE = re.compile(r'youtube\.com/shorts/', re.I)
+
+
+def video_klien(cfg, domain):
+    """Daftar video klien untuk seksi video: [{'url': <watch URL>, 'tegak': bool}].
+
+    URL Shorts diubah ke bentuk watch?v= karena hanya bentuk itu yang pasti dikenali
+    oEmbed WordPress; rasio tegaknya tetap dicatat supaya embed-nya tidak terpotong."""
+    teks = str(cfg.get('video_embed', '') or '')
+    if not teks and domain:
+        folder = Path('/home/On Progress') / domain
+        if folder.is_dir():
+            for berkas in sorted(folder.rglob('*.txt')):
+                try:
+                    isi = berkas.read_text(errors='replace')
+                except OSError:
+                    continue
+                if VIDEO_RE.search(isi):
+                    teks += '\n' + isi
+    hasil, terlihat = [], set()
+    for m in VIDEO_RE.finditer(teks):
+        kode = m.group(1)
+        if kode in terlihat:
+            continue
+        terlihat.add(kode)
+        hasil.append({'url': f'https://www.youtube.com/watch?v={kode}',
+                      'tegak': bool(VIDEO_TEGAK_RE.search(m.group(0)))})
+    return hasil[:12]
+
+
+def blok_video(v):
+    """core/embed YouTube responsif (bukan berkas video yang diunggah)."""
+    aspek = 'wp-embed-aspect-9-16' if v.get('tegak') else 'wp-embed-aspect-16-9'
+    kelas = f'vf-video__item {aspek} wp-has-aspect-ratio'
+    return blok('embed', {'url': v['url'], 'type': 'video', 'providerNameSlug': 'youtube',
+                          'responsive': True, 'className': kelas},
+                f'<figure class="wp-block-embed is-type-video is-provider-youtube '
+                f'wp-block-embed-youtube {kelas}"><div class="wp-block-embed__wrapper">\n'
+                f'{esc(v["url"])}\n</div></figure>')
+
+
+def sampul_video(url, anak, kelas, redup=60, tinggi=520):
+    """core/cover dengan video latar YouTube (backgroundType embed-video).
+
+    Core memutar embed tanpa kontrol; CSS tema (`.wp-block-cover__embed-background`)
+    yang membuatnya menutupi seluruh cover di desktop maupun HP."""
+    attrs = {'url': url, 'backgroundType': 'embed-video', 'dimRatio': redup,
+             'overlayColor': 'primary-gelap', 'isUserOverlayColor': True,
+             'minHeight': tinggi, 'minHeightUnit': 'px', 'align': 'full',
+             'className': kelas, 'layout': {'type': 'default'}}
+    # Urutan anak WAJIB: <figure> embed dulu, baru lapisan warna — kalau dibalik,
+    # core/cover ditolak ("Expected tag name `figure`, instead saw `span`").
+    return blok('cover', attrs,
+                f'<div class="wp-block-cover alignfull {kelas}" style="min-height:{tinggi}px">'
+                f'<figure class="wp-block-cover__video-background wp-block-cover__embed-background wp-block-embed">'
+                f'<div class="wp-block-embed__wrapper">{esc(url)}</div></figure>'
+                f'<span aria-hidden="true" class="wp-block-cover__background has-primary-gelap-background-color '
+                f'has-background-dim-{redup} has-background-dim"></span>'
+                '<div class="wp-block-cover__inner-container">' + '\n\n'.join(anak) + '</div></div>')
 
 
 def sampul(foto, anak, kelas, redup=60, tinggi=520):
@@ -1265,6 +1399,16 @@ def _kepala_seksi(teks, sub='', label=''):
     if sub:
         anak.append(paragraf(esc(sub)))
     return grup(anak, kelas='vf-kepala-seksi')
+
+
+def judul_klien(judul, sd):
+    """Judul bagian logo dari compro ("Our Partner"/"Our Client") jadi bahasa Indonesia."""
+    t = re.sub(r'\s+', ' ', str(judul or '')).strip()
+    if re.search(r'partner|mitra|rekan', t, re.I):
+        return 'Mitra Kami'
+    if re.search(r'client|klien|customer|pelanggan', t, re.I):
+        return 'Klien Kami'
+    return t or 'Klien Kami'
 
 
 def kartu_foto(daftar, foto, kunci, kolom_grid=None, tanpa_foto=False, panah=False):
@@ -1765,6 +1909,16 @@ def beranda_referensi(q, sd, isi, info):
                 tinggi = max(560, min(int(s.get('tinggi') or 0), 800))
                 return sampul(foto['hero'], teks_hero + [grup(bar_isi, kelas='vf-ref-hero-bar', align='wide')],
                               'vf-hero-foto vf-ref-hero' + rata, 40, tinggi)
+            # Referensi ber-video latar: hero klien juga memakai video (manifest
+            # `hero_video=`, kalau kosong memakai video contoh untuk sementara).
+            video = (info.get('hero_video') or '').strip() or (VIDEO_HERO_CONTOH if s.get('video_latar') else '')
+            if video:
+                isi_video = teks_hero
+                if s.get('kolom') == 2 and len(teks_hero) >= 3:
+                    pisah = next(i for i, b in enumerate(teks_hero) if '<h1' in b) + 1
+                    isi_video = [barisan([kolom(teks_hero[:pisah]), kolom(teks_hero[pisah:])],
+                                         kelas='vf-ref-hero__baris', align='wide')]
+                return sampul_video(video, isi_video, 'vf-hero-foto vf-ref-hero' + rata, 60, 560)
             # Hero dua kolom seperti referensi: judul di kiri, keterangan & tombol di
             # kanan (northseaaconsulting.com). Tanpa ini semuanya menumpuk di satu kolom.
             if s.get('kolom') == 2 and len(teks_hero) >= 3:
@@ -1898,6 +2052,26 @@ def beranda_referensi(q, sd, isi, info):
     def klien(s):
         nama = [c if isinstance(c, str) else c.get('nama', '') for c in isi.get('customer') or []]
         nama = [n for n in nama if n][:24]
+        # Logo mitra & klien dari company profile lebih baik daripada daftar nama: beranda
+        # referensi pun memajang logonya (permintaan user 2026-09-18).
+        if info.get('mitra'):
+            bagian = []
+            for g in info['mitra']:
+                logo = [blok('image', {'id': l['id'], 'sizeSlug': 'medium', 'className': 'vf-klien__logo'},
+                             f'<figure class="wp-block-image size-medium vf-klien__logo">'
+                             f'<img src="{esc(l["url"])}" alt="{esc(l.get("alt") or g["judul"])}"/></figure>')
+                        for l in g['logo'][:40]]
+                if not logo:
+                    continue
+                if g['judul']:
+                    bagian.append(kepala_seksi(judul_klien(g['judul'], sd)))
+                # Blok `velocity/geser`: carousel berisi blok Gambar biasa, supaya pemilik
+                # situs bisa menambah/mengganti logo lewat editor (permintaan user
+                # 2026-09-18 — grup berkelas dulu sulit dikenali & disunting).
+                bagian.append(blok('velocity/geser', {'tampilan': 'logo', 'align': 'wide'},
+                                   '\n\n'.join(logo)))
+            if bagian:
+                return seksi_berlatar(bagian, s)
         if not nama:
             return ''
         return seksi_berlatar([kepala_seksi('Klien Kami'),
@@ -1926,7 +2100,7 @@ def beranda_referensi(q, sd, isi, info):
             # Seksi form referensi (judul berwarna + form satu kolom di tengah).
             return seksi_berlatar([kepala_seksi(js.get('pemesanan') or f"Konsultasikan Kebutuhan Anda bersama {sd['nama']}",
                                                 js.get('pemesanan_sub') or 'Ceritakan rencana Anda; tim kami akan menghubungi untuk membahas langkah berikutnya.'),
-                                   blok('velocity/form-kirim')], dict(s, jenis='form'))
+                                   blok_form()], dict(s, jenis='form'))
         return seksi_berlatar([kepala_seksi('Hubungi Kami'), blok('velocity/kontak'), tombol('Hubungi Kami', kontak)], s)
 
     def ajakan(s):
@@ -1968,13 +2142,85 @@ def beranda_referensi(q, sd, isi, info):
                                     layout={'type': 'grid', 'columnCount': len(kartu), 'minimumColumnWidth': '15rem'})],
                               dict(s, rata='tengah'))
 
+    def angka(s):
+        """Seksi kartu bernomor referensi ("01 02 03 ..."). Referensi memberi nomor pada
+        alasan/tahapan, bukan statistik: isinya alur kerja klien, jadi tidak ada angka
+        capaian yang dikarang."""
+        butir = isi.get('alur') or []
+        if len(butir) < 3:
+            return ''
+        n = kolom_ref(s, 3, len(butir))
+        kartu = []
+        for i, a in enumerate(butir[:max(n * 2, 6)]):
+            kartu.append(grup([paragraf_kelas(f'{i + 1:02d}', 'vf-nomor-kartu__angka'),
+                               judul(esc(a.get('judul')), 3), paragraf(esc(a.get('teks')))],
+                              kelas='vf-nomor-kartu'))
+        return seksi_berlatar([kepala_seksi(js.get('alur') or 'Alur Kerja Kami',
+                                            js.get('alur_sub') or f"Tahapan kerja {sd['nama']} dari awal sampai selesai."),
+                               grup(kartu, kelas=f'vf-nomor-grid vf-kolom-{n}', align='wide',
+                                    layout={'type': 'grid', 'columnCount': n, 'minimumColumnWidth': '15rem'})], s)
+
+    def faq(s):
+        butir = faq_butir(sd, isi)
+        if len(butir) < 3:
+            return ''
+        return seksi_berlatar([kepala_seksi(js.get('faq') or 'Pertanyaan yang Sering Diajukan',
+                                            js.get('faq_sub') or f"Hal yang paling sering ditanyakan seputar layanan {sd['nama']}."),
+                               akordeon(butir, 'vf-akordeon-grup vf-faq-grup')], s)
+
+    def testimoni(s):
+        """Kartu ulasan. Sumbernya ulasan SUNGGUHAN dari klien (isi['testimoni']); ulasan tidak
+        pernah dikarang diam-diam. Manifest `testimoni_contoh=1` (keputusan user per situs,
+        sonarmuda99.com 2026-09-20: desain harus sama seperti referensi walau ulasan asli belum
+        ada) mengisi slotnya dengan ulasan CONTOH yang ditandai jelas di teks & atribusinya,
+        supaya klien/PM tinggal mengganti isinya lewat wp-admin."""
+        butir = [t for t in (isi.get('testimoni') or []) if isinstance(t, dict) and t.get('teks')]
+        contoh = not butir and info.get('testimoni_contoh')
+        if contoh:
+            butir = [{'teks': f"Contoh ulasan: kebutuhan {l['judul'].lower()} dibahas lebih dulu, "
+                              f"barang ditinjau, lalu penanganannya dilakukan sesuai kesepakatan.",
+                      'nama': 'Contoh ulasan pelanggan'} for l in sd['layanan'][:4]]
+        if len(butir) < 2:
+            return ''
+        n = kolom_ref(s, 2, len(butir))
+        kartu = [grup([paragraf_kelas(esc(t['teks']), 'vf-ulasan__teks'),
+                       paragraf_kelas(esc(t.get('nama') or 'Pelanggan'), 'vf-ulasan__nama')],
+                      kelas='vf-ulasan' + (' vf-ulasan--contoh' if contoh else '')) for t in butir[:max(n * 2, 4)]]
+        sub = js.get('testimoni_sub') or ''
+        if contoh:
+            sub = 'Contoh tampilan ulasan — akan diganti dengan ulasan asli pelanggan.'
+        return seksi_berlatar([kepala_seksi(js.get('testimoni') or 'Apa Kata Pelanggan Kami', sub),
+                               grup(kartu, kelas=f'vf-ulasan-grid vf-kolom-{n}', align='wide',
+                                    layout={'type': 'grid', 'columnCount': n, 'minimumColumnWidth': '18rem'})], s)
+
+    def video(s):
+        daftar = info.get('video') or []
+        if not daftar:
+            return ''
+        n = kolom_ref(s, min(len(daftar), 4), len(daftar))
+        grid = grup([blok_video(v) for v in daftar], kelas=f'vf-video vf-kolom-{n}', align='wide',
+                    layout={'type': 'grid', 'columnCount': n, 'minimumColumnWidth': '13rem'})
+        return seksi_berlatar([kepala_seksi(js.get('video') or 'Video Kegiatan Kami',
+                                            js.get('video_sub') or f"Dokumentasi kegiatan {sd['nama']}."), grid], s)
+
     pembuat = {'paket': paket, 'hero': hero, 'tentang': tentang, 'layanan': layanan, 'produk': produk, 'keunggulan': keunggulan,
-               'alur': alur, 'galeri': galeri, 'klien': klien, 'artikel': artikel, 'kontak': kontak_seksi, 'ajakan': ajakan}
+               'alur': alur, 'galeri': galeri, 'klien': klien, 'artikel': artikel, 'kontak': kontak_seksi, 'ajakan': ajakan,
+               'video': video, 'angka': angka, 'faq': faq, 'testimoni': testimoni}
     susunan = [dict(s) for s in desain.get('seksi') or []]
     if toko and not any(s['jenis'] == 'produk' and not kategori(s) for s in susunan):
         # Toko online: daftar produk VD Store wajib ada di beranda walau referensi tidak memuatnya.
         letak = next((i + 1 for i, s in enumerate(susunan) if kategori(s)), 1 if susunan and susunan[0]['jenis'] == 'hero' else 0)
         susunan.insert(letak, {'jenis': 'produk', 'latar': 'terang', 'kolom': 4, 'rata': 'tengah', 'judul_referensi': ''})
+    if info.get('video') and not any(x['jenis'] == 'video' for x in susunan):
+        # Referensi tidak punya seksi video, tetapi videonya milik klien sendiri: ditaruh
+        # sesudah galeri (dokumentasi berkumpul), selain itu sebelum seksi penutup.
+        letak = next((i + 1 for i, x in enumerate(susunan) if x['jenis'] == 'galeri'), 0)
+        if not letak:
+            letak = next((i for i, x in enumerate(susunan) if x['jenis'] in ('kontak', 'ajakan')), len(susunan))
+        acuan = next((x for x in susunan if x['jenis'] == 'galeri'), {})
+        susunan.insert(letak, {'jenis': 'video', 'latar': 'terang' if acuan.get('latar') == 'abu' else 'abu',
+                               'kolom': min(len(info['video']), 4), 'rata': acuan.get('rata') or 'tengah',
+                               'label': acuan.get('label', '')})
     bagian, dilewati, dipakai = [], [], set()
     for s in susunan:
         kunci = s['jenis'] + (':kategori' if kategori(s) else '')
@@ -2045,7 +2291,9 @@ def galeri_slot(foto, batas=12):
     daftar = daftar[:batas]
     if not daftar:
         return ''
-    anak = '\n\n'.join(gambar(f, None, '4/3') for f in daftar)
+    # Halaman Galeri: tiap foto bisa diklik jadi popup & digeser ke foto berikutnya
+    # (permintaan user 2026-09-19).
+    anak = '\n\n'.join(gambar(f, None, '4/3', perbesar=True) for f in daftar)
     return blok('gallery', {'columns': 3, 'linkTo': 'none', 'className': 'vf-galeri'},
                 '<figure class="wp-block-gallery has-nested-images columns-3 is-cropped vf-galeri">'
                 + anak + '</figure>')
@@ -2580,6 +2828,17 @@ foreach ((array) get_option('vfse_images', array()) as $slot => $id) {
         $foto[$slot] = array('id' => (int) $id, 'url' => $url, 'alt' => (string) get_post_meta((int) $id, '_wp_attachment_image_alt', true));
     }
 }
+// Logo mitra & klien dari company profile (paket-g-foto): deret logo di beranda.
+$mitra = array();
+foreach ((array) get_option('vfse_logo_mitra', array()) as $grup) {
+    $g = array('judul' => (string) ($grup['judul'] ?? ''), 'logo' => array());
+    foreach ((array) ($grup['ids'] ?? array()) as $id) {
+        $u = wp_get_attachment_image_url((int) $id, 'medium');
+        if ($u) { $g['logo'][] = array('id' => (int) $id, 'url' => $u,
+            'alt' => (string) get_post_meta((int) $id, '_wp_attachment_image_alt', true)); }
+    }
+    if ($g['logo']) { $mitra[] = $g; }
+}
 $peta = get_option('velocity_map');
 // Kategori produk VD Store (submenu Produk, toko online).
 $kat_produk = array();
@@ -2594,6 +2853,7 @@ vfse_keluar(array('tema' => get_stylesheet(), 'halaman' => $hal, 'sisa' => $sisa
     'kategori_produk' => $kat_produk,
     'peta' => is_array($peta) ? $peta : null,
     'nav' => $nav, 'semua' => $halaman_id, 'home' => home_url('/'), 'depan' => (int) get_option('page_on_front'),
+    'mitra' => $mitra,
     'foto' => (object) $foto));
 '''
 
@@ -2661,6 +2921,100 @@ LABEL_MENU_INGGRIS = {'home', 'homepage', 'about', 'about us', 'company', 'who w
                       'contact', 'contact us', 'get in touch'}
 
 
+# Seksi beranda -> id jangkar untuk menu situs satu halaman (landing page). Nilainya
+# dipakai sebagai id HTML sekaligus atribut `anchor` blok, jadi harus slug sederhana.
+JANGKAR_SEKSI = {'tentang': ('tentang', 'Tentang'), 'angka': ('alur', 'Alur Kerja'),
+                 'layanan': ('layanan', 'Layanan'), 'keunggulan': ('keunggulan', 'Keunggulan'),
+                 'paket': ('pilihan', 'Pilihan Layanan'), 'produk': ('produk', 'Produk'),
+                 'galeri': ('galeri', 'Galeri'), 'video': ('video', 'Video'),
+                 'testimoni': ('ulasan', 'Ulasan'), 'faq': ('faq', 'FAQ'),
+                 'kontak': ('kontak', 'Kontak')}
+BLOK_SEKSI = re.compile(r'<!-- wp:(group|cover) (\{.*\}) -->\n<(div)\b')
+KELAS_SEKSI = re.compile(r'vf-ref-([a-z]+)\b')
+JUDUL_SEKSI_RE = re.compile(r'<h2[^>]*>(.*?)</h2>', re.S)
+
+
+def beri_jangkar(markup):
+    """Sisipkan id jangkar di seksi beranda (dipakai menu landing page).
+
+    Berlaku untuk markup generator maupun halaman buatan agen desain: keduanya memakai
+    kelas `vf-ref-<jenis>` pada blok seksi teratas. Mengembalikan (markup, [(id, label)]).
+    Blok yang sudah punya anchor dibiarkan apa adanya."""
+    hasil, jangkar, dipakai, pos = [], [], set(), 0
+    for m in BLOK_SEKSI.finditer(markup):
+        try:
+            attrs = json.loads(m.group(2))
+        except ValueError:
+            continue
+        # Kelas seksi selalu diawali `vf-ref-seksi`, jenisnya menyusul (vf-ref-tentang, dst.).
+        kunci = next((JANGKAR_SEKSI[j] for j in KELAS_SEKSI.findall(str(attrs.get('className') or ''))
+                      if j in JANGKAR_SEKSI), None)
+        if not kunci or kunci[0] in dipakai or attrs.get('anchor'):
+            continue
+        # Judul seksi jadi label menu; tanpa judul memakai label baku.
+        ekor = markup[m.end():m.end() + 4000]
+        judul_teks = JUDUL_SEKSI_RE.search(ekor)
+        label = re.sub(r'<[^>]+>', '', judul_teks.group(1)).strip() if judul_teks else ''
+        label = re.sub(r'\s+', ' ', label)
+        dipakai.add(kunci[0])
+        jangkar.append((kunci[0], kunci[1], label))
+        attrs['anchor'] = kunci[0]
+        hasil.append(markup[pos:m.start()])
+        hasil.append(f'<!-- wp:{m.group(1)} {atribut(attrs)} -->\n<div id="{kunci[0]}"')
+        pos = m.end()
+    hasil.append(markup[pos:])
+    return ''.join(hasil), jangkar
+
+
+def satu_halaman(info):
+    """Referensi berupa situs SATU HALAMAN (landing page): menunya menggulir ke seksi
+    beranda, bukan pindah halaman — habercafeandresto.co.id 2026-09-20 (`/faq/` di sana
+    404). Ditandai kalau sebagian besar butir menu referensi menunjuk beranda."""
+    desain = info.get('desain') or {}
+    pohon = desain.get('menu') or []
+    if len(pohon) < 4:
+        return False
+    beranda = sum(1 for m in pohon if (m.get('jenis') or '') == 'beranda')
+    return beranda >= 3 and not (desain.get('halaman') or {})
+
+
+def menu_jangkar(info, sd):
+    """Menu landing page: Beranda + satu butir per seksi beranda (tautan #jangkar).
+    Halaman yang tidak punya seksi di beranda (mis. Produk) tetap ikut sebagai halaman."""
+    jangkar = info.get('jangkar') or []
+    if len(jangkar) < 3:
+        return ''
+    semua = info['semua']
+    ada = {j[0] for j in jangkar}
+    # Halaman katalog Produk tidak punya seksi di beranda, tapi tetap perlu di menu.
+    halaman_produk = ('produk' not in ada and 'produk' in semua
+                      and 'produk' not in (info.get('tanpa_halaman') or ()))
+    # Sepanjang menu referensi; kalau kepanjangan, seksi pendukung dibuang lebih dulu
+    # dan Kontak (seksi terakhir) tidak pernah hilang.
+    batas = max(6, len(info.get('desain', {}).get('menu') or [])) - (1 if halaman_produk else 0)
+    dipilih = list(jangkar)
+    for kurang in ('pilihan', 'keunggulan', 'alur', 'video', 'ulasan'):
+        if len(dipilih) + 1 <= batas:
+            break
+        dipilih = [j for j in dipilih if j[0] != kurang] or dipilih
+    butir = [{'label': 'Beranda', 'url': info['home'], 'kind': 'custom', 'isTopLevelLink': True}]
+    for slug, baku, judul in dipilih[:max(1, batas - 1)]:
+        # Judul seksi yang pendek lebih enak dibaca di menu daripada label baku.
+        label = judul if judul and len(judul) <= 14 else baku
+        butir.append({'label': label, 'url': f"{info['home']}#{slug}", 'kind': 'custom', 'isTopLevelLink': True})
+    if halaman_produk:
+        butir.insert(min(4, len(butir)), {'label': 'Produk', 'type': 'page', 'id': semua['produk']['id'],
+                                          'url': semua['produk']['url'], 'kind': 'post-type'})
+    # Halaman tulisan (blog) tidak punya seksi di beranda; tautannya ditaruh sebelum Kontak
+    # supaya pengunjung tetap bisa membuka daftar artikel dari menu utama.
+    if 'berita' in semua and 'berita' not in (info.get('tanpa_halaman') or ()):
+        letak = next((i for i, x in enumerate(butir)
+                      if isinstance(x, dict) and str(x.get('url', '')).endswith('#kontak')), len(butir))
+        butir.insert(letak, {'label': 'Blog', 'type': 'page', 'id': semua['berita']['id'],
+                             'url': semua['berita']['url'], 'kind': 'post-type'})
+    return '\n\n'.join(blok('navigation-link', b) if isinstance(b, dict) else b for b in butir)
+
+
 def menu_referensi(info, sd):
     """Menu mengikuti pohon menu web referensi (rencana VERSI 5), atau '' bila tidak berlaku.
 
@@ -2717,6 +3071,17 @@ def menu_referensi(info, sd):
                                              'kind': 'taxonomy'}) for k in info.get('kategori_isi') or []]
         butir.append(blok('navigation-submenu', dasar, '\n\n'.join(anak)) if anak else dasar)
         dipakai.add(slug)
+    # Halaman situs yang tidak punya padanan di menu referensi tetap harus bisa dibuka
+    # dari menu utama (permintaan user 2026-09-18): referensi northseaaconsulting.com
+    # punya "Locations"/"Resources" yang tidak cocok, sehingga Produk, Galeri, Berita,
+    # dan Pemesanan sempat tidak pernah masuk menu.
+    for slug in ('produk', 'galeri', 'berita', 'pemesanan'):
+        if slug in dipakai or slug in tanpa:
+            continue
+        tambahan = halaman(slug, LABEL_MENU_BAKU.get(slug, slug.replace('-', ' ').title()))
+        if tambahan:
+            butir.append(tambahan)
+            dipakai.add(slug)
     if 'hubungi-kami' not in dipakai and (h := halaman('hubungi-kami', 'Kontak')):
         butir.append(h)
     if len(butir) < 3:
@@ -2756,7 +3121,7 @@ def halaman_menu_referensi(desain, sd, isi):
             if isi.get('alur'):
                 anak += [judul('Alur Kerja'), akordeon([(f"{i + 1}. {a.get('judul')}", a.get('teks') or '')
                                                         for i, a in enumerate(isi['alur'][:6])])]
-            anak.append(blok('velocity/form-kirim'))
+            anak.append(blok_form())
             hasil[f"layanan/{slug_teks(l['judul'])}"] = (l['judul'], '\n\n'.join(anak))
     if 'faq' in ada:
         tanya = faq_butir(sd, isi)
@@ -2791,6 +3156,9 @@ def faq_butir(sd, isi):
 
 def tautan_menu(info, sd, slugs_ada):
     """Menu utama: susunan menu klasik yang sudah disepakati (paket-g-setup) dibawa apa adanya."""
+    if satu_halaman(info) and not (info.get('label_menu') or info.get('tanpa_halaman_manifest')):
+        if jangkar_menu := menu_jangkar(info, sd):
+            return jangkar_menu
     if ref_menu := menu_referensi(info, sd):
         return ref_menu
     butir = []
@@ -2857,8 +3225,34 @@ def menu_produk(info, label):
 KONTAK_BLOK_INSTALLER = re.compile(
     r'\s*(?:<!-- wp:heading -->\s*<h2 class="wp-block-heading">(?:Kontak|Media Sosial|Lokasi|Ajukan Pemesanan|Kirim Pesan)</h2>\s*<!-- /wp:heading -->'
     r'|<!-- wp:velocity/kontak /-->|<!-- wp:velocity/form-kirim /-->'
+    r'|<!-- wp:contact-form-7/contact-form-selector \{[^\n]*?\} -->.*?<!-- /wp:contact-form-7/contact-form-selector -->'
     r'|<!-- wp:social-links \{[^\n]*?\} -->.*?<!-- /wp:social-links -->'
     r'|<!-- wp:html -->\s*<!-- velocity-map -->.*?<!-- /wp:html -->)', re.S)
+
+
+def kartu_kontak(sd, tampilan='kartu'):
+    """Grid Kartu Ikon berisi kontak NYATA (bukan ditarik diam-diam dari Data Situs), supaya
+    klien bisa mengubah ikon, judul, isi, dan tautannya langsung di editor — tambah kartu
+    baru cukup duplikat/seret (permintaan user 2026-09-19). Kolom diatur blok Group (Grid)."""
+    angka = lambda s: re.sub(r'^0', '62', re.sub(r'\D', '', str(s or '')))
+    kartu = []
+    if sd.get('alamat'):
+        kartu.append(('alamat', 'Alamat', sd['alamat'],
+                      'https://www.google.com/maps/search/?api=1&query=' + urllib.parse.quote(sd['alamat']), True))
+    if sd.get('wa'):
+        kartu.append(('whatsapp', 'WhatsApp', sd['wa'], 'https://wa.me/' + angka(sd['wa']), True))
+    if sd.get('telp') and angka(sd['telp']) != angka(sd.get('wa')):
+        kartu.append(('telepon', 'Telepon', sd['telp'], 'tel:' + re.sub(r'[^0-9+]', '', sd['telp']), False))
+    if sd.get('email_publik'):
+        kartu.append(('email', 'Email', sd['email_publik'], 'mailto:' + sd['email_publik'], False))
+    if not kartu:
+        return ''
+    isi = '\n\n'.join(blok('velocity/kartu-ikon', {'ikon': ikon, 'judul': judul, 'isi': esc(nilai),
+                                                    'tautan': url, 'tabBaru': baru, 'tampilan': tampilan})
+                       for ikon, judul, nilai, url, baru in kartu)
+    return blok('group', {'className': 'vf-kontak-grid',
+                          'layout': {'type': 'grid', 'columnCount': min(4, len(kartu)), 'minimumColumnWidth': '14rem'}},
+                f'<div class="wp-block-group vf-kontak-grid">{isi}</div>')
 
 
 def kontak_dua_kolom(info, peta):
@@ -2904,6 +3298,7 @@ def langkah_isi(cfg, situs, coba):
     vct = muat_modul('velocity_child_theme', HERE / 'velocity-child-theme')
     ref = referensi_desain(cfg, domain, 'berita' if isi.get('jenis') == 'berita' else 'perusahaan')
     sd = data_situs(cfg, domain, isi, vct, ref)
+    siapkan_cf7(situs, coba)
     berita = sd['jenis'] == 'berita'
     # Toko Online Custom: produk dari VD Store (arsip /produk/). Halaman "produk" tidak dibuat:
     # VD Store memindahkan arsipnya ke /produk-list/ kalau ada halaman berslug itu.
@@ -2926,6 +3321,15 @@ def langkah_isi(cfg, situs, coba):
     if tambahan_ref:
         info['kategori_isi'] = situs.php(PHP_KATEGORI_ISI).get('kategori') or []
     info['toko'] = toko
+    # Video latar hero dari manifest (`hero_video=<URL YouTube>`); kosong = video contoh
+    # dipakai bila referensinya memang ber-video latar.
+    info['hero_video'] = str(cfg.get('hero_video', '') or '').strip()
+    # Video klien (tautan embed, bukan berkas): seksi video beranda.
+    info['video'] = video_klien(cfg, domain)
+    # Manifest `testimoni_contoh=1`: seksi ulasan diisi contoh berlabel (bukan ulasan asli).
+    info['testimoni_contoh'] = str(cfg.get('testimoni_contoh', '')).strip().lower() in ('1', 'ya', 'true')
+    if info['video']:
+        print(f"fse: video_klien:{len(info['video'])}")
     # Manifest `tanpa_pemesanan=1` (yukpergimancing.com 2026-09-17: toko memakai checkout VD Store):
     # halaman & menu Pemesanan tidak dibuat dan formulir pemesanan tidak dipasang di Hubungi Kami.
     # `kontak_kolom=2`: Hubungi Kami dua kolom (teks + kontak + sosmed | peta).
@@ -2956,6 +3360,14 @@ def langkah_isi(cfg, situs, coba):
         if timpa.is_file() and timpa.read_text().strip():
             isi_baru = timpa.read_text().strip()
             print(f'fse: halaman_claude:{slug}')
+        # Situs satu halaman (referensi landing page): tiap seksi beranda diberi id jangkar
+        # supaya menu bisa menggulir ke sana. Dilakukan di sini, sesudah susunan agen dipilih,
+        # jadi halaman generator maupun halaman agen sama-sama dapat jangkarnya.
+        if slug == 'beranda' and satu_halaman(info):
+            isi_baru, jangkar = beri_jangkar(isi_baru)
+            info['jangkar'] = jangkar
+            if jangkar:
+                print('fse: jangkar_beranda:' + ','.join(j[0] for j in jangkar))
         if slug in info['tanpa_halaman']:
             print(f'fse: halaman_dikecualikan:{slug} (manifest tanpa_halaman)')
             return
@@ -2983,6 +3395,44 @@ def langkah_isi(cfg, situs, coba):
             # selalu bagian TERAKHIR halaman, jadi dipotong dari penanda pertamanya sampai
             # habis — regex ber-`.*?` salah potong karena grup FAQ punya grup di dalamnya
             # (menyisakan </div> yatim dan markup ditolak cek-blok).
+            # Blok kontak milik installer juga disusun ulang tiap run (sejak ada varian
+            # kartu berikon): tanpa ini `lanjutan` melihat penandanya lalu melewatkan
+            # versi barunya. Judul "Kontak" di atasnya ikut dibuang supaya tidak dobel.
+            dasar = re.sub(r'\s*<!-- wp:heading[^\n]*-->\s*<h2[^>]*>\s*Kontak\s*</h2>\s*<!-- /wp:heading -->'
+                           r'(?=\s*<!-- wp:velocity/kontak)', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:velocity/kontak[^>]*/-->', '', dasar)
+            dasar = re.sub(r'\s*<!-- wp:heading[^\n]*-->\s*<h2[^>]*>\s*Kontak\s*</h2>\s*<!-- /wp:heading -->'
+                           r'(?=\s*<!-- wp:group \{[^\n]*vf-kontak-grid)', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:group \{[^\n]*?vf-kontak-grid[^\n]*?\} -->.*?<!-- /wp:group -->',
+                           '', dasar, flags=re.S)
+            # Peta juga milik installer: titiknya bisa berubah (kota dari alamat kantor
+            # company profile), jadi bloknya disusun ulang, bukan dipertahankan.
+            dasar = re.sub(r'\s*<!-- wp:heading[^\n]*-->\s*<h2[^>]*>\s*Lokasi\s*</h2>\s*<!-- /wp:heading -->'
+                           r'(?=\s*<!-- wp:html)', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:html -->\s*<!-- velocity-map -->.*?<!-- /wp:html -->',
+                           '', dasar, flags=re.S)
+            # Media sosial & formulir ikut dibangun ulang: kalau hanya sebagian blok yang
+            # disusun ulang, sisanya tetap di tempat lama dan urutan halaman jadi kacau
+            # (Kontak & Lokasi sempat terdorong ke bawah formulir).
+            dasar = re.sub(r'\s*<!-- wp:heading[^\n]*-->\s*<h2[^>]*>\s*Media Sosial\s*</h2>\s*<!-- /wp:heading -->'
+                           r'(?=\s*<!-- wp:social-links)', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:social-links.*?<!-- /wp:social-links -->', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:heading[^\n]*-->\s*<h2[^>]*>[^<]*</h2>\s*<!-- /wp:heading -->'
+                           r'(?=\s*<!-- wp:(?:velocity/form-kirim|contact-form-7/))', '', dasar, flags=re.S)
+            dasar = re.sub(r'\s*<!-- wp:velocity/form-kirim[^>]*/-->', '', dasar)
+            dasar = re.sub(r'\s*<!-- wp:contact-form-7/contact-form-selector.*?<!-- /wp:contact-form-7/contact-form-selector -->',
+                           '', dasar, flags=re.S)
+            # Baris kontak yang sekadar mengulang data situs (alamat/telepon/email) dibuang:
+            # sejak kontak tampil sebagai kartu berikon, paragraf ini jadi duplikat.
+            ulang = [x for x in (sd.get('alamat'), sd.get('telp'), sd.get('email_publik')) if x]
+            if ulang:
+                def _buang(m):
+                    teks = re.sub(r'<[^>]+>', ' ', m.group(0))
+                    teks = re.sub(r'\s+', ' ', teks).strip()
+                    kena = sum(1 for x in ulang if x and x.lower()[:40] in teks.lower())
+                    return '' if kena >= 2 and len(teks) < 400 else m.group(0)
+                dasar = re.sub(r'<!-- wp:paragraph[^\n]*-->.*?<!-- /wp:paragraph -->', _buang, dasar, flags=re.S)
+            dasar = dasar.strip()
             potong = min([i for i in (dasar.find('vf-ref-faq'), dasar.find('vf-faq-grup')) if i >= 0] or [-1])
             if potong >= 0:
                 awal = dasar.rfind('<!-- wp:', 0, potong)
@@ -3046,11 +3496,13 @@ def langkah_isi(cfg, situs, coba):
     rencanakan('galeri', 'Galeri', lanjutan('galeri', [t for t in galeri_tambahan if t[1]]))
     judul_form = 'Kirim Pesan ke Redaksi' if berita else 'Kirim Pesan' if dealer else 'Ajukan Pemesanan'
     tambahan_kontak = [
-        ('wp:velocity/kontak', judul('Kontak') + '\n\n' + blok('velocity/kontak')),
+        # Halaman Hubungi Kami: grid Kartu Ikon berisi kontak nyata, disunting di tempat.
+        ('vf-kontak-grid', judul('Kontak') + '\n\n' + (kartu_kontak(sd) or blok('velocity/kontak', {'tampilan': 'kartu'}))),
         ('wp:social-links', judul('Media Sosial') + '\n\n' + ikon_sosmed()),
     ]
     if not tanpa_pemesanan:
-        tambahan_kontak.append(('wp:velocity/form-kirim', judul(judul_form) + '\n\n' + blok('velocity/form-kirim')))
+        tambahan_kontak.append(('wp:contact-form-7/' if FORM_CF7 else 'wp:velocity/form-kirim',
+                                judul(judul_form) + '\n\n' + blok_form()))
     if petak := blok_peta(info.get('peta')):
         # Peta wajib ada di Hubungi Kami. Dulu hanya situs dealer yang memasangnya di sini
         # dan situs lain menunggu iframe dari site-finish — padahal suntingan site-finish
@@ -3082,7 +3534,7 @@ def langkah_isi(cfg, situs, coba):
         rencanakan('test-drive', 'Test Drive', '\n\n'.join([
             paragraf('Isi formulir di bawah untuk menjadwalkan test drive. Tim kami menghubungi Anda untuk memastikan '
                      'unit, tanggal, dan titik temu.'),
-            blok('velocity/form-kirim')]))
+            blok_form()]))
         rencanakan('simulasi-kredit', 'Simulasi Kredit', '\n\n'.join([
             paragraf('Atur harga unit, uang muka, tenor, dan bunga untuk melihat estimasi cicilan bulanan. '
                      'Hasilnya bisa langsung dikonsultasikan ke tim kami.'),
@@ -3101,7 +3553,7 @@ def langkah_isi(cfg, situs, coba):
         if not tanpa_pemesanan:
             rencanakan('pemesanan', 'Pemesanan', '\n\n'.join([
                 paragraf('Isi formulir di bawah ini untuk mengajukan pemesanan atau konsultasi. Permintaan Anda kami terima langsung melalui email.'),
-                blok('velocity/form-kirim')]))
+                blok_form()]))
     # Halaman mengikuti menu referensi (rencana VERSI 5): anak per layanan & FAQ.
     for slug, (judul_hal, isi_hal) in (info.get('halaman_referensi') or {}).items():
         rencanakan(slug, judul_hal, isi_hal)
@@ -3224,4 +3676,10 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)

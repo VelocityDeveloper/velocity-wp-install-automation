@@ -12,6 +12,15 @@ defined('ABSPATH') || exit;
 
 // Product katalog custom: bukan WooCommerce, supaya data produk terpisah dari post berita.
 add_action('init', function () {
+    // Situs yang memakai CPT `produk` (inc/produk.php) tidak perlu CPT `product` bawaan:
+    // dua menu "Produk" di wp-admin hanya membingungkan pemilik situs. Kalau terlanjur ada
+    // isinya, CPT ini tetap didaftarkan supaya datanya tidak hilang dari wp-admin.
+    if (function_exists('velocity_fse_cpt_produk') && velocity_fse_cpt_produk()) {
+        global $wpdb;
+        if (!(int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'product'")) {
+            return;
+        }
+    }
     // Data Situs `katalog_produk` = false: situs tanpa katalog (medikaklinikteknologi.com) tidak
     // menampilkan menu Produk. Tetap didaftarkan selama masih ada isi product apa pun.
     if (velocity_fse_situs('katalog_produk') === false) {
@@ -79,6 +88,8 @@ function velocity_fse_wa_link($pesan = '')
     if ($nomor === '') {
         return '';
     }
+    // wa.me hanya menerima format internasional: 0811… (penulisan klien) → 62811….
+    $nomor = preg_replace('/^0/', '62', $nomor);
     $pesan = $pesan !== '' ? $pesan : sprintf('Halo %s, saya ingin bertanya.', velocity_fse_situs('nama'));
     return 'https://wa.me/' . $nomor . '?text=' . rawurlencode($pesan);
 }

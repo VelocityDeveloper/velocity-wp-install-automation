@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
@@ -67,9 +68,19 @@ AI_PERAN = (
     ('konten', 'Konten halaman & artikel', 'ai-content-generator.py'),
     ('isi_contoh', 'Isi contoh desain: layanan, produk, warna', 'paket-g-konten'),
     ('foto', 'Pemilihan foto contoh', 'paket-g-foto'),
-    ('fse', 'FSE builder: gaya beranda dari referensi', 'fse-apply'),
+    ('fse', 'FSE builder: gaya beranda portal berita', 'fse-apply'),
     ('tema', 'Pembaca child-theme paket biasa', 'theme-paket-biasa'),
 )
+# Fungsi yang TIDAK memakai model endpoint di halaman ini. Desain FSE paket custom ber-referensi
+# dikerjakan agen Claude Code (scripts/desain-claude, keputusan user 2026-09-18/19): modelnya
+# ditentukan CLI Claude sendiri, jadi barisnya hanya ditampilkan, tidak bisa dipilih. fse-apply
+# tetap menyusun tema & halaman sebagai titik awal agen (peran 'fse' di atas hanya dipakai portal
+# berita untuk memilih gaya beranda).
+AI_PERAN_TETAP = (
+    ('desain_claude', 'Desain FSE paket custom: tata letak, CSS & halaman', 'desain-claude',
+     'agen Claude Code (claude-opus-5)'),
+)
+AUTOPILOT_ENV = Path('/etc/velocity/installer-autopilot.env')
 AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
 AI_GENERATED = AI_CONFIG_DIR / 'generated'
 # Ditulis catat_token() di ai-content-generator.py, satu baris per panggilan AI.
@@ -194,6 +205,141 @@ def load_servers():
                 continue
     return []
 
+
+
+# --- kelola server (halaman /server/) ---
+# Dulu ditangani server_registry.py terpisah di /usr/local/bin (tanpa repo, tanpa token):
+# simpan = hapus lalu tambah di akhir, sehingga mengedit server pertama diam-diam
+# mengganti tujuan default installer, dan mengganti IP membuat entri ganda.
+# Sekarang disunting per posisi; urutan hanya berubah lewat "jadikan default".
+SERVERS_STORE = SERVERS_FILE_CANDIDATES[0]
+SERVER_FIELDS = ('name', 'host', 'user', 'port', 'notes')
+_servers_lock = threading.Lock()
+
+
+def clean_server(item):
+    """Validasi satu entri server. Kembalikan (dict, None) atau (None, galat)."""
+    if not isinstance(item, dict):
+        return None, 'data_tidak_valid'
+    s = {k: ' '.join(str(item.get(k) or '').split()) for k in SERVER_FIELDS}
+    if not s['name'] or len(s['name']) > 80:
+        return None, 'nama_wajib'
+    if not re.match(r'^[A-Za-z0-9.-]{1,253}$', s['host']):
+        return None, 'host_tidak_valid'
+    if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', s['user']):
+        return None, 'user_tidak_valid'
+    if not re.match(r'^[0-9]{1,5}$', s['port']) or not 1 <= int(s['port']) <= 65535:
+        return None, 'port_tidak_valid'
+    s['port'] = str(int(s['port']))
+    s['notes'] = s['notes'][:500]
+    return s, None
+
+
+def save_servers(servers):
+    SERVERS_STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SERVERS_STORE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(servers, indent=2) + '\n')
+    os.chmod(tmp, 0o600)
+    tmp.replace(SERVERS_STORE)
+
+
+def server_usage():
+    """Jumlah manifest per target_host (situs yang dipasang ke server itu)."""
+    hitung = {}
+    for manifest in ROOT.glob('*/*.txt'):
+        if manifest.stem != manifest.parent.name:
+            continue
+        host = manifest_target(manifest)
+        if host:
+            hitung[host] = hitung.get(host, 0) + 1
+    return hitung
+
+
+def servers_view():
+    pakai = server_usage()
+    daftar = [dict(s, index=i, default=(i == 0), domains=pakai.get(str(s.get('host', '')), 0))
+              for i, s in enumerate(load_servers()) if isinstance(s, dict)]
+    return {'servers': daftar, 'store': str(SERVERS_STORE),
+            'readonly': bool(os.environ.get('INSTALLER_SERVERS', '').strip())}
+
+
+def _server_index(servers, payload):
+    try:
+        i = int(payload.get('index'))
+    except (TypeError, ValueError):
+        return None
+    return i if 0 <= i < len(servers) else None
+
+
+def server_mutasi(aksi, payload):
+    """aksi: simpan | hapus | default. Kembalikan (hasil, galat, kode HTTP)."""
+    if os.environ.get('INSTALLER_SERVERS', '').strip():
+        return None, 'diatur_lewat_env_INSTALLER_SERVERS', 409
+    with _servers_lock:
+        servers = [x for x in load_servers() if isinstance(x, dict)]
+        if aksi == 'simpan':
+            item, err = clean_server(payload)
+            if err:
+                return None, err, 400
+            baru = payload.get('index') in (None, '')
+            i = None if baru else _server_index(servers, payload)
+            if not baru and i is None:
+                return None, 'server_tidak_ditemukan', 404
+            if any(str(x.get('host')) == item['host'] for j, x in enumerate(servers) if j != i):
+                return None, 'host_sudah_terdaftar', 409
+            if i is not None and servers[i].get('host') != item['host']:
+                pakai = server_usage().get(str(servers[i].get('host')), 0)
+                if pakai and not payload.get('pindah_host'):
+                    return None, f'host_dipakai_{pakai}_manifest', 409
+            if i is None:
+                servers.append(item)
+            else:
+                servers[i] = item
+        else:
+            i = _server_index(servers, payload)
+            if i is None:
+                return None, 'server_tidak_ditemukan', 404
+            if aksi == 'hapus':
+                pakai = server_usage().get(str(servers[i].get('host')), 0)
+                if pakai:
+                    return None, f'masih_dipakai_{pakai}_manifest', 409
+                if len(servers) == 1:
+                    return None, 'server_terakhir', 409
+                servers.pop(i)
+            elif aksi == 'default':
+                servers.insert(0, servers.pop(i))
+            else:
+                return None, 'aksi_tidak_dikenal', 400
+        save_servers(servers)
+    return servers_view(), None, 200
+
+
+def server_test(payload):
+    """Coba SSH ke server dengan kunci installer; laporkan hostname & DirectAdmin."""
+    servers = [x for x in load_servers() if isinstance(x, dict)]
+    i = _server_index(servers, payload)
+    if i is None:
+        return {'ok': False, 'error': 'server_tidak_ditemukan'}
+    srv, err = clean_server(servers[i])
+    if err:
+        return {'ok': False, 'error': err}
+    key = ssh_key_file()
+    if not key:
+        return {'ok': False, 'error': 'kunci_ssh_installer_tidak_ada'}
+    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
+           'hostname; test -d /usr/local/directadmin && echo DA=ya || echo DA=tidak']
+    mulai = time.time()
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'error': 'timeout'}
+    ms = int((time.time() - mulai) * 1000)
+    baris = (r.stdout or '').strip().splitlines()
+    if r.returncode != 0 or not baris:
+        pesan = (r.stderr or '').strip().splitlines()
+        return {'ok': False, 'error': (pesan[-1] if pesan else f'exit_{r.returncode}')[:200], 'ms': ms}
+    return {'ok': True, 'hostname': baris[0][:120], 'directadmin': 'DA=ya' in baris, 'ms': ms}
 
 _local_ip_cache = {'at': 0, 'value': []}
 LOCAL_IP_TTL = 300
@@ -655,7 +801,29 @@ def domains():
             'log': [],
             'source': 'crm',
         })
-    return rows
+    # Situs yang sudah COMPLETE ditampilkan di paling bawah (terbaru dulu) supaya bisa dijalankan
+    # ulang atau dilihat bagan/log-nya (permintaan user 2026-09-19). Barisnya ditandai
+    # source='selesai': onprogress-sync melewatinya, autopilot hanya mengambil 'belum diambil'.
+    # Log tidak ikut dikirim (56+ situs); modal log & bagan mengambilnya lewat ?domain=.
+    selesai = []
+    for name in done:
+        if name.lower() in emitted or not DOMAIN_RE.match(name) or name.lower() in abaikan:
+            continue
+        manifest = ROOT / name / f'{name}.txt'
+        row = domain_row(name, manifest if manifest.is_file() else None)
+        row['ada_log'] = bool(row.get('log'))
+        row['log'] = []
+        try:
+            row['paket'] = next((l.partition('=')[2].strip() for l in manifest.read_text(errors='replace').splitlines()
+                                 if l.startswith('paket=')), '') or None
+        except OSError:
+            row['paket'] = None
+        crm = antrean.get(name) or {}
+        row.update({'deadline': crm.get('deadline') or None, 'crm_status': crm.get('crm_status') or None,
+                    'webmaster': crm.get('webmaster') or None, 'claim': claims.get(name), 'source': 'selesai'})
+        selesai.append(row)
+    selesai.sort(key=lambda r: r.get('updated_at') or '', reverse=True)
+    return rows + selesai
 
 
 # Agen desain Claude (scripts/desain-claude) menulis penanda <domain>.json selama berjalan. Situs
@@ -916,6 +1084,10 @@ def generate_manifest(domain: str):
     )
     # Tanpa baris ini installer melewati pemasangan tema/plugin dan hasilnya
     # WordPress polos dengan tema bawaan.
+    try:
+        sync_packages()
+    except Exception:
+        pass  # API gagal: zip terakhir yang tersinkron tetap dipakai
     theme_pkg, addons_pkg = _velocity_packages()
     if addons_pkg:
         content += f'velocity_addons_pkg={addons_pkg}\n'
@@ -1097,6 +1269,17 @@ def set_default_ai_model(model_id):
     return True
 
 
+def desain_claude_aktif():
+    """True bila agen desain Claude dinyalakan (DESAIN_CLAUDE=1 di env autopilot)."""
+    try:
+        for baris in AUTOPILOT_ENV.read_text().splitlines():
+            if baris.strip().startswith('DESAIN_CLAUDE='):
+                return baris.split('=', 1)[1].strip() == '1'
+    except OSError:
+        pass
+    return False
+
+
 def set_ai_pemakaian(peran, model_id):
     """Pilih model untuk satu fungsi installer (AI_PERAN); model_id kosong = ikut model default."""
     if peran not in {kunci for kunci, _, _ in AI_PERAN}:
@@ -1276,14 +1459,29 @@ def ai_token_usage():
         baris_semua = AI_USAGE.read_text(errors='replace').splitlines()
     except OSError:
         baris_semua = []
+    # Sumber (permintaan user 2026-09-18): `endpoint` = model dari endpoint custom halaman /ai/
+    # (satu baris = satu request), `claude` = agen desain Claude Code (satu baris per model per
+    # sesi agen; jumlah request API di kolom `permintaan`, token cache & biaya dirinci).
+    SUMBER_KOSONG = lambda: {'panggilan': 0, 'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0,
+                             'input_tokens': 0, 'cache_read_tokens': 0, 'cache_creation_tokens': 0,
+                             'biaya_usd': 0.0, 'model': set()}
     kosong = lambda: {'panggilan': 0, 'gagal': 0, 'prompt_tokens': 0, 'completion_tokens': 0,
-                      'total_tokens': 0, 'per_peran': {}, 'mulai': '', 'terakhir': ''}
+                      'total_tokens': 0, 'per_peran': {}, 'mulai': '', 'terakhir': '',
+                      'per_sumber': {}}
 
     def tambah(t, b):
-        t['panggilan'] += 1
+        n = int(b.get('permintaan') or 1)
+        t['panggilan'] += n
         t['gagal'] += 0 if b.get('ok') else 1
         for k in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
             t[k] += int(b.get(k) or 0)
+        sumber = t['per_sumber'].setdefault(b.get('sumber') or 'endpoint', SUMBER_KOSONG())
+        sumber['panggilan'] += n
+        for k in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'input_tokens', 'cache_read_tokens',
+                  'cache_creation_tokens'):
+            sumber[k] += int(b.get(k) or 0)
+        sumber['biaya_usd'] += float(b.get('biaya_usd') or 0)
+        sumber['model'].add(b.get('model') or b.get('model_id') or '-')
         peran = b.get('peran') or '-'
         t['per_peran'][peran] = t['per_peran'].get(peran, 0) + int(b.get('total_tokens') or 0)
         ts = str(b.get('ts') or '')
@@ -1304,28 +1502,58 @@ def ai_token_usage():
         if b.get('ok'):
             r['model'].add(b.get('model') or b.get('model_id') or '-')
 
+    def rapikan_sumber(t):
+        for v in t['per_sumber'].values():
+            v['model'] = sorted(v['model'])
+            v['biaya_usd'] = round(v['biaya_usd'], 4)
+
     hasil = []
     total = kosong()
     for d in per_domain.values():
         runs = sorted(d.pop('runs').values(), key=lambda r: r['terakhir'], reverse=True)
         for r in runs:
             r['model'] = sorted(r['model'])
+            rapikan_sumber(r)
         d['runs'] = runs
-        hasil.append(d)
         for k in ('panggilan', 'gagal', 'prompt_tokens', 'completion_tokens', 'total_tokens'):
             total[k] += d[k]
+        for nama, v in d['per_sumber'].items():
+            tv = total['per_sumber'].setdefault(nama, SUMBER_KOSONG())
+            for k, x in v.items():
+                tv[k] = tv[k] | x if k == 'model' else tv[k] + x
+        rapikan_sumber(d)
+        hasil.append(d)
     hasil.sort(key=lambda d: d['terakhir'], reverse=True)
+    rapikan_sumber(total)
     for k in ('per_peran', 'mulai', 'terakhir'):
         total.pop(k)
     return {'domains': hasil, 'total': total, 'file': str(AI_USAGE)}
 
 
-# --- packages management ---
+# --- packages dari API Velocity ---
+# Permintaan user 2026-09-18: paket tidak lagi dikelola (upload/URL/hapus) di halaman
+# /packages/. Tema induk `velocity` & plugin `velocity-addons` yang dipasang installer
+# disinkronkan dari API tema/plugin Velocity (sama seperti vd-store & child theme),
+# jadi versi terbaru yang dirilis di sana otomatis terpakai.
+
+VELOCITY_API = 'https://api.velocitydeveloper.co/api/v1'
+# slug -> (jenis API, tipe paket installer)
+PAKET_INSTALLER = {'velocity': ('themes', 'theme'), 'velocity-addons': ('plugins', 'plugin')}
+PAKET_SINKRON_JEDA = 600  # detik antar-sinkron otomatis
+# Rilis GitHub dibandingkan dengan API: versi yang lebih baru yang dipakai. API Velocity
+# kadang tertinggal dari rilis (velocity-addons 2.3.1, 2026-09-22), padahal installer
+# harus selalu memasang versi terbaru (permintaan user 2026-09-22).
+PAKET_GITHUB = {'velocity-addons': 'Velocity-Developer/velocity-addons', 'velocity': 'Velocity-Developer/velocity'}
+GITHUB_TOKEN_FILE = Path(os.environ.get('WP_INSTALL_GITHUB_TOKEN_FILE') or '/etc/velocity/secrets/github_token')
+_paket_lock = threading.Lock()
+_paket_state = {'at': 0.0, 'api': {}, 'error': ''}
+
 
 def load_packages():
     try:
         if PACKAGES_META.is_file():
-            return json.loads(PACKAGES_META.read_text())
+            data = json.loads(PACKAGES_META.read_text())
+            return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         pass
     return {}
@@ -1338,62 +1566,137 @@ def save_packages(pkgs):
     tmp.replace(PACKAGES_META)
 
 
-def add_package(slug, ptype, name, source, size, version=''):
-    if ptype not in ('plugin', 'theme'):
-        return None, 'invalid_type'
-    if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
-        return None, 'invalid_slug'
-    pkgs = load_packages()
-    pkgs[slug] = {
-        'slug': slug,
-        'type': ptype,
-        'name': name or slug,
-        'source': source,
-        'size': size,
-        'version': version,
-        'added_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-    }
-    save_packages(pkgs)
-    return pkgs[slug], None
+def velocity_api_list(jenis):
+    """Daftar tema/plugin dari API Velocity. Header signature = md5 tanggal WIB."""
+    tanggal = time.strftime('%d%m%Y', time.gmtime(time.time() + 7 * 3600))
+    req = urllib.request.Request(f'{VELOCITY_API}/{jenis}', headers={
+        'User-Agent': 'velocity-installer/1.0', 'Accept': 'application/json',
+        'signature': hashlib.md5(tanggal.encode()).hexdigest()})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp).get('data')
+    if not isinstance(data, list):
+        raise ValueError('data_api_tidak_valid')
+    return [x for x in data if isinstance(x, dict) and x.get('slug')]
 
 
-def remove_package(slug):
-    pkgs = load_packages()
-    if slug not in pkgs:
-        return False
-    # remove file if exists
-    for ext in ('.zip', '.tar.gz'):
-        f = PACKAGES_DIR / f'{slug}{ext}'
-        if f.is_file():
-            f.unlink()
-    del pkgs[slug]
-    save_packages(pkgs)
-    return True
+def _versi_tuple(v):
+    return tuple(int(x) for x in re.findall(r'\d+', str(v or ''))[:4]) or (0,)
 
 
-def download_package_url(url, slug):
-    """Download a package from URL to packages dir. Returns path or error."""
-    if not url.startswith(('http://', 'https://')):
-        return None, 'invalid_url'
-    if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
-        return None, 'invalid_slug'
+def github_rilis_terbaru(slug):
+    """(versi, url_zip) rilis terbaru di GitHub, atau None. Aset zip pertama yang dipakai."""
+    repo = PAKET_GITHUB.get(slug)
+    if not repo:
+        return None
+    headers = {'User-Agent': 'velocity-installer/1.0', 'Accept': 'application/vnd.github+json'}
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Velocity-Installer/1.0'})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = resp.read()
-            if len(data) > 200 * 1024 * 1024:  # 200MB limit
-                return None, 'file_too_large'
-            ct = resp.headers.get('Content-Type', '')
-            if 'zip' in ct or url.endswith('.zip'):
-                ext = '.zip'
-            else:
-                ext = '.zip'  # default to zip
-            dest = PACKAGES_DIR / f'{slug}{ext}'
-            dest.write_bytes(data)
-            os.chmod(dest, 0o644)
-            return dest, None
-    except Exception as e:
-        return None, f'download_failed:{e}'
+        token = GITHUB_TOKEN_FILE.read_text().strip()
+    except OSError:
+        token = ''
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    req = urllib.request.Request(f'https://api.github.com/repos/{repo}/releases/latest', headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        d = json.load(resp)
+    aset = next((a for a in d.get('assets') or [] if str(a.get('name', '')).endswith('.zip')), None)
+    if not aset or not str(aset.get('browser_download_url', '')).startswith('https://'):
+        return None
+    return str(d.get('tag_name') or '').lstrip('vV'), aset['browser_download_url']
+
+
+def _zip_paket_valid(path, slug, tipe):
+    try:
+        with zipfile.ZipFile(path) as z:
+            nama = z.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return False
+    if tipe == 'theme':
+        return f'{slug}/style.css' in nama
+    return f'{slug}/{slug}.php' in nama
+
+
+def _unduh_paket(item, slug, tipe):
+    url = item.get('package_file_url') or item.get('package_external_url') or ''
+    if not url.startswith('https://'):
+        raise ValueError('url_paket_kosong')
+    tujuan = PACKAGES_DIR / f'{slug}.zip'
+    sementara = PACKAGES_DIR / f'.{slug}.zip.part'
+    req = urllib.request.Request(url, headers={'User-Agent': 'velocity-installer/1.0'})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = resp.read(200 * 1024 * 1024 + 1)
+    if len(data) > 200 * 1024 * 1024:
+        raise ValueError('file_too_large')
+    sementara.write_bytes(data)
+    if not _zip_paket_valid(sementara, slug, tipe):
+        sementara.unlink(missing_ok=True)
+        raise ValueError('zip_tidak_berisi_' + slug)
+    os.chmod(sementara, 0o644)
+    sementara.replace(tujuan)
+    return url, len(data)
+
+
+def sync_packages(force=False):
+    """Samakan zip tema/plugin installer dengan versi di API. Gagal -> zip lama tetap
+    dipakai. Dijeda PAKET_SINKRON_JEDA detik kecuali force."""
+    with _paket_lock:
+        if not force and time.time() - _paket_state['at'] < PAKET_SINKRON_JEDA:
+            return _paket_state
+        api, galat = {}, []
+        for jenis in ('themes', 'plugins'):
+            try:
+                api[jenis] = velocity_api_list(jenis)
+            except Exception as e:
+                galat.append(f'{jenis}: {e}')
+        pkgs = load_packages()
+        for slug, (jenis, tipe) in PAKET_INSTALLER.items():
+            item = next((x for x in api.get(jenis, []) if x.get('slug') == slug), None)
+            if not item and jenis in api:
+                galat.append(f'{slug}: tidak ada di API')
+            calon = []  # (versi, sumber, item unduhan)
+            if item:
+                calon.append((str(item.get('version') or '').strip(), 'api', item))
+            try:
+                gh = github_rilis_terbaru(slug)
+            except Exception as e:
+                gh = None
+                galat.append(f'{slug}: github {e}')
+            if gh and gh[0]:
+                calon.append((gh[0], 'github', {'package_external_url': gh[1], 'name': (item or {}).get('name')}))
+            if not calon:
+                continue
+            # Versi tertinggi menang; seri -> API (sumber resmi) didahulukan.
+            versi, sumber, pilih = max(calon, key=lambda c: (_versi_tuple(c[0]), c[1] == 'api'))
+            lama = pkgs.get(slug) or {}
+            zip_ada = _zip_paket_valid(PACKAGES_DIR / f'{slug}.zip', slug, tipe)
+            if zip_ada and lama.get('source') in ('api', 'github') and _versi_tuple(lama.get('version')) >= _versi_tuple(versi):
+                continue
+            try:
+                url, size = _unduh_paket(pilih, slug, tipe)
+            except Exception as e:
+                galat.append(f'{slug}: {e}')
+                continue
+            pkgs[slug] = {'slug': slug, 'type': tipe, 'name': pilih.get('name') or slug,
+                          'version': versi, 'source': sumber, 'url': url, 'size': size,
+                          'added_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+        # Paket di luar daftar installer (sisa unggahan manual) tidak dipakai lagi.
+        pkgs = {k: v for k, v in pkgs.items() if k in PAKET_INSTALLER}
+        save_packages(pkgs)
+        _paket_state.update(at=time.time(), api=api, error='; '.join(galat))
+        return _paket_state
+
+
+def packages_view(force=False):
+    state = sync_packages(force)
+    pkgs = load_packages()
+    return {
+        'installer': [dict(pkgs.get(slug) or {'slug': slug, 'type': tipe},
+                           ada=(PACKAGES_DIR / f'{slug}.zip').is_file())
+                      for slug, (_, tipe) in PAKET_INSTALLER.items()],
+        'themes': state['api'].get('themes', []),
+        'plugins': state['api'].get('plugins', []),
+        'synced_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(state['at'])) if state['at'] else '',
+        'error': state['error'],
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1426,7 +1729,7 @@ class Handler(BaseHTTPRequestHandler):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
-            self._send_json({'servers': load_servers()})
+            self._send_json(servers_view())
             return
         if path == '/api/installer/susulan':
             # Laporan scripts/audit-susulan: situs jadi yang belum ikut aturan terbaru (hanya dibaca).
@@ -1472,7 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
-            self._send_json({'packages': load_packages()})
+            self._send_json(packages_view())
             return
         # AI endpoints
         if path == '/api/ai/models':
@@ -1483,7 +1786,10 @@ class Handler(BaseHTTPRequestHandler):
             # mask api_key for listing
             safe = {'models': [], 'default_provider': data.get('default_provider', 'openai'),
                     'pemakaian': {k: v for k, v in (data.get('pemakaian') or {}).items() if v},
-                    'peran': [{'kunci': k, 'label': label, 'script': script} for k, label, script in AI_PERAN]}
+                    'peran': [{'kunci': k, 'label': label, 'script': script} for k, label, script in AI_PERAN],
+                    'peran_tetap': [{'kunci': k, 'label': label, 'script': script, 'model': model,
+                                     'aktif': desain_claude_aktif()}
+                                    for k, label, script, model in AI_PERAN_TETAP]}
             for m in data.get('models', []):
                 mm = dict(m)
                 if mm.get('api_key'):
@@ -1515,7 +1821,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         # Check allowed paths (including dynamic ones)
         allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/installer/claim',
-                          '/api/installer/release', '/api/packages', '/api/packages/download',
+                          '/api/installer/release', '/api/packages/sync',
+                          '/api/servers', '/api/servers/delete', '/api/servers/default', '/api/servers/test',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
         is_allowed = path in allowed_static or path.startswith('/api/ai/models/')
@@ -1525,95 +1832,26 @@ class Handler(BaseHTTPRequestHandler):
         if not _check_auth(self):
             self._send_json({'error': 'unauthorized'}, 401)
             return
-        # Package upload / URL add
-        if path == '/api/packages':
-            ct = self.headers.get('Content-Type', '')
-            if ct.startswith('multipart/form-data'):
-                # File upload
-                size = int(self.headers.get('Content-Length') or 0)
-                if size > 200 * 1024 * 1024:
-                    self._send_json({'error': 'file_too_large'}, 413)
-                    return
-                boundary = ct.split('boundary=')[1].strip()
-                body = self.rfile.read(size)
-                parts = body.split(('--' + boundary).encode())
-                upload_field = None
-                filename = None
-                file_data = b''
-                slug = None
-                ptype = 'plugin'
-                for part in parts:
-                    if b'Content-Disposition' not in part:
-                        continue
-                    header, data = part.split(b'\r\n\r\n', 1)
-                    header = header.decode('utf-8', errors='replace')
-                    if 'name="file"' in header:
-                        # extract filename
-                        m = re.search(r'filename="([^"]+)"', header)
-                        if m:
-                            filename = m.group(1)
-                        upload_field = data.rstrip(b'\r\n')
-                    elif 'name="slug"' in header:
-                        slug = data.rstrip(b'\r\n').decode('utf-8', errors='replace').strip()
-                    elif 'name="type"' in header:
-                        ptype = data.rstrip(b'\r\n').decode('utf-8', errors='replace').strip()
-                if not upload_field or not filename:
-                    self._send_json({'error': 'no_file'}, 400)
-                    return
-                if not slug:
-                    slug = re.sub(r'[^a-zA-Z0-9_-]', '', Path(filename).stem)[:40]
-                ext = '.zip' if filename.endswith('.zip') else '.zip'
-                dest = PACKAGES_DIR / f'{slug}{ext}'
-                dest.write_bytes(upload_field)
-                os.chmod(dest, 0o644)
-                result, err = add_package(slug, ptype, Path(filename).stem, f'upload:{filename}', len(upload_field))
-                if result is None:
-                    self._send_json({'error': err}, 400)
-                    return
-                self._send_json({'status': 'ok', 'package': result})
-                return
-            else:
-                # JSON: add by URL
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    payload = json.loads(self.rfile.read(length) or b'{}')
-                except (ValueError, OSError):
-                    self._send_json({'error': 'invalid_json'}, 400)
-                    return
-                url = payload.get('url', '')
-                slug = payload.get('slug', '')
-                ptype = payload.get('type', 'plugin')
-                name = payload.get('name', slug)
-                if not url or not slug:
-                    self._send_json({'error': 'url_and_slug_required'}, 400)
-                    return
-                dest, err = download_package_url(url, slug)
-                if dest is None:
-                    self._send_json({'error': err}, 422)
-                    return
-                result, err = add_package(slug, ptype, name, url, dest.stat().st_size)
-                if result is None:
-                    self._send_json({'error': err}, 400)
-                    return
-                self._send_json({'status': 'ok', 'package': result})
-                return
-        if path == '/api/packages/download':
+        if path == '/api/packages/sync':
+            self._send_json(packages_view(force=True))
+            return
+        if path.startswith('/api/servers'):
             try:
                 length = int(self.headers.get('Content-Length') or 0)
                 payload = json.loads(self.rfile.read(length) or b'{}')
             except (ValueError, OSError):
                 self._send_json({'error': 'invalid_json'}, 400)
                 return
-            url = payload.get('url', '')
-            slug = payload.get('slug', '')
-            if not url or not slug:
-                self._send_json({'error': 'url_and_slug_required'}, 400)
+            if not isinstance(payload, dict):
+                self._send_json({'error': 'invalid_json'}, 400)
                 return
-            dest, err = download_package_url(url, slug)
-            if dest is None:
-                self._send_json({'error': err}, 422)
+            if path == '/api/servers/test':
+                self._send_json(server_test(payload))
                 return
-            self._send_json({'status': 'ok', 'path': str(dest), 'size': dest.stat().st_size})
+            aksi = {'/api/servers': 'simpan', '/api/servers/delete': 'hapus',
+                    '/api/servers/default': 'default'}[path]
+            hasil, err, kode = server_mutasi(aksi, payload)
+            self._send_json(hasil if hasil else {'error': err}, kode)
             return
         # AI Model Management
         if path == '/api/ai/models':
@@ -1754,19 +1992,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
-        if path.startswith('/api/packages/'):
-            if not _check_auth(self):
-                self._send_json({'error': 'unauthorized'}, 401)
-                return
-            slug = path[len('/api/packages/'):]
-            if not slug or not re.match(r'^[a-zA-Z0-9_-]+$', slug):
-                self._send_json({'error': 'invalid_slug'}, 400)
-                return
-            if remove_package(slug):
-                self._send_json({'status': 'ok', 'removed': slug})
-            else:
-                self._send_json({'error': 'not_found'}, 404)
-            return
         if path.startswith('/api/ai/models/') and path.endswith('/delete'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)

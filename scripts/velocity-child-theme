@@ -166,6 +166,36 @@ def buka_unduhan(url):
     return github_api(aset['url'], token, 'application/octet-stream')
 
 
+GITHUB_ORG_TEMA = 'VelocityDeveloper'
+
+
+def tema_github(slug):
+    """Child theme yang ada di GitHub VelocityDeveloper tapi belum didaftarkan di API
+    tema (mis. velocity-kesehatan1, winskokoa.com 2026-09-22). Pakai zip rilis terbaru
+    bernama <slug>-*.zip. Kosong = tidak ada / tak bisa dicek."""
+    if not SLUG_RE.match(slug or ''):
+        return None
+    url = f'https://api.github.com/repos/{GITHUB_ORG_TEMA}/{slug}/releases/latest'
+    token = token_github()
+    try:
+        if token:
+            resp = github_api(url, token, 'application/vnd.github+json')
+        else:
+            resp = urllib.request.urlopen(urllib.request.Request(
+                url, headers=dict(UA, Accept='application/vnd.github+json')), timeout=30)
+        with resp:
+            rilis = json.load(resp)
+    except Exception:
+        return None
+    aset = next((a for a in rilis.get('assets') or []
+                 if str(a.get('name', '')).startswith(f'{slug}-') and a['name'].endswith('.zip')), None)
+    if not aset:
+        return None
+    return {'slug': slug, 'version': str(rilis.get('tag_name') or '').lstrip('vV') or '0',
+            'package_external_url': aset.get('browser_download_url'), 'type': 'wp_theme_child',
+            'sumber': 'github'}
+
+
 def zip_tembolok(slug):
     """Zip tema yang pernah diunduh, versi terbaru (mtime). Kosong = belum pernah."""
     if not CACHE.is_dir():
@@ -193,11 +223,27 @@ def download(theme):
         # dalam zip harus bernama slug yang sama.
         if tops != {slug}:
             raise ValueError(f'isi zip tidak sesuai slug: {sorted(tops)[:3]}')
+        buang_git(tmp)
     except (zipfile.BadZipFile, ValueError):
         tmp.unlink(missing_ok=True)
         raise
     tmp.replace(dest)
     return dest
+
+
+def buang_git(path):
+    """Zip rilis sebagian repo tema memuat folder .git/ (velocity-kesehatan1 v2.0.0);
+    kalau ikut terpasang, riwayat repo terbaca publik di wp-content/themes/<slug>/.git/."""
+    with zipfile.ZipFile(path) as z:
+        buang = [n for n in z.namelist() if '/.git/' in f'/{n}' or n.endswith('/.git')]
+        if not buang:
+            return
+        bersih = path.with_suffix('.bersih')
+        with zipfile.ZipFile(bersih, 'w', zipfile.ZIP_DEFLATED) as out:
+            for info in z.infolist():
+                if info.filename not in buang:
+                    out.writestr(info, z.read(info.filename))
+    bersih.replace(path)
 
 
 def paket_from_folder(domain):
@@ -291,6 +337,26 @@ def teks_di_atas(latar, gelap=None):
     return '#ffffff' if kontras(latar, '#ffffff') >= kontras(latar, gelap) else gelap
 
 
+def perbaiki_kontras_putih(latar, minimal=KONTRAS_MINIMAL, langkah_maks=4):
+    """(warna, '#ffffff') — warna digelapkan secukupnya supaya TEKS PUTIH terbaca.
+
+    Dipakai untuk warna tombol: hijau/oranye merek sering lolos kontras dengan teks
+    gelap, tapi tombolnya terlihat pucat dan tulisannya tenggelam (permintaan user
+    2026-09-18: tombol berlatar hijau harus bertulisan putih). Kalau butuh terlalu
+    banyak penggelapan (lebih dari 4 langkah) — warna pucat seperti kuning/oranye —
+    pemilih biasa yang dipakai,
+    supaya warnanya tidak berubah jadi cokelat.
+    """
+    warna = latar
+    for _ in range(langkah_maks):
+        if kontras(warna, '#ffffff') >= minimal:
+            return warna, '#ffffff'
+        warna = geser_terang(warna, -0.08)
+    if kontras(warna, '#ffffff') >= minimal:
+        return warna, '#ffffff'
+    return perbaiki_kontras(latar, minimal)
+
+
 def perbaiki_kontras(latar, minimal=KONTRAS_MINIMAL, gelap=None):
     """Geser latar sampai teks di atasnya terbaca.
 
@@ -358,6 +424,46 @@ def alamat_dokumen(teks):
         if alamat_kontak_web(calon):
             return calon.strip(' ,')
     return ''
+
+
+# Singkatan yang tetap huruf besar saat alamat dirapikan.
+ALAMAT_KAPITAL = {'DKI', 'RT', 'RW', 'HR', 'PT', 'CV', 'UD', 'PD', 'RI', 'KM', 'GG', 'BTN', 'KH',
+                  'DI', 'NTB', 'NTT', 'DIY', 'SCBD', 'TB', 'MH', 'MT', 'AH', 'HOS', 'KS'}
+# Kata yang ditulis huruf kecil di tengah alamat (kecuali di awal).
+ALAMAT_KECIL = {'dan', 'di', 'ke', 'dari', 'no', 'dalam'}
+
+
+def rapikan_alamat(alamat):
+    """Alamat SERBA KAPITAL dari company profile dirapikan jadi kapital per kata.
+
+    Halaman kontak compro sering diketik huruf besar semua; kalau disalin apa adanya,
+    footer & halaman Hubungi Kami ikut berteriak (permintaan user 2026-09-18). Kata
+    bersingkatan (DKI, RT, RW, HR) tetap kapital, kata bernomor (A501, 002) dibiarkan,
+    dan alamat yang memang sudah campuran huruf tidak disentuh.
+    """
+    teks = re.sub(r'\s+', ' ', str(alamat or '')).strip()
+    huruf = [c for c in teks if c.isalpha()]
+    if not huruf or sum(1 for c in huruf if c.isupper()) / len(huruf) < 0.7:
+        return teks
+    hasil = []
+    for i, kata in enumerate(teks.split(' ')):
+        inti = kata.strip('.,()')
+        if any(c.isdigit() for c in kata):
+            hasil.append(kata)
+        elif inti.upper() in ALAMAT_KAPITAL:
+            hasil.append(kata.upper())
+        elif i and inti.lower() in ALAMAT_KECIL:
+            hasil.append(kata.lower())
+        else:
+            hasil.append(kata[:1].upper() + kata[1:].lower())
+    return ' '.join(hasil)
+
+
+def kota_alamat(alamat):
+    """Nama kota/kabupaten dari satu baris alamat; '' kalau tidak jelas."""
+    cocok = re.search(r'(?:Kota(?:\s+Adm(?:inistrasi)?\.?)?|Kab(?:upaten)?\.?)\s+([A-Za-z .]{3,40}?)(?:,|$)',
+                      alamat or '', re.I)
+    return re.sub(r'\s{2,}', ' ', cocok.group(1)).strip(' .') if cocok else ''
 
 
 def data_klien(domain, nama=''):
@@ -443,7 +549,11 @@ def data_klien(domain, nama=''):
             bagian.append(tambahan)
     # Alamat usaha di kaki halaman company profile memang untuk publik; alamat
     # biodata FORM ISIAN adalah data administrasi pemilik dan hanya cadangan.
-    alamat_compro = data_compro(domain).get('alamat', '')
+    compro_kontak = data_compro(domain)
+    alamat_compro = rapikan_alamat(compro_kontak.get('alamat', ''))
+    # Telepon di halaman kontak company profile = nomor kantor untuk publik; nomor di
+    # biodata FORM ISIAN tetap data administrasi (SCC INSURANCE COMPRO, 2026-09-18).
+    telp = telp or compro_kontak.get('telp', '')
     return {
         'NAMA': nama[:80],
         'WA': wa,
@@ -456,7 +566,10 @@ def data_klien(domain, nama=''):
         'ALAMAT': (alamat_compro or alamat_kontak_web(kontak_web) or alamat_dokumen(dokumen)
                    or ('' if re.search(r'BIO\s*A?DATA|data ini kami gunakan untuk administrasi', teks_form, re.I)
                        else ', '.join(b for b in bagian if b)))[:200],
-        'AREA': kota or provinsi or 'sekitarnya',
+        # Kota untuk peta ikut alamat yang DIPAKAI: kalau alamat kantor company profile
+        # yang tampil, kotanya harus dari situ juga — bukan kota rumah pemilik di biodata
+        # (solusicerdasconsulting.com: kantor Jakarta Selatan, biodata Bekasi, 2026-09-18).
+        'AREA': (kota_alamat(alamat_compro) if alamat_compro else '') or kota or provinsi or 'sekitarnya',
     }
 
 
@@ -859,6 +972,12 @@ def main():
         match = next((t for t in children if t['slug'] == slug_diminta), None)
     else:
         match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
+    if not match:
+        # Belum terdaftar di API tema tapi repo rilisnya ada di GitHub VelocityDeveloper.
+        calon = slug_diminta or ('velocity-' + norm(out['ref']) if out.get('ref') else '')
+        match = tema_github(calon)
+        if match:
+            out['sumber'] = 'github'
     if not match:
         # Referensi ada tapi belum ada di API: Paket G tetap dapat child theme
         # sendiri, paket lain jatuh ke tema induk seperti sebelumnya.

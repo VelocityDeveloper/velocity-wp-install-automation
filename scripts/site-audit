@@ -55,7 +55,7 @@ $halaman = array();
 foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
     $halaman[$p->post_name] = array('id' => $p->ID, 'status' => $p->post_status,
                                     'isi' => strlen((string) $p->post_content),
-                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]|<!-- wp:[a-z0-9-]+\/(form|form-kirim|rfq)\b/', (string) $p->post_content),
+                                    'shortcode' => (bool) preg_match('/\[[a-z0-9_]+_(pemesanan|layanan|produk|galeri|kontak|alur)\]|<!-- wp:[a-z0-9-]+\/(form|form-kirim|rfq|contact-form-selector)\b/', (string) $p->post_content),
                                     // Judul yang tercetak dua kali di satu halaman (isi + shortcode/blok yang
                                     // mencetak judul sama) — jasakontraktorindo.com "Ajukan Pemesanan" ganda.
                                     'judul_ganda' => $p->post_status === 'publish' ? velocity_audit_judul_ganda($p) : '');
@@ -346,6 +346,15 @@ echo wp_json_encode(array(
     'teks'            => $teks,
 ));
 PHP
+# Kepemilikan wp-content (hanya dibaca): berkas bukan milik pemilik wp-content, contohnya
+# wp-content/upgrade milik root yang membuat pasang plugin dari wp-admin gagal.
+W="$DOCROOT/wp-content"
+if [[ -d "$W" ]]; then
+  p=$(stat -c %U:%G "$W")
+  n=$(find "$W" -xdev \( ! -user "${p%%:*}" -o ! -group "${p#*:}" \) 2>/dev/null | wc -l || true)
+  c=$(find "$W" -xdev \( ! -user "${p%%:*}" -o ! -group "${p#*:}" \) -printf '%u:%P\n' 2>/dev/null | head -3 | paste -sd' ' || true)
+  echo "pemilik|$p|$n|$c"
+fi
 wp eval-file /tmp/velocity-audit.php
 rm -f /tmp/velocity-audit.php
 '''
@@ -488,6 +497,20 @@ def main():
 
     temuan, info = [], {}
     teks = situs.pop('teks', '')
+
+    # --- kepemilikan wp-content ---
+    # Berkas milik root (WP-CLI installer/AI sebagai root) membuat pasang/perbarui plugin & tema
+    # dari wp-admin gagal (layananhipnoterapi.com 2026-09-18). Run berikutnya merapikannya
+    # lewat scripts/pemilik_wp.py.
+    pemilik = next((l for l in run.stdout.splitlines() if l.startswith('pemilik|')), '')
+    if pemilik:
+        _, milik, salah, contoh = (pemilik.split('|', 3) + ['', '', ''])[:4]
+        salah = int(salah) if salah.strip().isdigit() else 0
+        info['pemilik_wp_content'] = milik + (f', {salah} berkas lain ({contoh.strip()})' if salah else ', semua sesuai')
+        if milik.startswith('root:'):
+            temuan.append('wp_content_milik_root')
+        elif salah:
+            temuan.append(f'pemilik_wp_content_salah:{salah}')
 
     # --- tema ---
     info['tema'] = situs['tema']

@@ -29,14 +29,14 @@ body.vf-ref-v5 .wp-block-button__link {
 body.vf-ref-v5.vf-ref-lebar .wp-block-post-content .alignwide {
 	max-width: var(--vf-wadah) !important;
 }
-body.vf-ref-v5 :is(.vf-kotak-ikon, .vf-kartu-foto, .vf-pilihan) {
+body.vf-ref-v5 :is(.vf-kotak-ikon, .vf-kartu-foto, .vf-pilihan, .vf-nomor-kartu, .vf-ulasan) {
 	border-width: var(--vf-kartu-border, 0);
 	border-style: solid;
 	border-color: var(--vf-kartu-border-warna, transparent);
 	border-radius: var(--vf-kartu-radius, 12px);
 }
 body.vf-ref-v5 .vf-kotak-ikon { padding: var(--vf-kartu-pad, 1.5rem) !important; }
-body.vf-ref-v5 :is(.vf-grid-ikon, .vf-grid-kartu, .vf-pilihan-grid) { gap: var(--vf-kartu-jarak, 1.25rem) !important; }
+body.vf-ref-v5 :is(.vf-grid-ikon, .vf-grid-kartu, .vf-pilihan-grid, .vf-nomor-grid, .vf-ulasan-grid, .vf-video) { gap: var(--vf-kartu-jarak, 1.25rem) !important; }
 
 /* ---------- header melayang (bar putih bersudut di atas hero) ----------
    Pembungkus template part (sticky di style.css) dijadikan lapisan di atas hero; latar header
@@ -235,3 +235,179 @@ body.vf-ref-v5 .vf-kolom-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !i
 /* ---------- halaman layanan (anak) ---------- */
 .vf-ref-layanan-atas { align-items: center !important; gap: 2rem 4rem !important; }
 .vf-ref-layanan-atas .wp-block-image img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--vf-kartu-radius, 7px); }
+
+/* ---------- kartu bernomor (referensi memberi nomor 01, 02, ... pada tahapan) ---------- */
+.vf-nomor-grid { margin-top: 2.2rem !important; }
+.vf-nomor-kartu {
+	background: var(--wp--preset--color--latar);
+	padding: var(--vf-kartu-pad, 1.6rem) !important;
+	text-align: left;
+	position: relative;
+}
+.vf-rata-tengah .vf-nomor-kartu { text-align: center; }
+.vf-nomor-kartu > * { margin-block: 0 .6rem !important; }
+.vf-nomor-kartu > :last-child { margin-bottom: 0 !important; }
+.vf-nomor-kartu__angka {
+	font-family: var(--vf-font-judul, inherit);
+	font-size: clamp(2rem, 4vw, 2.8rem);
+	line-height: 1;
+	font-weight: 700;
+	/* Dulu opacity .28 dan terbaca sebagai teks kontras rendah oleh audit. */
+	color: var(--wp--preset--color--primary);
+	opacity: .78;
+}
+.vf-nomor-kartu h3 { font-size: 1.25rem; margin-bottom: .5rem !important; }
+.vf-nomor-kartu p:not(.vf-nomor-kartu__angka) { font-size: .98rem; }
+
+/* ---------- kartu ulasan pelanggan ---------- */
+.vf-ulasan-grid { margin-top: 2.2rem !important; }
+.vf-ulasan {
+	background: var(--wp--preset--color--latar);
+	padding: var(--vf-kartu-pad, 1.6rem) !important;
+	text-align: left;
+	display: flex;
+	flex-direction: column;
+	gap: .9rem;
+}
+.vf-ulasan > * { margin-block: 0 !important; }
+.vf-ulasan__teks { font-size: 1.02rem; line-height: 1.7; }
+.vf-ulasan__teks::before { content: "\201C"; font-family: var(--vf-font-judul, inherit); font-size: 2.2rem; line-height: 0; vertical-align: -.35em; margin-right: .2rem; color: var(--wp--preset--color--primary); }
+.vf-ulasan__nama { font-weight: 700; font-size: .95rem; margin-top: auto !important; }
+
+/* ---------- seksi video (embed YouTube; berkas video tidak diunggah) ---------- */
+.vf-video { margin-top: 2.2rem !important; }
+.vf-video .wp-block-embed { margin: 0; }
+.vf-video .wp-block-embed__wrapper { border-radius: var(--vf-kartu-radius, 12px); overflow: hidden; }
+.vf-video iframe { display: block; width: 100%; border: 0; }
+@media (max-width: 781px) {
+	.vf-nomor-grid, .vf-ulasan-grid { grid-template-columns: 1fr !important; }
+}
+
+/* ---------- header transparan melayang di atas hero (habercafeandresto.co.id) ----------
+   Di puncak halaman header tidak berlatar (hero terlihat sampai tepi atas layar) dengan
+   peredup gradasi supaya menu tetap terbaca; begitu digulir (body.vf-header-digulir dari
+   inc/referensi-komponen.php) berubah jadi bar berlatar terang seperti referensi. */
+body.vf-ref-header-transparan.home .wp-site-blocks > header.wp-block-template-part {
+	position: fixed;
+	inset: 0 0 auto 0;
+	z-index: 50;
+	background: linear-gradient(to bottom, rgba(20, 17, 14, .72), rgba(20, 17, 14, 0));
+	transition: background .3s ease;
+}
+body.vf-ref-header-transparan.home.admin-bar .wp-site-blocks > header.wp-block-template-part { top: 32px; }
+/* Latar bar dalam dimatikan: yang memberi warna adalah pembungkus header di atas.
+   Selektor sengaja lebih kuat daripada `.vf-ref.vf-header-terang .vf-header.has-background`
+   di style.css yang memaksa bar putih. */
+body.vf-ref.vf-ref-header-transparan.home .vf-header,
+body.vf-ref.vf-ref-header-transparan.home .vf-header.has-background {
+	background: transparent !important;
+	box-shadow: none !important;
+	transition: padding .3s ease;
+}
+body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) :is(.vf-header a:where(:not(.wp-element-button)), .vf-header .vf-nav .wp-block-navigation-item__content, .vf-header .vf-nama-situs a, .vf-header .wp-block-site-title a, .vf-header .wp-block-navigation__responsive-container-open) {
+	color: #fff !important;
+}
+/* Ikon menu HP mengikuti warna teks header (tanpa ini garisnya gelap di atas hero). */
+body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) .vf-header .wp-block-navigation__responsive-container-open svg { fill: #fff !important; }
+body.vf-ref.vf-ref-header-transparan.home.vf-header-digulir .vf-header .wp-block-navigation__responsive-container-open svg { fill: var(--wp--preset--color--ink, #1b1b1f) !important; }
+
+/* Latar solid, TANPA backdrop-filter: filter/blur pada header menjadikannya containing
+   block bagi elemen position:fixed di dalamnya, sehingga overlay menu HP ikut terkurung
+   setinggi header dan menunya seolah tidak bisa dibuka saat halaman digulir. */
+body.vf-ref-header-transparan.home.vf-header-digulir .wp-site-blocks > header.wp-block-template-part {
+	background: var(--wp--preset--color--latar, #f8f5ef);
+	box-shadow: 0 1px 0 rgba(0, 0, 0, .06);
+}
+body.vf-ref.vf-ref-header-transparan.home.vf-header-digulir :is(.vf-header a:where(:not(.wp-element-button)), .vf-header .vf-nav .wp-block-navigation-item__content, .vf-header .vf-nama-situs a, .vf-header .wp-block-site-title a) {
+	color: var(--wp--preset--color--ink, #1b1b1f) !important;
+}
+body.vf-ref-header-transparan.home.vf-header-digulir .vf-header { padding-block: .55rem !important; }
+/* Menu anchor: judul seksi tidak tertutup header yang melayang. */
+body.vf-ref-header-transparan :is(.vf-ref-seksi, .wp-block-cover)[id] { scroll-margin-top: var(--vf-header-tinggi, 92px); }
+@media (max-width: 781px) {
+	body.vf-ref-header-transparan.home .wp-site-blocks > header.wp-block-template-part { background: rgba(20, 17, 14, .82); }
+}
+
+/* ---------- chip penyaring kategori (seksi bergaya "menu pilihan") ---------- */
+.vf-chip-baris { gap: .6rem !important; margin: 1.6rem auto 2rem !important; }
+.vf-chip {
+	margin: 0 !important;
+	padding: .55rem 1.15rem;
+	border: 1px solid var(--wp--preset--color--aksen, #e6dec9);
+	border-radius: 999px;
+	font-size: .88rem;
+	line-height: 1.2;
+	cursor: pointer;
+	user-select: none;
+	transition: background .2s ease, color .2s ease;
+}
+.vf-chip:hover { background: var(--wp--preset--color--aksen, #e6dec9); }
+.vf-chip--aktif {
+	background: var(--wp--preset--color--ink, #1b1b1f);
+	border-color: var(--wp--preset--color--ink, #1b1b1f);
+	color: var(--wp--preset--color--putih, #fff);
+}
+.vf-filter [hidden] { display: none !important; }
+
+/* Ikon di kartu bernomor (referensi menaruhnya di pojok kanan atas kartu):
+   ::before = kotak tumpul, ::after = glif ikon yang dipusatkan di kotak itu. */
+.vf-nomor-kartu[class*="vf-ikon--"] { position: relative; }
+.vf-nomor-kartu[class*="vf-ikon--"]::before,
+.vf-nomor-kartu[class*="vf-ikon--"]::after {
+	content: "";
+	position: absolute;
+	top: var(--vf-kartu-pad, 1.5rem);
+	right: var(--vf-kartu-pad, 1.5rem);
+	width: 40px;
+	height: 40px;
+	border-radius: 11px;
+}
+.vf-nomor-kartu[class*="vf-ikon--"]::before { background: var(--wp--preset--color--aksen, #e6dec9); }
+.vf-nomor-kartu[class*="vf-ikon--"]::after {
+	/* Glif memakai warna teks, bukan warna primer: primer di atas kotak aksen kontrasnya tipis. */
+	background: var(--wp--preset--color--ink, #1b1b1f);
+	-webkit-mask: var(--vf-ikon) center / 20px 20px no-repeat;
+	mask: var(--vf-ikon) center / 20px 20px no-repeat;
+}
+/* Judul & angka tidak boleh menabrak ikon. */
+.vf-nomor-kartu[class*="vf-ikon--"] :is(.vf-nomor-kartu__angka, h3) { padding-right: 52px; }
+
+/* ---------- grid berhalaman (galeri panjang) ---------- */
+.vf-paginasi > [hidden] { display: none !important; }
+.vf-paginasi__nav {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: .5rem;
+	margin-top: 1.6rem;
+}
+.vf-paginasi__tombol {
+	min-width: 2.4rem;
+	padding: .5rem .8rem;
+	border: 1px solid var(--wp--preset--color--aksen, #e6dec9);
+	border-radius: 999px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: .9rem;
+	line-height: 1;
+	cursor: pointer;
+}
+.vf-paginasi__tombol:hover { background: var(--wp--preset--color--aksen, #e6dec9); }
+.vf-paginasi__tombol[aria-current="page"] {
+	background: var(--wp--preset--color--ink, #1b1b1f);
+	border-color: var(--wp--preset--color--ink, #1b1b1f);
+	color: var(--wp--preset--color--putih, #fff);
+}
+
+/* ---------- menu HP terbuka: warna teks selalu ikut latar overlay ----------
+   Aturan warna header (terang/transparan/digulir) ikut terpakai di dalam overlay
+   sehingga tulisannya bisa gelap di atas latar gelap. Selektor ini sengaja lebih
+   kuat daripada semuanya. */
+body.vf-ref .vf-header .vf-nav .wp-block-navigation__responsive-container.is-menu-open :is(.wp-block-navigation-item__content, .wp-block-navigation__responsive-container-close, a),
+body.vf-ref.vf-ref-header-transparan.home.vf-header-digulir .vf-header .vf-nav .wp-block-navigation__responsive-container.is-menu-open :is(.wp-block-navigation-item__content, .wp-block-navigation__responsive-container-close, a),
+body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) .vf-header .vf-nav .wp-block-navigation__responsive-container.is-menu-open :is(.wp-block-navigation-item__content, .wp-block-navigation__responsive-container-close, a) {
+	color: var(--wp--preset--color--putih, #fff) !important;
+}
+body.vf-ref .vf-header .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-close svg { fill: currentColor !important; }

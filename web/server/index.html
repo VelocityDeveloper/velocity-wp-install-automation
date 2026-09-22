@@ -272,6 +272,44 @@
           font-size: 11px;
         }
       }
+      .srv {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px 16px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+        padding: 16px 20px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .srv.utama { border-color: var(--green); }
+      .srv-info { min-width: 0; flex: 1 1 320px; }
+      .srv-nama { color: var(--cyan); font-weight: 700; }
+      .srv-alamat { color: var(--muted); overflow-wrap: anywhere; }
+      .srv-sub { margin-top: 4px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .srv-sub .ok { color: var(--green); }
+      .srv-sub .err { color: var(--red); }
+      .srv-aksi { display: flex; flex-wrap: wrap; gap: 8px; }
+      .pill {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 7px;
+        border: 1px solid;
+        font-size: 11px;
+        font-weight: 700;
+        vertical-align: 1px;
+      }
+      .pill.default { border-color: var(--green); color: var(--green); }
+      .pill.pakai { border-color: var(--yellow); color: var(--yellow); }
+      .refresh { padding: 6px 11px; font-size: 12px; white-space: nowrap; }
+      .refresh.danger { border-color: var(--red); color: var(--red); }
+      .refresh.danger:hover { background: #ff737318; }
+      .refresh:disabled { opacity: 0.5; cursor: wait; }
+      .modal-status { margin: 12px 0 0; font-size: 12px; color: var(--red); }
+      .modal-status:empty { display: none; }
+      .note { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+      .nav a { white-space: nowrap; }
     </style>
   </head>
   <body>
@@ -288,223 +326,221 @@
         <h1 class="heading">Manage Server</h1>
         <p class="meta">$ ssh-credentials --mode internal</p>
         <section class="section">
-          <div class="section-title">server terhubung</div>
-          <div id="server-list"></div>
+          <div class="section-title">server terdaftar</div>
+          <p class="note">
+            Server <b>DEFAULT</b> (urutan pertama) jadi tujuan manifest baru. Jumlah situs dihitung dari
+            <code>target_host</code> manifest; server yang masih dipakai tidak bisa dihapus.
+          </p>
+          <div id="server-list"><p class="empty">Memuat server...</p></div>
+          <p class="status" id="list-status" role="status"></p>
         </section>
         <section class="section">
-          <div class="section-title">tambah / edit credential</div>
+          <div class="section-title">tambah server</div>
           <div class="panel">
-            <p class="meta">
-              Data tersimpan di /var/lib/velocity/servers.json — sumber data
-              installer &amp; panel ini.
-            </p>
             <form id="form">
               <div class="grid">
-                <label
-                  >Nama server<input
-                    name="name"
-                    required
-                    maxlength="80"
-                    placeholder="Server produksi" /></label
-                ><label
-                  >Host / IP<input
-                    name="host"
-                    required
-                    maxlength="253"
-                    placeholder="100.x.x.x atau hostname" /></label
-                ><label
-                  >Username SSH<input
-                    name="user"
-                    required
-                    maxlength="64"
-                    value="deploy" /></label
-                ><label
-                  >Port<input
-                    name="port"
-                    type="number"
-                    min="1"
-                    max="65535"
-                    value="22"
-                    required /></label
-                ><label class="full"
-                  >Catatan<textarea
-                    name="notes"
-                    maxlength="500"
-                    placeholder="OS, fungsi server, atau batasan akses"
-                  ></textarea>
-                </label>
+                <label>Nama server<input name="name" required maxlength="80" placeholder="mis. Farnaz" /></label>
+                <label>Host / IP<input name="host" required maxlength="253" placeholder="103.x.x.x atau hostname" /></label>
+                <label>Username SSH<input name="user" required maxlength="32" value="root" /></label>
+                <label>Port SSH<input name="port" type="number" min="1" max="65535" required placeholder="mis. 53864" /></label>
+                <label class="full">Catatan<textarea name="notes" maxlength="500" placeholder="hostname panel, fungsi server, atau batasan akses"></textarea></label>
               </div>
               <div class="actions">
-                <button class="button">[ simpan ]</button
-                ><span class="status" id="status" role="status"></span>
+                <button class="button">[ tambah ]</button><span class="status" id="status" role="status"></span>
               </div>
             </form>
           </div>
         </section>
         <nav class="nav">
-          <span>mode: <code>read/write</code></span
-          ><span
-            ><a href="/installer/">[ installer ]</a>
-            <a href="/">[ home ]</a></span
-          >
+          <span>data: <code id="store">/var/lib/velocity/servers.json</code></span
+          ><span><a href="/installer/">[ installer ]</a> <a href="/">[ home ]</a></span>
         </nav>
       </section>
     </main>
-    <div
-      class="modal"
-      id="edit-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="modal-title"
-    >
+    <div class="modal" id="edit-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-box">
         <div class="modal-head">
           <span id="modal-title">edit server</span
-          ><button
-            class="modal-close"
-            id="close-modal"
-            type="button"
-            aria-label="Tutup"
-          >
-            ×
-          </button>
+          ><button class="modal-close" id="close-modal" type="button" aria-label="Tutup">×</button>
         </div>
         <form class="modal-body" id="server-edit-form">
+          <input type="hidden" name="index" />
           <div class="grid">
-            <label
-              >Nama server<input name="name" required maxlength="80" /></label
-            ><label
-              >Host / IP<input name="host" required maxlength="253" /></label
-            ><label
-              >Username SSH<input name="user" required maxlength="64" /></label
-            ><label
-              >Port<input
-                name="port"
-                type="number"
-                min="1"
-                max="65535"
-                required /></label
-            ><label class="full"
-              >Catatan<textarea name="notes" maxlength="500"></textarea>
-            </label>
+            <label>Nama server<input name="name" required maxlength="80" /></label>
+            <label>Host / IP<input name="host" required maxlength="253" /></label>
+            <label>Username SSH<input name="user" required maxlength="32" /></label>
+            <label>Port SSH<input name="port" type="number" min="1" max="65535" required /></label>
+            <label class="full">Catatan<textarea name="notes" maxlength="500"></textarea></label>
           </div>
+          <p class="modal-status" id="modal-status" role="alert"></p>
           <div class="modal-actions">
-            <button class="refresh" id="cancel-modal" type="button">
-              [ batal ]</button
+            <button class="refresh" id="cancel-modal" type="button">[ batal ]</button
             ><button class="button" type="submit">[ simpan ]</button>
           </div>
         </form>
       </div>
     </div>
     <script>
-      const listEl = document.getElementById("server-list");
-      const form = document.getElementById("form");
-      const editModal = document.getElementById("edit-modal");
-      const editForm = document.getElementById("server-edit-form");
-      const statusEl = document.getElementById("status");
+      const $ = (id) => document.getElementById(id);
+      const listEl = $("server-list");
+      const form = $("form");
+      const editModal = $("edit-modal");
+      const editForm = $("server-edit-form");
       let servers = [];
+      let readonly = false;
+      const hasilTes = {};
 
-      function esc(s) {
-        return String(s ?? "").replace(
-          /[&<>]/g,
-          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
-        );
+      const PESAN = {
+        nama_wajib: "Nama server wajib diisi.",
+        host_tidak_valid: "Host hanya boleh huruf, angka, titik, dan tanda hubung.",
+        user_tidak_valid: "Username SSH tidak valid.",
+        port_tidak_valid: "Port harus 1-65535.",
+        host_sudah_terdaftar: "Host ini sudah terdaftar di server lain.",
+        server_tidak_ditemukan: "Server tidak ditemukan (daftar berubah?). Muat ulang halaman.",
+        server_terakhir: "Server terakhir tidak bisa dihapus.",
+        diatur_lewat_env_INSTALLER_SERVERS: "Daftar server diatur lewat env INSTALLER_SERVERS, tidak bisa diubah dari sini.",
+        unauthorized: "Tidak berwenang (butuh token dari luar LAN).",
+      };
+      function pesan(err) {
+        let m = /^(host_dipakai|masih_dipakai)_(\d+)_manifest$/.exec(err || "");
+        if (m && m[1] === "masih_dipakai") return "Masih dipakai " + m[2] + " manifest situs, tidak bisa dihapus.";
+        if (m) return "Host lama masih dipakai " + m[2] + " manifest situs.";
+        return PESAN[err] || "Gagal: " + err;
       }
-
+      function esc(s) {
+        return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+      }
+      async function api(path, body) {
+        const r = await fetch(path, body === undefined ? { cache: "no-store" } : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+        return j;
+      }
+      function terapkan(d) {
+        servers = d.servers || [];
+        readonly = !!d.readonly;
+        if (d.store) $("store").textContent = d.store;
+        render();
+      }
+      function tes(i) {
+        const t = hasilTes[i];
+        if (!t) return "";
+        if (t === "jalan") return '<div class="srv-sub">tes SSH berjalan...</div>';
+        return t.ok
+          ? '<div class="srv-sub"><span class="ok">✓ SSH tersambung</span> · ' + esc(t.hostname) + " · DirectAdmin " + (t.directadmin ? "ada" : '<span class="err">tidak ada</span>') + " · " + t.ms + " ms</div>"
+          : '<div class="srv-sub"><span class="err">✗ SSH gagal: ' + esc(t.error) + "</span></div>";
+      }
       function render() {
+        form.querySelectorAll("input,textarea,button").forEach((el) => (el.disabled = readonly));
         if (!servers.length) {
-          listEl.innerHTML =
-            '<p class="empty">Belum ada server. Tambahkan via form di bawah.</p>';
+          listEl.innerHTML = '<p class="empty">Belum ada server. Tambahkan via form di bawah.</p>';
           return;
         }
-        listEl.innerHTML = servers
-          .map(
-            (s, i) =>
-              `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px"><div><strong style="color:var(--cyan)">${esc(s.name)}</strong> <span style="color:var(--muted)">${esc(s.host)}:${esc(s.port)}</span> <span style="color:var(--muted)">@${esc(s.user)}</span>${s.notes ? " — " + esc(s.notes) : ""}</div><div style="display:flex;gap:10px"><button class="refresh" data-edit="${i}" type="button">[ edit ]</button></div></div>`,
-          )
-          .join("");
-        listEl
-          .querySelectorAll("[data-edit]")
-          .forEach((b) =>
-            b.addEventListener("click", () => openEdit(b.dataset.edit)),
-          );
+        listEl.innerHTML = servers.map((s, i) =>
+          '<div class="srv' + (s.default ? " utama" : "") + '"><div class="srv-info">'
+          + '<span class="srv-nama">' + esc(s.name) + "</span>"
+          + (s.default ? '<span class="pill default" title="Tujuan manifest baru">DEFAULT</span>' : "")
+          + (s.domains ? '<span class="pill pakai" title="Manifest situs yang memakai server ini">' + s.domains + " situs</span>" : "")
+          + '<div class="srv-alamat">' + esc(s.user) + "@" + esc(s.host) + ":" + esc(s.port) + "</div>"
+          + (s.notes ? '<div class="srv-sub">' + esc(s.notes) + "</div>" : "")
+          + tes(i) + '</div><div class="srv-aksi">'
+          + '<button class="refresh" type="button" data-aksi="tes" data-i="' + i + '"' + (hasilTes[i] === "jalan" ? " disabled" : "") + ">[ tes SSH ]</button>"
+          + (readonly ? "" : '<button class="refresh" type="button" data-aksi="edit" data-i="' + i + '">[ edit ]</button>'
+            + (s.default ? "" : '<button class="refresh" type="button" data-aksi="default" data-i="' + i + '">[ jadikan default ]</button>')
+            + (s.domains || servers.length === 1 ? "" : '<button class="refresh danger" type="button" data-aksi="hapus" data-i="' + i + '">[ hapus ]</button>'))
+          + "</div></div>").join("");
       }
-
+      function statusDaftar(teks, err) {
+        const el = $("list-status");
+        el.className = "status" + (err ? " err" : " ok");
+        el.textContent = teks;
+      }
       async function load() {
         try {
-          const r = await fetch("/api/servers", { cache: "no-store" });
-          const d = await r.json();
-          servers = d.servers || [];
-          render();
+          terapkan(await api("/api/servers"));
         } catch (e) {
-          listEl.innerHTML =
-            '<p class="empty">Gagal memuat server: ' +
-            esc(String(e.message || e)) +
-            "</p>";
+          listEl.innerHTML = '<p class="empty">Gagal memuat server: ' + esc(pesan(e.message)) + "</p>";
         }
       }
+      listEl.addEventListener("click", async (e) => {
+        const b = e.target.closest("button[data-aksi]");
+        if (!b) return;
+        const i = Number(b.dataset.i);
+        const s = servers[i];
+        if (!s) return;
+        if (b.dataset.aksi === "edit") return openEdit(i);
+        if (b.dataset.aksi === "tes") {
+          hasilTes[i] = "jalan";
+          render();
+          try { hasilTes[i] = await api("/api/servers/test", { index: i }); }
+          catch (err) { hasilTes[i] = { ok: false, error: pesan(err.message) }; }
+          render();
+          return;
+        }
+        const tanya = b.dataset.aksi === "hapus"
+          ? 'Hapus server "' + s.name + '" (' + s.host + ")?"
+          : 'Jadikan "' + s.name + '" tujuan default untuk manifest baru?';
+        if (!confirm(tanya)) return;
+        try {
+          terapkan(await api(b.dataset.aksi === "hapus" ? "/api/servers/delete" : "/api/servers/default", { index: i }));
+          for (const k in hasilTes) delete hasilTes[k];
+          render();
+          statusDaftar(b.dataset.aksi === "hapus" ? "Server " + s.name + " dihapus." : s.name + " sekarang jadi default.");
+        } catch (err) {
+          statusDaftar(pesan(err.message), true);
+        }
+      });
 
       function openEdit(i) {
         const s = servers[i];
-        ["name", "host", "user", "port", "notes"].forEach((k) => {
-          if (editForm.elements[k]) editForm.elements[k].value = s[k] ?? "";
-        });
+        editForm.elements.index.value = i;
+        ["name", "host", "user", "port", "notes"].forEach((k) => (editForm.elements[k].value = s[k] ?? ""));
+        $("modal-status").textContent = "";
+        $("modal-title").textContent = "edit server: " + s.name;
         editModal.classList.add("open");
         editForm.elements.name.focus();
       }
-      function closeModal() {
-        editModal.classList.remove("open");
-      }
-      document
-        .getElementById("close-modal")
-        .addEventListener("click", closeModal);
-      document
-        .getElementById("cancel-modal")
-        .addEventListener("click", closeModal);
-      editModal.addEventListener("click", (e) => {
-        if (e.target === editModal) closeModal();
-      });
-
-      async function save(payload) {
-        const r = await fetch("/api/servers", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        return r;
-      }
+      function closeModal() { editModal.classList.remove("open"); }
+      $("close-modal").addEventListener("click", closeModal);
+      $("cancel-modal").addEventListener("click", closeModal);
+      editModal.addEventListener("click", (e) => { if (e.target === editModal) closeModal(); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const s = Object.fromEntries(new FormData(form));
-        if (/[\s;&|`$]/.test(s.host)) {
-          statusEl.className = "status err";
-          statusEl.textContent = "Host tidak valid (ada karakter terlarang).";
-          return;
-        }
-        const r = await save(s);
-        if (r.ok) {
-          statusEl.className = "status ok";
-          statusEl.textContent =
-            "Data tersimpan di /var/lib/velocity/servers.json.";
+        const st = $("status");
+        const data = Object.fromEntries(new FormData(form));
+        try {
+          terapkan(await api("/api/servers", data));
+          st.className = "status ok";
+          st.textContent = "Server " + data.name + " ditambahkan.";
           form.reset();
-          await load();
-        } else {
-          statusEl.className = "status err";
-          statusEl.textContent = "Gagal menyimpan (HTTP " + r.status + ").";
+        } catch (err) {
+          st.className = "status err";
+          st.textContent = pesan(err.message);
         }
       });
 
       editForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const s = Object.fromEntries(new FormData(editForm));
-        if (/[\s;&|`$]/.test(s.host)) {
-          return;
+        const data = Object.fromEntries(new FormData(editForm));
+        const lama = servers[Number(data.index)];
+        if (lama && lama.domains && lama.host !== data.host.trim()) {
+          if (!confirm("Host " + lama.host + " dipakai " + lama.domains + " manifest situs. Manifest itu tetap menunjuk host lama. Tetap ganti?")) return;
+          data.pindah_host = true;
         }
-        const r = await save(s);
-        if (r.ok) {
+        try {
+          terapkan(await api("/api/servers", data));
+          delete hasilTes[data.index];
+          render();
           closeModal();
-          await load();
+          statusDaftar("Server " + data.name + " disimpan.");
+        } catch (err) {
+          $("modal-status").textContent = pesan(err.message);
         }
       });
 

@@ -12,7 +12,7 @@ python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scr
 node --check scripts/referensi-desain.js
 node --check scripts/potret-halaman
 node --check scripts/banding-potret
-python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py
+python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/theme-paket-biasa
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga tema FSE: markup blok templates/parts/patterns harus valid menurut parser
 # editor WordPress (kode 3 = alat node belum terpasang di mesin ini, dilewati).

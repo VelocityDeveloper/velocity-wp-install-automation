@@ -19,6 +19,10 @@ Isi folder fse-rencana/<domain>/claude/ (ditulis agen):
   bagian-footer.html    template part footer
   gaya.css              CSS tambahan situs (Site Editor → Gaya → CSS tambahan)
 
+Tahap tema (VELOCITY_DESAIN_TAHAP=tema, desain-claude --tahap=tema): halaman belum disusun,
+jadi `cek`/`pasang` hanya menangani header, footer & gaya.css (fse-apply --isi tidak dijalankan)
+dan `audit` hanya menilai header, footer, gaya.
+
 Semua hasil pasang bisa disunting orang di wp-admin/Site Editor; yang sudah disunting orang
 tidak ditimpa (penanda md5). Berkas yang dihapus dari claude/ = pasangannya di situs dicabut
 (kembali ke hasil generator/tema) selama belum disunting orang.
@@ -47,6 +51,8 @@ def muat(nama, path):
 
 FA = muat('fse_apply', HERE / 'fse-apply')
 MANIFEST = os.environ.get('VELOCITY_DESAIN_MANIFEST', '')
+TAHAP_TEMA = os.environ.get('VELOCITY_DESAIN_TAHAP') == 'tema'
+BAGIAN_TEMA = ('header', 'footer', 'gaya')
 
 
 def konteks():
@@ -62,7 +68,8 @@ def catat(domain, pesan):
     from datetime import datetime
     try:
         with open(f'/var/lib/velocity/installer/{domain}.log', 'a') as f:
-            f.write(f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] desain_claude: {pesan}\n')
+            awalan = 'desain_claude_tema' if TAHAP_TEMA else 'desain_claude'
+            f.write(f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] {awalan}: {pesan}\n')
     except OSError:
         pass
 
@@ -175,6 +182,12 @@ def cek(cfg, folder):
     for m in masalah:
         print(f'tidak_valid gaya.css: {m}')
     ok = ok and not masalah
+    if TAHAP_TEMA:
+        halaman = sorted(p.name for p in (folder / 'claude').glob('*.html') if not p.name.startswith('bagian-'))
+        if halaman:
+            print('tahap tema: berkas halaman diabaikan sampai tahap halaman: ' + ', '.join(halaman))
+        print('cek: ' + ('ok' if ok else 'ADA_MASALAH (perbaiki dulu, pasang ditolak)'))
+        return ok
     run = subprocess.run([sys.executable, str(HERE / 'fse-apply'), '--isi', MANIFEST, '--coba'],
                          capture_output=True, text=True, timeout=600)
     teks = keluaran_fse(run.stdout + run.stderr)
@@ -192,6 +205,11 @@ def pasang(cfg, folder):
     hasil = situs.php(PHP_GAYA, {'css': css, 'bagian': baca_bagian(folder)})
     for baris in hasil['hasil']:
         print(f'pasang: {baris}')
+    if TAHAP_TEMA:
+        # Halaman belum disusun installer: hanya header, footer & CSS yang dipasang.
+        catat(cfg['domain'].lower(), 'agen memasang tema: '
+              + (' '.join(b for b in hasil['hasil'] if not b.endswith('_sama') and 'sama:' not in b) or 'tanpa perubahan'))
+        return 0
     run = subprocess.run([sys.executable, str(HERE / 'fse-apply'), '--isi', MANIFEST],
                          capture_output=True, text=True, timeout=900)
     teks = keluaran_fse(run.stdout + run.stderr)
@@ -215,16 +233,24 @@ def audit(cfg, folder):
     except (OSError, ValueError):
         print('audit: hasil tidak terbaca')
         return 2
-    print('skor: ' + ' '.join(f'{k}={v}' for k, v in (d.get('skor') or {}).items()))
-    catat(cfg['domain'].lower(), 'agen audit: ' + ' '.join(f'{k}={v}' for k, v in (d.get('skor') or {}).items())
-          + (' -> sesuai' if d.get('sesuai') else ' -> belum_mirip:' + ','.join(d.get('belum_mirip') or [])))
-    print('belum_mirip: ' + (','.join(d.get('belum_mirip') or []) or '-'))
+    skor = d.get('skor') or {}
+    belum = d.get('belum_mirip') or []
+    if TAHAP_TEMA:
+        skor = {k: v for k, v in skor.items() if k in BAGIAN_TEMA}
+        belum = [k for k, v in skor.items() if int(v) < 80]
+        print('tahap tema: hanya header, footer, gaya yang dinilai (halaman belum disusun installer)')
+    print('skor: ' + ' '.join(f'{k}={v}' for k, v in skor.items()))
+    catat(cfg['domain'].lower(), 'agen audit: ' + ' '.join(f'{k}={v}' for k, v in skor.items())
+          + (' -> sesuai' if (not belum if TAHAP_TEMA else d.get('sesuai')) else ' -> belum_mirip:' + ','.join(belum)))
+    print('belum_mirip: ' + (','.join(belum) or '-'))
     for nama, b in (d.get('bagian') or {}).items():
+        if TAHAP_TEMA and nama not in BAGIAN_TEMA:
+            continue
         beda = [f"{c['kunci']}(bobot {c['bobot']}): situs={c.get('situs')!r} ref={c.get('referensi')!r}"
                 for c in b.get('cek') or [] if float(c.get('skor', 1)) < 1]
         if beda:
             print(f'[{nama}] ' + '; '.join(beda)[:1500])
-    for s in d.get('seksi_beranda') or []:
+    for s in ([] if TAHAP_TEMA else d.get('seksi_beranda') or []):
         if s.get('beda') or s.get('urutan_situs') is None:
             print(f"[seksi beranda] {s.get('jenis')} ref#{s.get('urutan_ref')} situs#{s.get('urutan_situs')} "
                   f"skor={s.get('skor')} beda={','.join(s.get('beda') or []) or '-'}")

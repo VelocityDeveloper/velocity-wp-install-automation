@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Samakan zip tema `velocity` & plugin `velocity-addons` di /var/lib/velocity/packages dengan
+versi TERBARU (API Velocity atau rilis GitHub, mana yang lebih baru), tanpa jeda 10 menit.
+
+Dipanggil installer-runner sebelum tiap instalasi (permintaan user 2026-09-22: installer selalu
+pakai versi terbaru). Gagal (API/GitHub tak terjangkau) -> zip terakhir tetap dipakai, exit 0.
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'services'))
+import installer_status  # noqa: E402
+
+try:
+    state = installer_status.sync_packages(force=True)
+except Exception as e:  # jangan pernah menggagalkan instalasi karena sinkron paket
+    print(f'sinkron_paket_gagal:{e}')
+    sys.exit(0)
+pkgs = installer_status.load_packages()
+ringkas = ' '.join(f"{k}={v.get('version')}({v.get('source')})" for k, v in sorted(pkgs.items()))
+print(f'sinkron_paket: {ringkas}' + (f" | galat: {state['error']}" if state.get('error') else ''))

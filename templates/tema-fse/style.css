@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.11.1
+Version: 1.28.0
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -75,15 +75,200 @@ img { height: auto; }
 .vf-ref.vf-wadah-tetap :is(.wp-block-image img, .wp-block-image, .wp-block-cover, .vf-kartu img) {
   border-radius: var(--vf-kartu-radius, 15px);
 }
+/* Jarak antara header, kotak-kotak isi, dan footer: tanpa ini kartu-kartu menempel
+   ke header dan footer menempel ke dasar layar (permintaan user 2026-09-18). */
+.vf-ref.vf-wadah-tetap .vf-header { margin-bottom: var(--vf-wadah-jarak, 24px); }
+/* Tombol WhatsApp mengambang (velocity-addons: fixed kanan-bawah, tinggi ±50px, 8px dari
+   bawah) sempat menutupi "Design by" di baris bawah footer (solusicerdasconsulting.com
+   2026-09-19). Ruang 58px disediakan hanya bila tombolnya ada:
+   - footer selebar layar: ditambahkan di DALAM footer (padding bawah);
+   - wadah tetap (footer berupa kartu): jarak di BAWAH kartu, jadi tombol melayang di
+     ruang kosong di bawah kartu, tidak di atas teksnya. */
+body:has(.whatsapp-floating) .vf-footer {
+  padding-bottom: calc(var(--wp--preset--spacing--40) + 58px) !important;
+}
+body.vf-ref.vf-wadah-tetap:has(.whatsapp-floating) .vf-footer {
+  padding-bottom: var(--wp--preset--spacing--40) !important;
+  /* +24px (bukan 58px penuh, user: "terlalu lebar"): cukup supaya tombol berhenti di
+     bawah baris teks terakhir — boleh sedikit menimpa ruang kosong kartu. */
+  margin-bottom: calc(var(--vf-wadah-jarak, 24px) + 24px);
+}
+/* Blok pertama sesudah header kadang punya margin-top negatif/0 dari core; pastikan
+   jaraknya tetap terlihat. */
+.vf-ref.vf-wadah-tetap .wp-site-blocks > :nth-child(2) { margin-top: var(--vf-wadah-jarak, 24px) !important; }
+.vf-ref.vf-wadah-tetap .vf-footer { margin-top: var(--vf-wadah-jarak, 24px); margin-bottom: var(--vf-wadah-jarak, 24px); }
+/* Banner judul halaman dalam ikut jadi kartu selebar wadah, bukan pita selebar layar. */
+.vf-ref.vf-wadah-tetap .vf-judul-halaman {
+  max-width: min(var(--vf-wadah, 1320px), calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+  margin-inline: auto;
+  border-radius: var(--vf-kartu-radius, 15px);
+  overflow: hidden;
+}
+/* ---- Kartu kontak berikon (halaman Hubungi Kami) -----------------------------
+   Satu kartu per jenis kontak dengan ikon sesuai jenisnya (permintaan user
+   2026-09-18: "tampilan lebih modern"). Footer tetap memakai daftar biasa. */
+.vf-kontak-kartu {
+  /* Kartu berlebar sama (user 2026-09-19: grid lama berantakan karena kartu alamat
+     selebar dua kolom). Isi tiap kartu bertumpuk: ikon, judul, lalu isi. */
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 1rem;
+  margin-block: 1.5rem;
+}
+@media (max-width: 1024px) { .vf-kontak-kartu { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .vf-kontak-kartu { grid-template-columns: 1fr; } }
+.vf-kontak-kartu__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .5rem;
+  min-width: 0;
+  padding: 1.4rem 1.35rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: var(--vf-kartu-radius, 15px);
+  background: var(--wp--preset--color--putih);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.vf-kontak-kartu__item:hover {
+  border-color: var(--wp--preset--color--primary);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .08);
+}
+.vf-kontak-kartu__ikon {
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  margin-bottom: .35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wp--preset--color--primary) 12%, transparent);
+  color: var(--wp--preset--color--primary);
+}
+.vf-kontak-kartu__ikon svg { width: 1.4rem; height: 1.4rem; fill: currentColor; }
+.vf-kontak-kartu__item--whatsapp .vf-kontak-kartu__ikon {
+  background: color-mix(in srgb, var(--wp--preset--color--aksen) 16%, transparent);
+  color: var(--wp--preset--color--aksen);
+}
+.vf-kontak-kartu__judul {
+  color: var(--wp--preset--color--abu);
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+/* Email & alamat panjang dipatahkan di dalam kartu, bukan meluber keluar. */
+.vf-kontak-kartu__isi { color: var(--wp--preset--color--teks); line-height: 1.55; overflow-wrap: anywhere; }
+.vf-kontak-kartu__isi a { color: inherit; text-decoration: none; }
+.vf-kontak-kartu__isi a:hover { color: var(--wp--preset--color--primary); text-decoration: underline; }
+
+/* ---- Kartu Ikon (velocity/kartu-ikon) -------------------------------------------
+   Varian "kartu" memakai gaya .vf-kontak-kartu__item di atas; susunan kolomnya diatur
+   blok Group (layout Grid) pembungkusnya, jadi jumlah kolom bisa diubah klien sendiri
+   di panel blok. Varian "baris" untuk footer: ikon kecil di kiri, ikut warna footer. */
+.vf-kartu-ikon { box-sizing: border-box; }
+.vf-kartu-ikon--baris {
+  display: flex;
+  align-items: flex-start;
+  gap: .7rem;
+  margin: 0 0 .85rem !important;
+  color: inherit;
+  font-size: .92rem;
+}
+.vf-kartu-ikon--baris .vf-kontak-kartu__ikon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: inherit;
+}
+.vf-kartu-ikon--baris .vf-kontak-kartu__ikon svg { width: 1rem; height: 1rem; fill: currentColor; }
+.vf-kartu-ikon__teks { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.vf-kartu-ikon--baris .vf-kontak-kartu__judul {
+  color: inherit;
+  opacity: .7;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.vf-kartu-ikon--baris .vf-kontak-kartu__isi { color: inherit; line-height: 1.5; overflow-wrap: anywhere; }
+.vf-kartu-ikon--baris .vf-kontak-kartu__isi a { color: inherit; text-decoration: none; }
+.vf-kartu-ikon--baris .vf-kontak-kartu__isi a:hover { text-decoration: underline; }
+/* Grid kartu kontak (Group layout Grid): kartu sama tinggi. */
+.vf-kontak-grid { align-items: stretch; margin-block: 1.5rem; }
+.vf-kontak-grid > .vf-kartu-ikon { height: 100%; }
+
+/* ---- Halaman artikel (single) ------------------------------------------------
+   Permintaan user 2026-09-18: wadah 960px, tanpa sidebar, tanpa kartu judul.
+   Urutan: tombol kembali > judul > meta (kategori, tanggal | ikon bagikan) >
+   foto utama > isi > "Baca Juga". */
+main.vf-artikel,
+.vf-ref.vf-wadah-tetap main.vf-artikel {
+  --wp--style--global--content-size: min(960px, calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+  --wp--style--global--wide-size: min(960px, calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+}
+.vf-artikel__balik { margin-bottom: .9rem !important; font-size: .95rem; }
+.vf-artikel__balik a { color: var(--wp--preset--color--teks); text-decoration: none; font-weight: 600; }
+.vf-artikel__balik a:hover { color: var(--wp--preset--color--primary); }
+.vf-artikel .vf-artikel__judul { margin-bottom: .8rem !important; }
+.vf-artikel__meta {
+  gap: 1rem 1.5rem;
+  align-items: center;
+  margin-bottom: 1.4rem !important;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--wp--preset--color--garis);
+}
+.vf-artikel__meta-kiri { gap: .6rem .9rem; align-items: center; }
+.vf-artikel__meta .vf-artikel__tanggal { margin: 0 !important; color: var(--wp--preset--color--abu); font-size: .93rem; }
+.vf-bagikan { display: flex; align-items: center; gap: .5rem; }
+.vf-bagikan__label { color: var(--wp--preset--color--abu); font-size: .85rem; }
+.vf-bagikan__ikon {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: 999px;
+  color: var(--wp--preset--color--teks);
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.vf-bagikan__ikon svg { width: 1.05rem; height: 1.05rem; fill: currentColor; }
+.vf-bagikan__ikon:hover { background: var(--wp--preset--color--primary); border-color: var(--wp--preset--color--primary); color: var(--wp--preset--color--di-primary); }
+.vf-artikel .vf-artikel__foto { margin-bottom: 1.6rem; }
+.vf-artikel .vf-terkait { margin-top: 3rem; }
+
+/* Blok alignwide ikut lebar wadah (bawaan tema 1400px) supaya artikel & sidebar
+   sejajar dengan seksi beranda. */
+.vf-ref.vf-wadah-tetap .alignwide:not(main.vf-artikel .alignwide) {
+  max-width: min(var(--vf-wadah, 1320px),
+    calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+  margin-inline: auto;
+}
+/* Sudut kartu yang sama untuk kotak sidebar & "Baca Juga" di halaman artikel. */
+.vf-ref.vf-wadah-tetap :is(.vf-samping .vf-kotak, .vf-terkait, .vf-artikel__foto img, .vf-kartu img) {
+  border-radius: var(--vf-kartu-radius, 15px);
+}
+/* Isi halaman dalam selebar wadah yang sama dengan beranda (bawaan tema 760px). */
+.vf-ref.vf-wadah-tetap main.wp-block-group:not(.vf-artikel),
+.vf-ref.vf-wadah-tetap main:not(.vf-artikel) .wp-block-post-content {
+  --wp--style--global--content-size: min(var(--vf-wadah, 1320px),
+    calc(100% - 2 * var(--wp--style--root--padding-right, 24px)));
+}
+
 @media (max-width: 781px) {
   /* Di layar kecil sisakan tepi 16px saja — wadah 1320px + padding bawaan membuat
      kotaknya terlalu menjorok (solusicerdasconsulting.com 2026-09-18). */
   .vf-ref.vf-wadah-tetap .wp-block-post-content > .alignfull:not(.vf-header),
   .vf-ref.vf-wadah-tetap .wp-site-blocks > .alignfull:not(.vf-header):not(.wp-block-template-part),
-  .vf-ref.vf-wadah-tetap .vf-footer {
+  .vf-ref.vf-wadah-tetap .vf-footer,
+  .vf-ref.vf-wadah-tetap .vf-judul-halaman {
     max-width: calc(100% - 32px);
     border-radius: var(--vf-kartu-radius, 15px);
   }
+  .vf-ref.vf-wadah-tetap :is(.vf-header, .vf-footer) { --vf-wadah-jarak: 16px; }
 }
 /* Hero dua kolom ikut referensi: judul kiri, keterangan & tombol kanan; menumpuk di HP. */
 .vf-ref-hero__baris { align-items: flex-end; gap: 2.5rem; width: 100%; }
@@ -316,7 +501,7 @@ img { height: auto; }
 .vf-form label { color: var(--wp--preset--color--ink); font-size: .85rem; font-weight: 700; }
 .vf-form label span { color: #b42318; }
 .vf-form__bantuan { color: var(--wp--preset--color--abu); font-size: .8rem; margin-top: -.2rem; }
-.vf-form input,
+.vf-form input:not([type="submit"]),
 .vf-form select,
 .vf-form textarea {
   box-sizing: border-box;
@@ -333,7 +518,18 @@ img { height: auto; }
 .vf-form textarea:focus { outline: 2px solid var(--wp--preset--color--primary); outline-offset: 1px; }
 .vf-form__jebakan { position: absolute !important; left: -9999px; }
 .vf-form__kirim { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; margin: 0; }
-.vf-form__kirim button { cursor: pointer; border: 0; }
+.vf-form__kirim button,
+.vf-form__kirim input[type="submit"] { cursor: pointer; border: 0; width: auto; }
+/* Contact Form 7: markup .vf-form di dalam form CF7 (inc/cf7.php). */
+.wpcf7 .wpcf7-form-control-wrap { display: block; }
+.wpcf7 .wpcf7-not-valid-tip { margin-top: .3rem; color: #b42318; font-size: .8rem; font-weight: 600; }
+.wpcf7 .vf-form input.wpcf7-not-valid,
+.wpcf7 .vf-form select.wpcf7-not-valid,
+.wpcf7 .vf-form textarea.wpcf7-not-valid { border-color: #b42318; }
+.wpcf7 .wpcf7-spinner { margin: 0; }
+.wpcf7 form .wpcf7-response-output { margin: 1rem 0 0; padding: .8rem 1rem; border-radius: 8px; border-width: 1px; font-size: .9rem; }
+.wpcf7 form.sent .wpcf7-response-output { background: #e8f6ee; border-color: #86c79f; color: #14532d; }
+.wpcf7 form:is(.invalid, .unaccepted, .payment-required, .failed, .aborted, .spam) .wpcf7-response-output { background: #fdecec; border-color: #f1a9a9; color: #7f1d1d; }
 .vf-form__catatan { margin: 0; font-size: .8rem; color: var(--wp--preset--color--abu); }
 .vf-notif { margin: 0; padding: .8rem 1rem; border-radius: 8px; }
 .vf-notif--ok { background: #e8f6ee; color: #14532d; }
@@ -380,7 +576,9 @@ img { height: auto; }
 /* Blok shortcode tercetak tanpa pembungkus, jadi jarak judul → daftar diberi di judulnya (sama dengan kolom Kontak). */
 .vf-statistik > .vf-footer__judul { margin-bottom: .8rem !important; }
 .vf-statistik:not(:has(.velocity-list-stats)) { display: none; }
-.vf-statistik .velocity-list-stats { list-style: none; display: grid; gap: .5rem; margin: 0; padding-left: 0; }
+/* Seragam dengan daftar lain di footer (kolom Menu): tanpa kotak, garis, atau selang-seling
+   — permintaan user 2026-09-18. Jarak & ukuran huruf sama dengan .vf-footer__daftar. */
+.vf-statistik .velocity-list-stats { list-style: none; display: grid; gap: .45rem; margin: 0; padding-left: 0; }
 .vf-statistik .velocity-list-stats > li,
 .vf-statistik .velocity-list-stats > div {
   display: flex;
@@ -391,40 +589,12 @@ img { height: auto; }
   padding: 0;
   border: 0;
   background: none;
-  font-size: .9rem;
+  font-size: .92rem;
 }
 .vf-statistik .velocity-list-stats > li > span:first-child,
 .vf-statistik .velocity-list-stats > div > span:first-child { opacity: .85; }
 .vf-statistik .velocity-list-stats .fw-bold { font-weight: 800; color: var(--wp--preset--color--aksen-di-primary); }
 
-/* Statistik versi tampilan 2 (manifest `velocity_palet_versi=2`, permintaan user
-   2026-09-16): tetap shortcode [velocity-statistics style="list"], tapi tampilannya
-   ikut token desain referensi klien — font judul untuk angka, garis pemisah dari palet
-   (kelas Bootstrap `border-bottom` milik plugin tidak pernah aktif di tema blok), dan
-   sudut mengikuti --vf-kartu-radius. Situs lama tanpa kelas vf-tampilan-2 tidak berubah. */
-.vf-tampilan-2 .vf-statistik .velocity-list-stats {
-  gap: 0;
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-  border-radius: var(--vf-kartu-radius, 12px);
-  overflow: hidden;
-}
-.vf-tampilan-2 .vf-statistik .velocity-list-stats > li,
-.vf-tampilan-2 .vf-statistik .velocity-list-stats > div {
-  padding: .5rem .8rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-  font-size: .88rem;
-}
-.vf-tampilan-2 .vf-statistik .velocity-list-stats > :last-child { border-bottom: 0; }
-.vf-tampilan-2 .vf-statistik .velocity-list-stats > :nth-child(odd) {
-  background: color-mix(in srgb, currentColor 4%, transparent);
-}
-.vf-tampilan-2 .vf-statistik .velocity-list-stats .fw-bold {
-  font-family: var(--vf-font-judul, var(--vf-font-teks, inherit));
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--vf-judul-tebal, 800);
-}
-/* Footer terang: angka memakai aksen versi teks supaya tetap 4.5:1 di atas latar terang. */
-.vf-tampilan-2.vf-footer-terang .vf-statistik .velocity-list-stats .fw-bold { color: var(--wp--preset--color--aksen-teks); }
 .vf-tampilan-2.vf-footer-gelap .vf-statistik .velocity-list-stats .fw-bold { color: var(--wp--preset--color--aksen-di-primary); }
 
 /* ---------- gaya beranda perusahaan "korporat" & "terbelah" ----------
@@ -528,11 +698,119 @@ img { height: auto; }
   line-height: 1;
 }
 .vf-ref .vf-kartu-panah .vf-kartu-foto__isi { padding-bottom: 3.2rem; }
+/* Deret logo mitra & klien dari company profile: kotak putih seragam, logo utuh
+   (tidak dipotong) dan tidak melar (permintaan user 2026-09-18). */
+.vf-klien--logo { align-items: center; }
+.vf-klien--logo .vf-klien__logo { margin: 0; }
+/* Carousel logo: strip geser mendatar + tombol panah (dipasang assets/js/slider.js).
+   Tanpa JS tetap bisa digeser jari/trackpad. */
+.vf-logo-geser {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  padding-bottom: .25rem;
+}
+.vf-logo-geser::-webkit-scrollbar { display: none; }
+.vf-logo-geser > * {
+  flex: 0 0 calc((100% - 4rem) / 5);
+  scroll-snap-align: start;
+  margin: 0 !important;
+}
+@media (max-width: 1024px) { .vf-logo-geser > * { flex-basis: calc((100% - 2rem) / 3); } }
+@media (max-width: 600px) { .vf-logo-geser > * { flex-basis: calc((100% - 1rem) / 2); } }
+/* Varian carousel untuk FOTO (bukan logo): kartu lebih besar, gambar bersudut, keterangan
+   di bawahnya. Memakai mekanisme geser & panah yang sama. */
+.vf-geser-foto > * { flex-basis: calc((100% - 3rem) / 4); }
+@media (max-width: 1024px) { .vf-geser-foto > * { flex-basis: calc((100% - 1rem) / 2); } }
+@media (max-width: 600px) { .vf-geser-foto > * { flex-basis: 100%; } }
+.vf-geser-foto figure { margin: 0; }
+.vf-geser-foto img {
+  display: block;
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: var(--vf-kartu-radius, 15px);
+}
+.vf-geser-foto figcaption {
+  margin-top: .65rem;
+  color: var(--wp--preset--color--ink);
+  font-size: .95rem;
+  font-weight: 600;
+  text-align: left;
+}
+.vf-logo-geser__bingkai { position: relative; }
+.vf-logo-geser__nav {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  /* Ikon panah diperbesar & diberi garis tegas supaya kelihatan (permintaan user
+     2026-09-18); sebelumnya tipis dan nyaris menyatu dengan latar. */
+  border: 2px solid var(--wp--preset--color--garis);
+  border-radius: 999px;
+  background: var(--wp--preset--color--putih);
+  color: var(--wp--preset--color--ink);
+  font-size: 1.9rem;
+  font-weight: 400;
+  line-height: 1;
+  padding-bottom: .18em;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .1);
+}
+.vf-logo-geser__nav:hover { border-color: var(--wp--preset--color--primary); }
+/* Panah non-aktif tetap terlihat (redup) — penanda bahwa deretnya bisa digeser. */
+.vf-logo-geser__nav.is-mati { opacity: .35; cursor: default; box-shadow: none; }
+.vf-logo-geser__nav.is-mati:hover { border-color: var(--wp--preset--color--garis); }
+.vf-logo-geser__nav--mundur { left: -1.5rem; }
+.vf-logo-geser__nav--maju { right: -1.5rem; }
+
+.vf-klien--logo .vf-klien__logo img {
+  display: block;
+  width: 100%;
+  height: 84px;
+  object-fit: contain;
+  background: var(--wp--preset--color--putih);
+  /* Garis tipis supaya batas tiap kotak logo terlihat di latar abu. */
+  border: 1px solid var(--wp--preset--color--garis);
+  border-radius: var(--vf-kartu-radius, 15px);
+  padding: .9rem 1.1rem;
+  box-sizing: border-box;
+}
 .vf-kartu-foto__isi { padding: 1.1rem 1.25rem 1.35rem; }
 .vf-kartu-foto__isi > * { margin-block: 0 !important; }
 .vf-kartu-foto h3 { color: var(--wp--preset--color--ink); font-size: 1.12rem; line-height: 1.3; }
 .vf-kartu-foto p { margin-top: .5rem !important; font-size: .93rem; }
-.vf-kartu-foto ul { margin-top: .6rem !important; padding-left: 1.1rem; font-size: .9rem; }
+/* Poin layanan tanpa bullet: dirapikan jadi baris bertanda centang kecil, rata kiri
+   (permintaan user 2026-09-18 — bullet bawaan terlihat berantakan di kartu). */
+.vf-kartu-foto ul {
+  margin-top: .75rem !important;
+  padding-left: 0;
+  list-style: none;
+  font-size: .9rem;
+  text-align: left;
+}
+.vf-kartu-foto ul li {
+  position: relative;
+  margin: 0;
+  padding: .3rem 0 .3rem 1.45rem;
+  line-height: 1.5;
+}
+.vf-kartu-foto ul li + li { border-top: 1px solid var(--wp--preset--color--garis); }
+.vf-kartu-foto ul li::before {
+  content: "\2713";
+  position: absolute;
+  left: 0;
+  top: .3rem;
+  color: var(--wp--preset--color--aksen);
+  font-weight: 700;
+}
 
 /* keunggulan berikon */
 .vf-kotak-ikon {
@@ -1653,7 +1931,7 @@ body.vf-gaya-dealer .vf-form {
   border: 1px solid var(--wp--preset--color--garis);
   background: var(--vf-dealer-kartu);
 }
-body.vf-gaya-dealer .vf-form :is(input, select, textarea) {
+body.vf-gaya-dealer .vf-form :is(input:not([type="submit"]), select, textarea) {
   border-color: var(--wp--preset--color--garis);
   background: var(--wp--preset--color--putih);
   color: var(--wp--preset--color--ink);
@@ -2628,7 +2906,7 @@ body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: c
 
 /* banner judul halaman dalam */
 .vf-ref:is(.vf-banner-gelap, .vf-banner-aksen, .vf-banner-foto) .vf-judul-halaman.has-background,
-.vf-ref:is(.vf-banner-gelap, .vf-banner-aksen, .vf-banner-foto) .vf-judul-halaman :is(h1, .wp-block-post-title, .vf-remah, .vf-remah a) {
+.vf-ref:is(.vf-banner-gelap, .vf-banner-aksen, .vf-banner-foto) .vf-judul-halaman :is(h1, .wp-block-post-title, .vf-remah, .vf-remah a, .vf-artikel__tanggal, .wp-block-post-date) {
   color: var(--wp--preset--color--di-primary) !important;
 }
 .vf-ref.vf-banner-gelap .vf-judul-halaman.has-background { background: var(--wp--preset--color--primary-gelap) !important; }

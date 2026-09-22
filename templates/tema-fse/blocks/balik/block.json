@@ -1,11 +1,11 @@
 {
 	"$schema": "https://schemas.wp.org/trunk/block.json",
 	"apiVersion": 3,
-	"name": "velocity/populer",
-	"title": "Tulisan Terpopuler",
+	"name": "velocity/balik",
+	"title": "Kembali ke Daftar Artikel",
 	"category": "widgets",
-	"icon": "chart-bar",
-	"description": "Lima tulisan dengan komentar terbanyak (lalu terbaru). Terisi otomatis dari artikel situs.",
+	"icon": "arrow-left-alt",
+	"description": "Tautan \"Kembali\" ke kategori atau halaman daftar artikel. Tujuannya ditentukan otomatis.",
 	"supports": {
 		"html": false
 	},
