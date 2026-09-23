@@ -682,6 +682,9 @@ else
   # notify-telegram & bagan proses, jadi tidak boleh ditambah kolom.
   child_error=$(child_val error)
   [[ -z "$child_error" ]] || echo "child_theme_error:$child_error" >&2
+  # Referensi web luar: child theme yang dipakai web itu (dilaporkan bila belum di API).
+  child_ref_tema=$(child_val ref_tema)
+  [[ -z "$child_ref_tema" ]] || echo "child_theme_ref_tema:$child_ref_tema" >&2
   if [[ "$child_status" == matched ]]; then
     CHILD_SLUG=$(child_val slug)
     CHILD_ZIP=$(child_val zip)

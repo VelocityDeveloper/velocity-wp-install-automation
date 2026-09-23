@@ -1,0 +1,555 @@
+#!/usr/bin/env python3
+"""Paket Toko Online biasa: menu toko & produk VD Store (keputusan user 2026-09-23).
+
+Pemakaian: toko-biasa --menu <manifest>     menu utama baku toko
+           toko-biasa --produk <manifest>   produk dari folder produk klien, atau 5 produk contoh
+           toko-biasa --produk --coba <manifest>   susun & tampilkan daftar produk tanpa SSH
+           --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
+
+Alur di installer-runner (hanya paket toko online BIASA, bukan Toko Online Custom):
+  VD Store dipasang + halaman toko digenerate (vd-store, vd-store-settings)
+  -> toko-biasa --menu -> konten AI -> site-finish (logo) -> toko-biasa --produk -> alur lama
+
+--menu: Beranda, Produk (arsip store_product), Pricelist, Keranjang, Cek Ongkir, Tracking Order,
+  Berita. Halaman Pricelist dibuat bila belum ada (template page-pricelist.php bila tema punya;
+  selain itu shortcode [wp_store_catalog]). Menu hanya disusun ulang kalau masih kosong, masih
+  menu bawaan installer, atau masih persis susunan langkah ini — menu yang disunting orang dibiarkan.
+
+--produk: folder berpola produk/product di folder klien (/home/On Progress/<domain>) dibaca
+  per produk: subfolder = satu produk (keterangan .txt/.docx di dalamnya = deskripsi), gambar
+  bernama jelas = satu produk (harga dari nama berkas, mis. "Daster (95k).jpg"), gambar bernama
+  generik ("WhatsApp Image ...", "IMG-...") & dokumen daftar produk dikenali Claude
+  (scripts/claude_vision.py): dikelompokkan per produk, dinamai, harga hanya bila tertulis.
+  Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (judul "Contoh – ",
+  meta _velocity_contoh=1) berfoto Pexels. Produk contoh dihapus begitu produk asli masuk.
+  Produk yang sudah diimpor (meta _velocity_produk_kunci) tidak digandakan pada run ulang.
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import claude_vision  # noqa: E402
+from client_form import read_client_form  # noqa: E402
+
+ON_PROGRESS = Path('/home/On Progress')
+KERJA = Path('/var/lib/velocity/toko-produk')
+GAMBAR = {'.jpg', '.jpeg', '.png', '.webp'}
+DOKUMEN = {'.txt', '.docx', '.doc', '.pdf', '.xlsx', '.xls', '.csv'}
+FOLDER_PRODUK = re.compile(r'produ[ck]|product', re.I)
+BUKAN_PRODUK = re.compile(r'logo|contoh|referensi|screenshot|tangkapan|desain|banner', re.I)
+NAMA_GENERIK = re.compile(r'^(whatsapp (image|unknown)|gambar whatsapp|img[-_ ]?\d|img_|dsc|pxl_|photo|image|foto|'
+                          r'screenshot|\d{6,}|[\d\s().,_-]+$)', re.I)
+BATAS_BYTE = 100 * 1024
+MAKS_PRODUK = 60
+MAKS_GAMBAR_AI = 30
+JUMLAH_CONTOH = 5
+UA = {'User-Agent': 'velocity-installer/1.0'}
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+finish = muat('site_finish', 'site-finish')
+
+
+def log(pesan):
+    print(f'toko: {pesan}', flush=True)
+
+
+def toko_biasa(paket):
+    p = re.sub(r'\s+', '', (paket or '').lower())
+    return 'tokoonline' in p and 'custom' not in p
+
+
+# ---------- menu ----------
+
+MENU_PHP = r'''<?php
+$lokasi = get_nav_menu_locations();
+$mid = (int) ($lokasi['primary'] ?? 0);
+if (!$mid) {
+    $mid = (int) wp_create_nav_menu('Primary Menu');
+    if (!$mid) { echo "menu: gagal_buat\n"; return; }
+    $lokasi['primary'] = $mid; set_theme_mod('nav_menu_locations', $lokasi);
+    echo "menu: dibuat:$mid\n";
+}
+$items = wp_get_nav_menu_items($mid) ?: [];
+$sidik = function ($items) { return md5(implode('|', array_map(function ($i) { return $i->title . '>' . $i->url; }, $items))); };
+$bawaan = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'layanan', 'kontak'];
+$semua_bawaan = true;
+foreach ($items as $it) { if (!in_array(strtolower(trim($it->title)), $bawaan, true)) { $semua_bawaan = false; } }
+if ($items && !$semua_bawaan && get_option('velocity_menu_toko') !== $sidik($items)) {
+    echo "menu: dibiarkan:disunting\n"; return;
+}
+
+// Halaman Pricelist
+$pl = get_page_by_path('pricelist', OBJECT, 'page');
+if (!$pl || $pl->post_status !== 'publish') {
+    $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Pricelist',
+                          'post_name' => 'pricelist', 'post_content' => ''], true);
+    if (!is_wp_error($id)) { update_post_meta($id, '_velocity_toko_biasa', 1); $pl = get_post($id); echo "menu: pricelist_dibuat:$id\n"; }
+}
+if ($pl && get_post_meta($pl->ID, '_velocity_toko_biasa', true)) {
+    $punya = file_exists(get_stylesheet_directory() . '/page-pricelist.php') || file_exists(get_template_directory() . '/page-pricelist.php');
+    if ($punya) {
+        update_post_meta($pl->ID, '_wp_page_template', 'page-pricelist.php');
+        if ($pl->post_content !== '') { wp_update_post(['ID' => $pl->ID, 'post_content' => '']); }
+    } elseif (strpos($pl->post_content, '[wp_store_catalog') === false) {
+        wp_update_post(['ID' => $pl->ID, 'post_content' => '[wp_store_catalog]']);
+    }
+    echo 'menu: pricelist:' . ($punya ? 'template_tema' : 'shortcode_katalog') . "\n";
+}
+
+$s = (array) get_option('wp_store_settings', []);
+$hal = function ($kunci) use ($s) { $id = absint($s[$kunci] ?? 0); return ($id && get_post_status($id) === 'publish') ? $id : 0; };
+$berita = (int) get_option('page_for_posts');
+if (!$berita) { $b = get_page_by_path('berita', OBJECT, 'page'); $berita = $b ? $b->ID : 0; }
+$susunan = [
+    ['Beranda', 'page', (int) get_option('page_on_front')],
+    ['Produk', 'url', get_post_type_archive_link('store_product')],
+    ['Pricelist', 'page', $pl ? $pl->ID : 0],
+    ['Keranjang', 'page', $hal('page_cart')],
+    ['Cek Ongkir', 'page', $hal('page_shipping_check')],
+    ['Tracking Order', 'page', $hal('page_tracking')],
+    ['Berita', 'page', $berita],
+];
+foreach ($items as $it) { wp_delete_post($it->ID, true); }
+$pos = 0;
+foreach ($susunan as [$judul, $jenis, $nilai]) {
+    if (!$nilai) { echo "menu: lewati:$judul\n"; continue; }
+    $pos++;
+    $data = ['menu-item-title' => $judul, 'menu-item-status' => 'publish', 'menu-item-position' => $pos];
+    if ($jenis === 'page') {
+        $data += ['menu-item-object-id' => $nilai, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type'];
+    } else {
+        $data += ['menu-item-url' => $nilai, 'menu-item-type' => 'custom'];
+    }
+    wp_update_nav_menu_item($mid, 0, $data);
+}
+update_option('velocity_menu_toko', $sidik(wp_get_nav_menu_items($mid) ?: []), false);
+echo "menu: tersusun:$pos\n";
+'''
+
+
+# ---------- produk: baca folder klien ----------
+
+def folder_produk(folder):
+    """Folder produk teratas di folder klien (Produk/, foto produk/, Product/, ...)."""
+    hasil = []
+    for p in sorted(folder.rglob('*')):
+        if not p.is_dir():
+            continue
+        bagian = p.relative_to(folder).parts
+        if not FOLDER_PRODUK.search(p.name) or any(BUKAN_PRODUK.search(b) for b in bagian):
+            continue
+        if any(h in p.parents for h in hasil):
+            continue
+        hasil.append(p)
+    return hasil
+
+
+def harga_dari(teks):
+    """Harga rupiah dari teks/nama berkas: "Rp 45rb", "(95k)", "225.000", "1,5jt". None bila tak ada."""
+    t = (teks or '').lower().replace(' ', ' ')
+    m = re.search(r'(?:rp\.?\s*)?(\d+(?:[.,]\d+)?)\s*(jt|juta|rb|ribu|k)\b', t)
+    if m:
+        angka = float(m.group(1).replace(',', '.'))
+        return int(angka * (1_000_000 if m.group(2) in ('jt', 'juta') else 1000))
+    m = re.search(r'rp\.?\s*(\d{1,3}(?:[.,]\d{3})+|\d{4,})', t) or re.search(r'(?<![\d.,])(\d{1,3}(?:\.\d{3})+)(?![\d.,])', t)
+    if m:
+        return int(re.sub(r'\D', '', m.group(1)))
+    return None
+
+
+def bersihkan_nama(stem):
+    n = re.sub(r'\((\d+)\)|\s-\s?\d+$|_\d+$', ' ', stem)
+    n = re.sub(r'(?:rp\.?\s*)?\d+(?:[.,]\d+)*\s*(?:jt|juta|rb|ribu|k)\b|rp\.?\s*[\d.,]+', ' ', n, flags=re.I)
+    n = re.sub(r'^\s*\d+\s*[.)-]\s*', '', n)
+    n = re.sub(r'[_]+', ' ', n)
+    n = re.sub(r'\(\s*\)|\[\s*\]', ' ', n)
+    n = re.sub(r'\s+', ' ', n).strip(' -.,')
+    return n[:1].upper() + n[1:] if n else ''
+
+
+def teks_dokumen(berkas):
+    try:
+        docs = muat('client_docs_mod', 'client_docs.py')
+        return '\n'.join(str(x) for x in docs._doc_lines(berkas))[:4000]
+    except Exception:
+        return ''
+
+
+def susun_draf(folder):
+    """Draf produk dari struktur folder & nama berkas, plus daftar yang perlu dikenali AI."""
+    produk, generik, dokumen = [], [], []
+    for akar in folder_produk(folder):
+        for d in [akar] + sorted(x for x in akar.rglob('*') if x.is_dir()):
+            if any(BUKAN_PRODUK.search(b) for b in d.relative_to(folder).parts):
+                continue
+            gambar = sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in GAMBAR and f.stat().st_size >= 5000)
+            docs = sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in DOKUMEN)
+            if d != akar and gambar:
+                teks = '\n'.join(teks_dokumen(x) for x in docs)
+                nama = bersihkan_nama(d.name) or d.name
+                # Folder berupa kode ("15b"): nama gambar di dalamnya ("HP 15 black") lebih jelas.
+                if len(re.findall(r'[A-Za-z]', nama)) < 4:
+                    dari_gambar = bersihkan_nama(gambar[0].stem)
+                    if dari_gambar and not NAMA_GENERIK.search(gambar[0].stem.strip()):
+                        nama = dari_gambar
+                produk.append({'nama': nama, 'harga': harga_dari(d.name) or harga_dari(teks), 'deskripsi': teks.strip()[:1500],
+                               'kategori': bersihkan_nama(d.parent.name) if d.parent != akar else '', 'gambar': [str(g) for g in gambar]})
+                continue
+            dokumen += [x for x in docs if d == akar or not gambar]
+            if d != akar:
+                continue
+            kelompok = {}
+            for g in gambar:
+                if NAMA_GENERIK.search(g.stem.strip()):
+                    generik.append(g)
+                    continue
+                nama = bersihkan_nama(g.stem)
+                if not nama:
+                    generik.append(g)
+                    continue
+                k = kelompok.setdefault(nama.lower(), {'nama': nama, 'harga': harga_dari(g.stem), 'deskripsi': '',
+                                                       'kategori': '', 'gambar': []})
+                k['gambar'].append(str(g))
+                k['harga'] = k['harga'] or harga_dari(g.stem)
+            produk += list(kelompok.values())
+    return produk, generik, dokumen
+
+
+def kenali_ai(domain, generik, dokumen, produk):
+    """Claude mengelompokkan & menamai foto bernama generik, memakai teks dokumen produk."""
+    hasil = []
+    teks_docs = '\n\n'.join(f'== {d.name}\n{teks_dokumen(d)}' for d in dokumen)[:8000]
+    nama_ada = ', '.join(p['nama'] for p in produk)[:1500]
+    for mulai in range(0, len(generik), MAKS_GAMBAR_AI):
+        potong = generik[mulai:mulai + MAKS_GAMBAR_AI]
+        daftar = '\n'.join(f'{claude_vision.nama_gambar(i)} (berkas asli: {g.name})' for i, g in enumerate(potong))
+        prompt = (
+            f'Kamu menyusun katalog produk toko online {domain} dari foto kiriman klien.\n'
+            f'Baca SEMUA gambar ini di folder kerja:\n{daftar}\n\n'
+            + (f'Dokumen produk dari klien (sumber nama/harga/deskripsi):\n{teks_docs}\n\n' if teks_docs else '')
+            + (f'Produk lain yang sudah dikenali dari nama berkas: {nama_ada}\n\n' if nama_ada else '')
+            + 'Aturan:\n'
+            '- Kelompokkan foto yang menampilkan PRODUK YANG SAMA (sudut/warna berbeda) jadi satu produk.\n'
+            '- Nama produk singkat & jelas dalam bahasa Indonesia; pakai nama dari dokumen atau tulisan di foto bila ada.\n'
+            '- harga: angka rupiah HANYA bila tertulis di foto/dokumen/nama berkas; selain itu null. Jangan mengarang.\n'
+            '- deskripsi: 1-3 kalimat dari yang terlihat/tertulis saja, tanpa klaim yang tidak terlihat.\n'
+            '- kategori: jenis produk umum (mis. "Obat Bebas", "Gamis").\n'
+            '- Lewati gambar yang bukan foto produk (logo, banner promo tanpa produk, tangkapan layar chat, foto orang saja).\n'
+            'Jawab HANYA JSON array: [{"nama": "...", "harga": 12000 | null, "deskripsi": "...", '
+            '"kategori": "...", "gambar": ["g01.jpg", ...]}]')
+        jawab = claude_vision.tanya(prompt, potong, timeout=600, log=log)
+        if not isinstance(jawab, list):
+            log(f'ai_gagal_potongan:{mulai // MAKS_GAMBAR_AI + 1}')
+            return None
+        peta = {claude_vision.nama_gambar(i): str(g) for i, g in enumerate(potong)}
+        for item in jawab:
+            if not isinstance(item, dict):
+                continue
+            gbr = [peta[x] for x in item.get('gambar') or [] if x in peta]
+            nama = str(item.get('nama') or '').strip()
+            if not gbr or not nama:
+                continue
+            harga = item.get('harga')
+            hasil.append({'nama': nama[:120], 'harga': int(harga) if isinstance(harga, (int, float)) and harga > 0 else None,
+                          'deskripsi': str(item.get('deskripsi') or '').strip()[:1500],
+                          'kategori': str(item.get('kategori') or '').strip()[:60], 'gambar': gbr})
+    return hasil
+
+
+def daftar_produk(domain):
+    """(produk, sumber). sumber: folder | kosong. Hasil disimpan per sidik isi folder."""
+    folder = ON_PROGRESS / domain
+    produk, generik, dokumen = susun_draf(folder)
+    if not produk and not generik:
+        return [], 'kosong'
+    sidik = hashlib.md5('\n'.join(sorted(f'{p}:{Path(p).stat().st_size}' for p in
+                                         [g for x in produk for g in x['gambar']] + [str(g) for g in generik]
+                                         + [str(d) for d in dokumen])).encode()).hexdigest()
+    simpan = KERJA / domain / 'produk.json'
+    try:
+        lama = json.loads(simpan.read_text())
+        if lama.get('sidik') == sidik:
+            log(f'produk_dari_tembolok:{len(lama["produk"])}')
+            return lama['produk'], 'folder'
+    except (OSError, ValueError, KeyError):
+        pass
+    if generik:
+        log(f'kenali_ai: gambar_generik={len(generik)} dokumen={len(dokumen)}')
+        ai = kenali_ai(domain, generik, dokumen, produk)
+        if ai is None:
+            # Claude tak tersedia: tiap foto generik jadi produk bernama urut; PM mengganti namanya.
+            ai = [{'nama': f'Produk {i}', 'harga': None, 'deskripsi': '', 'kategori': '', 'gambar': [str(g)]}
+                  for i, g in enumerate(generik, 1)]
+            log('kenali_ai: cadangan_nama_urut')
+        produk += ai
+    produk = produk[:MAKS_PRODUK]
+    simpan.parent.mkdir(parents=True, exist_ok=True)
+    simpan.write_text(json.dumps({'sidik': sidik, 'produk': produk}, ensure_ascii=False, indent=1))
+    return produk, 'folder'
+
+
+# ---------- produk contoh ----------
+
+def produk_contoh(domain, cfg):
+    """5 produk contoh sesuai bidang usaha (Claude), foto dari Pexels."""
+    simpan = KERJA / domain / 'contoh.json'
+    try:
+        return json.loads(simpan.read_text())
+    except (OSError, ValueError):
+        pass
+    form = read_client_form(ON_PROGRESS / domain)
+    fields = {k: v for k, v in (form.get('fields') or {}).items()
+              if not re.search(r'password|sandi|login|user|alamat|nama anda|hp|telp|wa|email|bank|kodepos', k, re.I)}
+    try:
+        tema = json.loads((Path('/var/lib/velocity/ai/generated') / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        tema = {}
+    layanan = ', '.join(str(x.get('judul') or x) if isinstance(x, dict) else str(x) for x in (tema.get('layanan') or []))[:600]
+    prompt = (
+        f'Buat {JUMLAH_CONTOH} produk CONTOH untuk toko online "{cfg.get("site_title") or domain}".\n'
+        f'Data form klien:\n' + '\n'.join(f'- {k}: {v}' for k, v in fields.items())[:2500] + '\n'
+        + (f'Layanan/bidang: {layanan}\n' if layanan else '')
+        + 'Produk harus jenis barang yang wajar dijual toko ini, harga perkiraan pasar Indonesia (angka bulat).\n'
+        'Jawab HANYA JSON array: [{"nama": "...", "kategori": "...", "harga": 25000, '
+        '"deskripsi": "2 kalimat", "kata_kunci_foto": "english keywords for stock photo"}]')
+    jawab = claude_vision.tanya(prompt, [], timeout=300, log=log)
+    if not isinstance(jawab, list) or not jawab:
+        jawab = [{'nama': f'Produk {i}', 'kategori': 'Produk', 'harga': 0, 'deskripsi': 'Produk contoh.',
+                  'kata_kunci_foto': 'product package'} for i in range(1, JUMLAH_CONTOH + 1)]
+    jawab = [x for x in jawab if isinstance(x, dict)][:JUMLAH_CONTOH]
+    foto = muat('paket_g_foto', 'paket-g-foto').Pexels()
+    kerja = KERJA / domain / 'contoh'
+    kerja.mkdir(parents=True, exist_ok=True)
+    produk, terpakai = [], set()
+    for i, x in enumerate(jawab, 1):
+        gambar = []
+        for calon in foto.cari(str(x.get('kata_kunci_foto') or x.get('nama') or ''))[:8]:
+            if not calon.get('url') or calon['url'] in terpakai:
+                continue
+            try:
+                tujuan = kerja / f'contoh-{i}.jpg'
+                req = urllib.request.Request(calon['url'], headers=UA)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    tujuan.write_bytes(resp.read())
+                gambar = [str(tujuan)]
+                terpakai.add(calon['url'])
+                break
+            except Exception:
+                continue
+        harga = x.get('harga')
+        produk.append({'nama': 'Contoh – ' + str(x.get('nama') or f'Produk {i}').strip()[:100],
+                       'harga': int(harga) if isinstance(harga, (int, float)) and harga > 0 else None,
+                       'deskripsi': 'Produk CONTOH untuk pratinjau toko; nama, harga, dan foto akan diganti data produk asli. '
+                                    + str(x.get('deskripsi') or '').strip(),
+                       'kategori': str(x.get('kategori') or 'Produk').strip()[:60], 'gambar': gambar, 'contoh': True})
+    simpan.write_text(json.dumps(produk, ensure_ascii=False, indent=1))
+    return produk
+
+
+# ---------- kompres & kirim ----------
+
+def kompres(sumber, tujuan, batas=BATAS_BYTE):
+    """JPEG < batas byte: sisi maks 1200px, kualitas diturunkan lalu ukuran diperkecil."""
+    from PIL import Image, ImageOps
+    with Image.open(sumber) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ('RGBA', 'LA', 'P'):
+            im = im.convert('RGBA')
+            latar = Image.new('RGB', im.size, 'white')
+            latar.paste(im, mask=im.split()[-1])
+            im = latar
+        else:
+            im = im.convert('RGB')
+        if Path(sumber).stat().st_size <= batas and Path(sumber).suffix.lower() in ('.jpg', '.jpeg') and max(im.size) <= 1600:
+            shutil.copy2(sumber, tujuan)
+            return Path(tujuan).stat().st_size
+        im.thumbnail((1200, 1200))
+        while True:
+            for q in (85, 78, 70, 62, 55, 48, 40):
+                buf = io.BytesIO()
+                im.save(buf, 'JPEG', quality=q, optimize=True, progressive=True)
+                if buf.tell() < batas:
+                    Path(tujuan).write_bytes(buf.getvalue())
+                    return buf.tell()
+            if max(im.size) <= 300:
+                Path(tujuan).write_bytes(buf.getvalue())
+                return buf.tell()
+            im = im.resize((int(im.width * 0.8), int(im.height * 0.8)), Image.LANCZOS)
+
+
+PRODUK_PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+if (!post_type_exists('store_product')) { echo "produk: dilewati:vd_store_tidak_aktif\n"; return; }
+$dir = getenv('PRODUK_DIR');
+$data = json_decode(file_get_contents($dir . '/produk.json'), true) ?: [];
+$ada_asli = false;
+foreach ($data as $p) { if (empty($p['contoh'])) { $ada_asli = true; } }
+$contoh_lama = get_posts(['post_type' => 'store_product', 'post_status' => 'any', 'numberposts' => -1,
+                          'meta_key' => '_velocity_contoh', 'meta_value' => '1', 'fields' => 'ids']);
+if ($ada_asli && $contoh_lama) {
+    foreach ($contoh_lama as $id) {
+        foreach (array_merge([get_post_thumbnail_id($id)], (array) get_post_meta($id, '_store_gallery_ids', true)) as $a) { if ($a) { wp_delete_attachment((int) $a, true); } }
+        wp_delete_post($id, true);
+    }
+    echo 'produk: contoh_dihapus:' . count($contoh_lama) . "\n";
+}
+$jumlah_asli = count(get_posts(['post_type' => 'store_product', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids',
+                                'meta_query' => [['key' => '_velocity_contoh', 'compare' => 'NOT EXISTS']]]));
+if (!$ada_asli && $jumlah_asli) { echo "produk: contoh_dilewati:sudah_ada_produk\n"; return; }
+if (!$ada_asli && $contoh_lama) { echo "produk: contoh_sudah_ada\n"; return; }
+$baru = 0; $ada = 0;
+foreach ($data as $p) {
+    $kunci = $p['kunci'];
+    $lama = get_posts(['post_type' => 'store_product', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids',
+                       'meta_key' => '_velocity_produk_kunci', 'meta_value' => $kunci]);
+    if ($lama) { $ada++; continue; }
+    $id = wp_insert_post(['post_type' => 'store_product', 'post_status' => 'publish', 'post_title' => $p['nama'],
+                          'post_content' => $p['deskripsi'] ? wpautop(esc_html($p['deskripsi'])) : ''], true);
+    if (is_wp_error($id)) { echo 'produk: gagal:' . $id->get_error_message() . "\n"; continue; }
+    update_post_meta($id, '_velocity_produk_kunci', $kunci);
+    update_post_meta($id, '_store_product_type', 'physical');
+    if (!empty($p['harga'])) { update_post_meta($id, '_store_price', (int) $p['harga']); }
+    if (!empty($p['contoh'])) { update_post_meta($id, '_velocity_contoh', 1); }
+    if (!empty($p['kategori'])) {
+        $t = term_exists($p['kategori'], 'store_product_cat') ?: wp_insert_term($p['kategori'], 'store_product_cat');
+        if (!is_wp_error($t)) { wp_set_object_terms($id, [(int) $t['term_id']], 'store_product_cat'); }
+    }
+    $lampiran = [];
+    foreach ($p['berkas'] as $i => $b) {
+        $tmp = wp_tempnam($b); copy($dir . '/' . $b, $tmp);
+        $a = media_handle_sideload(['name' => sanitize_file_name($p['slug'] . '-' . ($i + 1) . '.jpg'), 'tmp_name' => $tmp], $id, $p['nama']);
+        if (!is_wp_error($a)) { $lampiran[] = $a; update_post_meta($a, '_velocity_source', 'produk:' . $kunci); }
+    }
+    if ($lampiran) {
+        set_post_thumbnail($id, $lampiran[0]);
+        if (count($lampiran) > 1) { update_post_meta($id, '_store_gallery_ids', array_slice($lampiran, 1)); }
+    }
+    $baru++;
+}
+echo "produk: dibuat:$baru sudah_ada:$ada\n";
+'''
+
+
+def kirim_dan_jalankan(cfg, php, stage, env_tambahan=''):
+    """Kirim folder stage ke server, lalu jalankan php lewat wp eval-file."""
+    domain, da_user = cfg['domain'].lower(), cfg.get('da_user', '')
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    ssh = finish.ssh_command(cfg, key)
+    root = finish.docroot(domain, da_user)
+    remote = f'/tmp/velocity-toko-{domain}'
+    global DIUBAH
+    DIUBAH = True
+    (Path(stage) / 'skrip.php').write_text(php)
+    tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+    up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote)} && mkdir -p {shlex.quote(remote)} && tar -xzf - -C {shlex.quote(remote)}'],
+                        stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+    tar.wait()
+    if up.returncode != 0:
+        log(f'gagal_kirim:{up.stderr.strip()[:200]}')
+        return 1
+    skrip = (f'set -e\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\n'
+             f'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+             f'{env_tambahan}\n'
+             f'PRODUK_DIR={shlex.quote(remote)} php -d memory_limit=512M "$WP_BIN" eval-file {shlex.quote(remote + "/skrip.php")} '
+             f'--path={shlex.quote(root)} --allow-root --user=1 2>&1 | grep -v "^Warning:" || true\n'
+             f'rm -rf {shlex.quote(remote)}\n')
+    run = subprocess.run(ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=1800)
+    for baris in (run.stdout + run.stderr).splitlines():
+        if baris.strip():
+            print(baris.strip()[:200])
+    return 0 if run.returncode == 0 else 1
+
+
+def slug(teks):
+    return re.sub(r'[^a-z0-9]+', '-', teks.lower()).strip('-')[:60] or 'produk'
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    mode = '--menu' if '--menu' in sys.argv else '--produk' if '--produk' in sys.argv else ''
+    if not mode or not args:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    if not toko_biasa(cfg.get('paket', '')):
+        log(f'dilewati:bukan_toko_online_biasa:{cfg.get("paket", "")}')
+        return 0
+    # Situs yang sudah ter-deploy tidak diubah tanpa persetujuan (keputusan user 2026-09-23):
+    # --paksa hanya dipakai setelah user menyetujuinya untuk situs itu.
+    if '--coba' not in sys.argv and '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    stage = Path(tempfile.mkdtemp(prefix='velocity-toko-'))
+    try:
+        if mode == '--menu':
+            return kirim_dan_jalankan(cfg, MENU_PHP, stage)
+        produk, sumber = daftar_produk(domain)
+        if not produk:
+            log('folder_produk_kosong: buat produk contoh')
+            produk = produk_contoh(domain, cfg)
+        log(f'produk: sumber={sumber if sumber == "folder" else "contoh"} jumlah={len(produk)}')
+        kirim, total_awal, total_akhir = [], 0, 0
+        for p in produk:
+            kunci = hashlib.md5(('|'.join(sorted(p['gambar'])) or p['nama']).encode()).hexdigest()[:16]
+            berkas = []
+            for i, g in enumerate(p['gambar'][:6]):
+                nama = f'{kunci}-{i + 1}.jpg'
+                try:
+                    total_awal += Path(g).stat().st_size
+                    total_akhir += kompres(g, stage / nama)
+                    berkas.append(nama)
+                except Exception as e:
+                    log(f'kompres_gagal:{Path(g).name}:{type(e).__name__}')
+            kirim.append({'kunci': kunci, 'nama': p['nama'], 'slug': slug(p['nama']), 'harga': p.get('harga'),
+                          'deskripsi': p.get('deskripsi') or '', 'kategori': p.get('kategori') or '',
+                          'berkas': berkas, 'contoh': bool(p.get('contoh'))})
+        besar = [f for f in stage.glob('*.jpg') if f.stat().st_size >= BATAS_BYTE]
+        log(f'gambar: {sum(len(x["berkas"]) for x in kirim)} berkas {total_awal // 1024} KB -> {total_akhir // 1024} KB, '
+            f'>=100KB: {len(besar)}')
+        for x in kirim:
+            log(f'  {x["nama"][:60]} | harga={x["harga"] or "-"} | kategori={x["kategori"] or "-"} | gambar={len(x["berkas"])}')
+        if '--coba' in sys.argv:
+            return 0
+        (stage / 'produk.json').write_text(json.dumps(kirim, ensure_ascii=False))
+        return kirim_dan_jalankan(cfg, PRODUK_PHP, stage)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    kode = 1
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

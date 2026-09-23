@@ -113,6 +113,9 @@ def theme_note(domain):
     child = next((l.split(':') for l in reversed(lines) if l.startswith('child_theme:')), [])
     status = child[1] if len(child) > 1 else ''
     ref = child[2] if len(child) > 2 else ''
+    tema_ref = tema_referensi_web(lines)
+    if status == 'not_found' and ref and tema_ref:
+        return f'{active} (referensi {ref} memakai {tema_ref})'
     if status == 'not_found' and ref:
         return f'{active} (referensi {ref} tidak ada di API tema)'
     if status in ('api_error', 'download_failed'):
@@ -123,6 +126,34 @@ def theme_note(domain):
         # Paket G: child theme kosong bernama project, desainnya dikerjakan manual.
         return f'{active} (child theme baru, desain custom)'
     return active
+
+
+def tema_referensi_web(lines):
+    """Tema yang dipakai web referensi luar (`child_theme_ref_tema:` run terakhir), atau ''."""
+    i = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].startswith('child_theme:')), -1)
+    if i < 0:
+        return ''
+    ref = next((l for l in lines[i + 1:i + 4] if l.startswith('child_theme_ref_tema:')), '')
+    return ref.split(':', 1)[1].strip() if ref else ''
+
+
+def peringatan_tema(domain):
+    """Peringatan bila child theme web referensi belum ada di API tema (keputusan user
+    2026-09-23: paket biasa ber-referensi web luar memakai child theme dari API; kalau
+    belum tersedia, PM diberi tahu supaya tema itu didaftarkan)."""
+    try:
+        lines = (LOG_DIR / f'{domain}.log').read_text(errors='replace').splitlines()[-800:]
+    except OSError:
+        return ''
+    child = next((l.split(':') for l in reversed(lines) if l.startswith('child_theme:')), [])
+    if len(child) < 3 or child[1] != 'not_found':
+        return ''
+    tema = tema_referensi_web(lines)
+    if tema:
+        return (f'Referensi tema belum tersedia di API: {child[2]} memakai {tema}. '
+                f'Situs dipasang dengan tema induk; daftarkan {tema} di api.velocitydeveloper.co '
+                f'lalu jalankan ulang.')
+    return f'Referensi {child[2]} belum tersedia di API tema, situs memakai tema induk.'
 
 
 def wp_login(domain):
@@ -240,7 +271,8 @@ def perbaikan_desain(domain, batas=25):
             f"Screenshot: <code>{html.escape(d.get('potret') or '-')}</code>")
 
 
-def build_message(domain, status, stage, paket='', theme='', maintenance='', login=('', ''), perbaikan=''):
+def build_message(domain, status, stage, paket='', theme='', maintenance='', login=('', ''), perbaikan='',
+                  peringatan=''):
     status = status.upper()
     stage = html.escape(stage or '-')
     head = f'Domain: <code>{domain}</code>\n'
@@ -255,6 +287,8 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
             head += f'Tema: <code>{html.escape(theme)}</code>\n'
         if maintenance:
             head += f'Maintenance: <b>{html.escape(maintenance)}</b>\n'
+        if peringatan:
+            head += f'⚠️ {html.escape(peringatan)}\n'
         situs = manifest_situs_url(domain)
         links = f'Situs: {situs}\nAdmin: {situs}/wp-admin'
         user, password = login
@@ -356,7 +390,8 @@ def main():
     text = build_message(domain, status, stage, manifest_paket(domain),
                          theme_note(domain) if done else '', maintenance_note(domain) if done else '',
                          wp_login(domain) if done else ('', ''),
-                         perbaikan_desain(domain) if 'desain_belum_mirip' in stage else '')
+                         perbaikan_desain(domain) if 'desain_belum_mirip' in stage else '',
+                         peringatan_tema(domain) if done else '')
     failed = 0
     for chat in chats:
         try:

@@ -420,6 +420,11 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # vd-store & vd-store-settings melewati sendiri paket yang bukan toko online, jadi di Paket G,
   # Portal Berita Custom & paket biasa non-toko pemanggilannya hanya mencetak "dilewati".
   pasang_vd_store
+  # Toko Online biasa (keputusan user 2026-09-23): sesudah halaman VD Store digenerate, menu utama
+  # = Beranda, Produk, Pricelist, Keranjang, Cek Ongkir, Tracking Order, Berita. Paket lain &
+  # situs yang sudah ter-deploy dilewati skripnya sendiri.
+  echo "[$(date -Is)] Toko biasa: menu toko" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/toko-biasa" --menu "$MANIFEST" >> "$LOG" 2>&1 || true
   if paket_desain_custom; then
     jalur_tema
     paket_g_tema || true
@@ -436,6 +441,11 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] Finishing: aset & pengaturan dari data klien" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-finish" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Toko Online biasa: produk dari folder produk klien (per produk, gambar < 100 KB) ke
+  # store_product, atau 5 produk contoh bila foldernya tidak ada. Sesudah site-finish supaya
+  # logo sudah dipilih (foto logo tidak ikut jadi produk).
+  echo "[$(date -Is)] Toko biasa: produk" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/toko-biasa" --produk "$MANIFEST" >> "$LOG" 2>&1 || true
   # Hapus tema & plugin bawaan yang tidak dipakai — hanya kalau run ini memasang
   # WordPress dari awal; apply ulang situs lama tidak menyentuh isinya. Sebelum
   # QA, supaya kerusakan akibat penghapusan ikut tertangkap.

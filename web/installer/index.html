@@ -1039,9 +1039,12 @@
       function hasilChild(teks) {
         const m = /child_theme:(matched|generated|not_found|no_ref|api_error|download_failed|error):([^:\n]*)/.exec(teks);
         if (!m) return null;
+        // Referensi web luar (2026-09-23): tema yang dipakai web itu, dari `child_theme_ref_tema:`.
+        const t = /child_theme_ref_tema:(\S+)/.exec(teks);
         return {
-          matched: 'referensi ' + m[2] + ' terpasang', generated: 'child theme digenerate',
-          not_found: 'referensi ' + (m[2] || '-') + ' tidak ada di API', no_ref: 'form tanpa referensi desain',
+          matched: 'referensi ' + m[2] + (t ? ' (' + t[1] + ')' : '') + ' terpasang', generated: 'child theme digenerate',
+          not_found: t ? 'tema ' + t[1] + ' (web ' + m[2] + ') belum ada di API'
+            : 'referensi ' + (m[2] || '-') + ' tidak ada di API', no_ref: 'form tanpa referensi desain',
           api_error: 'API tema gagal', download_failed: 'unduhan tema gagal', error: 'pencocokan gagal',
         }[m[1]];
       }
@@ -1121,15 +1124,15 @@
             if (/fse_cek: (gagal|tidak bisa)/.test(t)) return 'tidak bisa diperiksa';
             return 'menunggu';
           } },
-        { id: 'childF', kol: 6, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form lewat API tema', mulai: CHILD_THEME,
+        { id: 'childF', kol: 6, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
-        { id: 'childToko', kol: 6, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form', mulai: CHILD_THEME,
+        { id: 'childToko', kol: 6, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
         // Paket E: temanya ditentukan paketnya sendiri (velocity-pakete), bukan referensi di form,
         // dan sudah aktif sebelum konten AI ditulis (keputusan user 2026-09-16).
         { id: 'childE', kol: 6, jalur: 2, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.e) },
-        { id: 'childLain', kol: 6, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi cocok', mulai: CHILD_THEME,
+        { id: 'childLain', kol: 6, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi (demo / web luar) ada di API', mulai: CHILD_THEME,
           selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko)) },
         // VD Store (keputusan user 2026-09-17): Toko Online Custom memasang & mengatur VD Store DULU,
         // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
@@ -1143,6 +1146,19 @@
           selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
           ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
             : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
+        // Toko Online biasa (2026-09-23, scripts/toko-biasa): menu toko sesudah halaman VD Store digenerate,
+        // produk dari folder produk klien (atau 5 contoh) sesudah finishing. Situs lama dilewati.
+        { id: 'menuToko', kol: 8, jalur: 4, nama: 'Menu toko', ket0: 'Beranda, Produk, Pricelist, Keranjang, Cek Ongkir, Tracking, Berita',
+          mulai: /\] Toko biasa: menu toko/, selesai: /menu: (tersusun|dibiarkan)|toko: dilewati/,
+          ketHasil: t => { const m = /menu: tersusun:(\d+)/.exec(t); return m ? m[1] + ' item menu'
+            : /menu: dibiarkan/.test(t) ? 'dibiarkan: sudah disunting' : /toko: dilewati:situs_sudah_terpasang/.test(t) ? 'dilewati: situs lama' : null; },
+          aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
+        { id: 'produkToko', kol: 11, jalur: 4, nama: 'Produk toko', ket0: 'folder produk → store_product (gambar < 100 KB), atau 5 contoh',
+          mulai: /\] Toko biasa: produk/, selesai: /produk: (dibuat|contoh_sudah_ada|contoh_dilewati|dilewati)|toko: dilewati/,
+          ketHasil: t => { const s = /toko: produk: sumber=(folder|contoh) jumlah=(\d+)/.exec(t);
+            if (/toko: dilewati:situs_sudah_terpasang/.test(t)) return 'dilewati: situs lama';
+            return s ? (s[1] === 'folder' ? s[2] + ' produk dari folder klien' : s[2] + ' produk contoh') : null; },
+          aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
         // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
         // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
         { id: 'isiKlasik', kol: 8, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
@@ -1151,7 +1167,7 @@
           aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
         { id: 'konten', kol: 9, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
           selesai: /AI content generation completed/, aktif: tanpaDry },
-        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo, favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
+        { id: 'finishing', kol: 10, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
           selesai: /finish_done/, aktif: tanpaDry },
         { id: 'baru', kol: 11, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
           ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
@@ -1280,9 +1296,11 @@
         // Semua paket custom lanjut ke konten (VD Store toko custom sudah terpasang sebelum tema).
         ['cekTema', 'konten', 'sesuai', c => dan(tanpaDry(c), c.custom)],
         ['childF', 'isiKlasik'], ['childE', 'isiKlasik'], ['childToko', 'vdstore'], ['childLain', 'isiKlasik'],
-        ['vdstore', 'isiKlasik'],
+        ['vdstore', 'menuToko'], ['menuToko', 'isiKlasik'],
         ['isiKlasik', 'konten'],
-        ['konten', 'finishing'], ['finishing', 'baru'],
+        ['konten', 'finishing'],
+        ['finishing', 'baru', '', c => dan(tanpaDry(c), c.tokoBiasa === null ? null : !c.tokoBiasa)],
+        ['finishing', 'produkToko', 'toko biasa', c => dan(tanpaDry(c), c.tokoBiasa)], ['produkToko', 'baru'],
         ['baru', 'bersih', 'ya'], ['bersih', 'isi'], ['baru', 'isi', 'tidak', c => dan(tanpaDry(c), c.installBaru === null ? null : !c.installBaru)],
         ['isi', 'fotoSlot', 'ya'],
         ['fotoSlot', 'dealerUnit', 'dealer mobil', c => dan(tanpaDry(c), c.custom, c.dealer)],

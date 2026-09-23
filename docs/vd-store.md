@@ -31,6 +31,28 @@ WooCommerce) — satu-satunya paket toko di jalur FSE (`paket_desain_custom` di 
 untuk saat ini tidak memakai jalur ini (tetap child theme klasik). Situs yang sudah terpasang tidak
 diperbarui otomatis.
 
+## Toko Online biasa (keputusan user 2026-09-23)
+
+Alur installer paket Toko Online **biasa** (child theme klasik, bukan FSE), `scripts/toko-biasa`:
+
+1. VD Store dipasang + pengaturan + halaman toko digenerate (`vd-store`, `vd-store-settings`).
+2. `toko-biasa --menu`: menu utama = Beranda, Produk (arsip `store_product`), Pricelist, Keranjang,
+   Cek Ongkir, Tracking Order, Berita. Halaman Pricelist dibuat bila belum ada (template
+   `page-pricelist.php` bila tema punya, selain itu `[wp_store_catalog]`). Menu yang sudah disunting
+   orang dibiarkan; `theme-paket-biasa` tidak lagi menyisipkan "Layanan" ke menu toko.
+3. Konten AI, lalu `site-finish`: logo dari kiriman klien. Gambar lepas berlatar polos (mis. JPEG
+   "WhatsApp Image ...") dipastikan Claude (`scripts/claude_vision.py`) sebagai logo; tidak ada logo
+   = logo contoh. Folder produk tidak ikut dicari sebagai logo, dan logo tidak ikut jadi foto galeri.
+4. `toko-biasa --produk`: folder berpola `produk`/`product` di folder klien → satu `store_product`
+   per produk (subfolder = produk; nama berkas jelas = produk, harga dari nama berkas; foto bernama
+   generik & dokumen daftar produk dikenali Claude, harga hanya bila tertulis). Gambar dikompres
+   < 100 KB. Tanpa folder produk: 5 produk contoh ("Contoh – ...", meta `_velocity_contoh`) berfoto
+   Pexels; produk contoh dihapus otomatis begitu produk asli diimpor.
+5. Alur lama (bersih-bersih, tampilan klasik, foto artikel, QA, maintenance).
+
+Situs yang sudah ter-deploy (log berisi `SUCCESS: COMPLETE`) dilewati langkah 2–4 dan aturan logo
+baru; `toko-biasa --paksa` hanya dengan persetujuan user.
+
 ## Menampilkan produk
 
 Selalu lewat shortcode VD Store (blok `core/shortcode`):

@@ -259,6 +259,10 @@ def client_assets(folder):
     files = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in IMG_EXT
                    and not any(BUKAN_FOTO_KLIEN.search(bagian) for bagian in p.relative_to(folder).parts))
     logos = [p for p in files if re.search(r'logo', p.name, re.I) and p.stat().st_size >= 1000]
+    # Logo bernama generik yang sudah dipastikan (cari_logo langkah 6) juga bukan foto.
+    tersimpan = cari_logo.logo_tersimpan(folder.name)
+    if tersimpan:
+        files = [p for p in files if p.resolve() != tersimpan.resolve()]
     logo = max(logos, key=lambda p: (p.suffix.lower() == '.png', p.stat().st_size)) if logos else None
     photos = [p for p in files if p not in logos and MIN_BYTES <= p.stat().st_size <= MAX_BYTES]
     return logo, photos[:MAX_PHOTOS]
@@ -941,6 +945,9 @@ def main():
     logo, sumber_logo = cari_logo.cari(domain, folder, compro)
     if logo:
         print(f'finish: logo dari {sumber_logo}')
+        # Berkas logo tidak ikut jadi foto galeri/hero (apotekmedikaindofarma.com 2026-09-23:
+        # logo JPEG bernama "WhatsApp Image ..." terpasang sebagai foto galeri & banner).
+        photos = [p for p in photos if p.resolve() != logo.resolve()]
     else:
         print('finish: logo klien tidak ditemukan di kiriman klien')
     # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa

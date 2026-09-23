@@ -17,8 +17,13 @@ form-nya tidak pernah memuat referensi. Untuk paket itu child theme kosong
 bernama project dibuat di sini (`velocity-<label domain>`) supaya desainer
 langsung punya tempat kerja dan situs tidak berhenti di tema induk.
 
+Referensi berupa web luar (mis. "TEMPLATE YANG DIPILIH: plotterpolaindonesia.com")
+dibuka untuk membaca child theme yang dipakainya; kalau slug itu ada di API tema,
+child theme dari API yang dipasang. Kalau belum ada: status not_found + ref_tema
+(dilaporkan ke Telegram), tanpa jalan pintas GitHub (keputusan user 2026-09-23).
+
 Keluaran baris key=value: status (matched | generated | not_found | no_ref |
-api_error | download_failed), ref, slug, version, zip, error.
+api_error | download_failed), ref, slug, ref_tema, version, zip, error.
 """
 import argparse
 import datetime
@@ -45,6 +50,7 @@ API_URL = 'https://api.velocitydeveloper.co/api/v1/themes'
 ON_PROGRESS = Path('/home/On Progress')
 CACHE = Path('/var/lib/velocity/packages/child-themes')
 GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+INSTALLER_LOG = Path('/var/lib/velocity/installer')
 # Signature API = md5(dmY) menurut tanggal kantor (WIB).
 WIB = datetime.timezone(datetime.timedelta(hours=7))
 DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
@@ -53,6 +59,12 @@ HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
 LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
+# Web referensi klien sering di balik WAF yang menolak UA bot.
+UA_BROWSER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                            '(KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+              'Accept': 'text/html,*/*'}
+WEB_RE = re.compile(r'(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s"<>]*)?', re.I)
+TEMA_WEB_RE = re.compile(r'wp-content\\?/themes\\?/([a-zA-Z0-9_-]+)\\?/')
 # Rilis repo GitHub privat (mis. velocity-pakete) dibalas 404 tanpa login; unduhannya
 # diulang lewat API aset GitHub memakai token organisasi ini.
 GITHUB_TOKEN_FILE = Path(os.environ.get('WP_INSTALL_GITHUB_TOKEN_FILE')
@@ -110,6 +122,84 @@ def design_ref(text):
     # Form paket khusus (mis. SIA) hanya menyebut satu desain tanpa label.
     subs = {s.lower() for s in SUB.findall(text)} - {'www'}
     return subs.pop() if len(subs) == 1 else ''
+
+
+def design_ref_web(text):
+    """URL web luar pilihan klien di label "... yang dipilih", atau ''.
+
+    Klien paket biasa kadang menulis web lain sebagai template, mis. "TEMPLATE YANG
+    DIPILIH: plotterpolaindonesia.com" (apotekmedikaindofarma.com 2026-09-23). Child
+    theme-nya dibaca dari web itu (tema_web), bukan dari nama subdomain demo."""
+    lines = [l.strip() for l in text.splitlines()]
+    for i, line in enumerate(lines):
+        label = LABEL.search(line)
+        if not label:
+            continue
+        nilai = [line[label.end():].lstrip(' :')]
+        if not nilai[0]:
+            # Sama seperti design_ref: nilai bisa jatuh ke baris berikutnya, dan
+            # sesudahnya form berisi daftar contoh demo ("Ada 20 Pilihan ...").
+            nilai = [n for n in lines[i + 1:i + 4] if n and not n.upper().startswith('HYPERLINK')][:1]
+        for n in nilai:
+            if 'pilih' in n.lower():
+                continue
+            m = WEB_RE.search(n)
+            if m and not SUB.search(m.group(0)) and '@' not in n[:m.start() + 1]:
+                return 'https://' + m.group(1).lower() + (m.group(2) or '/')
+    return ''
+
+
+def sudah_terpasang(domain):
+    """True kalau installer pernah menyelesaikan situs ini (log berisi SUCCESS: COMPLETE).
+
+    Referensi web luar hanya dipakai untuk instalasi baru: situs yang sudah
+    ter-deploy tidak boleh berganti child theme karena aturan ini (keputusan user
+    2026-09-23), termasuk saat apply ulang, mode child-theme, atau audit."""
+    try:
+        return 'SUCCESS: COMPLETE' in (INSTALLER_LOG / f'{domain}.log').read_text(errors='replace')
+    except OSError:
+        return False
+
+
+def ambil_web(url, batas=3_000_000):
+    req = urllib.request.Request(url, headers=UA_BROWSER)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read(batas).decode('utf-8', 'replace'), resp.geturl()
+
+
+def tema_web(url):
+    """(slug child theme, tema induk) yang dipakai web referensi WordPress.
+
+    Slug dibaca dari jalur aset wp-content/themes/<slug>/; tema yang punya header
+    `Template:` di style.css adalah child theme-nya. Web tanpa child theme
+    mengembalikan (slug tema itu, ''). Galat jaringan dilempar ke pemanggil."""
+    html, akhir = ambil_web(url)
+    hitung = {}
+    for slug in TEMA_WEB_RE.findall(html):
+        slug = slug.lower()
+        hitung[slug] = hitung.get(slug, 0) + 1
+    if not hitung:
+        return '', ''
+    urut = sorted(hitung, key=lambda s: -hitung[s])
+    asal = re.match(r'https?://[^/]+', akhir).group(0)
+    for slug in urut:
+        try:
+            css, _ = ambil_web(f'{asal}/wp-content/themes/{slug}/style.css', batas=8192)
+        except Exception:
+            continue
+        induk = re.search(r'^[\s*]*Template:\s*([a-z0-9_-]+)', css, re.I | re.M)
+        if induk and induk.group(1).lower() != slug:
+            return slug, induk.group(1).lower()
+    # style.css tak terbaca: tema selain induk Velocity dianggap child theme-nya.
+    lain = [s for s in urut if s != 'velocity']
+    return (lain[0], 'velocity') if lain and 'velocity' in hitung else (urut[0], '')
+
+
+def cocok_slug_web(children, slug):
+    """Child theme API untuk slug hasil tema_web: slug persis, lalu nama ternormalisasi."""
+    kunci = norm(re.sub(r'^velocity-|-child$', '', slug))
+    return (next((t for t in children if t['slug'] == slug), None)
+            or next((t for t in children if kunci and kunci in theme_keys(t)), None))
 
 
 def fetch_themes():
@@ -907,8 +997,8 @@ def main():
     if args.cache:
         global CACHE
         CACHE = Path(args.cache)
-    out = {'status': '', 'ref': '', 'slug': '', 'prefix': '', 'version': '', 'zip': '',
-           'kontras': '', 'error': ''}
+    out = {'status': '', 'ref': '', 'slug': '', 'ref_tema': '', 'prefix': '', 'version': '',
+           'zip': '', 'kontras': '', 'error': ''}
 
     def emit():
         print('\n'.join(f'{k}={v}' for k, v in out.items()))
@@ -950,13 +1040,32 @@ def main():
         # Log installer berformat child_theme:<status>:<ref>:<slug> — ref tidak boleh
         # memuat titik dua, jadi "Paket E" ditulis "paket-e".
         out['ref'] = re.sub(r'[^a-z0-9]+', '-', paket.strip().lower()).strip('-')
-    elif not override:
-        out['ref'] = design_ref(read_client_form(ON_PROGRESS / domain)['text'])
+    ref_web = ''
+    if not paket_slug and not override:
+        teks_form = read_client_form(ON_PROGRESS / domain)['text']
+        out['ref'] = design_ref(teks_form)
+        if not out['ref'] and not custom_paket:
+            ref_web = design_ref_web(teks_form)
+            if ref_web and sudah_terpasang(domain):
+                # Situs lama tetap seperti sebelum aturan ini ada (no_ref).
+                out['error'] = 'referensi_web_dilewati:sudah_terpasang'
+                ref_web = ''
+            # ref tanpa titik dua (format log child_theme:<status>:<ref>:<slug>).
+            out['ref'] = re.sub(r'^https://|/$', '', ref_web).replace(':', '')
         if not out['ref']:
             # Paket G memang tidak pernah memuat referensi — bukan kegagalan.
             if custom_paket:
                 return generate()
             out['status'] = 'no_ref'
+            return emit()
+    if ref_web:
+        try:
+            out['ref_tema'], _induk = tema_web(ref_web)
+        except Exception as e:
+            out.update(status='not_found', error=f'referensi_tak_terbuka:{type(e).__name__}')
+            return emit()
+        if not out['ref_tema']:
+            out.update(status='not_found', error='referensi_bukan_wordpress')
             return emit()
     try:
         themes = fetch_themes()
@@ -970,6 +1079,15 @@ def main():
     slug_diminta = override or paket_slug
     if slug_diminta:
         match = next((t for t in children if t['slug'] == slug_diminta), None)
+    elif ref_web:
+        match = cocok_slug_web(children, out['ref_tema'])
+        if not match:
+            # Hanya API (keputusan user 2026-09-23): tema referensi yang belum
+            # didaftarkan dilaporkan, tidak dicari ke GitHub.
+            out['status'] = 'not_found'
+            if out['ref_tema'] == 'velocity':
+                out['error'] = 'referensi_tanpa_child_theme'
+            return emit()
     else:
         match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
     if not match:

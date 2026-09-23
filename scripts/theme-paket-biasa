@@ -338,12 +338,14 @@ ul.vk-sosmed>li::before{content:none!important}
 .velocity-list-stats>div:last-child{border-bottom:0!important}
 .velocity-list-stats .fw-bold{font-variant-numeric:tabular-nums}
 .velocity-header-logo img{max-height:110px;width:auto;height:auto}
+.navigation-brand-logo img,.custom-logo-link img{max-height:90px;width:auto!important;height:auto}
 .home-wrapper .position-relative.overflow-hidden::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.25) 60%,rgba(0,0,0,0));z-index:1}
 .home-wrapper .position-relative.overflow-hidden>.position-absolute{z-index:2}
 .velocity-home-card h4{color:var(--bs-primary)}
 .velocity-card-button .btn{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff}
 .velocity-card-button .btn:hover,.velocity-card-button .btn:focus{filter:brightness(1.12);color:#fff}
 @media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:767.98px){.navigation-brand-logo img,.custom-logo-link img{max-height:64px}}
 @media (max-width:575.98px){.home-wrapper .position-relative.overflow-hidden>.position-absolute .col-md-7{max-width:78%}.velocity-home-title{font-size:17px;line-height:23px;margin-bottom:.25rem!important}.velocity-home-desc{display:none}}
 /* /velocity-tampilan-klasik */'''
 
@@ -413,7 +415,9 @@ if ($d['halaman_layanan'] !== '') {
     } elseif ($milik_installer($hal->ID) && $hal->post_content !== $akar($d['halaman_layanan'])) {
         wp_update_post(['ID' => $hal->ID, 'post_content' => $akar($d['halaman_layanan'])]); $tandai($hal->ID); echo "tampilan: layanan_diperbarui\n";
     } elseif (!$milik_installer($hal->ID)) { echo "tampilan: layanan_dibiarkan:disunting\n"; }
-    if ($hal && $menu_id) {
+    // Menu toko online biasa disusun scripts/toko-biasa (opsi velocity_menu_toko): Layanan tidak disisipkan.
+    if ($hal && $menu_id && get_option('velocity_menu_toko')) { echo "tampilan: menu_layanan_dilewati:menu_toko\n"; }
+    elseif ($hal && $menu_id) {
         $items = wp_get_nav_menu_items($menu_id) ?: [];
         $ada = false; $posisi = count($items) + 1;
         foreach ($items as $it) {

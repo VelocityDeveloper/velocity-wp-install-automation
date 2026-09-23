@@ -25,10 +25,17 @@ import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+import sys  # noqa: E402
+sys.path.insert(0, str(HERE))
 KELUAR = Path('/var/lib/velocity/logos')
 NAMA_LOGO = re.compile(r'logo|lambang|brand|logotype', re.I)
 # Subfolder acuan desain: isinya logo perusahaan LAIN (situs contoh), bukan logo klien.
 BUKAN_KLIEN = re.compile(r'contoh|referensi|screenshot|tangkapan\s*layar|desain', re.I)
+# Folder foto produk (toko online): isinya produk, bukan logo — foto produk berlatar putih
+# lolos ciri piksel logo. scripts/toko-biasa memakai pola yang sama.
+FOLDER_PRODUK = re.compile(r'produ[ck]|product', re.I)
+# Isian "Logo" di FORM ISIAN yang berarti berkas logo dikirim terpisah.
+LOGO_TERLAMPIR = re.compile(r'lampir|terkirim|kirim|attach|file|ada|di ?atas|foto|gambar', re.I)
 GAMBAR = {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
 MIN_SISI = 64
 MAKS_SISI = 2000
@@ -237,13 +244,25 @@ def _dari_office(berkas, tujuan_dir):
     return None
 
 
+def sudah_terpasang(domain):
+    """True kalau installer pernah menyelesaikan situs ini. Situs yang sudah ter-deploy memakai
+    aturan lama (tanpa pengecualian folder produk & tanpa langkah 6) supaya finish ulang tidak
+    mengganti logonya tanpa persetujuan (keputusan user 2026-09-23)."""
+    try:
+        return 'SUCCESS: COMPLETE' in (Path('/var/lib/velocity/installer') / f'{domain}.log').read_text(errors='replace')
+    except OSError:
+        return False
+
+
 def cari(domain, folder, compro=None):
     """(berkas, sumber). sumber: nama-berkas | company profile | pdf:<nama> | dokumen:<nama> | gambar-klien."""
     folder = Path(folder)
+    lama = sudah_terpasang(domain)
     berkas = []
     if folder.is_dir():
         berkas = sorted(p for p in folder.rglob('*') if p.is_file()
-                        and not any(BUKAN_KLIEN.search(b) for b in p.relative_to(folder).parts))
+                        and not any(BUKAN_KLIEN.search(b) for b in p.relative_to(folder).parts)
+                        and (lama or not any(FOLDER_PRODUK.search(b) for b in p.relative_to(folder).parts[:-1])))
 
     # 1. gambar yang namanya memang menyebut logo
     bernama = [p for p in berkas if p.suffix.lower() in GAMBAR and NAMA_LOGO.search(p.name)
@@ -295,4 +314,103 @@ def cari(domain, folder, compro=None):
     if kandidat:
         pilih = min(kandidat, key=lambda p: p.stat().st_size)
         return pilih, f'gambar-klien:{pilih.name}'
+
+    # 6. gambar berlatar polos (JPEG kiriman WhatsApp, dsb.) yang dipastikan Claude sebagai logo.
+    # Keputusannya disimpan (logo_tersimpan): Claude tidak dipanggil ulang tiap run, dan
+    # site-finish.client_assets membuang berkas ini dari daftar foto klien.
+    if lama:
+        return None, ''
+    gambar = [p for p in berkas if p.suffix.lower() in GAMBAR]
+    simpanan = logo_tersimpan(domain)
+    if simpanan and simpanan in gambar:
+        return simpanan, f'gambar-klien-tersimpan:{simpanan.name}'
+    pilih = logo_dari_gambar(domain, gambar)
+    if pilih:
+        try:
+            (KELUAR / domain).mkdir(parents=True, exist_ok=True)
+            (KELUAR / domain / 'logo-terpilih.txt').write_text(str(pilih[0]))
+        except OSError:
+            pass
+        return pilih
     return None, ''
+
+
+def logo_tersimpan(domain):
+    """Berkas logo hasil langkah 6 yang tersimpan untuk domain ini, atau None."""
+    try:
+        p = Path((KELUAR / domain / 'logo-terpilih.txt').read_text().strip())
+    except OSError:
+        return None
+    return p if p.is_file() else None
+
+
+def ciri_latar_polos(path):
+    """(tepi_terang, warna_dominan) gambar apa pun (JPEG/PNG/WebP) lewat PIL, atau None.
+
+    Logo kiriman klien sering berupa JPEG berlatar putih bernama "WhatsApp Image ..."
+    (apotekmedikaindofarma.com 2026-09-23): tepi hampir seluruhnya terang dan 12 warna
+    teratas menutupi sebagian besar gambar. Foto produk berlatar putih juga lolos, jadi
+    hasil saringan ini WAJIB dipastikan Claude (logo_dari_gambar)."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert('RGBA')
+            im.thumbnail((200, 200))
+            latar = Image.new('RGBA', im.size, (255, 255, 255, 255))
+            im = Image.alpha_composite(latar, im).convert('RGB')
+    except Exception:
+        return None
+    w, h = im.size
+    px = im.load()
+    b = max(2, int(min(w, h) * 0.05))
+    tepi = [px[x, y] for x in range(w) for y in range(h) if x < b or y < b or x >= w - b or y >= h - b]
+    terang = sum(1 for c in tepi if min(c) > 225) / len(tepi)
+    hist = sorted(im.quantize(64).histogram(), reverse=True)
+    return terang, sum(hist[:12]) / (w * h)
+
+
+def logo_dari_gambar(domain, gambar):
+    """(berkas, sumber) logo dari gambar lepas berlatar polos, atau None.
+
+    Kandidat = gambar di luar folder produk yang tepinya terang & warnanya sedikit, lalu
+    Claude (scripts/claude_vision.py) memilih yang benar-benar logo. Claude tidak tersedia:
+    kandidat tunggal dipakai hanya bila FORM ISIAN menyebut logonya terlampir."""
+    kandidat = []
+    for p in gambar:
+        dim = ukuran(p)
+        if dim and min(dim) < MIN_SISI:
+            continue
+        ciri = ciri_latar_polos(p)
+        if ciri and ciri[0] >= 0.85 and ciri[1] >= 0.6:
+            kandidat.append(p)
+    if not kandidat:
+        return None
+    kandidat = kandidat[:8]
+    try:
+        import claude_vision
+        daftar = '\n'.join(f'{claude_vision.nama_gambar(i)}' for i in range(len(kandidat)))
+        jawab = claude_vision.tanya(
+            'Gambar-gambar berikut dikirim klien untuk pembuatan website ' + domain + '.\n'
+            'Baca tiap gambar di folder kerja:\n' + daftar + '\n'
+            'Tentukan satu gambar yang merupakan LOGO usaha klien (lambang/tulisan merek, bukan '
+            'foto produk, foto orang, brosur, atau tangkapan layar). Kalau tidak ada logo, isi null.\n'
+            'Jawab HANYA JSON: {"logo": "gNN.jpg" | null, "alasan": "..."}', kandidat, timeout=240)
+    except Exception:
+        jawab = None
+    if isinstance(jawab, dict):
+        nama = jawab.get('logo')
+        for i, p in enumerate(kandidat):
+            if nama and nama == claude_vision.nama_gambar(i):
+                return p, f'gambar-klien-dipastikan-claude:{p.name}'
+        return None
+    # Claude tidak tersedia: hanya kalau form menyatakan logo dikirim & kandidatnya satu.
+    if len(kandidat) == 1:
+        try:
+            from client_form import read_client_form
+            fields = read_client_form(Path('/home/On Progress') / domain).get('fields', {})
+            isian = next((v for k, v in fields.items() if re.search(r'logo', k, re.I)), '')
+        except Exception:
+            isian = ''
+        if isian and LOGO_TERLAMPIR.search(isian):
+            return kandidat[0], f'gambar-klien-form-terlampir:{kandidat[0].name}'
+    return None
