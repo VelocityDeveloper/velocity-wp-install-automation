@@ -16,7 +16,8 @@ defined('ABSPATH') || exit;
 
 function velocity_fse_cpt_produk()
 {
-    return velocity_fse_situs('cpt_produk') === true;
+    // Toko VD Store: produk = `store_product`, dan slug /produk/ sudah dipakai arsipnya.
+    return velocity_fse_situs('cpt_produk') === true && !velocity_fse_vd_store();
 }
 
 add_action('init', function () {

@@ -596,7 +596,7 @@ WP_INSTALL_SSH_KEY_FILE=/root/.ssh/id_ed25519 scripts/audit-susulan [--paralel 4
 
 Temuan `maintenance_mati_setelah_dinyalakan_installer` sengaja ada: pernah terjadi maintenance mode mati sendiri sehingga situs yang belum diserahkan sempat terbuka untuk umum, dan `site-finish --maintenance` tidak akan menyalakannya lagi (penanda `velocity_installer_maintenance` sudah ada). Pemulihannya manual: `wp option update maintenance_mode 1`.
 
-Pelajaran lain dari pembangunan alur ini dicatat di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md) — baca sebelum menambah langkah otomatis baru. Khusus soal palet warna dan keterbacaan: [`docs/warna-dan-kontras.md`](docs/warna-dan-kontras.md), dengan penjaganya `scripts/cek-warna-tema` (ikut dijalankan `deploy.sh`).
+Pelajaran lain dari pembangunan alur ini dicatat di [`docs/pelajaran-automasi.md`](docs/pelajaran-automasi.md) — baca sebelum menambah langkah otomatis baru. Khusus soal palet warna dan keterbacaan: [`docs/warna-dan-kontras.md`](docs/warna-dan-kontras.md), dengan penjaganya `scripts/cek-warna-tema` (ikut dijalankan `deploy.sh`). Paket toko online: struktur produk milik plugin VD Store (`store_product`, arsip `/produk/`, shortcode katalog) ada di [`docs/vd-store.md`](docs/vd-store.md) — tema, generator, dan agen desain tidak membuat CPT produk sendiri.
 
 ## Halaman & menu Paket G (`scripts/paket-g-setup`)
 

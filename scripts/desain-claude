@@ -51,6 +51,7 @@ ROOT = HERE.parent
 ALAT = HERE / 'desain-claude-alat'
 TEMA = ROOT / 'templates' / 'tema-fse'
 TUGAS = ROOT / 'templates' / 'desain-claude' / 'tugas.md'
+TOKO = ROOT / 'templates' / 'desain-claude' / 'toko-vd-store.md'
 KUNCI = Path('/var/lib/velocity/desain-claude.lock')
 AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
 CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
@@ -121,7 +122,8 @@ foreach (get_pages(array('post_status' => 'publish')) as $p) {
     $halaman[] = array('slug' => get_page_uri($p), 'judul' => $p->post_title, 'url' => get_permalink($p));
 }
 $logo = (int) get_option('site_logo');
-vfse_keluar(array('tema' => get_stylesheet(), 'palet' => $palet, 'situs' => $situs, 'foto' => $foto,
+// Toko ber-VD Store (bukan WooCommerce): aturan produk store_product disisipkan ke prompt.
+vfse_keluar(array('vd_store' => defined('WP_STORE_VERSION') && !class_exists('WooCommerce'), 'tema' => get_stylesheet(), 'palet' => $palet, 'situs' => $situs, 'foto' => $foto,
     'halaman' => $halaman, 'logo' => $logo ? wp_get_attachment_url($logo) : '', 'nama' => get_bloginfo('name'),
     'slogan' => get_bloginfo('description'), 'home' => home_url('/')));
 '''
@@ -189,7 +191,7 @@ footer & `gaya.css` sudah kamu susun di tahap tema: pertahankan dan lanjutkan da
 }
 
 
-def prompt_tugas(cfg, domain, folder, putaran, referensi):
+def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False):
     blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
     target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
     ganti = {
@@ -199,6 +201,9 @@ def prompt_tugas(cfg, domain, folder, putaran, referensi):
         '{{HALAMAN}}': ', '.join(t.replace('__', '/') for t in target) or 'beranda, tentang-kami, galeri, hubungi-kami',
     }
     prompt = TUGAS.read_text().replace('{{TAHAP}}', TAHAP_TEKS[TAHAP])
+    # Hanya Toko Online Custom yang memakai VD Store (bukan WooCommerce): aturan produk store_product
+    # disisipkan; toko online biasa tidak lewat jalur ini (keputusan user 2026-09-23).
+    prompt = prompt.replace('{{TOKO}}', TOKO.read_text() if FA.toko_custom(cfg) and vd_store else '')
     for k, v in ganti.items():
         prompt = prompt.replace(k, v)
     return prompt
@@ -447,7 +452,8 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
     if TAHAP == 'tema':
         simpan_tema_lama(folder)
     log(f'agen mulai (skor awal {awal}, maks {putaran} putaran / {menit} menit)')
-    kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url']))
+    kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url'],
+                                                                         bool(bahan.get('vd_store'))))
     catat_pemakaian(domain, hasil)
     minta = hasil.get('permintaan_per_model') or {}
     log(f"agen selesai kode={kode} menit={durasi} model={','.join(hasil.get('modelUsage') or minta) or '-'} "

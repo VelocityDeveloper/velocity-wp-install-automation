@@ -30,6 +30,7 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
 5. Rapi di desktop (1366) **dan HP (390)**: tidak ada scroll horizontal, padding/margin konsisten,
    teks terbaca (kontras), gambar tidak pecah, latar video/foto menutupi seksi penuh.
 
+{{TOKO}}
 ## Yang boleh kamu tulis (hanya di folder kerja ini: `{{FOLDER}}`)
 
 - `<slug>.html` — isi halaman dalam markup blok WordPress. Halaman yang dikelola installer:

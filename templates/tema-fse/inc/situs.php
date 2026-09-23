@@ -12,6 +12,15 @@ defined('ABSPATH') || exit;
 
 // Product katalog custom: bukan WooCommerce, supaya data produk terpisah dari post berita.
 add_action('init', function () {
+    // Situs toko online: produk milik VD Store (`store_product` + `store_product_cat`, arsip /produk/).
+    // CPT `product` di sini hanya menambah menu "Produk" kedua di wp-admin yang tidak dipakai
+    // katalog, keranjang, maupun checkout (kopibalidewiseri.com 2026-09-23).
+    if (velocity_fse_vd_store()) {
+        global $wpdb;
+        if (!(int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'product'")) {
+            return;
+        }
+    }
     // Situs yang memakai CPT `produk` (inc/produk.php) tidak perlu CPT `product` bawaan:
     // dua menu "Produk" di wp-admin hanya membingungkan pemilik situs. Kalau terlanjur ada
     // isinya, CPT ini tetap didaftarkan supaya datanya tidak hilang dari wp-admin.
@@ -46,6 +55,15 @@ add_action('init', function () {
         'rewrite' => array('slug' => 'category-product', 'with_front' => false),
     ));
 });
+
+/**
+ * Plugin VD Store aktif. Dicek lewat konstanta plugin, bukan post_type_exists('store_product'),
+ * supaya tidak bergantung urutan hook `init` (VD Store mendaftarkan CPT-nya di prioritas yang sama).
+ */
+function velocity_fse_vd_store()
+{
+    return defined('WP_STORE_VERSION');
+}
 
 /** Kunci yang boleh tampil ke pengunjung (Block Bindings `velocity/situs`). */
 function velocity_fse_kunci_publik()

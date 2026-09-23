@@ -608,9 +608,13 @@ def data_situs(cfg, domain, isi, vct, ref=None):
     if str(cfg.get('logo_footer', '')).strip().lower() in ('1', 'ya', 'true'):
         hasil['logo_footer'] = True
     # Manifest `cpt_produk=1`: katalog barang jadi CPT `produk` + taksonomi kategori
-    # (tema inc/produk.php), bukan halaman anak biasa.
+    # (tema inc/produk.php), bukan halaman anak biasa. Toko Online Custom tidak: produknya
+    # `store_product` VD Store (tema juga menolak CPT `produk` selama VD Store aktif).
     if str(cfg.get('cpt_produk', '')).strip().lower() in ('1', 'ya', 'true'):
-        hasil['cpt_produk'] = True
+        if toko_custom(cfg):
+            print('fse: cpt_produk dilewati (Toko Online Custom: produk = store_product VD Store)', file=sys.stderr)
+        else:
+            hasil['cpt_produk'] = True
     if isinstance(khusus.get('katalog_produk'), bool):
         hasil['katalog_produk'] = khusus['katalog_produk']
     if isinstance(khusus.get('ganti_tautan'), dict):
@@ -1090,20 +1094,6 @@ DAFTAR = '\n\n'.join([
     blok('post-featured-image', {'isLink': True, 'aspectRatio': '4/3'}),
     grup([blok('post-title', {'level': 3, 'isLink': True}), blok('post-date')], kelas='vf-daftar__teks'),
 ])
-PRODUCT_CARD = '\n\n'.join([
-    blok('post-featured-image', {'isLink': True, 'aspectRatio': '1'}),
-    blok('post-terms', {'term': 'category-product', 'className': 'vf-product-card__category'}),
-    blok('post-title', {'level': 3, 'isLink': True, 'className': 'vf-product-card__title'}),
-    blok('post-excerpt', {'moreText': 'Lihat Produk'}),
-])
-
-def query_produk(q, per=8):
-    q.nomor += 1
-    attrs = {'queryId': q.nomor, 'query': {'perPage': per, 'pages': 0, 'offset': 0,
-        'postType': 'product', 'order': 'desc', 'orderBy': 'date', 'inherit': False}}
-    tpl = {'className': 'vf-product-grid', 'layout': {'type': 'grid', 'columnCount': 4,
-        'minimumColumnWidth': '14rem'}}
-    return blok('query', attrs, '<div class="wp-block-query">' + blok('post-template', tpl, PRODUCT_CARD) + '</div>')
 UTAMA = grup([
     blok('post-featured-image', {'isLink': True, 'aspectRatio': '16/10'}),
     grup([blok('post-terms', {'term': 'category', 'className': 'vf-label'}),
@@ -1477,9 +1467,12 @@ def beranda_perusahaan_foto(q, sd, isi, info, gaya):
     # Katalog produk mengikuti referensi: tampil dekat setelah hero, bukan tersembunyi di halaman Produk.
     # Hanya paket toko: query produk VD Store di situs perusahaan biasa tampil kosong
     # (judul + tombol saja, ptmitraajegselaras.com 2026-09-17).
+    # Produk toko = `store_product` VD Store lewat shortcode-nya, arsipnya /produk/; Query Loop
+    # `product` (CPT tema) selalu kosong di situs toko (kopibalidewiseri.com 2026-09-23).
     if info.get('toko'):
         bagian.append(grup([kepala_seksi(js.get('produk') or 'Produk Kami', 'Pilihan produk dan merchandise custom.'),
-                            query_produk(q, 8), tombol('Lihat Semua Produk', tautan('produk'))],
+                            vd_store('[wp_store_shop per_page="8"]'),
+                            tombol('Lihat Semua Produk', info['home'] + 'produk/')],
                            kelas='vf-seksi vf-produk-unggulan', align='wide'))
 
     # Ringkasan tentang: Data Situs, atau paragraf pertama halaman Tentang Kami tulisan AI
@@ -1698,6 +1691,12 @@ def beranda_katalog(q, sd, isi, info):
 def paket_toko(cfg):
     """Paket Toko Online (custom maupun biasa): produk dari plugin VD Store."""
     return 'tokoonline' in re.sub(r'\s+', '', str(cfg.get('paket', '')).lower())
+
+
+def toko_custom(cfg):
+    """Paket Toko Online Custom: satu-satunya paket toko di jalur FSE (produk = store_product VD Store).
+    Toko Online biasa tetap child theme klasik (keputusan user 2026-09-23)."""
+    return 'tokoonlinecustom' in re.sub(r'\s+', '', str(cfg.get('paket', '')).lower())
 
 
 def vd_store(kode):
