@@ -1,0 +1,9 @@
+[Unit]
+Description=Rekap token Claude tiap menit (sekalian mencatat kunci SSH sesi yang sedang hidup)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

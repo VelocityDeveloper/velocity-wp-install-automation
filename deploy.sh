@@ -12,7 +12,7 @@ python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scr
 node --check scripts/referensi-desain.js
 node --check scripts/potret-halaman
 node --check scripts/banding-potret
-python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/theme-paket-biasa
+python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/theme-paket-biasa scripts/brain-data scripts/brain-aktivitas scripts/claude-pakai
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga tema FSE: markup blok templates/parts/patterns harus valid menurut parser
 # editor WordPress (kode 3 = alat node belum terpasang di mesin ini, dilewati).
@@ -45,17 +45,32 @@ fi
 if [[ "$(realpath scripts/ai-content-generator.py)" != "$(realpath "$INSTALL_ROOT/scripts/ai-content-generator.py")" ]]; then
   install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
 fi
-install -d -m 755 "$WEB_ROOT/installer"
-install -m 644 web/installer/index.html "$WEB_ROOT/installer/index.html"
-install -d -m 755 "$WEB_ROOT/installer/susulan"
-install -m 644 web/installer/susulan/index.html "$WEB_ROOT/installer/susulan/index.html"
-install -d -m 755 "$WEB_ROOT/server"
-install -m 644 web/server/index.html "$WEB_ROOT/server/index.html"
-install -d -m 755 "$WEB_ROOT/ai"
-install -m 644 web/ai/index.html "$WEB_ROOT/ai/index.html"
-install -d -m 755 "$WEB_ROOT/packages"
-install -m 644 web/packages/index.html "$WEB_ROOT/packages/index.html"
-install -m 644 web/index.html "$WEB_ROOT/index.html"
+# Dashboard utama = aplikasi Vue (web-vue/, rute /installer /server /ai /paket /token /brain dilayani
+# index.html-nya lewat try_files nginx). Dashboard HTML lama tetap ada di /lama/ dengan tautan
+# antarhalaman diarahkan ke /lama/… (2026-09-24).
+pasang_lama() {  # pasang_lama <sumber> <tujuan relatif web root>
+  install -d -m 755 "$(dirname "$WEB_ROOT/$2")"
+  sed -e 's#href="/"#href="/lama/"#g' -e 's#"/\(installer\|server\|ai\|packages\)/#"/lama/\1/#g' "$1" > "$WEB_ROOT/$2.tmp"
+  chmod 644 "$WEB_ROOT/$2.tmp" && mv "$WEB_ROOT/$2.tmp" "$WEB_ROOT/$2"
+}
+pasang_lama web/index.html lama/index.html
+pasang_lama web/installer/index.html lama/installer/index.html
+pasang_lama web/installer/susulan/index.html lama/installer/susulan/index.html
+pasang_lama web/server/index.html lama/server/index.html
+pasang_lama web/ai/index.html lama/ai/index.html
+pasang_lama web/packages/index.html lama/packages/index.html
+# alur.js dipakai dua dashboard: Vue memuat /alur.js, halaman lama /lama/installer/alur.js
+install -m 644 web/installer/alur.js "$WEB_ROOT/alur.js"
+install -m 644 web/installer/alur.js "$WEB_ROOT/lama/installer/alur.js"
+( cd web-vue && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npx vite build >/dev/null )
+install -d -m 755 "$WEB_ROOT/v2-assets"
+rsync -a --delete web-vue/dist/v2-assets/ "$WEB_ROOT/v2-assets/"
+install -m 644 web-vue/dist/ikon.png "$WEB_ROOT/ikon.png"
+install -m 644 web-vue/dist/index.html "$WEB_ROOT/index.html"
+install -d -m 755 "$WEB_ROOT/brain"
+install -m 644 web/brain/index.html "$WEB_ROOT/brain/index.html"
+# data.json /brain/ ditulis brain-data.timer, aktivitas.json oleh brain-aktivitas.service (config/brain-*), bukan oleh deploy
+systemctl try-restart brain-aktivitas.service
 
 # Tanpa langkah salin, restart hanya berarti kalau unit menunjuk file repo.
 # Kalau masih menunjuk salinan lama, deploy akan sukses tapi tidak mengubah apa pun.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Perbarui data /brain/ tiap 5 menit
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

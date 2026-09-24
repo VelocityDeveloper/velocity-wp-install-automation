@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Rekap pemakaian token Claude Code per orang untuk menu Token Usage di dashboard.
+
+Sumber token: transkrip ~/.claude/projects/**/*.jsonl — tiap balasan model mencatat usage
+(input, cache tulis, cache baca, output). Satu panggilan model bisa tertulis di beberapa
+baris (satu per blok isi) dan resume bisa menyalin riwayat ke berkas baru, jadi usage
+dihitung sekali per message.id di seluruh berkas.
+
+Siapa orangnya:
+  - Telegram : pesan user pertama berisi <channel source="plugin:telegram…" chat_id="…">
+  - SSH/desktop: tiap putaran, sesi yang sedang hidup (~/.claude/sessions/<pid>.json) dicocokkan
+    dengan SSH_CONNECTION prosesnya → baris "Accepted … from IP port P" di /var/log/secure →
+    fingerprint → komentar kunci di authorized_keys. Hasilnya disimpan di sesi.jsonl. Sesi yang
+    sudah selesai sebelum pencatat ini dipasang jatuh ke "belum teridentifikasi".
+  - selain itu: otomasi (entrypoint sdk-cli / proyek di luar /root, mis. agen desain installer)
+Nama orang digabung lewat pengguna.json (di DATA):
+  {"Muh": {"telegram": ["1016858432"], "ssh": ["Muh"], "ip": ["192.168.88.50"]}}
+"ip" dipakai untuk login SSH password, yang tidak membawa identitas selain alamat IP.
+
+Dibaca bertahap: posisi terakhir tiap berkas disimpan di cache, jadi putaran berikutnya
+hanya membaca baris baru.
+
+Pemakaian: claude-pakai [--out /usr/share/nginx/html/brain/token.json] [--ulang]
+"""
+import argparse
+import json
+import os
+import pickle
+import re
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+PROYEK = Path(os.environ.get("CLAUDE_HOME", "/root/.claude")) / "projects"
+DATA = Path("/var/lib/velocity/claude-pakai")
+OUT = "/usr/share/nginx/html/brain/token.json"
+WIB = timezone(timedelta(hours=7))
+POLA_TG = re.compile(r'^<channel source="plugin:telegram[^"]*" chat_id="(\d+)"[^>]*?user="([^"]*)"')
+KOLOM = ("input", "cache_tulis", "cache_baca", "output", "panggilan")
+
+# Pemilik ID Telegram dari whitelist bot (catatan 2026-09-23); pengguna.json menimpa/menambah.
+PENGGUNA_BAWAAN = {
+    "Muh": {"telegram": ["1016858432"], "ssh": ["Muh"]},
+    "Yuda": {"ssh": ["Yuda"]},
+    "Reza": {"ssh": ["Reza"]},
+    "Aditya K": {"telegram": ["785329499"], "ssh": ["Aditya K"]},  # @adityak_vd = kunci Aditya K (user, 24 Sep)
+    "Imam WS": {"telegram": ["5017545247"]},
+    "Adityathok": {"telegram": ["787473227"]},
+    "Afif": {"telegram": ["8563985331"]},
+    "Eko Mustaqim": {"telegram": ["240477294"]},
+    "Irawan VD": {"telegram": ["375333725"]},
+    "Yaya": {"telegram": ["8528357317"]},
+    "Mas Toro": {"telegram": ["260162734"]},
+    "Lingga": {"telegram": ["2054457133"]},
+}
+
+
+def teks_user(d):
+    c = (d.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        for b in c:
+            if isinstance(b, dict) and b.get("type") == "text":
+                return b.get("text", "")
+    return ""
+
+
+def judul_dari(t):
+    t = re.sub(r"<channel [^>]*>", "", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", t).strip()[:90]
+
+
+def baca_berkas(f, st, lihat):
+    """Baca baris baru berkas f mulai st['pos']; tambahkan usage ke st['hari'][tgl][model]."""
+    with open(f, "rb") as fh:
+        fh.seek(st["pos"])
+        for raw in fh:
+            if not raw.endswith(b"\n"):
+                break  # baris sedang ditulis; ulang di putaran berikut
+            st["pos"] += len(raw)
+            ln = raw.decode("utf-8", "ignore")
+            butuh_user = '"type":"user"' in ln and (not st["judul"] or (not st["tg"] and "plugin:telegram" in ln))
+            if not butuh_user and not ('"usage"' in ln and '"type":"assistant"' in ln) and st["ep"]:
+                continue
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            st["ep"] = st["ep"] or d.get("entrypoint")
+            ts = d.get("timestamp")
+            if d.get("type") == "user":  # pesan Telegram masuk sebagai isMeta, jadi jangan disaring
+                t = teks_user(d)
+                m = POLA_TG.match(t) if not st["tg"] else None
+                if m:
+                    st["tg"], st["tg_user"] = m.group(1), m.group(2)
+                    st["judul_tg"] = st.get("judul_tg") or judul_dari(t)
+                if not st["judul"] and t and not d.get("isMeta") and not t.startswith(("<command-", "<local-command", "Caveat:", "[Request interrupted")):
+                    st["judul"] = judul_dari(t) or "(tanpa teks)"
+            if d.get("type") != "assistant":
+                continue
+            msg = d.get("message") or {}
+            u, mid, model = msg.get("usage"), msg.get("id"), msg.get("model") or "?"
+            if not u or not mid or model == "<synthetic>" or mid in lihat:
+                continue
+            lihat.add(mid)
+            try:
+                w = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(WIB)
+            except (AttributeError, ValueError):
+                continue
+            st["mulai"] = st["mulai"] or w.timestamp()
+            st["akhir"] = w.timestamp()
+            rek = st["hari"].setdefault(w.strftime("%Y-%m-%d"), {}).setdefault(model, [0, 0, 0, 0, 0])
+            rek[0] += u.get("input_tokens") or 0
+            rek[1] += u.get("cache_creation_input_tokens") or 0
+            rek[2] += u.get("cache_read_input_tokens") or 0
+            rek[3] += u.get("output_tokens") or 0
+            rek[4] += 1
+
+
+def sid_dari(f):
+    # <proyek>/<sid>.jsonl atau <proyek>/<sid>/subagents/agent-*.jsonl (ikut sesi induknya)
+    rel = f.relative_to(PROYEK).parts
+    return (rel[1] if len(rel) > 2 else f.stem), rel[0], len(rel) > 2
+
+
+def label_kunci():
+    """fingerprint SHA256 → komentar kunci (nama orang) di authorized_keys."""
+    import subprocess
+    out = subprocess.run(["ssh-keygen", "-lf", "/root/.ssh/authorized_keys"], capture_output=True, text=True).stdout
+    peta = {}
+    for ln in out.splitlines():
+        b = ln.split(None, 2)
+        if len(b) == 3:
+            peta[b[1]] = re.sub(r"\s*\([A-Z0-9-]+\)$", "", b[2]).strip()
+    return peta
+
+
+def cari_login(ip, port):
+    """Baris Accepted sshd untuk koneksi ip:port → (metode, fingerprint|None)."""
+    pola = re.compile(r"Accepted (\w+) for \S+ from " + re.escape(ip) + " port " + re.escape(port) + r" ssh2(?:: \S+ (SHA256:\S+))?")
+    for f in sorted(Path("/var/log").glob("secure*"), key=lambda p: -p.stat().st_mtime):
+        try:
+            for ln in reversed(f.read_text(errors="ignore").splitlines()):
+                m = pola.search(ln)
+                if m:
+                    return m.group(1), m.group(2)
+        except OSError:
+            continue
+    return None, None
+
+
+def catat_sesi_hidup():
+    """Catat identitas SSH sesi Claude yang sedang berjalan ke sesi.jsonl (sekali per sesi)."""
+    p = DATA / "sesi.jsonl"
+    sudah = set()
+    try:
+        for ln in open(p):
+            try:
+                sudah.add(json.loads(ln)["sid"])
+            except (ValueError, KeyError):
+                pass
+    except OSError:
+        pass
+    kunci = None
+    baru = []
+    for f in (PROYEK.parent / "sessions").glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+            sid, pid = d["sessionId"], int(d["pid"])
+            if sid in sudah:
+                continue
+            env = dict(x.split("=", 1) for x in Path(f"/proc/{pid}/environ").read_bytes().decode(errors="ignore").split("\0") if "=" in x)
+        except (OSError, ValueError, KeyError):
+            continue
+        r = {"sid": sid, "pid": pid, "entrypoint": d.get("entrypoint"), "dicatat": time.time()}
+        conn = env.get("SSH_CONNECTION", "").split()
+        if len(conn) >= 2:
+            r["ip"] = conn[0]
+            metode, fp = cari_login(conn[0], conn[1])
+            r["metode"] = metode
+            if fp:
+                kunci = kunci if kunci is not None else label_kunci()
+                r["fp"], r["kunci"] = fp, kunci.get(fp, fp[:15])
+        elif env.get("TMUX"):
+            r["tmux"] = True
+        baru.append(r)
+    if baru:
+        with open(p, "a") as fh:
+            for r in baru:
+                fh.write(json.dumps(r) + "\n")
+    pasang = DATA / "pasang.json"
+    if not pasang.exists():
+        pasang.write_text(json.dumps({"sejak": time.time()}))
+
+
+def muat_json(p, bawaan):
+    try:
+        return json.loads(Path(p).read_text())
+    except (OSError, ValueError):
+        return bawaan
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=OUT)
+    ap.add_argument("--ulang", action="store_true", help="abaikan cache, baca semua dari awal")
+    a = ap.parse_args()
+    DATA.mkdir(parents=True, exist_ok=True)
+    catat_sesi_hidup()
+    cache_p = DATA / "cache.pkl"
+    cache = {"berkas": {}, "lihat": set()}
+    if not a.ulang and cache_p.exists():
+        try:
+            cache = pickle.loads(cache_p.read_bytes())
+        except Exception:
+            pass
+
+    berkas = sorted(PROYEK.glob("**/*.jsonl"), key=lambda p: p.stat().st_mtime)
+    for f in berkas:
+        k = str(f)
+        st = cache["berkas"].get(k)
+        ukuran = f.stat().st_size
+        if st is None or ukuran < st["pos"]:
+            st = cache["berkas"][k] = {"pos": 0, "ep": None, "tg": None, "tg_user": None, "judul": None,
+                                       "mulai": None, "akhir": None, "hari": {}}
+        if ukuran > st["pos"]:
+            try:
+                baca_berkas(f, st, cache["lihat"])
+            except OSError:
+                pass
+
+    # Identitas SSH dari hook; baris terakhir per sesi yang menang
+    ssh = {}
+    try:
+        for ln in open(DATA / "sesi.jsonl"):
+            try:
+                r = json.loads(ln)
+                if r.get("kunci") or r.get("ip"):
+                    ssh[r["sid"]] = r
+            except (ValueError, KeyError):
+                continue
+    except OSError:
+        pass
+
+    pengguna = {**PENGGUNA_BAWAAN, **muat_json(DATA / "pengguna.json", {})}
+    peta = {}
+    for nama, idt in pengguna.items():
+        for t in idt.get("telegram", []):
+            peta["tg:" + str(t)] = nama
+        for s in idt.get("ssh", []):
+            peta["ssh:" + s] = nama
+        for ip in idt.get("ip", []):
+            peta["ip:" + ip] = nama
+
+    # Gabung per sesi (subagent ikut induk), lalu per orang
+    sesi = {}
+    for k, st in cache["berkas"].items():
+        if not st["hari"] and not st["tg"]:
+            continue
+        sid, proyek, sub = sid_dari(Path(k))
+        s = sesi.setdefault(sid, {"sid": sid, "proyek": proyek, "ep": None, "tg": None, "tg_user": None,
+                                  "judul": None, "mulai": None, "akhir": None, "hari": {}})
+        if not sub:
+            s["ep"] = s["ep"] or st["ep"]
+            s["judul"] = st.get("judul_tg") or s["judul"] or st["judul"]
+        s["tg"] = s["tg"] or st["tg"]
+        s["tg_user"] = s["tg_user"] or st["tg_user"]
+        for x in ("mulai", "akhir"):
+            if st[x]:
+                s[x] = min(s[x], st[x]) if (x == "mulai" and s[x]) else max(s[x] or 0, st[x])
+        for tgl, per_model in st["hari"].items():
+            for model, v in per_model.items():
+                rek = s["hari"].setdefault(tgl, {}).setdefault(model, [0, 0, 0, 0, 0])
+                for i in range(5):
+                    rek[i] += v[i]
+
+    orang = {}
+    for s in sesi.values():
+        if not s["hari"]:
+            continue
+        h = ssh.get(s["sid"])
+        if s["tg"]:
+            jalur = "telegram"
+            nama = peta.get("tg:" + s["tg"]) or ("@" + s["tg_user"] if s["tg_user"] and not s["tg_user"].isdigit() else "Telegram " + s["tg"])
+            asal = "Telegram " + (("@" + s["tg_user"]) if s["tg_user"] and not s["tg_user"].isdigit() else s["tg"])
+        elif s["ep"] == "sdk-cli" or s["proyek"] != "-root":
+            jalur, nama, asal = "otomasi", "Otomasi (installer & alat)", s["proyek"].lstrip("-")
+        else:
+            jalur = "desktop" if s["ep"] == "claude-desktop" else "terminal"
+            if h and h.get("kunci"):
+                nama = peta.get("ssh:" + h["kunci"], h["kunci"])
+                asal = f"kunci {h['kunci']} · {h.get('ip', '?')}"
+            elif h and h.get("ip"):
+                nama = peta.get("ip:" + h["ip"], f"SSH password {h['ip']}")
+                asal = f"password · {h['ip']}"
+            else:
+                nama = "Belum teridentifikasi (" + ("desktop" if jalur == "desktop" else "terminal") + ")"
+                asal = "sebelum pencatat identitas dipasang" if not h else "tanpa SSH (lokal/tmux)"
+        o = orang.setdefault(nama, {"nama": nama, "sesi": []})
+        o["sesi"].append({
+            "sid": s["sid"], "jalur": jalur, "asal": asal, "judul": s["judul"] or "",
+            "mulai": s["mulai"], "akhir": s["akhir"],
+            "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
+        })
+
+    hasil = {
+        "dibuat": time.time(),
+        "zona": "WIB",
+        "kolom": KOLOM,
+        "pencatat_sejak": muat_json(DATA / "pasang.json", {}).get("sejak"),
+        "pengguna": sorted(orang.values(), key=lambda o: o["nama"].lower()),
+    }
+    Path(DATA / "cache.tmp").write_bytes(pickle.dumps(cache))
+    os.replace(DATA / "cache.tmp", cache_p)
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".token-")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(hasil, fh, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, out)
+
+
+if __name__ == "__main__":
+    main()

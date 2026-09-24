@@ -1,0 +1,6 @@
+[Unit]
+Description=Perbarui data graf skill & memory Claude untuk /brain/
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/brain-data --out /usr/share/nginx/html/brain/data.json

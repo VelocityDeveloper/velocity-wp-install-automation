@@ -1,0 +1,7 @@
+[Unit]
+Description=Rekap pemakaian token Claude per orang untuk menu Token Usage dashboard
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/claude-pakai --out /usr/share/nginx/html/brain/token.json
