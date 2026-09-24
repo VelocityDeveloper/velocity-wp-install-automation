@@ -20,8 +20,18 @@ Nama orang digabung lewat pengguna.json (di DATA):
 Dibaca bertahap: posisi terakhir tiap berkas disimpan di cache, jadi putaran berikutnya
 hanya membaca baris baru.
 
+Setor ke CRM (menu "Token Claude" di new.velocitydeveloper.net, hanya owner & admin):
+--setor URL mengirim rekap yang sama dengan Authorization: Bearer <API_PUBLIC_KEY> dari
+--kunci (berkas 0600). Dikirim hanya bila isinya berubah dan paling sering tiap 5 menit;
+gagal setor dicatat ke stderr tanpa menggagalkan rekap lokal.
+
 Pemakaian: claude-pakai [--out /usr/share/nginx/html/brain/token.json] [--ulang]
+                        [--setor URL --kunci /etc/velocity/secrets/project_list_api_key]
 """
+import hashlib
+import sys
+import urllib.error
+import urllib.request
 import argparse
 import json
 import os
@@ -52,7 +62,7 @@ PENGGUNA_BAWAAN = {
     "Irawan VD": {"telegram": ["375333725"]},
     "Yaya": {"telegram": ["8528357317"]},
     "Mas Toro": {"telegram": ["260162734"]},
-    "Lingga": {"telegram": ["2054457133"]},
+    "Lingga": {"telegram": ["2054457133"], "ssh": ["Lingga"]},
 }
 
 
@@ -196,6 +206,30 @@ def catat_sesi_hidup():
         pasang.write_text(json.dumps({"sejak": time.time()}))
 
 
+JEDA_SETOR = 300
+
+
+def setor(url, berkas_kunci, isi, sidik):
+    """Kirim rekap ke CRM bila berubah dan jeda sudah lewat. Tidak pernah melempar."""
+    catatan = DATA / "setor.json"
+    st = muat_json(catatan, {})
+    if st.get("sidik") == sidik or time.time() - st.get("waktu", 0) < JEDA_SETOR:
+        return
+    try:
+        kunci = Path(berkas_kunci).read_text().strip()
+        req = urllib.request.Request(url, data=isi, method="POST", headers={
+            "Authorization": "Bearer " + kunci,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=30) as r:
+            jawab = r.read(300).decode(errors="ignore")
+        catatan.write_text(json.dumps({"sidik": sidik, "waktu": time.time(), "jawab": jawab}))
+    except (OSError, urllib.error.URLError) as e:
+        rinci = e.read(300).decode(errors="ignore") if isinstance(e, urllib.error.HTTPError) else ""
+        print(f"setor gagal: {e} {rinci}", file=sys.stderr)
+
+
 def muat_json(p, bawaan):
     try:
         return json.loads(Path(p).read_text())
@@ -207,6 +241,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=OUT)
     ap.add_argument("--ulang", action="store_true", help="abaikan cache, baca semua dari awal")
+    ap.add_argument("--setor", help="URL setoran CRM, mis. https://new.velocitydeveloper.net/api/api/public/claude-token")
+    ap.add_argument("--kunci", default="/etc/velocity/secrets/project_list_api_key")  # = API_PUBLIC_KEY CRM
     a = ap.parse_args()
     DATA.mkdir(parents=True, exist_ok=True)
     catat_sesi_hidup()
@@ -317,11 +353,16 @@ def main():
     os.replace(DATA / "cache.tmp", cache_p)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    isi = json.dumps(hasil, ensure_ascii=False, separators=(",", ":")).encode()
     fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".token-")
-    with os.fdopen(fd, "w") as fh:
-        json.dump(hasil, fh, ensure_ascii=False, separators=(",", ":"))
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(isi)
     os.chmod(tmp, 0o644)
     os.replace(tmp, out)
+    if a.setor:
+        # sidik tanpa `dibuat`: nilai itu berubah tiap putaran walau isinya sama
+        sidik = hashlib.sha256(json.dumps({k: v for k, v in hasil.items() if k != "dibuat"}, sort_keys=True).encode()).hexdigest()
+        setor(a.setor, a.kunci, isi, sidik)
 
 
 if __name__ == "__main__":
