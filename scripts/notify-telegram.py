@@ -156,6 +156,23 @@ def peringatan_tema(domain):
     return f'Referensi {child[2]} belum tersedia di API tema, situs memakai tema induk.'
 
 
+VIDEO_EXT = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v', '.wmv', '.flv'}
+
+
+def catatan_video(domain):
+    """Video di folder klien yang tidak diunggah ke situs (aturan: video klien tidak pernah
+    diupload, keputusan user 2026-09-14 & 2026-09-24). Kosong bila tidak ada video."""
+    folder = Path('/home/On Progress') / domain
+    if not domain or '/' in domain or not folder.is_dir():
+        return ''
+    video = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in VIDEO_EXT)
+    if not video:
+        return ''
+    contoh = ', '.join(p.relative_to(folder).as_posix() for p in video[:3])
+    lebih = f' +{len(video) - 3} lainnya' if len(video) > 3 else ''
+    return f'{len(video)} video klien tidak diunggah ke situs (aturan: video tidak diupload): {contoh}{lebih}'
+
+
 def wp_login(domain):
     """(username, password) admin WordPress, dengan urutan sumber yang sama persis
     dengan website-install-from-manifest: manifest `password=` → `da_password_file`
@@ -289,6 +306,9 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
             head += f'Maintenance: <b>{html.escape(maintenance)}</b>\n'
         if peringatan:
             head += f'⚠️ {html.escape(peringatan)}\n'
+        video = catatan_video(domain)
+        if video:
+            head += f'🎬 {html.escape(video)}\n'
         situs = manifest_situs_url(domain)
         links = f'Situs: {situs}\nAdmin: {situs}/wp-admin'
         user, password = login

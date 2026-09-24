@@ -24,6 +24,7 @@ Alur di installer-runner (hanya paket toko online BIASA, bukan Toko Online Custo
   Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (judul "Contoh – ",
   meta _velocity_contoh=1) berfoto Pexels. Produk contoh dihapus begitu produk asli masuk.
   Produk yang sudah diimpor (meta _velocity_produk_kunci) tidak digandakan pada run ulang.
+  Video di folder produk TIDAK diunggah; jumlahnya dicatat (toko: video_dilewati:N) & dilaporkan Telegram.
 """
 import hashlib
 import importlib.machinery
@@ -53,6 +54,9 @@ FOLDER_PRODUK = re.compile(r'produ[ck]|product', re.I)
 BUKAN_PRODUK = re.compile(r'logo|contoh|referensi|screenshot|tangkapan|desain|banner', re.I)
 NAMA_GENERIK = re.compile(r'^(whatsapp (image|unknown)|gambar whatsapp|img[-_ ]?\d|img_|dsc|pxl_|photo|image|foto|'
                           r'screenshot|\d{6,}|[\d\s().,_-]+$)', re.I)
+# Video klien tidak pernah diunggah ke situs (keputusan user 2026-09-14, ditegaskan 2026-09-24);
+# yang ditemukan dicatat di log dan dilaporkan di Telegram (notify-telegram.catatan_video).
+VIDEO = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v', '.wmv', '.flv'}
 BATAS_BYTE = 100 * 1024
 MAKS_PRODUK = 60
 MAKS_GAMBAR_AI = 30
@@ -413,7 +417,11 @@ $contoh_lama = get_posts(['post_type' => 'store_product', 'post_status' => 'any'
                           'meta_key' => '_velocity_contoh', 'meta_value' => '1', 'fields' => 'ids']);
 if ($ada_asli && $contoh_lama) {
     foreach ($contoh_lama as $id) {
-        foreach (array_merge([get_post_thumbnail_id($id)], (array) get_post_meta($id, '_store_gallery_ids', true)) as $a) { if ($a) { wp_delete_attachment((int) $a, true); } }
+        // Hanya gambar yang diunggah langkah ini (_velocity_source produk:...): gambar contoh yang
+        // dipasang tangan bisa jadi foto utama artikel (apotekmedikaindofarma.com 2026-09-24).
+        foreach (array_merge([get_post_thumbnail_id($id)], (array) get_post_meta($id, '_store_gallery_ids', true)) as $a) {
+            if ($a && strpos((string) get_post_meta((int) $a, '_velocity_source', true), 'produk:') === 0) { wp_delete_attachment((int) $a, true); }
+        }
         wp_delete_post($id, true);
     }
     echo 'produk: contoh_dihapus:' . count($contoh_lama) . "\n";
@@ -511,6 +519,9 @@ def main():
     try:
         if mode == '--menu':
             return kirim_dan_jalankan(cfg, MENU_PHP, stage)
+        video = [f for d in folder_produk(ON_PROGRESS / domain) for f in d.rglob('*') if f.is_file() and f.suffix.lower() in VIDEO]
+        if video:
+            log(f'video_dilewati:{len(video)} ({", ".join(f.name for f in video[:5])}) — video tidak diunggah')
         produk, sumber = daftar_produk(domain)
         if not produk:
             log('folder_produk_kosong: buat produk contoh')
