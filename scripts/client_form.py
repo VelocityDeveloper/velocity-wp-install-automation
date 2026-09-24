@@ -1,10 +1,16 @@
 """Baca 'FORM ISIAN WEBSITE' yang dikirim klien di folder On Progress.
 
 Stdlib saja — tidak butuh antiword/catdoc/LibreOffice (tidak tersedia di
-AlmaLinux 9). Format dideteksi lewat magic bytes, bukan ekstensi, karena
-sebagian file .doc di Drive sebenarnya zip dan sebaliknya.
+AlmaLinux 9); PDF lewat pdftotext (poppler-utils). Format dideteksi lewat magic
+bytes, bukan ekstensi, karena sebagian file .doc di Drive sebenarnya zip dan
+sebaliknya: .docx, .doc (OLE), .odt, PDF berteks.
+
+fields = "Label: isi" (parse_fields) + isian di bawah judul bagian template
+(parse_sections, audit 2026-09-24) yang hanya mengisi label yang belum ada.
 """
+import html
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -61,10 +67,23 @@ def _eightbit(raw):
 
 def _from_zip(path):
     with zipfile.ZipFile(path) as z:
-        if 'word/document.xml' not in z.namelist():
+        nama = z.namelist()
+        if 'word/document.xml' in nama:
+            xml = z.read('word/document.xml').decode('utf8', 'replace')
+        elif 'content.xml' in nama:
+            # .odt (LibreOffice/WPS): paragraf <text:p>/<text:h>, ganti baris <text:line-break/>.
+            xml = z.read('content.xml').decode('utf8', 'replace')
+            xml = re.sub(r'<text:line-break\s*/>|</text:(p|h)>', '\n', xml)
+            xml = re.sub(r'<text:(tab|s)\b[^>]*/>', ' ', xml)
+            return html.unescape(re.sub(r'<[^>]+>', '', xml)).split('\n')
+        else:
             return []
-        xml = z.read('word/document.xml').decode('utf8', 'replace')
-    return re.sub(r'<[^>]+>', '', re.sub(r'</w:p>', '\n', xml)).split('\n')
+    # Ganti baris di dalam paragraf (<w:br/>, Shift+Enter) juga pemisah: tanpa ini isian & panduan
+    # template menempel ("azahralaundryexpress.comNama domain adalah ...", audit 2026-09-24).
+    xml = re.sub(r'<w:(br|cr)\b[^>]*/>', '\n', xml)
+    xml = re.sub(r'<w:tab\b[^>]*/>', ' ', xml)
+    # Entitas XML (&amp; &quot;) dikembalikan: "Tours &amp; Travel" bukan nama klien.
+    return html.unescape(re.sub(r'<[^>]+>', '', re.sub(r'</w:p>', '\n', xml))).split('\n')
 
 
 def _clean(lines):
@@ -88,21 +107,30 @@ def extract_text(path):
         head = path.open('rb').read(4)
         if head.startswith(b'PK'):
             return _clean(_from_zip(path))
+        if head.startswith(b'%PDF'):
+            # Form yang disimpan klien sebagai PDF (bukan hasil scan): teks lewat pdftotext (poppler).
+            run = subprocess.run(['pdftotext', '-layout', str(path), '-'], capture_output=True, text=True, timeout=120)
+            return _clean(re.sub(r' {3,}', '  ', run.stdout).splitlines())
         if head.startswith(b'\xd0\xcf\x11\xe0'):
             raw = path.read_bytes()
             # Word menyimpan teks .doc sebagai UTF-16LE atau 8-bit terkompresi,
             # berbeda per file; ambil hasil yang paling berisi.
             wide, narrow = _clean(_utf16(raw)), _clean(_eightbit(raw))
             return wide if _score(wide) >= _score(narrow) else narrow
-    except (OSError, zipfile.BadZipFile, ValueError):
+    except (OSError, zipfile.BadZipFile, ValueError, subprocess.SubprocessError):
         pass
     return []
+
+
+# Isian di baris sesudah "Label:" yang kosong di barisnya: hanya yang jelas berupa email/URL/nomor.
+_ISI_LANJUT = re.compile(r'^([^\s@]+@[^\s@]+\.\w+|https?://\S+|www\.\S+|\+?[\d][\d\s.()-]{7,})$', re.I)
 
 
 def parse_fields(lines):
     """Ambil pasangan 'Label: nilai', buang yang dibiarkan kosong klien."""
     fields = {}
-    for ln in lines:
+    lines = list(lines)
+    for idx, ln in enumerate(lines):
         # Form Portal Berita menulis isian berbutir ("-nama media: Mulawarman TV"); tanpa ini
         # baris itu tidak terbaca dan nama situs jatuh ke biodata (mulawarmantv.com 2026-09-18).
         ln = re.sub(r'^\s*[-•*]+\s*(?=[A-Za-z])', '', ln)
@@ -123,16 +151,132 @@ def parse_fields(lines):
         label, value = m.group(1).strip(), m.group(2).strip()
         if label.lower() in SKIP_LABELS or CRED_LABEL.search(label) or CRED_LABEL.search(value):
             continue
-        # Label sampah hasil baca .doc biner (mis. "iY0") tidak punya kata utuh.
-        if not re.search(r'[A-Za-z]{3}', label):
+        # Daftar pilihan desain template ("Pilihan 7: www.toko8...") & contoh jawaban bukan isian klien.
+        if re.match(r'^(pilihan\s*\d+|pilihannya\b.*|pilihan warna.*|contoh jawaban)$', label, re.I):
             continue
-        # Teks panduan template menempel di belakang jawaban klien, dipisah
-        # deretan titik atau tanda bintang.
-        value = re.split(r'\.{3,}|\*', value)[0].strip()
+        # Label sampah hasil baca .doc biner (mis. "iY0", "FKb") tidak punya kata utuh / huruf hidup.
+        if not re.search(r'[A-Za-z]{3}', label) or not re.search(r'[aiueo]', label, re.I) or not label.isascii():
+            continue
+        # Teks panduan template menempel di belakang jawaban klien, dipisah deretan titik, tanda
+        # bintang, "(optional)" atau "Misal:" — di .docx tanpa spasi: "HijauMisal: warna dasar ... biru dan
+        # hijau" terbaca biru+hijau (audit 2026-09-24).
+        value = re.split(r'\.{3,}|\*|\(\s*(?:optional|wajib)\b|Misal\s*:', value, flags=re.I)[0].strip()
+        if not value:
+            # "Email:" lalu tautan mailto di baris berikutnya (.doc): ambil isian yang jelas email/URL/nomor.
+            for lanjut in lines[idx + 1:idx + 4]:
+                lanjut = ' '.join(str(lanjut).split())
+                if re.match(r'^(HYPERLINK|mailto:)', lanjut, re.I):
+                    continue
+                if _ISI_LANJUT.match(lanjut):
+                    value = lanjut
+                break
         value = re.sub(r'\s*\((silahkan|wajib|untuk|jika)[^)]*\)\s*$', '', value, flags=re.I).strip()
         if value and not BLANK.match(value):
             fields.setdefault(label, value)
     return fields
+
+
+# Judul bagian template FORM ISIAN yang isinya ditulis klien di baris BERIKUTNYA (bukan "Label: isi").
+# Label hasil dipilih supaya cocok dengan pola pemakai yang sudah ada (velocity-child-theme data_klien,
+# installer_status judul situs, site-finish). Lima jenis template: paket biasa/F lama ("NAMA PERUSAHAAN
+# ANDA"), paket G ("NAMA PERUSAHAAN/ INSTANSI" + "KONTAK / INSTANSI"), portal berita ("NAMA MEDIA"),
+# compro PDF ("KONTAK YG DITAMPILKAN"), toko (FORM 1 "DATA WEBSITE" berformat "Label: isi").
+_JUDUL_BAGIAN = (
+    (r'NAMA DOMAIN', 'Domain'),
+    # Template sekolah/kampus: "NAMA INSTANSI PENDIDIKAN", "KONTAK / INSTANSI PENDIDIKAN".
+    (r'NAMA (PERUSAHAAN\s*/\s*INSTANSI|INSTANSI)( PENDIDIKAN)?', 'Nama Perusahaan / Instansi'),
+    # Template paket biasa/F lama: nama di FORM 1 hanya CADANGAN bila "Nama Perusahaan:" biodata kosong
+    # (label ini kalah urutan dari field biodata). Diukur 2026-09-24 pada 94 proyek: bila keduanya terisi,
+    # biodata lebih sering tepat (edytravelservices, kamiteknik, pemdeslampok).
+    (r'NAMA PERUSAHAAN( ANDA)?', 'Nama Perusahaan Anda'),
+    (r'NAMA MEDIA', 'Nama Media'),
+    (r'SLOGAN (PERUSAHAAN|MEDIA|INSTANSI)( ANDA|\s*/\s*INSTANSI)?( PENDIDIKAN)?', 'Slogan'),
+    (r'LOGO (PERUSAHAAN|MEDIA|INSTANSI)( ANDA|\s*/\s*INSTANSI)?( PENDIDIKAN)?', None),
+    (r'KONTAK\s*/\s*INSTANSI( PENDIDIKAN)?|KONTAK MEDIA|KONTAK YG DITAMPILKAN', 'Kontak untuk di web'),
+    (r'SUSUNAN MENU ATAS', 'Susunan menu atas'),
+    (r'ISI DARI SETIAP MENU ATAS', 'Isi menu atas'),
+    (r'SISI KIRI', 'Sisi kiri'), (r'ISI DARI SISI KIRI', 'Isi sisi kiri'),
+    (r'SISI KANAN', 'Sisi kanan'), (r'ISI DARI SISI KANAN', 'Isi sisi kanan'),
+    (r'TAMBAHAN DATA|DATA TAMBAHAN', 'Data tambahan'),
+    (r'PENJELASAN SINGKAT USAHA ANDA', 'Penjelasan usaha'),
+    (r'LAYANAN\s*/\s*PRODUK', 'Layanan / produk'),
+    (r'CUSTOMER\s*/\s*KLIEN', 'Customer / klien'),
+    (r'FOTO PERUSAHAAN\s*/\s*TIM', None),
+    (r'DESIGN YANG DIPILIH|TEMPLATE YANG DIPILIH', 'Desain yang dipilih'),
+    (r'APAKAH ADA WEBSITE YANG INGIN DICONTOH[^:]*', 'Website referensi'),
+    (r'APAKAH ANDA SUDAH MEMPUNYAI KONSEP DESAIN SENDIRI[^:]*', 'Konsep desain sendiri'),
+    (r'WARNA TEMA WEB( YANG ANDA PILIH)?', 'Warna tema web'),
+    (r'SAMPEL WARNA TEMA WEB', None),
+    (r'PESAN TAMBAHAN DARI ANDA', None),
+)
+# Tanpa re.I: judul template selalu huruf besar; "Nama Perusahaan: ..." di BIODATA (FORM 2) milik parse_fields.
+_JUDUL_RE = [(re.compile(rf'^\s*(?:{p})\s*(?P<titik>:)?\s*(?P<isi>.*)$'), label) for p, label in _JUDUL_BAGIAN]
+# Baris pemisah bagian template lain (akhir isian).
+_BATAS = re.compile(r'^\s*(FORM\s*\d|BIO\s*A?DATA|SYARAT DAN KETENTUAN|ISIAN DATA|DESAIN WEBSITE|ILUSTRASI|'
+                    r'SUSUNAN TATA LETAK|APAKAH DESAIN WEBNYA|PILIHANNYA BERIKUT|Paket Website Yang Anda Pilih|'
+                    r'kontak\s+(utk|untuk)\s+di\s*web)\b', re.I)
+# Kalimat panduan template yang tercetak di bawah judul (bukan isian klien).
+_PANDUAN = re.compile(
+    r'^(silah?kan|contoh|misal|msial|jika bingung|untuk (isi|penjelasan|layanan)|pada gambar|nama domain adalah|'
+    r'\*|alamat dan telp|bisa (berisi|data)|kontak berikut|penjelasan usaha anda|responsive desain|\(|hyperlink\b|'
+    r'mailto:|-{5,}|dapat di ?lihat|tolong anda kirimkan company profile|ada \d+ pilihan|pilihan \d+|'
+    r'\. jika tidak|jika tidak jawab|jawablah|.*alamatwebcontoh)', re.I)
+# Isian di baris berikut pada "Label:" yang dibiarkan kosong di barisnya (mis. "Email:" lalu tautan mailto).
+_LABEL_BARIS = re.compile(r'^([A-Za-z][A-Za-z0-9 /_()-]{2,40}?)\s*:\s*$')
+
+
+def _isi_bagian(baris):
+    """Isian klien di bawah satu judul: buang titik-titik, panduan template, baris HYPERLINK."""
+    hasil = []
+    for b in baris:
+        # Kode field Word yang ikut terbaca di tengah baris: HYPERLINK "mailto:x@y" \t "_blank".
+        b = re.sub(r'HYPERLINK\s+"[^"]*"(\s*\\[a-z]\s*"[^"]*")*', ' ', b)
+        b = re.sub(r'^[.\s]{3,}', '', ' '.join(b.split())).strip()
+        # Panduan yang menempel di belakang isian: deretan titik, "(optional)", "Misal:", "(Setelah web jadi".
+        b = re.split(r'\.{5,}|\(\s*(?:optional|wajib|setelah|silah?kan)|Misal\s*:|Contoh\s*:|PILIHANNYA BERIKUT',
+                     b, flags=re.I)[0].strip(' .')
+        if not b or BLANK.match(b) or _PANDUAN.match(b) or not re.search(r'[A-Za-z0-9]{2}', b):
+            continue
+        # Nomor rekening/ID template yang tercetak di setiap form.
+        if b in ('22226127635',):
+            continue
+        if b not in hasil:
+            hasil.append(b)
+    return '\n'.join(hasil)[:2000]
+
+
+def parse_sections(lines):
+    """Isian berbentuk judul bagian + isi di baris berikutnya (FORM 1 template resmi).
+
+    parse_fields hanya mengenal "Label: isi", jadi "NAMA PERUSAHAAN ANDA\\nCahaya ratu petir"
+    tidak pernah terbaca: judul situs cahayaratupetir.com jatuh ke tebakan nama domain
+    ("Cahayaratupetir") dan tiap pemakai menambal dengan regex sendiri (audit 2026-09-24)."""
+    hasil, i = {}, 0
+    # Titik-titik isian kosong di depan judul (".......... PILIHANNYA BERIKUT INI:") diabaikan.
+    lines = [re.sub(r'^[.\s]{3,}', '', ' '.join(str(l).split())) for l in lines]
+    while i < len(lines):
+        cocok = next(((m, label) for rx, label in _JUDUL_RE for m in [rx.match(lines[i])] if m), None)
+        if not cocok:
+            i += 1
+            continue
+        m, label = cocok
+        j = i + 1
+        while j < len(lines) and j - i <= 60 and not _BATAS.match(lines[j]) \
+                and not any(rx.match(lines[j]) for rx, _ in _JUDUL_RE):
+            j += 1
+        # Isian sebaris ("TEMPLATE YANG DIPILIH: toko30...") berarti baris berikutnya panduan/daftar pilihan.
+        # Tanpa titik dua, sisa huruf besar masih bagian judul varian lain ("... INSTANSI PENDIDIKAN").
+        sebaris = '' if not m.group('titik') and m.group('isi').isupper() else _isi_bagian([m.group('isi')])
+        # "Fitur mengikuti:" sebaris lalu tautannya di baris berikut: keduanya dipakai.
+        isi = sebaris if sebaris and not sebaris.endswith(':') else \
+            '\n'.join(x for x in (sebaris, _isi_bagian(lines[i + 1:j])) if x)
+        # Kolom nama yang diisi alamat domain ("rigaswicaksono.com") bukan nama usaha.
+        if label and label.startswith('Nama') and re.fullmatch(r'(https?://)?(www\.)?[\w-]+(\.[\w-]+)+/?', isi, re.I):
+            isi = ''
+        if label and isi:
+            hasil.setdefault(label, isi)
+        i = j
+    return hasil
 
 
 def read_client_form(folder):
@@ -149,7 +293,41 @@ def read_client_form(folder):
         text.extend(lines)
         for k, v in parse_fields(lines).items():
             fields.setdefault(k, v)
+        # Isian judul bagian hanya MENGISI yang kosong: "Label: isi" yang sudah terbaca tetap menang,
+        # jadi situs yang datanya sudah benar tidak berubah.
+        ada = {k.lower() for k in fields}
+        for k, v in parse_sections(lines).items():
+            if k.lower() not in ada:
+                fields.setdefault(k, v)
     return {'text': '\n'.join(text), 'fields': fields, 'unreadable': unread}
+
+
+# Kalimat bawaan template di bagian PESAN TAMBAHAN (bukan tulisan klien).
+_TEMPLATE_PESAN = re.compile(
+    r'^(silah?kan anda sampaikan|silah?kan anda sampikan|setelah semua form|judul email|bantuanvelocity@|'
+    r'hyperlink\b|mailto:|-{5,}|form\s*\d)', re.I)
+
+
+def pesan_tambahan(text):
+    """Tulisan klien di bagian "PESAN TAMBAHAN DARI ANDA" (FORM 5), tanpa kalimat template.
+
+    Isi form adalah acuan pengerjaan (keputusan user 2026-09-24): permintaan di sini — mis.
+    "halaman paket & hasil pekerjaan, data dan gambar bisa diambil dari totalantipetir.com"
+    (cahayaratupetir.com) — wajib dikerjakan, jadi installer melaporkannya sampai ditandai selesai."""
+    m = re.search(r'PESAN\s+TAMBAHAN[^\n]*\n(.*?)(?:\nSetelah semua form|\nJudul email|\Z)', text or '', re.S | re.I)
+    if not m:
+        return ''
+    hasil = []
+    for baris in m.group(1).splitlines():
+        b = baris.strip()
+        if not b or BLANK.match(b) or _TEMPLATE_PESAN.match(b):
+            continue
+        # Sisa .doc biner (karakter kendali/huruf acak) bukan tulisan klien.
+        if sum(c.isalnum() or c.isspace() for c in b) < 0.8 * len(b):
+            continue
+        if b not in hasil:
+            hasil.append(b)
+    return '\n'.join(hasil).strip()
 
 
 if __name__ == '__main__':

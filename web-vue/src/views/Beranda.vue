@@ -19,7 +19,12 @@ const kartuStat = computed(() => {
   return [
     { label: 'CPU', nilai: `${d.cpu}%`, persen: d.cpu, ket: `${d.cores} core` },
     { label: 'Memori', nilai: `${d.memory.percent}%`, persen: d.memory.percent, ket: `${ukuranBerkas(d.memory.used)} / ${ukuranBerkas(d.memory.total)}` },
-    { label: 'Disk /', nilai: `${d.disk.percent}%`, persen: d.disk.percent, ket: `${ukuranBerkas(d.disk.used)} / ${ukuranBerkas(d.disk.total)}` },
+    {
+      label: 'Disk',
+      baris: [['/', d.disk], ['/home', d.disk_home]].filter(([, x]) => x).map(([titik, x]) => ({
+        titik, persen: x.percent, ket: `Sisa ${ukuranBerkas(x.free ?? x.total - x.used)} dari ${ukuranBerkas(x.total)}`,
+      })),
+    },
     { label: 'Load', nilai: d.load.map((v) => Number(v).toFixed(2)).join(' · '), persen: null, ket: `Uptime ${uptime.value}` },
   ]
 })
@@ -99,9 +104,18 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
       <template v-if="s">
         <article v-for="k in kartuStat" :key="k.label" class="kartu stat-kartu">
           <span class="redup">{{ k.label }}</span>
-          <strong class="angka">{{ k.nilai }}</strong>
-          <div v-if="k.persen !== null" class="meter" role="meter" :aria-valuenow="k.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="k.label"><i :style="{ width: `${k.persen}%` }" /></div>
-          <span class="redup">{{ k.ket }}</span>
+          <template v-if="k.baris">
+            <div v-for="x in k.baris" :key="x.titik" class="disk-baris">
+              <div class="disk-kepala"><span>{{ x.titik }}</span><strong>{{ x.persen }}%</strong></div>
+              <div class="meter" role="meter" :aria-valuenow="x.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="`Disk ${x.titik}`"><i :style="{ width: `${x.persen}%` }" /></div>
+              <span class="redup">{{ x.ket }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <strong class="angka">{{ k.nilai }}</strong>
+            <div v-if="k.persen !== null" class="meter" role="meter" :aria-valuenow="k.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="k.label"><i :style="{ width: `${k.persen}%` }" /></div>
+            <span class="redup">{{ k.ket }}</span>
+          </template>
         </article>
       </template>
       <article v-else v-for="i in 4" :key="i" class="kartu stat-kartu kerangka-muat"><span /><span /></article>
@@ -188,6 +202,10 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 .stat { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .stat-kartu { display: grid; gap: 8px; align-content: start; }
 .angka { font-size: 26px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.disk-baris { display: grid; gap: 6px; }
+.disk-baris + .disk-baris { margin-top: 4px; }
+.disk-kepala { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.disk-kepala strong { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kerangka-muat { min-height: 118px; }
 .kerangka-muat span { display: block; height: 12px; border-radius: 6px; background: var(--kartu-2); }
 .kerangka-muat span + span { height: 26px; width: 50%; }
@@ -222,7 +240,7 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 .cron { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .cron code { display: block; padding: 8px 10px; border-radius: 8px; background: var(--kartu-2); color: var(--teks-2); font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 
-.brain iframe { display: block; width: 100%; height: clamp(300px, 40vw, 440px); border: 0; border-radius: 12px; background: #0d1210; }
+.brain iframe { display: block; width: 100%; height: clamp(380px, 68vh, 760px); border: 0; border-radius: 12px; background: #0d1210; }
 
 @media (max-width: 1200px) {
   .stat { grid-template-columns: repeat(2, minmax(0, 1fr)); }

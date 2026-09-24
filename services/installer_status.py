@@ -76,10 +76,15 @@ AI_PERAN = (
 # ditentukan CLI Claude sendiri, jadi barisnya hanya ditampilkan, tidak bisa dipilih. fse-apply
 # tetap menyusun tema & halaman sebagai titik awal agen (peran 'fse' di atas hanya dipakai portal
 # berita untuk memilih gaya beranda).
+# Kolom ke-4/5: saklar di env autopilot & nilai bawaannya. Permintaan klien di form (PESAN TAMBAHAN)
+# juga dikerjakan agen Claude Code (scripts/permintaan-claude, permintaan user 2026-09-24).
 AI_PERAN_TETAP = (
-    ('desain_claude', 'Desain FSE paket custom: tata letak, CSS & halaman', 'desain-claude',
-     'agen Claude Code (claude-opus-5)'),
+    ('desain_claude', 'Desain FSE paket custom: tata letak, CSS & halaman', 'desain-claude', 'DESAIN_CLAUDE', '0'),
+    ('permintaan_claude', 'Permintaan klien di form (pesan tambahan): halaman, data, menu', 'permintaan-claude',
+     'PERMINTAAN_CLAUDE', '1'),
 )
+# Model agen = Opus terbaru yang dikenal CLI Claude (diresolve & disimpan scripts/desain-claude).
+DESAIN_CLAUDE_MODEL = Path('/var/lib/velocity/desain-claude-model.json')
 AUTOPILOT_ENV = Path('/etc/velocity/installer-autopilot.env')
 AI_PROMPTS = AI_CONFIG_DIR / 'prompts'
 AI_GENERATED = AI_CONFIG_DIR / 'generated'
@@ -1269,15 +1274,24 @@ def set_default_ai_model(model_id):
     return True
 
 
-def desain_claude_aktif():
-    """True bila agen desain Claude dinyalakan (DESAIN_CLAUDE=1 di env autopilot)."""
+def model_desain_claude():
+    try:
+        model = json.loads(DESAIN_CLAUDE_MODEL.read_text()).get('model') or ''
+    except (OSError, ValueError):
+        model = ''
+    return f"agen Claude Code ({model or 'Opus terbaru'})"
+
+
+def saklar_aktif(kunci, bawaan):
+    """True bila saklar agen Claude (mis. DESAIN_CLAUDE=1) menyala di env autopilot."""
+    nilai = bawaan
     try:
         for baris in AUTOPILOT_ENV.read_text().splitlines():
-            if baris.strip().startswith('DESAIN_CLAUDE='):
-                return baris.split('=', 1)[1].strip() == '1'
+            if baris.strip().startswith(kunci + '='):
+                nilai = baris.split('=', 1)[1].strip()
     except OSError:
         pass
-    return False
+    return nilai == '1'
 
 
 def set_ai_pemakaian(peran, model_id):
@@ -1787,9 +1801,9 @@ class Handler(BaseHTTPRequestHandler):
             safe = {'models': [], 'default_provider': data.get('default_provider', 'openai'),
                     'pemakaian': {k: v for k, v in (data.get('pemakaian') or {}).items() if v},
                     'peran': [{'kunci': k, 'label': label, 'script': script} for k, label, script in AI_PERAN],
-                    'peran_tetap': [{'kunci': k, 'label': label, 'script': script, 'model': model,
-                                     'aktif': desain_claude_aktif()}
-                                    for k, label, script, model in AI_PERAN_TETAP]}
+                    'peran_tetap': [{'kunci': k, 'label': label, 'script': script, 'model': model_desain_claude(),
+                                     'aktif': saklar_aktif(saklar, bawaan)}
+                                    for k, label, script, saklar, bawaan in AI_PERAN_TETAP]}
             for m in data.get('models', []):
                 mm = dict(m)
                 if mm.get('api_key'):

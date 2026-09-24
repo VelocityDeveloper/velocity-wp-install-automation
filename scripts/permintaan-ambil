@@ -1,0 +1,125 @@
+#!/usr/bin/env node
+/*
+ * Ambil isi satu halaman web (teks berurutan + gambar) untuk agen permintaan klien
+ * (scripts/permintaan-claude-alat `ambil`). Contoh kasus: cahayaratupetir.com 2026-09-24 — klien
+ * menulis "data dan gambar bisa diambil dari totalantipetir.com" (Google Sites).
+ *
+ * Pemakaian: permintaan-ambil <url> <folder-keluaran> [maks-gambar]
+ * Keluaran di folder:
+ *   halaman.md    judul, lalu isi berurutan sesuai DOM: baris teks & `![gambar NNN](img-NNN.ext)`
+ *                 (ukuran asli, alt, posisi y) — urutan ini dipakai memasangkan foto dengan teksnya
+ *   tautan.txt    tautan satu situs (untuk halaman lanjutan)
+ *   gambar.json   daftar gambar {berkas, src, lebar, tinggi, alt, y}
+ * Gambar diunduh DI DALAM sesi browser: URL gambar Google Sites bertanda tangan & ditolak (403)
+ * bila diambil terpisah dengan urllib. UA Chrome lengkap wajib (WAF hosting).
+ */
+const fs = require('fs');
+const path = require('path');
+
+const akar = process.env.VELOCITY_BLOCKVAL || '/var/lib/velocity/tools/blockval';
+const { chromium } = require(path.join(akar, 'node_modules', 'playwright-core'));
+const chrome = process.env.VELOCITY_CHROME
+  || fs.readdirSync('/root/.cache/ms-playwright').filter((d) => d.startsWith('chromium-')).sort().reverse()
+    .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+
+const [url, keluar, maksArg] = process.argv.slice(2);
+const MAKS = Math.min(+maksArg || 80, 200);
+if (!url || !keluar) {
+  console.log('pemakaian: permintaan-ambil <url> <folder> [maks-gambar]');
+  process.exit(2);
+}
+
+(async () => {
+  fs.mkdirSync(keluar, { recursive: true });
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox'] });
+  const berhenti = setTimeout(() => { console.log('ambil:timeout'); process.exit(1); }, 240000);
+  const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1366, height: 900 } });
+  const page = await ctx.newPage();
+  const isi = new Map();
+  page.on('response', async (r) => {
+    if (r.request().resourceType() === 'image' && r.status() === 200) {
+      try { isi.set(r.url(), await r.body()); } catch (e) { /* respons sudah dibuang */ }
+    }
+  });
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+  await page.evaluate(async () => {
+    const tunggu = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let y = 0, i = 0; y < document.documentElement.scrollHeight && i < 150; y += 500, i += 1) {
+      window.scrollTo(0, y);
+      await tunggu(200);
+    }
+    window.scrollTo(0, 0);
+  });
+  await page.waitForTimeout(1500);
+
+  const data = await page.evaluate(() => {
+    const out = [];
+    const lewati = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'TEMPLATE']);
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.nodeType === 1 && lewati.has(n.tagName) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    let n;
+    while ((n = w.nextNode())) {
+      if (n.nodeType === 1 && n.tagName === 'IMG') {
+        const src = n.currentSrc || n.src;
+        const r = n.getBoundingClientRect();
+        if (src && !src.startsWith('data:') && n.naturalWidth >= 150 && n.naturalHeight >= 100 && r.width > 0) {
+          out.push({ img: src, lebar: n.naturalWidth, tinggi: n.naturalHeight, alt: (n.alt || '').trim(), y: Math.round(r.top + scrollY) });
+        }
+      } else if (n.nodeType === 3) {
+        const t = n.textContent.replace(/\s+/g, ' ').trim();
+        const el = n.parentElement;
+        if (t && el && el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden') {
+          const r = el.getBoundingClientRect();
+          out.push({ t, y: Math.round(r.top + scrollY), blok: el.closest('p,li,h1,h2,h3,h4,h5,h6,td,th,div,section') });
+        }
+      }
+    }
+    // Potongan teks dalam satu blok (span bertingkat) digabung jadi satu baris.
+    const baris = [];
+    for (const o of out) {
+      const akhir = baris[baris.length - 1];
+      if (o.t !== undefined && akhir && akhir.t !== undefined && akhir.blok === o.blok) {
+        akhir.t += ' ' + o.t;
+      } else {
+        baris.push(o);
+      }
+    }
+    const tautan = [...new Set([...document.querySelectorAll('a[href]')].map((a) => a.href.split('#')[0])
+      .filter((h) => h.startsWith(location.origin)))].slice(0, 120);
+    return { judul: document.title, baris: baris.map(({ blok, ...b }) => b), tautan };
+  });
+
+  const gambar = [];
+  const md = [`# ${data.judul}`, url, ''];
+  const sudah = new Set();
+  for (const b of data.baris) {
+    if (b.t !== undefined) {
+      md.push(`${b.t}  (y=${b.y})`);
+      continue;
+    }
+    if (sudah.has(b.img) || gambar.length >= MAKS) continue;
+    sudah.add(b.img);
+    let buf = isi.get(b.img);
+    if (!buf) {
+      const r = await ctx.request.get(b.img, { headers: { Referer: url }, timeout: 30000 }).catch(() => null);
+      if (r && r.ok()) buf = await r.body();
+    }
+    if (!buf) continue;
+    const jenis = buf.slice(0, 4).toString('hex');
+    const ext = jenis.startsWith('89504e47') ? 'png' : jenis.startsWith('52494646') ? 'webp' : jenis.startsWith('47494638') ? 'gif' : 'jpg';
+    const berkas = `img-${String(gambar.length + 1).padStart(3, '0')}.${ext}`;
+    fs.writeFileSync(path.join(keluar, berkas), buf);
+    gambar.push({ berkas, src: b.img.slice(0, 300), lebar: b.lebar, tinggi: b.tinggi, alt: b.alt, y: b.y });
+    md.push(`![gambar ${berkas}](${berkas}) ${b.lebar}x${b.tinggi}${b.alt ? ` alt="${b.alt}"` : ''}  (y=${b.y})`);
+  }
+  fs.writeFileSync(path.join(keluar, 'halaman.md'), md.join('\n') + '\n');
+  fs.writeFileSync(path.join(keluar, 'tautan.txt'), data.tautan.join('\n') + '\n');
+  fs.writeFileSync(path.join(keluar, 'gambar.json'), JSON.stringify(gambar, null, 1));
+  clearTimeout(berhenti);
+  console.log(`ambil:ok:${keluar} teks=${data.baris.filter((b) => b.t !== undefined).length} gambar=${gambar.length} tautan=${data.tautan.length}`);
+  await browser.close();
+  process.exit(0);
+})().catch((e) => { console.log(`ambil:gagal:${String(e.message || e).split('\n')[0]}`); process.exit(1); });

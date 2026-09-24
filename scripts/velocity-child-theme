@@ -556,13 +556,48 @@ def kota_alamat(alamat):
     return re.sub(r'\s{2,}', ' ', cocok.group(1)).strip(' .') if cocok else ''
 
 
+# Catatan klien bahwa biodatanya tidak boleh tampil (FORM 5 pesan tambahan, dokumen lain):
+# "jangan tampilkan no hp saya", "biodata tidak usah dicantumkan", "alamat rumah rahasia".
+_DATA_PRIBADI = (r'(?:bio\s*a?data|data\s+(?:pribadi|diri|pemilik)|no(?:mor|\.)?\s*(?:hp|wa|telp?|pribadi)|'
+                 r'whats\s*app\s+(?:saya|pribadi)|alamat\s+(?:rumah|pribadi|saya)|e-?mail\s+(?:pribadi|saya))')
+_TIDAK = r'(?:jangan|tidak\s+(?:usah|perlu|mau|ingin|boleh)|tdk\s+(?:usah|perlu|mau)|(?:gak|ga|nggak|ngga)\s+usah|mohon\s+tidak)'
+TOLAK_BIODATA = re.compile(
+    _TIDAK + r'\s+(?:di\s*)?(?:tampil\w*|cantum\w*|publikasi\w*|pasang\w*|masuk\w*|sebar\w*|share)\b[^.\n]{0,60}?' + _DATA_PRIBADI
+    + r'|' + _DATA_PRIBADI + r'[^.\n]{0,60}?(?:' + _TIDAK + r'|dirahasiakan|rahasia)', re.I)
+
+
+def biodata_publik(teks_form, dokumen=''):
+    """{'wa','telp','email','alamat'} dari BIODATA PEMILIK sebagai cadangan kontak publik, atau {}
+    bila tidak ada bagian biodata / klien menulis tidak mau biodatanya tampil."""
+    if TOLAK_BIODATA.search(teks_form + '\n' + dokumen):
+        return {}
+    m = re.search(r'BIO\s*A?DATA(.*?)(?:FORM\s*3\b|DESAIN\s+WEBSITE|$)', teks_form, re.S | re.I)
+    if not m:
+        return {}
+    bio = m.group(1)
+    wa, telp = nomor_wa(bio)
+    email = next((e for e in EMAIL_RE.findall(bio) if not re.search(r'velocity|example', e, re.I)), '')
+    baris = lambda pola: next((x.group(1).strip() for x in [re.search(pola, bio, re.I | re.M)] if x), '')
+    alamat = re.sub(r'\s*,\s*(,\s*)+', ', ', baris(r'^\s*Alamat[^:\n]*:\s*(.+)$')).strip(' ,.-')
+    kota = re.sub(r'^\s*(kota(\s+adm(inistrasi)?\.?)?|kab(upaten)?\.?)\s+', '',
+                  baris(r'^\s*Kota[^:\n]*:\s*(.+)$'), flags=re.I).strip(' ,.-')
+    prov = baris(r'^\s*Pro(?:p|v)insi\s*:\s*(.+)$').strip(' ,.-')
+    kodepos = baris(r'^\s*Kode\s*pos\s*:\s*(\d{5})').strip()
+    bagian = [alamat] if alamat else []
+    for tambahan in (kota, ' '.join(x for x in (prov, kodepos) if x)):
+        if tambahan and tambahan.lower() not in ' '.join(bagian).lower():
+            bagian.append(tambahan)
+    return {'wa': wa, 'telp': telp, 'email': email, 'alamat': ', '.join(bagian) if alamat else ''}
+
+
 def data_klien(domain, nama=''):
     """Nama, kontak, dan alamat dari FORM ISIAN, untuk mengisi inc/theme-data.php.
 
-    Kontak PUBLIK hanya dari "Kontak utk di web" atau dokumen tambahan klien
-    (company profile). WhatsApp & email di biodata pemilik adalah data
-    administrasi ("untuk pemberitahuan perpanjangan") dan tidak pernah tampil
-    di situs — email pemilik hanya dipakai sebagai penerima form pemesanan.
+    Kontak PUBLIK (keputusan user 2026-09-24): "Kontak utk di web" / dokumen klien (company
+    profile) dulu; bila kosong, WA/telepon/email/alamat dari BIODATA PEMILIK dipakai — kecuali
+    klien menulis tidak mau biodatanya tampil (TOLAK_BIODATA). Dulu biodata tidak pernah tampil,
+    sehingga situs yang formnya tanpa "Kontak utk di web" selesai tanpa kontak sama sekali
+    (cahayaratupetir.com). Email pemilik tetap penerima form pemesanan.
     """
     folder = ON_PROGRESS / domain
     try:
@@ -644,6 +679,16 @@ def data_klien(domain, nama=''):
     # Telepon di halaman kontak company profile = nomor kantor untuk publik; nomor di
     # biodata FORM ISIAN tetap data administrasi (SCC INSURANCE COMPRO, 2026-09-18).
     telp = telp or compro_kontak.get('telp', '')
+    alamat_publik = (alamat_compro or alamat_kontak_web(kontak_web) or alamat_dokumen(dokumen)
+                     or ('' if re.search(r'BIO\s*A?DATA|data ini kami gunakan untuk administrasi', teks_form, re.I)
+                         else ', '.join(b for b in bagian if b)))
+    bio = biodata_publik(teks_form, dokumen)
+    if bio:
+        if not wa and bio['wa']:
+            wa, telp = bio['wa'], telp or bio['telp']
+        email_publik = email_publik or bio['email']
+        penerima = penerima or bio['email']
+        alamat_publik = alamat_publik or bio['alamat']
     return {
         'NAMA': nama[:80],
         'WA': wa,
@@ -653,9 +698,7 @@ def data_klien(domain, nama=''):
         # Alamat biodata FORM ISIAN ("Alamat lengkap" pemilik) hanya dipakai kalau
         # memang tidak ada bagian biodata terpisah; anaksegalabangsa.com sempat
         # menampilkan alamat rumah pemilik di footer. Kota tetap dipakai untuk peta.
-        'ALAMAT': (alamat_compro or alamat_kontak_web(kontak_web) or alamat_dokumen(dokumen)
-                   or ('' if re.search(r'BIO\s*A?DATA|data ini kami gunakan untuk administrasi', teks_form, re.I)
-                       else ', '.join(b for b in bagian if b)))[:200],
+        'ALAMAT': alamat_publik[:200],
         # Kota untuk peta ikut alamat yang DIPAKAI: kalau alamat kantor company profile
         # yang tampil, kotanya harus dari situ juga — bukan kota rumah pemilik di biodata
         # (solusicerdasconsulting.com: kantor Jakarta Selatan, biodata Bekasi, 2026-09-18).

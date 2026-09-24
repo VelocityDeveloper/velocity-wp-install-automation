@@ -28,6 +28,11 @@ if [[ -z "${DESAIN_CLAUDE:-}" ]]; then
   DESAIN_CLAUDE=$(sed -n 's/^DESAIN_CLAUDE=//p' /etc/velocity/installer-autopilot.env 2>/dev/null | tail -1)
 fi
 DESAIN_CLAUDE=${DESAIN_CLAUDE:-0}
+# Agen permintaan klien di form (scripts/permintaan-claude): bawaan menyala.
+if [[ -z "${PERMINTAAN_CLAUDE:-}" ]]; then
+  PERMINTAAN_CLAUDE=$(sed -n 's/^PERMINTAAN_CLAUDE=//p' /etc/velocity/installer-autopilot.env 2>/dev/null | tail -1)
+fi
+PERMINTAAN_CLAUDE=${PERMINTAAN_CLAUDE:-1}
 # Klien dengan hosting di luar dikerjakan di staging velocitydeveloper.co/<domain>:
 # manifest menyebut `docroot=` + `site_url=`. Semua script pembantu (fse-apply,
 # site-finish, site-audit, paket-g-foto, ai-content-generator) memakai escape hatch
@@ -408,6 +413,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
     notify FAILED "http_check_$code"
     exit 4
   fi
+  # Sertifikat SSL (permintaan user 2026-09-23): sampai sekarang installer hanya MEMBACA status
+  # SSL, jadi situs selesai tanpa HTTPS sampai ada yang memasangnya manual di panel. Diterbitkan
+  # di sini — sebelum tema, konten, screenshot & QA — supaya semuanya melihat situs seperti
+  # pengunjung. DNS belum mengarah = dilewati (bukan gagal), run berikutnya mencoba lagi.
+  echo "[$(date -Is)] Terbitkan SSL" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/site-ssl" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Generator memakai ulang konten tersimpan saat apply ulang, jadi aman
   # dijalankan lagi tanpa biaya AI dan tanpa menggandakan artikel. Mode finish
   # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
@@ -461,6 +472,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   else
     tampilan_klasik
   fi
+  # Pesan tambahan di form klien dikerjakan agen Claude sebagai user situs.
+  # Sebelum QA, supaya hasilnya ikut diperiksa. Saklar PERMINTAAN_CLAUDE di atas.
+  if [[ "$PERMINTAAN_CLAUDE" == 1 ]]; then
+    echo "[$(date -Is)] Permintaan form klien (agen Claude)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/permintaan-claude" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"
   problems=$(python3 -c 'import json, sys
@@ -473,6 +490,14 @@ except Exception:
     if [[ -n "$mirip" ]]; then
       problems="${problems:+$problems,}$mirip"
     fi
+  fi
+  # Isi form = acuan pengerjaan (keputusan user 2026-09-24): permintaan klien di PESAN TAMBAHAN yang
+  # belum selesai (agen tidak menyelesaikan semua butir / dimatikan) tetap dilaporkan "perlu dicek"
+  # + isinya sampai ditandai selesai (agen, atau scripts/permintaan-form <domain> --selesai "...").
+  pf=$(/usr/bin/python3 "$SCRIPTS/permintaan-form" "$MANIFEST" 2>>"$LOG" | tail -1 || true)
+  echo "[$(date -Is)] $pf" >> "$LOG"
+  if [[ "$pf" == "permintaan_form: belum_dikerjakan"* ]]; then
+    problems="${problems:+$problems,}permintaan_form_klien"
   fi
 fi
 if [[ "$MODE" == "apply" || "$MODE" == "maintenance" ]]; then

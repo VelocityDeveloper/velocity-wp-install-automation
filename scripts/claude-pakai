@@ -59,7 +59,7 @@ PENGGUNA_BAWAAN = {
     "Adityathok": {"telegram": ["787473227"]},
     "Afif": {"telegram": ["8563985331"]},
     "Eko Mustaqim": {"telegram": ["240477294"]},
-    "Irawan VD": {"telegram": ["375333725"]},
+    "Irawan VD": {"telegram": ["375333725"], "ssh": ["Irawan"]},  # kunci SSH "Irawan" (PC11 .72.20)
     "Yaya": {"telegram": ["8528357317"]},
     "Mas Toro": {"telegram": ["260162734"]},
     "Lingga": {"telegram": ["2054457133"], "ssh": ["Lingga"]},
@@ -77,10 +77,13 @@ def teks_user(d):
     return ""
 
 
-def judul_dari(t):
+BUKAN_PESAN = ("<command-", "<local-command", "Caveat:", "[Request interrupted", "<system-reminder", "<task-notification")
+
+
+def judul_dari(t, n=90):
     t = re.sub(r"<channel [^>]*>", "", t)
     t = re.sub(r"<[^>]+>", " ", t)
-    return re.sub(r"\s+", " ", t).strip()[:90]
+    return re.sub(r"\s+", " ", t).strip()[:n]
 
 
 def baca_berkas(f, st, lihat):
@@ -92,7 +95,7 @@ def baca_berkas(f, st, lihat):
                 break  # baris sedang ditulis; ulang di putaran berikut
             st["pos"] += len(raw)
             ln = raw.decode("utf-8", "ignore")
-            butuh_user = '"type":"user"' in ln and (not st["judul"] or (not st["tg"] and "plugin:telegram" in ln))
+            butuh_user = '"type":"user"' in ln and (not st["judul"] or st.get("n_teks", 0) < 3 or (not st["tg"] and "plugin:telegram" in ln))
             if not butuh_user and not ('"usage"' in ln and '"type":"assistant"' in ln) and st["ep"]:
                 continue
             try:
@@ -107,8 +110,12 @@ def baca_berkas(f, st, lihat):
                 if m:
                     st["tg"], st["tg_user"] = m.group(1), m.group(2)
                     st["judul_tg"] = st.get("judul_tg") or judul_dari(t)
-                if not st["judul"] and t and not d.get("isMeta") and not t.startswith(("<command-", "<local-command", "Caveat:", "[Request interrupted")):
+                manusia = t and (m or POLA_TG.match(t) or not d.get("isMeta")) and not t.startswith(BUKAN_PESAN)
+                if not st["judul"] and t and not d.get("isMeta") and not t.startswith(BUKAN_PESAN):
                     st["judul"] = judul_dari(t) or "(tanpa teks)"
+                if manusia and st.get("n_teks", 0) < 3:  # bahan tebakan jenis penggunaan
+                    st["teks"] = (st.get("teks", "") + " " + judul_dari(t, 400))[:1200]
+                    st["n_teks"] = st.get("n_teks", 0) + 1
             if d.get("type") != "assistant":
                 continue
             msg = d.get("message") or {}
@@ -128,6 +135,109 @@ def baca_berkas(f, st, lihat):
             rek[2] += u.get("cache_read_input_tokens") or 0
             rek[3] += u.get("output_tokens") or 0
             rek[4] += 1
+
+
+# Jenis penggunaan (urutan = urutan warna grafik di dashboard). Ditebak dari 3 pesan pertama sesi,
+# folder proyek & entrypoint; tebakan salah bisa dikoreksi per sesi di DATA/jenis.json {"<sid>": "<kunci>"}.
+JENIS = (
+    ("installer", "Installer otomatis"),
+    ("buat_web", "Pembuatan web"),
+    ("revisi_web", "Revisi web"),
+    ("pengembangan", "Pengembangan sistem"),
+    ("chat_cs", "Chat & CS"),
+    ("server", "Server & infra"),
+    ("tanya", "Tanya & cek"),
+    ("lainnya", "Lainnya"),
+)
+AI_USAGE = Path("/var/lib/velocity/ai/usage.jsonl")  # agen desain installer (claude -p tanpa transkrip)
+POLA_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|id|co|net|org|studio|asia|biz|info|web\.id)\b")
+BUKAN_WEB_KLIEN = re.compile(r"^(?:(?:[a-z0-9-]+\.)?velocitydeveloper\.(?:co|net|com)|github\.com|velocitygrafis\.com|metabox\.io|pexels\.com|google\.com)$")
+# Domain milik aplikasi internal/custom (Laravel dsb.), bukan situs WordPress klien
+APLIKASI = ("nextbeli", "daftar-borneo", "sia-vd", "stoothdy-event", "new.velocitydeveloper.net", "newvdnet", "new-vdnet", "tutorial.velocitydeveloper")
+KATA = {
+    "buat_web": r"eksekusi|elsekusi|jalankan (?:project|instal|installer)|instal|buat (?:theme|tema|tampilan|desain|design|layout|home)|lanjutkan (?:pengerjaan|instalasi|sesi instalasi)|paket [a-g]\b|fse",
+    "revisi_web": r"revisi|perbaik|koreksi|ubah|ganti|rapikan|sesuaikan|samakan|tambah|masukkan|isi (?:page|berita|halaman)|materi|logo|footer|header|menu|slider|respons|tampilan|desain|update pada|folder tambahan",
+    "chat_cs": r"\bwa1\b|komplain|review buruk|rekap_chat|follow ?up|baca chat|chat (?:wa|tim|cs)|\bcs\b|pengawas",
+    "pengembangan": r"installer|intaller|automation|otomasi|autopilot|alur|flow|dashboard|192\.168\.88\.211|telegram|skill|fitur|sistem|deploy|github|repo\b|laravel|aplikasi|token|brain|bagan|aturan|generate|vue",
+    "server": r"server|backup|ssh|nginx|firewall|passkey|update claude|dnf|cron|disk|ssl",
+    "tanya": r"\bcek\b|\bapa\b|apakah|bagaimana|jelaskan|kenapa|bisakah|berapa|sampai mana",
+}
+
+
+INTI_SISTEM = r"automation|otomasi|autopilot|alur|flow|installer|intaller|192\.168\.88\.211|skill|aturan"
+INTI_BUAT = r"eksekusi|elsekusi|jalankan|lanjutkan (?:pengerjaan|instalasi|sesi instalasi)|instalkan|tolong instal|install website|buat (?:theme|tema|tampilan|desain|design|layout)"
+
+
+def tebak_teks(t):
+    t = re.sub(r"\S+@\S+", " ", t.lower())  # alamat email bukan domain situs
+    ada = lambda k: re.search(KATA[k], t)
+    domain = [d for d in POLA_DOMAIN.findall(t) if not BUKAN_WEB_KLIEN.match(d)]
+    if any(a in t for a in APLIKASI):
+        return "pengembangan"
+    sistem = re.search(INTI_SISTEM, t)
+    if re.search(r"revisi", t) and not sistem:
+        return "revisi_web"
+    if domain:
+        if re.search(INTI_BUAT, t):
+            return "buat_web"
+        if sistem:
+            return "pengembangan"
+        if ada("chat_cs"):
+            return "chat_cs"
+        if ada("revisi_web"):
+            return "revisi_web"
+        return "buat_web"
+    for k in ("chat_cs", "server", "pengembangan", "tanya"):
+        if ada(k):
+            return k
+    return "lainnya"
+
+
+def tebak_jenis(s):
+    p = s["proyek"]
+    if "velocity-fse-rencana" in p or "velocity-vision" in p:
+        return "installer"
+    if "pengawas-wa" in p or "analisis-chat" in p:
+        return "chat_cs"
+    if p != "-root" and s["ep"] == "sdk-cli":
+        return "lainnya"
+    # Pesan pertama paling menentukan; 3 pesan pertama dipakai bila pesan pertama tidak jelas
+    judul = (s["judul"] or "").lower()
+    j = tebak_teks(judul)
+    if j in ("buat_web", "revisi_web", "chat_cs") and len(judul) >= 25:
+        return j
+    if re.search(INTI_SISTEM, judul) or any(a in judul for a in APLIKASI):
+        return j
+    k = tebak_teks(s.get("teks") or "")
+    return k if k not in ("tanya", "lainnya") else j
+
+
+def sesi_installer():
+    """Agen desain installer (desain-claude) jalan dengan --no-session-persistence, jadi tidak ada
+    transkrip; pemakaiannya diambil dari usage.jsonl (baris sumber=claude), satu sesi per run+domain."""
+    hasil = {}
+    try:
+        fh = open(AI_USAGE)
+    except OSError:
+        return []
+    with fh:
+        for ln in fh:
+            if '"sumber": "claude"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+                w = datetime.fromisoformat(r["ts"]).astimezone(WIB)
+            except (ValueError, KeyError):
+                continue
+            sid = f"installer:{r.get('run', '-')}:{r.get('domain', '-')}"
+            s = hasil.setdefault(sid, {"sid": sid, "jalur": "otomasi", "asal": f"{r.get('script', 'installer')} · run {r.get('run', '-')}",
+                                       "judul": f"Agen desain installer — {r.get('domain', '-')}", "mulai": w.timestamp(),
+                                       "akhir": w.timestamp(), "jenis": "installer", "hari": {}})
+            s["mulai"], s["akhir"] = min(s["mulai"], w.timestamp()), max(s["akhir"], w.timestamp())
+            rek = s["hari"].setdefault(w.strftime("%Y-%m-%d"), {}).setdefault(r.get("model") or "?", [0, 0, 0, 0, 0])
+            for i, k in enumerate(("input_tokens", "cache_creation_tokens", "cache_read_tokens", "completion_tokens", "permintaan")):
+                rek[i] += int(r.get(k) or 0)
+    return list(hasil.values())
 
 
 def sid_dari(f):
@@ -163,13 +273,16 @@ def cari_login(ip, port):
 
 
 def catat_sesi_hidup():
-    """Catat identitas SSH sesi Claude yang sedang berjalan ke sesi.jsonl (sekali per sesi)."""
+    """Catat identitas SSH sesi Claude yang sedang berjalan ke sesi.jsonl, sekali per (sesi, proses).
+    Sesi yang di-resume dari login lain (mis. dulu password, kini kunci) mendapat proses baru, jadi
+    dicatat ulang; baris terakhir per sesi yang dipakai."""
     p = DATA / "sesi.jsonl"
     sudah = set()
     try:
         for ln in open(p):
             try:
-                sudah.add(json.loads(ln)["sid"])
+                r = json.loads(ln)
+                sudah.add((r["sid"], r.get("pid")))
             except (ValueError, KeyError):
                 pass
     except OSError:
@@ -180,7 +293,7 @@ def catat_sesi_hidup():
         try:
             d = json.loads(f.read_text())
             sid, pid = d["sessionId"], int(d["pid"])
-            if sid in sudah:
+            if (sid, pid) in sudah:
                 continue
             env = dict(x.split("=", 1) for x in Path(f"/proc/{pid}/environ").read_bytes().decode(errors="ignore").split("\0") if "=" in x)
         except (OSError, ValueError, KeyError):
@@ -275,10 +388,13 @@ def main():
 
     # Identitas SSH dari hook; baris terakhir per sesi yang menang
     ssh = {}
+    kunci_kini = label_kunci()  # komentar kunci bisa diganti belakangan; nama ikut authorized_keys terkini
     try:
         for ln in open(DATA / "sesi.jsonl"):
             try:
                 r = json.loads(ln)
+                if r.get("fp") in kunci_kini:
+                    r["kunci"] = kunci_kini[r["fp"]]
                 if r.get("kunci") or r.get("ip"):
                     ssh[r["sid"]] = r
             except (ValueError, KeyError):
@@ -303,10 +419,11 @@ def main():
             continue
         sid, proyek, sub = sid_dari(Path(k))
         s = sesi.setdefault(sid, {"sid": sid, "proyek": proyek, "ep": None, "tg": None, "tg_user": None,
-                                  "judul": None, "mulai": None, "akhir": None, "hari": {}})
+                                  "judul": None, "teks": None, "mulai": None, "akhir": None, "hari": {}})
         if not sub:
             s["ep"] = s["ep"] or st["ep"]
             s["judul"] = st.get("judul_tg") or s["judul"] or st["judul"]
+            s["teks"] = s["teks"] or st.get("teks")
         s["tg"] = s["tg"] or st["tg"]
         s["tg_user"] = s["tg_user"] or st["tg_user"]
         for x in ("mulai", "akhir"):
@@ -318,6 +435,7 @@ def main():
                 for i in range(5):
                     rek[i] += v[i]
 
+    koreksi = muat_json(DATA / "jenis.json", {})
     orang = {}
     for s in sesi.values():
         if not s["hari"]:
@@ -343,17 +461,29 @@ def main():
         o = orang.setdefault(nama, {"nama": nama, "sesi": []})
         o["sesi"].append({
             "sid": s["sid"], "jalur": jalur, "asal": asal, "judul": s["judul"] or "",
-            "mulai": s["mulai"], "akhir": s["akhir"],
+            "jenis": koreksi.get(s["sid"]) or tebak_jenis(s), "mulai": s["mulai"], "akhir": s["akhir"],
             "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
         })
+
+    for s in sesi_installer():
+        s["jenis"] = koreksi.get(s["sid"]) or s["jenis"]
+        orang.setdefault("Otomasi (installer & alat)", {"nama": "Otomasi (installer & alat)", "sesi": []})["sesi"].append(s)
 
     hasil = {
         "dibuat": time.time(),
         "zona": "WIB",
         "kolom": KOLOM,
+        "jenis": JENIS,
         "pencatat_sejak": muat_json(DATA / "pasang.json", {}).get("sejak"),
         "pengguna": sorted(orang.values(), key=lambda o: o["nama"].lower()),
     }
+    # Identitas untuk label simpul sesi di graf /brain/ (brain-aktivitas): id sesi & ID Telegram → nama
+    identitas = {
+        "sesi": {x["sid"]: o["nama"] for o in orang.values() for x in o["sesi"]},
+        "telegram": {k[3:]: v for k, v in peta.items() if k.startswith("tg:")},
+    }
+    (DATA / "identitas.tmp").write_text(json.dumps(identitas, ensure_ascii=False))
+    os.replace(DATA / "identitas.tmp", DATA / "identitas.json")
     Path(DATA / "cache.tmp").write_bytes(pickle.dumps(cache))
     os.replace(DATA / "cache.tmp", cache_p)
     out = Path(a.out)

@@ -253,6 +253,75 @@ def data_compro(domain):
 BUKAN_FOTO_KLIEN = re.compile(r'contoh\s*warna|contoh\s*desain|referensi|screenshot|tangkapan\s*layar', re.I)
 
 
+# Foto tertanam di dokumen Word/PowerPoint klien (permintaan user 2026-09-24): cahayaratupetir.com
+# mengirim 36 foto proyek HANYA di dalam "Materi Website Profil - Rev1.docx", sehingga banner &
+# layanan jatuh ke foto bank (switchboard, spark gap) dan Galeri kosong. Dokumen identitas/legal
+# tidak pernah diambil fotonya (KTP pemilik pernah terunggah publik, bimbelppkgardamedika.or.id).
+FOTO_DOKUMEN = Path('/var/lib/velocity/foto-dokumen')
+DOKUMEN_PRIBADI = re.compile(r'ktp|npwp|akta|legal|izin|ijin|\bnib\b|siup|sertifikat|ijazah|kartu|identitas|'
+                             r'surat|invoice|kwitansi|kuitansi|nota|bukti|transfer|form\s*isian|biodata', re.I)
+FOTO_DOKUMEN_MIN_SISI = 400
+
+
+def _foto_layak(path):
+    """(lebar, tinggi) bila gambar layak jadi foto situs, None bila bukan: terlalu kecil,
+    sebagian besar putih (tabel/tangkapan teks/diagram), atau berciri logo."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            w, h = im.size
+            if min(w, h) < FOTO_DOKUMEN_MIN_SISI:
+                return None
+            kecil = im.convert('L').resize((64, 64))
+            putih = sum(1 for v in kecil.getdata() if v >= 235) / 4096
+        if putih > 0.55 or cari_logo.berciri_logo(path):
+            return None
+        return w, h
+    except Exception:
+        return None
+
+
+def foto_dokumen(folder):
+    """[(berkas, lebar, tinggi)] foto dari .docx/.pptx klien, diekstrak ke FOTO_DOKUMEN/<domain>/,
+    urut sesuai dokumen; hanya yang lolos _foto_layak, tanpa duplikat (md5)."""
+    import hashlib
+    import zipfile
+    keluar = FOTO_DOKUMEN / folder.name
+    dokumen = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in ('.docx', '.pptx')
+                     and not p.name.startswith('~$')
+                     and not any(BUKAN_FOTO_KLIEN.search(b) or DOKUMEN_PRIBADI.search(b)
+                                 for b in p.relative_to(folder).parts))
+    hasil, sidik = [], set()
+    for dok in dokumen:
+        awalan = re.sub(r'[^a-z0-9]+', '-', dok.stem.lower()).strip('-')[:40] or 'dokumen'
+        try:
+            with zipfile.ZipFile(dok) as z:
+                nama = [n for n in z.namelist() if re.match(r'(word|ppt)/media/', n) and Path(n).suffix.lower() in IMG_EXT]
+                nomor = lambda n: int((re.search(r'(\d+)', Path(n).stem) or [0, 0])[1])
+                for n in sorted(nama, key=nomor):
+                    tujuan = keluar / f'{awalan}-{Path(n).stem}{Path(n).suffix.lower()}'
+                    if not tujuan.is_file():
+                        keluar.mkdir(parents=True, exist_ok=True)
+                        tujuan.write_bytes(z.read(n))
+                    md5 = hashlib.md5(tujuan.read_bytes()).hexdigest()
+                    ukuran = _foto_layak(tujuan) if MIN_BYTES <= tujuan.stat().st_size <= MAX_BYTES else None
+                    if md5 in sidik or not ukuran:
+                        continue
+                    sidik.add(md5)
+                    hasil.append((tujuan, *ukuran))
+        except (OSError, zipfile.BadZipFile, KeyError):
+            continue
+    return hasil
+
+
+def _sebar(daftar, jumlah):
+    """Ambil `jumlah` butir tersebar merata dari seluruh daftar (bukan hanya bagian awal dokumen)."""
+    if len(daftar) <= jumlah:
+        return list(daftar)
+    return [daftar[round(i * (len(daftar) - 1) / (jumlah - 1))] for i in range(jumlah)] if jumlah > 1 else daftar[:1]
+
+
 def client_assets(folder):
     if not folder.is_dir():
         return None, []
@@ -264,8 +333,16 @@ def client_assets(folder):
     if tersimpan:
         files = [p for p in files if p.resolve() != tersimpan.resolve()]
     logo = max(logos, key=lambda p: (p.suffix.lower() == '.png', p.stat().st_size)) if logos else None
-    photos = [p for p in files if p not in logos and MIN_BYTES <= p.stat().st_size <= MAX_BYTES]
-    return logo, photos[:MAX_PHOTOS]
+    photos = [p for p in files if p not in logos and MIN_BYTES <= p.stat().st_size <= MAX_BYTES][:MAX_PHOTOS]
+    # Sisa kuota diisi foto dari dokumen Word/PowerPoint: foto lanskap lebar dulu (bahan banner),
+    # sisanya tersebar merata dari awal sampai akhir dokumen.
+    sisa = MAX_PHOTOS - len(photos)
+    if sisa > 0:
+        dok = foto_dokumen(folder)
+        lebar = [p for p, w, h in dok if w >= 900 and w >= 1.3 * h][:min(3, sisa)]
+        lain = [p for p, _, _ in dok if p not in lebar]
+        photos += lebar + _sebar(lain, sisa - len(lebar))
+    return logo, photos
 
 
 REMOTE = r'''
@@ -641,7 +718,13 @@ elif wp option get maintenance_mode >/dev/null 2>&1; then
 elif ! wp plugin is-active velocity-addons >/dev/null 2>&1; then
   echo "maintenance_skip:velocity_addons_tidak_aktif"
 else
-  wp option update maintenance_mode_data "$MAINT_DATA" --format=json >/dev/null
+  # Digabung, bukan ditimpa: ip_whitelist (IP kantor) sudah diisi saat finishing sebelum
+  # langkah ini; menimpa seluruh opsi membuat kantor ikut terblokir (bug 2026-09-23).
+  MAINT_DATA="$MAINT_DATA" wp eval '
+$d = get_option("maintenance_mode_data", array());
+if (!is_array($d)) { $d = array(); }
+update_option("maintenance_mode_data", array_merge($d, (array) json_decode((string) getenv("MAINT_DATA"), true)));
+' >/dev/null
   wp option update maintenance_mode 1 >/dev/null
   wp option update velocity_installer_maintenance "$(date -Is)" >/dev/null
   echo "maintenance_enabled"
@@ -987,7 +1070,10 @@ def main():
             name = f'photo-{i:02d}{photo.suffix.lower()}'
             shutil.copy2(photo, stage / name)
             photo_files.append(name)
-            photo_keys.append(f'{photo.relative_to(folder)}:{photo.stat().st_size}')
+            # Foto dari dokumen Word/PowerPoint tinggal di FOTO_DOKUMEN, di luar folder klien.
+            asal = (f'dokumen:{photo.name}' if FOTO_DOKUMEN in photo.parents
+                    else str(photo.relative_to(folder)))
+            photo_keys.append(f'{asal}:{photo.stat().st_size}')
         remote_dir = f'/tmp/velocity-finish-{domain}'
         header = '\n'.join([
             f'DOCROOT={shlex.quote(docroot(domain, da_user))}',

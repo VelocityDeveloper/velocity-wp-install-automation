@@ -9,6 +9,7 @@ import Brain from './views/Brain.vue'
 import Paket from './views/Paket.vue'
 import AiModel from './views/AiModel.vue'
 import Token from './views/Token.vue'
+import Projects from './views/Projects.vue'
 import './style.css'
 
 const routes = [
@@ -19,6 +20,7 @@ const routes = [
   { path: '/ai', component: AiModel, meta: { judul: 'AI Model' } },
   { path: '/token', component: Token, meta: { judul: 'Token Usage' } },
   { path: '/paket', component: Paket, meta: { judul: 'Paket' } },
+  { path: '/projects', component: Projects, meta: { judul: 'Project Lokal' } },
   { path: '/brain', component: Brain, meta: { judul: 'Claude Brain' } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]

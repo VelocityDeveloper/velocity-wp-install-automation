@@ -34,11 +34,19 @@ const NAV = [
   { ke: '/', label: 'Dashboard', ikon: 'dashboard' },
   { ke: '/installer', label: 'Installer', ikon: 'installer' },
   { ke: '/ai', label: 'AI Model', ikon: 'ai' },
-  { ke: '/token', label: 'Token Usage', ikon: 'token' },
+  // Grup bersub-menu: induknya tombol buka-tutup, bukan tautan
+  { grup: 'claude', label: 'Claude', ikon: 'claude', anak: [
+    { ke: '/token', label: 'Token Usage', ikon: 'token' },
+    { ke: '/brain', label: 'Brain', ikon: 'brain' },
+  ] },
   { ke: '/paket', label: 'Paket', ikon: 'paket' },
   { ke: '/server', label: 'Server', ikon: 'server' },
-  { ke: '/brain', label: 'Claude Brain', ikon: 'brain' },
+  { ke: '/projects', label: 'Project Lokal', ikon: 'proyek' },
 ]
+const aktif = (ke) => (ke === '/' ? route.path === '/' : route.path.startsWith(ke))
+// Grup terbuka bila dibuka manual atau salah satu anaknya sedang aktif
+const grupBuka = ref({})
+const grupTerbuka = (n) => grupBuka.value[n.grup] ?? n.anak.some((a) => aktif(a.ke))
 const LAYANAN = [
   { url: '/n8n/', label: 'n8n', ikon: 'n8n' },
   { url: '/hermes/', label: 'Hermes', ikon: 'hermes' },
@@ -79,9 +87,25 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
       </section>
 
       <nav class="nav-kartu" aria-label="Halaman">
-        <RouterLink v-for="n in NAV" :key="n.ke" :to="n.ke" class="nav-item" :class="{ aktif: n.ke === '/' ? route.path === '/' : route.path.startsWith(n.ke) }">
-          <Ikon :nama="n.ikon" :ukuran="18" /><span>{{ n.label }}</span>
-        </RouterLink>
+        <template v-for="n in NAV" :key="n.ke || n.grup">
+          <template v-if="n.anak">
+            <button
+              type="button" class="nav-item nav-induk" :class="{ berisi: n.anak.some((a) => aktif(a.ke)) }"
+              :aria-expanded="grupTerbuka(n)" :aria-controls="`sub-${n.grup}`"
+              @click="grupBuka[n.grup] = !grupTerbuka(n)">
+              <Ikon :nama="n.ikon" :ukuran="18" /><span>{{ n.label }}</span>
+              <Ikon nama="bawah" :ukuran="16" class="panah" :class="{ putar: grupTerbuka(n) }" />
+            </button>
+            <div v-show="grupTerbuka(n)" :id="`sub-${n.grup}`" class="nav-sub">
+              <RouterLink v-for="a in n.anak" :key="a.ke" :to="a.ke" class="nav-item" :class="{ aktif: aktif(a.ke) }">
+                <Ikon :nama="a.ikon" :ukuran="16" /><span>{{ a.label }}</span>
+              </RouterLink>
+            </div>
+          </template>
+          <RouterLink v-else :to="n.ke" class="nav-item" :class="{ aktif: aktif(n.ke) }">
+            <Ikon :nama="n.ikon" :ukuran="18" /><span>{{ n.label }}</span>
+          </RouterLink>
+        </template>
       </nav>
 
       <nav class="nav-kartu" aria-label="Layanan kantor">
@@ -128,6 +152,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 .nav-item:hover { background: var(--kartu-2); color: #fff; }
 .nav-item.aktif { background: var(--kartu-2); color: #fff; box-shadow: inset 3px 0 0 var(--aksen-terang); }
 .nav-item.aktif :deep(svg) { color: var(--aksen-terang); }
+.nav-induk { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.nav-induk.berisi { color: #fff; }
+.nav-induk.berisi > :deep(svg:first-child) { color: var(--aksen-terang); }
+.nav-induk:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: -2px; }
+.nav-induk .panah { margin-left: auto; transition: transform .2s; }
+.nav-induk .panah.putar { transform: rotate(180deg); }
+.nav-sub { display: flex; flex-direction: column; gap: 2px; margin-left: 21px; padding-left: 8px; border-left: 1px solid var(--garis); }
+.nav-sub .nav-item { min-height: 38px; font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .nav-induk .panah { transition: none; } }
 .lencana { margin-left: auto; padding: 1px 7px; border-radius: 6px; font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--waspada); background: rgba(232, 181, 74, .12); }
 
 .kartu-bawah {

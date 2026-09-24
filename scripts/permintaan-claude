@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+"""Agen Claude yang mengerjakan permintaan klien di FORM ISIAN (PESAN TAMBAHAN).
+
+Keputusan user 2026-09-24 (cahayaratupetir.com): isi form adalah acuan pengerjaan — permintaan seperti
+"halaman paket penangkal petir & hasil pekerjaan, data dan gambar bisa diambil dari totalantipetir.com"
+wajib dikerjakan. Isinya terlalu beragam untuk aturan tetap, jadi Claude Code (headless, mode agen)
+mengerjakannya langsung di situs:
+
+  1. prasyarat: ada permintaan yang belum dikerjakan (scripts/permintaan-form), bukan dry-run
+  2. bahan di folder kerja: permintaan, form (tanpa baris sandi), keadaan situs, daftar materi Drive
+  3. cadangan database di server (luar docroot) sebelum agen mulai
+  4. `claude -p` dengan templates/permintaan-claude/tugas.md; alat shell satu-satunya =
+     scripts/permintaan-claude-alat (wp/php sebagai user situs, unggah, plugin, ambil web, potret)
+  5. laporan agen (laporan.json) diperiksa: tiap URL hasil harus terbuka. Semua butir selesai ->
+     permintaan-form ditandai selesai; ada sisa -> tetap "perlu dicek" + sisa butirnya di Telegram
+
+  permintaan-claude <manifest|domain> [--paksa] [--menit=N] [--coba]
+     --paksa   jalan walau permintaan sudah ditandai selesai / sisa hanya butir perlu_manusia
+     --coba    siapkan bahan & cetak prompt saja (tanpa cadangan, tanpa agen)
+     --tanpa-cadangan   HANYA rig uji lokal (SQLite, wp db export tidak jalan)
+Env: PERMINTAAN_CLAUDE_MENIT (75). Model: Opus terbaru (sama dengan agen desain, scripts/desain-claude).
+Folder kerja: /var/lib/velocity/permintaan-claude/<domain>/ (hasil.json = hasil run terakhir).
+Keluaran baris terakhir: permintaan_claude: <status> ... ; kode 0 selesai (apa pun hasilnya), 2 gagal jalan.
+Situs yang sudah SUCCESS: COMPLETE dijalankan manual hanya dengan persetujuan user.
+"""
+import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import ssl
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+ALAT = HERE / 'permintaan-claude-alat'
+TUGAS = ROOT / 'templates' / 'permintaan-claude' / 'tugas.md'
+PLUGINS = ROOT / 'templates' / 'plugins'
+KERJA_AKAR = Path('/var/lib/velocity/permintaan-claude')
+STATE = Path('/var/lib/velocity/installer')
+PROJECT = Path('/home/project')
+ON_PROGRESS = Path(os.environ.get('VELOCITY_ON_PROGRESS') or '/home/On Progress')  # uji di rig lokal
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+LOG_DOMAIN = None
+RUN_MANUAL = 'permintaan-claude-' + datetime.now().strftime('%Y%m%d-%H%M%S')
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+# Model, CLI, kunci antrean & API key sama dengan agen desain: satu agen Claude berjalan dalam satu waktu.
+DC = muat('desain_claude', HERE / 'desain-claude')
+FA = DC.FA
+
+
+def log(pesan, tanpa_waktu=False):
+    baris = f'permintaan_claude: {pesan}' if tanpa_waktu else \
+        f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] permintaan_claude: {pesan}'
+    print(baris, flush=True)
+    if LOG_DOMAIN:
+        try:
+            with open(LOG_DOMAIN, 'a') as f:
+                f.write(baris + '\n')
+        except OSError:
+            pass
+
+
+def cari_manifest(arg):
+    p = Path(arg)
+    if p.is_file():
+        return p.resolve()
+    d = arg.strip().lower()
+    return (PROJECT / d / f'{d}.txt').resolve()
+
+
+def env_staging(cfg, manifest):
+    """Run manual untuk situs staging (docroot=/site_url= di manifest): sama dengan installer-runner."""
+    if not os.environ.get('WP_INSTALL_SSH_KEY_FILE') and Path('/root/.ssh/id_ed25519').is_file():
+        os.environ['WP_INSTALL_SSH_KEY_FILE'] = '/root/.ssh/id_ed25519'
+    if cfg.get('site_url') and not os.environ.get('VELOCITY_LOKAL_URL'):
+        os.environ['VELOCITY_LOKAL_URL'] = cfg['site_url']
+    if cfg.get('docroot') and not os.environ.get('VELOCITY_LOKAL_DOCROOT'):
+        pembungkus = STATE / f"ssh-{cfg['domain'].lower()}.sh"
+        pembungkus.write_text('#!/usr/bin/env bash\nexec ssh -i {} -o BatchMode=yes -o StrictHostKeyChecking=accept-new '
+                              '-o ConnectTimeout=15 -p {} {}@{} "$@"\n'.format(
+                                  shlex.quote(os.environ['WP_INSTALL_SSH_KEY_FILE']), shlex.quote(cfg.get('ssh_port') or '22'),
+                                  shlex.quote(cfg.get('ssh_user') or 'root'), shlex.quote(cfg['target_host'])))
+        pembungkus.chmod(0o700)
+        os.environ['VELOCITY_LOKAL_DOCROOT'] = cfg['docroot']
+        os.environ['VELOCITY_LOKAL_SSH'] = str(pembungkus)
+
+
+def status_form(manifest, *tambahan):
+    run = subprocess.run([sys.executable, str(HERE / 'permintaan-form'), str(manifest), *tambahan],
+                         capture_output=True, text=True, timeout=120)
+    return run.stdout.strip()
+
+
+PHP_SITUS = r'''
+$halaman = array();
+foreach (get_pages(array('post_status' => 'publish,draft,private')) as $p) {
+    $halaman[] = array('id' => $p->ID, 'slug' => get_page_uri($p), 'judul' => $p->post_title, 'status' => $p->post_status,
+        'template' => get_page_template_slug($p), 'url' => get_permalink($p));
+}
+$menu = array();
+foreach (wp_get_nav_menus() as $m) {
+    $item = array();
+    foreach ((array) wp_get_nav_menu_items($m->term_id) as $i) {
+        $item[] = array('id' => $i->ID, 'judul' => $i->title, 'url' => $i->url, 'induk' => (int) $i->menu_item_parent);
+    }
+    $menu[] = array('id' => $m->term_id, 'nama' => $m->name, 'item' => $item);
+}
+$navigasi = array();
+foreach (get_posts(array('post_type' => 'wp_navigation', 'numberposts' => 10, 'post_status' => 'publish')) as $n) {
+    $navigasi[] = array('id' => $n->ID, 'judul' => $n->post_title, 'isi' => substr($n->post_content, 0, 3000));
+}
+$cpt = array();
+foreach (get_post_types(array('public' => true, '_builtin' => false), 'objects') as $t) {
+    $cpt[] = array('nama' => $t->name, 'label' => $t->label, 'jumlah' => (int) wp_count_posts($t->name)->publish);
+}
+$kontak = array();
+foreach (array('velocity_situs', 'nomor_whatsapp', 'velocitytheme_option') as $o) {
+    $v = get_option($o);
+    if ($v) { $kontak[$o] = is_array($v) ? array_intersect_key($v, array_flip(preg_grep('/wa|whatsapp|telp|phone|email|alamat|address|instagram|facebook|youtube|tiktok/i', array_keys($v)))) : $v; }
+}
+unset($kontak['velocity_situs']['email']);
+vfse_keluar(array('nama' => get_bloginfo('name'), 'slogan' => get_bloginfo('description'), 'home' => home_url('/'),
+    'tema' => get_stylesheet(), 'tema_blok' => (bool) wp_is_block_theme(), 'depan' => (int) get_option('page_on_front'),
+    'lokasi_menu' => get_nav_menu_locations(), 'halaman' => $halaman, 'menu' => $menu, 'navigasi' => $navigasi,
+    'post_type' => $cpt, 'plugin_aktif' => (array) get_option('active_plugins'), 'kontak' => $kontak,
+    'jumlah_media' => (int) wp_count_posts('attachment')->inherit));
+'''
+
+
+def siapkan(cfg, domain, kerja, permintaan):
+    kerja.mkdir(parents=True, exist_ok=True)
+    (kerja / 'permintaan.txt').write_text(permintaan + '\n')
+    sys.path.insert(0, str(HERE))
+    from client_form import read_client_form
+    form = read_client_form(ON_PROGRESS / domain).get('text', '')
+    # Baris sandi/kata kunci di form tidak ikut dibaca agen.
+    # Sisa biner .doc (karakter kendali/huruf acak) dibuang, seperti client_form.pesan_tambahan.
+    baris = []
+    for b in form.splitlines():
+        b = b.strip()
+        if b and not re.search(r'password|sandi|passw|pwd', b, re.I) \
+                and sum(c.isascii() and c.isprintable() for c in b) >= 0.9 * len(b) and re.search(r'[A-Za-z]{3}', b) \
+                and (not baris or baris[-1] != b):
+            baris.append(b)
+    form = '\n'.join(baris)
+    (kerja / 'form.txt').write_text(form + '\n')
+    situs = FA.Situs(cfg).php(PHP_SITUS)
+    (kerja / 'situs.json').write_text(json.dumps(situs, ensure_ascii=False, indent=1))
+    daftar = subprocess.run([sys.executable, str(ALAT), 'bahan'], capture_output=True, text=True, timeout=120,
+                            env=dict(os.environ, VELOCITY_PERMINTAAN_MANIFEST=cfg['_manifest'],
+                                     VELOCITY_PERMINTAAN_KERJA=str(kerja))).stdout
+    (kerja / 'bahan.txt').write_text(daftar)
+    return situs
+
+
+def cadangkan(cfg, domain):
+    """Cadangan database di server sebelum agen mengubah apa pun (luar docroot, tidak makan kuota user)."""
+    situs = FA.Situs(cfg)
+    nama = f"{domain}-permintaan-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sql"
+    skrip = (
+        'set -e\n'
+        'C="$HOME/velocity-cadangan"; mkdir -p "$C"; chmod 700 "$C"\n'
+        f'php -d memory_limit=512M /usr/local/bin/wp --path={shlex.quote(situs.docroot)} --allow-root '
+        f'db export "$C/{nama}" --quiet 2>&1\n'
+        f'gzip -f "$C/{nama}"\n'
+        # Simpan 5 cadangan terakhir per domain.
+        f'ls -1t "$C"/{domain}-permintaan-*.sql.gz | tail -n +6 | xargs -r rm -f\n'
+        f'echo "cadangan=$C/{nama}.gz"\n'
+    )
+    run = situs.bash(skrip, timeout=900)
+    m = re.search(r'cadangan=(\S+)', run.stdout)
+    if run.returncode or not m:
+        raise RuntimeError((run.stdout + run.stderr).strip()[-300:])
+    return m.group(1)
+
+
+def prompt_tugas(cfg, domain, kerja, situs, permintaan, menit):
+    blok = situs.get('tema_blok')
+    ganti = {
+        '{{DOMAIN}}': domain, '{{PAKET}}': cfg.get('paket', ''), '{{TEMA}}': situs.get('tema', ''),
+        '{{JENIS_TEMA}}': 'block theme / FSE' if blok else 'tema klasik',
+        '{{URL}}': FA.muat_modul('fak', HERE / 'fse-audit-kemiripan').situs_url(domain),
+        '{{PERMINTAAN}}': permintaan, '{{KERJA}}': str(kerja), '{{ALAT}}': str(ALAT), '{{MENIT}}': str(menit),
+        '{{PLUGIN_TERSEDIA}}': ', '.join(sorted(p.name for p in PLUGINS.iterdir() if p.is_dir())),
+        '{{MENU_PETUNJUK}}': ('Menu tema blok ada di post `wp_navigation` (lihat `navigasi` di situs.json): tambah '
+                              '`<!-- wp:navigation-link {...} /-->` ke isinya lewat `alat php`.') if blok else
+                             ('Menu klasik: `wp menu item add-post <menu> <id-halaman>` (menu utama lihat '
+                              '`lokasi_menu` di situs.json).'),
+    }
+    teks = TUGAS.read_text()
+    for k, v in ganti.items():
+        teks = teks.replace(k, v)
+    return teks
+
+
+def jalankan_claude(kerja, env, menit, prompt):
+    env = {k: v for k, v in env.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    opus = DC.opus_terbaru(env)
+    log(f'model agen: {opus} (Opus terbaru yang dikenal CLI ini)')
+    perintah = [
+        DC.CLAUDE, '-p', prompt,
+        '--model', DC.model_agen(),
+        '--output-format', 'stream-json', '--verbose',
+        '--no-session-persistence',
+        '--permission-mode', 'acceptEdits',
+        '--add-dir', str(kerja),
+        '--allowedTools', 'Read', 'Write', 'Edit', 'Glob', 'Grep', f'Bash({ALAT}:*)',
+        # Rahasia klien (manifest berisi password DA/DB/WP, kunci SSH, token) tidak boleh dibaca;
+        # materi klien hanya lewat `alat bahan` (dokumen pribadi pemilik disaring).
+        '--disallowedTools', 'WebFetch', 'WebSearch', 'Agent', 'Read(//etc/**)', 'Read(//root/**)',
+        'Read(//home/**)', 'Read(//var/lib/velocity/secret/**)', 'Read(//var/lib/velocity/installer/**)',
+    ]
+    mulai = time.time()
+    hasil, kode, permintaan = {}, None, {}
+    env = dict(env, ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus,
+               ANTHROPIC_SMALL_FAST_MODEL=opus, CLAUDE_CODE_SUBAGENT_MODEL=opus)
+    proses = subprocess.Popen(perintah, cwd=kerja, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    habis = threading.Timer(menit * 60, proses.kill)
+    habis.start()
+    try:
+        for baris in proses.stdout:
+            try:
+                ev = json.loads(baris)
+            except ValueError:
+                continue
+            if ev.get('type') == 'assistant':
+                pesan = ev.get('message') or {}
+                permintaan.setdefault(pesan.get('model') or '-', set()).add(pesan.get('id'))
+                for blok in pesan.get('content') or []:
+                    # Perintah alat sudah dicatat alat sendiri (agen › wp/php/unggah ...).
+                    if blok.get('type') == 'tool_use' and blok.get('name') == 'Bash':
+                        continue
+                    ringkas = DC.ringkas_langkah(blok)
+                    if ringkas:
+                        log(ringkas)
+            elif ev.get('type') == 'result':
+                hasil = ev
+        kode = proses.wait()
+    finally:
+        habis.cancel()
+    if not hasil and kode not in (0, None):
+        kode = 'timeout' if time.time() - mulai >= menit * 60 - 5 else kode
+    durasi = round((time.time() - mulai) / 60, 1)
+    hasil['permintaan_per_model'] = {m: len(i) for m, i in permintaan.items()}
+    hasil['opus_terbaru'] = opus
+    (kerja / 'sesi.json').write_text(json.dumps(dict(hasil, kode_keluar=kode, menit=durasi), ensure_ascii=False, indent=1))
+    return kode, durasi, hasil
+
+
+def catat_pemakaian(domain, hasil):
+    """Satu baris per model ke usage.jsonl (halaman /ai/), peran permintaan_claude."""
+    minta = hasil.get('permintaan_per_model') or {}
+    for model, u in (hasil.get('modelUsage') or {}).items():
+        if 'opus' not in model.lower():
+            log(f'PERINGATAN model_bukan_opus:{model}')
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain,
+            'run': os.environ.get('VELOCITY_RUN_ID') or RUN_MANUAL, 'mode': os.environ.get('INSTALL_MODE', '') or 'permintaan-claude',
+            'peran': 'permintaan_claude', 'script': 'permintaan-claude', 'sumber': 'claude', 'model_id': 'claude-code',
+            'model': model, 'permintaan': minta.get(model) or 1, 'prompt_tokens': masuk + baca + buat,
+            'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar, 'input_tokens': masuk,
+            'cache_read_tokens': baca, 'cache_creation_tokens': buat, 'biaya_usd': round(float(u.get('costUSD') or 0), 4),
+            'ok': not hasil.get('is_error'), 'giliran': hasil.get('num_turns'),
+        }
+        try:
+            with open(DC.AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError as e:
+            log(f'pemakaian_tidak_tercatat:{e}')
+
+
+PHP_CEK_URL = r'''
+$hasil = array();
+foreach ((array) $d['url'] as $u) {
+    $id = url_to_postid($u);
+    $hasil[$u] = $id ? get_post_status($id) : '';
+}
+vfse_keluar($hasil);
+'''
+
+
+def buka(url):
+    """Kode HTTP halaman (UA Chrome: WAF hosting memblokir UA urllib)."""
+    konteks = ssl.create_default_context()
+    konteks.check_hostname = False
+    konteks.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': UA}), timeout=30, context=konteks) as r:
+            return r.status, r.read(200_000).decode('utf8', 'replace')
+    except urllib.error.HTTPError as e:
+        return e.code, ''
+    except Exception:
+        return 0, ''
+
+
+def periksa_url(cfg, laporan):
+    """Tiap URL hasil harus terbuka: post terbit (url_to_postid) atau HTTP 200 (arsip CPT dsb.)."""
+    semua = sorted({u for b in laporan for u in (b.get('url') or []) if isinstance(u, str) and u.startswith('http')})
+    if not semua:
+        return {}
+    try:
+        status = FA.Situs(cfg).php(PHP_CEK_URL, {'url': semua})
+    except Exception:
+        status = {}
+    hasil = {}
+    for u in semua:
+        if status.get(u) == 'publish':
+            hasil[u] = 'ok'
+            continue
+        kode, badan = buka(u)
+        hasil[u] = 'ok' if kode == 200 and 'maintenance-shell' not in badan else \
+            ('maintenance' if 'maintenance-shell' in badan or kode == 503 else f'http_{kode}')
+    return hasil
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    opsi = dict(a[2:].split('=', 1) if '=' in a else (a[2:], '1') for a in sys.argv[1:] if a.startswith('--'))
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    manifest = cari_manifest(args[0])
+    if not manifest.is_file():
+        print('permintaan_claude: gagal:manifest_tidak_ada')
+        return 2
+    cfg = FA.read_manifest(manifest)
+    cfg['_manifest'] = str(manifest)
+    domain = cfg.get('domain', '').lower()
+    menit = int(opsi.get('menit') or os.environ.get('PERMINTAAN_CLAUDE_MENIT') or 75)
+    if os.environ.get('INSTALL_MODE') == 'dry-run':
+        print('permintaan_claude: lewati:dry_run')
+        return 0
+    env_staging(cfg, manifest)
+    global LOG_DOMAIN
+    if not os.environ.get('VELOCITY_RUN_ID'):
+        LOG_DOMAIN = STATE / f'{domain}.log'
+
+    st = status_form(manifest)
+    if st == 'permintaan_form: tidak_ada' or (st == 'permintaan_form: sudah_dikerjakan' and 'paksa' not in opsi):
+        log(f"lewati:{st.split(': ', 1)[-1]}", tanpa_waktu=True)
+        return 0
+    if not st.startswith('permintaan_form: '):
+        log('gagal:status_form_tidak_terbaca', tanpa_waktu=True)
+        return 2
+    permintaan = status_form(manifest, '--teks')
+    md5 = hashlib.md5(re.sub(r'\s+', ' ', permintaan).encode()).hexdigest()
+    kerja = KERJA_AKAR / domain
+    try:
+        lama = json.loads((kerja / 'hasil.json').read_text())
+    except (OSError, ValueError):
+        lama = {}
+    # Sisa yang memang butuh manusia tidak dikerjakan ulang tiap run (hemat kuota agen).
+    if lama.get('md5') == md5 and lama.get('sisa') and all(b.get('status') == 'perlu_manusia' for b in lama['sisa']) \
+            and 'paksa' not in opsi:
+        log(f"lewati:sisa_perlu_manusia:{len(lama['sisa'])}", tanpa_waktu=True)
+        return 0
+    if not Path(DC.CLAUDE).exists():
+        log('gagal:claude_cli_tidak_ada', tanpa_waktu=True)
+        return 2
+
+    try:
+        situs = siapkan(cfg, domain, kerja, permintaan)
+    except Exception as e:
+        log(f'gagal:bahan:{type(e).__name__}:{e}'[:300], tanpa_waktu=True)
+        return 2
+    prompt = prompt_tugas(cfg, domain, kerja, situs, permintaan, menit)
+    if 'coba' in opsi:
+        print(prompt)
+        log(f'coba: bahan siap di {kerja}', tanpa_waktu=True)
+        return 0
+
+    env = dict(os.environ, VELOCITY_PERMINTAAN_MANIFEST=str(manifest), VELOCITY_PERMINTAAN_KERJA=str(kerja),
+               VELOCITY_DOMAIN=domain)
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    DC.KUNCI.parent.mkdir(parents=True, exist_ok=True)
+    with open(DC.KUNCI, 'w') as kunci:
+        batas = time.time() + 3 * 3600
+        while True:
+            try:
+                fcntl.flock(kunci, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > batas:
+                    log('lewati:antrean_agen_penuh_3_jam', tanpa_waktu=True)
+                    return 0
+                time.sleep(30)
+        return kerjakan(cfg, domain, kerja, env, prompt, permintaan, md5, menit, manifest, 'tanpa-cadangan' not in opsi)
+
+
+def kerjakan(cfg, domain, kerja, env, prompt, permintaan, md5, menit, manifest, cadang=True):
+    cadangan = '-'
+    if cadang:
+        try:
+            cadangan = cadangkan(cfg, domain)
+        except Exception as e:
+            log(f'gagal:cadangan_database:{e}'[:300], tanpa_waktu=True)
+            return 2
+        log(f'cadangan database: {cadangan}')
+    (kerja / 'laporan.json').unlink(missing_ok=True)
+    log(f'agen mulai (maks {menit} menit): ' + ' '.join(permintaan.split())[:300])
+    kode, durasi, hasil = jalankan_claude(kerja, env, menit, prompt)
+    catat_pemakaian(domain, hasil)
+    minta = hasil.get('permintaan_per_model') or {}
+    log(f"agen selesai kode={kode} menit={durasi} model={','.join(hasil.get('modelUsage') or minta) or '-'} "
+        f"request={sum(minta.values())} biaya_usd={round(float(hasil.get('total_cost_usd') or 0), 2)}")
+
+    try:
+        laporan = json.loads((kerja / 'laporan.json').read_text())
+        butir = [b for b in laporan.get('butir') or [] if isinstance(b, dict)]
+    except (OSError, ValueError, AttributeError):
+        laporan, butir = {}, []
+    if not butir:
+        status = 'gagal:laporan_agen_tidak_ada'
+        sisa = [{'permintaan': permintaan[:300], 'status': 'tidak_bisa', 'hasil': 'agen tidak menulis laporan'}]
+        cek = {}
+    else:
+        # Laporan agen tidak dipercaya begitu saja: URL hasil diperiksa sendiri.
+        cek = periksa_url(cfg, butir)
+        for b in butir:
+            rusak = [u for u in b.get('url') or [] if cek.get(u) not in ('ok', 'maintenance')]
+            if b.get('status') == 'selesai' and rusak:
+                b['status'] = 'tidak_bisa'
+                b['hasil'] = f"{b.get('hasil', '')} (URL tidak terbuka: {', '.join(f'{u} {cek.get(u)}' for u in rusak)})"
+        sisa = [b for b in butir if b.get('status') != 'selesai']
+        status = 'selesai' if not sisa else f'sebagian:{len(butir) - len(sisa)}/{len(butir)}'
+    (kerja / 'hasil.json').write_text(json.dumps({
+        'waktu': datetime.now().astimezone().isoformat(timespec='seconds'), 'md5': md5, 'status': status,
+        'butir': butir, 'sisa': sisa, 'cek_url': cek, 'ringkasan': laporan.get('ringkasan', ''),
+        'cadangan': cadangan, 'menit': durasi, 'kode_agen': kode,
+        'ringkasan_agen': (hasil.get('result') or '')[:4000]}, ensure_ascii=False, indent=1))
+    if status == 'selesai':
+        status_form(manifest, '--selesai', f"agen Claude: {laporan.get('ringkasan', '')}"[:500])
+        log(f'selesai {len(butir)}/{len(butir)} butir menit={durasi}: {laporan.get("ringkasan", "")[:300]}', tanpa_waktu=True)
+    else:
+        log(f"{status} menit={durasi} sisa: " + ' | '.join(f"{b.get('status')}: {str(b.get('permintaan', ''))[:80]}"
+                                                            for b in sisa)[:600], tanpa_waktu=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

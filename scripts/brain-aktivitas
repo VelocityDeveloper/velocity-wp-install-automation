@@ -32,6 +32,8 @@ DATA = "/usr/share/nginx/html/brain/data.json"
 SIMPAN = 400          # kejadian memory/skill/proyek terakhir yang disimpan
 SIMPAN_ALAT = 200     # pemakaian tool terakhir yang disimpan
 AWAL_DETIK = 7 * 86400
+# Nama orang per sesi, ditulis claude-pakai tiap menit (lihat scripts/claude-pakai)
+IDENTITAS = Path("/var/lib/velocity/claude-pakai/identitas.json")
 SESI_TAMPIL = 3 * 3600  # sesi mati tetap tampil bila aktif 3 jam terakhir
 # Sinaps: dua simpul yang dipakai sesi yang sama dalam JENDELA detik saling menguat;
 # bobot meluruh eksponensial (TAU) sehingga jalur yang lama tak dipakai memudar.
@@ -48,6 +50,27 @@ def waktu(iso):
         return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
     except (ValueError, AttributeError):
         return time.time()
+
+
+def keterangan_alat(nama, inp):
+    """Keterangan singkat untuk log realtime /brain: nama berkas, deskripsi perintah, atau pola.
+    Isi perintah Bash TIDAK ditulis (bisa memuat sandi); hanya `description` yang ditulis Claude."""
+    if not isinstance(inp, dict):
+        return ""
+    if inp.get("file_path") or inp.get("notebook_path"):
+        return Path(str(inp.get("file_path") or inp.get("notebook_path"))).name[:80]
+    if nama == "Bash":
+        return str(inp.get("description") or "")[:90]
+    if nama in ("Grep", "Glob"):
+        return str(inp.get("pattern") or "")[:60]
+    if nama == "Skill":
+        return str(inp.get("skill") or "")[:60]
+    if nama in ("Agent", "Task"):
+        return str(inp.get("description") or "")[:80]
+    if nama in ("WebFetch", "WebSearch"):
+        u = str(inp.get("url") or inp.get("query") or "")
+        return (re.sub(r"^https?://([^/]+).*", r"\1", u) if nama == "WebFetch" else u)[:60]
+    return ""
 
 
 class Pemantau:
@@ -139,7 +162,7 @@ class Pemantau:
             hari = datetime.fromtimestamp(t).strftime("%Y-%m-%d")
             self.harian[hari][nama] += 1
             self.tool_terakhir[nama] = max(self.tool_terakhir.get(nama, 0), t)
-            self.alat.append({"t": t, "sesi": sesi, "tool": nama})
+            self.alat.append({"t": t, "sesi": sesi, "tool": nama, "ket": keterangan_alat(nama, inp)})
             s = self.sesi_aktif.setdefault(sesi, {"terakhir": 0, "jumlah": 0, "mulai": t})
             s["terakhir"] = max(s["terakhir"], t)
             s["mulai"] = min(s["mulai"], t)
@@ -229,7 +252,20 @@ class Pemantau:
         return bool(baru) or ada_alat
 
     # ---- sesi: dari registri proses Claude ----
+    def identitas(self):
+        """Nama orang per sesi dari claude-pakai (kunci SSH authorized_keys / ID Telegram)."""
+        try:
+            mt = IDENTITAS.stat().st_mtime
+            if mt != getattr(self, "_idt_mt", None):
+                d = json.loads(IDENTITAS.read_text())
+                self._idt = ({k[:8]: v for k, v in d.get("sesi", {}).items()}, d.get("telegram", {}))
+                self._idt_mt = mt
+        except (OSError, ValueError):
+            pass
+        return getattr(self, "_idt", ({}, {}))
+
     def daftar_sesi(self):
+        per_sesi, per_tg = self.identitas()
         kenal = {}
         for f in CLAUDE.glob("sessions/*.json"):
             try:
@@ -259,6 +295,12 @@ class Pemantau:
             k = kenal.get(sid, {"id": sid, "label": f"sesi {sid}", "jenis": "lain", "hidup": False, "mulai": 0})
             a = self.sesi_aktif.get(sid, {})
             k = dict(k, terakhir=a.get("terakhir", 0), jumlah=a.get("jumlah", 0))
+            m = re.match(r"TG (\d+)$", k["label"])
+            orang = per_sesi.get(sid) or (per_tg.get(m.group(1)) if m else None)
+            if orang and not orang.startswith(("Belum teridentifikasi", "Otomasi")):
+                pendek = {"telegram": "TG", "desktop": "desktop", "terminal": "terminal"}.get(k["jenis"], "sesi")
+                k["orang"] = orang
+                k["label"] = f"{orang.replace('SSH password ', 'pw ')} · {pendek}"
             if not k["mulai"]:
                 k["mulai"] = a.get("mulai", 0)
             if k["hidup"] or now - k["terakhir"] < SESI_TAMPIL:

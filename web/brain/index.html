@@ -129,7 +129,7 @@ function idSimpulEvent(e){if(e.id)return e.id;if(e.skill){const n=dasar&&dasar.n
 function dinamis(){
   const nodes=[],links=[];if(!akt)return{nodes,links};const now=Date.now()/1000;
   const sesi=(akt.sesi||[]);if(sesi.length){nodes.push({id:'hub:sesi',kind:'hub',label:'Sesi',group:'sesi'});links.push({source:'core',target:'hub:sesi',kind:'struktur'})}
-  for(const s of sesi){nodes.push({id:`sesi:${s.id}`,kind:'sesi',label:s.label,jenis:s.jenis,hidup:s.hidup,mulai:s.mulai,terakhir:s.terakhir,jumlah:s.jumlah,sid:s.id,desc:`${s.jenis==='telegram'?'Sesi Claude untuk user Telegram':s.jenis==='desktop'?'Sesi Claude dari aplikasi desktop':'Sesi Claude di terminal'} · ${s.hidup?'sedang berjalan':'sudah selesai'}`});links.push({source:'hub:sesi',target:`sesi:${s.id}`,kind:'struktur'})}
+  for(const s of sesi){nodes.push({id:`sesi:${s.id}`,kind:'sesi',label:s.label,orang:s.orang,jenis:s.jenis,hidup:s.hidup,mulai:s.mulai,terakhir:s.terakhir,jumlah:s.jumlah,sid:s.id,desc:`${s.orang?`${s.orang} — `:''}${s.jenis==='telegram'?'Sesi Claude untuk user Telegram':s.jenis==='desktop'?'Sesi Claude dari aplikasi desktop':'Sesi Claude di terminal'} · ${s.hidup?'sedang berjalan':'sudah selesai'}`});links.push({source:'hub:sesi',target:`sesi:${s.id}`,kind:'struktur'})}
   const tl=Object.entries(akt.tools||{}).sort((a,b)=>b[1].minggu-a[1].minggu);const dipakaiBaru=new Set((akt.alat||[]).filter(a=>now-a.t<3600).map(a=>a.tool));
   const tampilTool=tl.filter(([k],i)=>i<16||dipakaiBaru.has(k));
   if(tampilTool.length){nodes.push({id:'hub:tool',kind:'hub',label:'Tools',group:'tool'});links.push({source:'core',target:'hub:tool',kind:'struktur'})}

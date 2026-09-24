@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Permintaan klien di FORM ISIAN (bagian PESAN TAMBAHAN) yang wajib dikerjakan.
+
+Keputusan user 2026-09-24 (cahayaratupetir.com): "data2 di form itu adalah acuan pengerjaannya" —
+permintaan seperti "halaman paket penangkal petir dan hasil pekerjaan, data dan gambar bisa diambil
+dari totalantipetir.com" tidak boleh terlewat. Installer belum bisa mengerjakan permintaan bebas
+seperti ini sendiri, jadi selama belum ditandai selesai situs dilaporkan "perlu dicek" beserta isi
+permintaannya (installer-runner -> problems `permintaan_form_klien`, notify-telegram).
+
+  permintaan-form <manifest|domain>                  status; keluaran baris terakhir:
+        permintaan_form: tidak_ada | sudah_dikerjakan | belum_dikerjakan:<md5>
+  permintaan-form <manifest|domain> --teks           cetak isi permintaan
+  permintaan-form <manifest|domain> --selesai "..."  tandai sudah dikerjakan (catatan singkat)
+Status disimpan di /var/lib/velocity/installer/permintaan-form/<domain>.json; permintaan yang
+berubah (md5 lain) kembali berstatus belum dikerjakan.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from client_form import pesan_tambahan, read_client_form  # noqa: E402
+
+# VELOCITY_ON_PROGRESS: hanya untuk uji di rig lokal.
+ON_PROGRESS = Path(os.environ.get('VELOCITY_ON_PROGRESS') or '/home/On Progress')
+STATUS = Path('/var/lib/velocity/installer/permintaan-form')
+
+
+def domain_dari(arg):
+    p = Path(arg)
+    if p.is_file():
+        for baris in p.read_text(errors='replace').splitlines():
+            if baris.startswith('domain='):
+                return baris.split('=', 1)[1].strip().lower()
+    return arg.strip().lower()
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if not args:
+        print(__doc__)
+        return 2
+    domain = domain_dari(args[0])
+    teks = pesan_tambahan(read_client_form(ON_PROGRESS / domain).get('text', ''))
+    if '--teks' in sys.argv:
+        print(teks)
+        return 0
+    if not teks:
+        print('permintaan_form: tidak_ada')
+        return 0
+    md5 = hashlib.md5(re.sub(r'\s+', ' ', teks).encode()).hexdigest()
+    berkas = STATUS / f'{domain}.json'
+    try:
+        catatan = json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        catatan = {}
+    if '--selesai' in sys.argv:
+        STATUS.mkdir(parents=True, exist_ok=True)
+        ket = args[1] if len(args) > 1 else ''
+        berkas.write_text(json.dumps({'md5': md5, 'teks': teks, 'selesai': datetime.now().astimezone()
+                                      .isoformat(timespec='seconds'), 'catatan': ket}, ensure_ascii=False, indent=1))
+        print('permintaan_form: ditandai_selesai')
+        return 0
+    if catatan.get('md5') == md5 and catatan.get('selesai'):
+        print('permintaan_form: sudah_dikerjakan')
+    else:
+        print(f'permintaan_form: belum_dikerjakan:{md5[:8]}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

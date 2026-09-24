@@ -58,13 +58,52 @@ CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
 KUNCI_API = Path('/etc/velocity/secrets/anthropic_api_key')
 # Model agen (keputusan user 2026-09-18): Opus, tidak boleh lebih rendah. Nilai selain Opus
 # di DESAIN_CLAUDE_MODEL diabaikan, dan model kecil internal Claude Code (judul, ringkasan —
-# bawaannya Haiku) ikut dipaksa ke Opus lewat env di bawah.
-MODEL_OPUS = os.environ.get('DESAIN_CLAUDE_MODEL_ID', 'claude-opus-5')
+# bawaannya Haiku) ikut dipaksa ke Opus lewat env di jalankan_claude().
+# Selalu Opus TERBARU (permintaan user 2026-09-23, saat Opus 5.5 rilis): ID tidak ditulis
+# mati — dulu 'claude-opus-5' tertinggal di model internal walau alias `opus` sudah 5.5.
+# opus_terbaru() meresolve alias `opus` CLI ini lewat satu request kecil, disimpan per versi CLI
+# (claude-update.timer memperbarui CLI tiap pagi -> versi baru -> dicek ulang).
+MODEL_TEMBOLOK = Path('/var/lib/velocity/desain-claude-model.json')
+# Hanya dipakai bila resolusi gagal DAN belum pernah ada hasil tersimpan.
+OPUS_CADANGAN = 'claude-opus-5-5'
 
 
 def model_agen():
     pilihan = os.environ.get('DESAIN_CLAUDE_MODEL', 'opus').strip()
     return pilihan if 'opus' in pilihan.lower() else 'opus'
+
+
+def opus_terbaru(env):
+    """ID model Opus terbaru yang dikenal CLI Claude di server ini (mis. claude-opus-5-5)."""
+    paksa = os.environ.get('DESAIN_CLAUDE_MODEL_ID', '').strip()
+    if 'opus' in paksa.lower():
+        return paksa
+    try:
+        versi = subprocess.run([CLAUDE, '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        versi = ''
+    try:
+        lama = json.loads(MODEL_TEMBOLOK.read_text())
+    except (OSError, ValueError):
+        lama = {}
+    if versi and lama.get('versi') == versi and 'opus' in str(lama.get('model', '')).lower():
+        return lama['model']
+    model = ''
+    try:
+        run = subprocess.run([CLAUDE, '-p', 'Balas satu kata: ok', '--model', 'opus', '--output-format', 'json',
+                              '--no-session-persistence', '--tools', ''],
+                             capture_output=True, text=True, timeout=180, env=env, cwd='/tmp')
+        model = next((m for m in (json.loads(run.stdout).get('modelUsage') or {}) if 'opus' in m.lower()), '')
+    except (OSError, subprocess.SubprocessError, ValueError):
+        model = ''
+    if model:
+        try:
+            MODEL_TEMBOLOK.write_text(json.dumps({'versi': versi, 'model': model, 'dicek': datetime.now()
+                                                  .astimezone().isoformat(timespec='seconds')}))
+        except OSError:
+            pass
+        return model
+    return lama.get('model') if 'opus' in str(lama.get('model', '')).lower() else OPUS_CADANGAN
 STATE = Path('/var/lib/velocity/installer')
 # Penanda "agen sedang berjalan" yang dibaca installer_status.py: situs tampil RUNNING di /installer/.
 AKTIF_DIR = STATE / 'desain-claude'
@@ -231,6 +270,11 @@ def ringkas_langkah(blok):
 
 
 def jalankan_claude(folder, env, menit, prompt):
+    # Alias `opus` dibiarkan milik CLI (ANTHROPIC_DEFAULT_OPUS_MODEL dari luar tidak boleh
+    # membelokkannya ke versi lama); model internal dipaksa ke ID Opus terbaru yang sama.
+    env = {k: v for k, v in env.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    opus = opus_terbaru(env)
+    log(f'model agen: {opus} (Opus terbaru yang dikenal CLI ini)')
     perintah = [
         CLAUDE, '-p', prompt,
         '--model', model_agen(),
@@ -247,8 +291,8 @@ def jalankan_claude(folder, env, menit, prompt):
     mulai = time.time()
     hasil, kode = {}, None
     permintaan = {}  # model -> id respons API (satu id = satu request)
-    env = dict(env, ANTHROPIC_DEFAULT_HAIKU_MODEL=MODEL_OPUS, ANTHROPIC_DEFAULT_SONNET_MODEL=MODEL_OPUS,
-               ANTHROPIC_SMALL_FAST_MODEL=MODEL_OPUS, CLAUDE_CODE_SUBAGENT_MODEL=MODEL_OPUS)
+    env = dict(env, ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus,
+               ANTHROPIC_SMALL_FAST_MODEL=opus, CLAUDE_CODE_SUBAGENT_MODEL=opus)
     proses = subprocess.Popen(perintah, cwd=folder / 'claude', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, env=env)
     # Batas waktu: readline bisa menunggu lama, jadi penjaga terpisah yang mematikan proses.
@@ -276,6 +320,7 @@ def jalankan_claude(folder, env, menit, prompt):
         kode = 'timeout' if time.time() - mulai >= menit * 60 - 5 else kode
     durasi = round((time.time() - mulai) / 60, 1)
     hasil['permintaan_per_model'] = {m: len(i) for m, i in permintaan.items()}
+    hasil['opus_terbaru'] = opus
     (folder / 'claude' / 'sesi.json').write_text(json.dumps(
         dict(hasil, kode_keluar=kode, menit=durasi), ensure_ascii=False, indent=1))
     return kode, durasi, hasil
@@ -295,6 +340,10 @@ def catat_pemakaian(domain, hasil):
     bukan_opus = [m for m in per_model if 'opus' not in m.lower()]
     if bukan_opus:
         log('PERINGATAN model_bukan_opus:' + ','.join(bukan_opus))
+    terbaru = hasil.get('opus_terbaru') or ''
+    lawas = [m for m in per_model if 'opus' in m.lower() and terbaru and not m.startswith(terbaru)]
+    if lawas:
+        log(f'PERINGATAN opus_bukan_terbaru:{",".join(lawas)} (terbaru {terbaru})')
     for model, u in per_model.items():
         masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
         keluar = int(u.get('outputTokens') or 0)

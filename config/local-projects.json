@@ -1,0 +1,58 @@
+{
+  "_catatan": "Daftar project yang berjalan di Local PC untuk menu /projects di dashboard. Status layanan, HTTP, dan git dibaca langsung oleh server_stats.py (GET /api/projects); berkas ini cukup memuat identitasnya. Setelah mengubah, tidak perlu restart apa pun.",
+  "projects": [
+    {
+      "id": "barokah",
+      "nama": "nextbeli.com (Barokah)",
+      "jenis": "klien",
+      "stack": "Laravel · PHP 8.4",
+      "port": 8010,
+      "folder": "/home/barokah",
+      "layanan": ["barokah-dev", "barokah-queue", "barokah-scheduler"],
+      "produksi": "https://nextbeli.com",
+      "catatan": "Produksi di server Farnaz (akun nextbeli). Deploy: /root/nextbeli/deploy-*.sh"
+    },
+    {
+      "id": "sia-vd",
+      "nama": "SIA VD",
+      "jenis": "klien",
+      "stack": "Laravel 12 · Inertia/Vue",
+      "port": 8020,
+      "folder": "/home/sia-vd",
+      "layanan": ["sia-vd-dev", "sia-vd-queue"],
+      "catatan": "Sistem informasi akademik. Update: /root/sia-vd/deploy-dev.sh"
+    },
+    {
+      "id": "daftar-borneo",
+      "nama": "daftar-borneo.id",
+      "jenis": "klien",
+      "stack": "Laravel 13 · Inertia/Vue",
+      "port": 8040,
+      "folder": "/home/daftar-borneo-dev",
+      "layanan": ["daftar-borneo-dev", "daftar-borneo-queue", "daftar-borneo-schedule"],
+      "produksi": "https://daftar-borneo.id",
+      "catatan": "CRM #62544 (Paket G). Pendaftaran WiFi per kabupaten."
+    },
+    {
+      "id": "demo-toko",
+      "nama": "Demo tema toko (VD Store)",
+      "jenis": "internal",
+      "stack": "WordPress · php -S",
+      "port": 8030,
+      "folder": "/var/lib/velocity/tema-toko/demo-toko",
+      "layanan": ["demo-toko"],
+      "catatan": "Demo konversi tema toko Velocity ke VD Store."
+    },
+    {
+      "id": "vdnet",
+      "nama": "New VDNet (CRM kantor)",
+      "jenis": "internal",
+      "stack": "Laravel API :8005 · Nuxt :3005",
+      "port": 8005,
+      "url": "/newvdnet/",
+      "folder": "/home/project_vd",
+      "layanan": ["vdnet-production"],
+      "catatan": "Deploy produksi lewat /root/vdnet/deploy.sh."
+    }
+  ]
+}

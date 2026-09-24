@@ -278,19 +278,34 @@
         gagal: /desain_claude: gagal/, ketHasil: hasilAgen, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
       { id: 'visualAkhir', kol: 20, jalur: 1, nama: 'Cek visual', ket0: 'desain akhir agen, desktop & HP ke Telegram',
         mulai: /Paket custom: cek visual/, selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
-      { id: 'qa', kol: 22, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten', mulai: /qa_result:/, selesai: /qa_result:/, aktif: tanpaDry },
-      { id: 'maint', kol: 23, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
+      // Agen permintaan form (keputusan user 2026-09-24, scripts/permintaan-claude, PERMINTAAN_CLAUDE=1):
+      // pesan tambahan di form klien dikerjakan Claude sebagai user situs sebelum pemeriksaan akhir.
+      { id: 'permintaan', kol: 22, jalur: 1, nama: 'Permintaan form', ket0: 'pesan tambahan klien, dikerjakan agen Claude',
+        mulai: /\] Permintaan form klien \(agen Claude\)/, selesai: /^permintaan_claude: (selesai \d|sebagian:|lewati:)/m,
+        gagal: /^permintaan_claude: gagal:/m,
+        ketHasil: t => { let m = /^permintaan_claude: selesai (\d+)\/\d+ butir/m.exec(t);
+          if (m) return m[1] + ' butir dikerjakan';
+          if ((m = /^permintaan_claude: sebagian:(\d+\/\d+)/m.exec(t))) return 'sebagian ' + m[1] + ', sisa perlu dicek';
+          if ((m = /^permintaan_claude: (lewati|gagal):(\S+)/m.exec(t))) return (m[1] === 'lewati' ? 'dilewati: ' : 'gagal: ') + m[2].replace(/_/g, ' ');
+          return null; },
+        aktif: c => dan(tanpaDry(c), c.permintaanClaude) },
+      // + permintaan klien di FORM 5 pesan tambahan (scripts/permintaan-form, keputusan user 2026-09-24):
+      // belum ditandai selesai = "perlu dicek" berisi permintaannya.
+      { id: 'qa', kol: 23, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten, permintaan form', mulai: /qa_result:/, selesai: /qa_result:/,
+        ketHasil: t => (/permintaan_form: belum_dikerjakan/.test(t) ? 'permintaan form klien belum dikerjakan'
+          : /permintaan_form: sudah_dikerjakan/.test(t) ? 'permintaan form klien sudah dikerjakan' : null), aktif: tanpaDry },
+      { id: 'maint', kol: 24, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
         ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
           : c.maintLewat !== null ? (c.maintLewat ? 'ya' : 'tidak') : c.custom === null ? 'menunggu' : c.custom ? 'ya: paket custom' : 'tidak') },
-      { id: 'maintLewat', kol: 24, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
+      { id: 'maintLewat', kol: 25, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
         selesai: /maintenance_dilewati/, aktif: c => dan(hanyaMode('apply')(c), c.maintLewat ?? c.custom) },
-      { id: 'maintOn', kol: 24, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
+      { id: 'maintOn', kol: 25, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
         selesai: /maintenance: maintenance_(enabled|active|skip)/,
         aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
-      { id: 'selesai', kol: 25, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
+      { id: 'selesai', kol: 26, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
       // Trap EXIT runner (juga saat run gagal): berkas milik root dari WP-CLI dikembalikan ke user situs,
       // supaya pasang plugin/tema dari wp-admin tidak gagal (scripts/pemilik_wp.py, 2026-09-18).
-      { id: 'pemilik', kol: 26, jalur: 1, nama: 'Kepemilikan wp-content', ket0: 'chown ke user situs',
+      { id: 'pemilik', kol: 27, jalur: 1, nama: 'Kepemilikan wp-content', ket0: 'chown ke user situs',
         mulai: /\] Kepemilikan wp-content/, selesai: /pemilik: (wp_content_dirapikan|sudah_benar|dilewati)/,
         gagal: /pemilik: (gagal|chown_gagal)/,
         ketHasil: t => {
@@ -335,15 +350,15 @@
       ['fotoArtikel', 'visual', '', c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung)],
       // Referensi ada + DESAIN_CLAUDE=1: agen Claude langsung, lalu cek visual desain akhir, lalu QA.
       ['fotoArtikel', 'agenLangsung', 'referensi ada', c => dan(tanpaDry(c), c.custom, c.agenLangsung)],
-      ['agenLangsung', 'visualAkhir'], ['visualAkhir', 'qa'],
+      ['agenLangsung', 'visualAkhir'], ['visualAkhir', 'permintaan'],
       ['visual', 'mirip'],
       // Belum mirip: kembali ke tema FSE (generate ulang tema + halaman), lalu diaudit lagi.
       ['mirip', 'fse', 'belum mirip, generate ulang', c => dan(tanpaDry(c), c.custom, c.miripUlang)],
       ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung)],
-      ['agenClaude', 'qa'],
-      ['mirip', 'qa', 'mirip / dilaporkan'],
-      ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'qa'],
-      ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
+      ['agenClaude', 'permintaan'],
+      ['mirip', 'permintaan', 'mirip / dilaporkan'],
+      ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
+      ['permintaan', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
     ];
@@ -410,6 +425,8 @@
         // Belum mirip dan DESAIN_CLAUDE=1: agen Claude mengambil alih (bukan generate ulang).
         agenClaude: /desain (langsung )?diambil alih agen Claude|desain_claude: audit awal/.test(teks),
         // Referensi ada + DESAIN_CLAUDE=1 (2026-09-19): agen langsung, tanpa gerbang tema & audit.
+        // Saklar PERMINTAAN_CLAUDE: runner hanya mencetak barisnya kalau agen permintaan dijalankan.
+        permintaanClaude: /\] Permintaan form klien \(agen Claude\)/.test(teks) ? true : /qa_result:/.test(teks) ? false : null,
         agenLangsung: /fse_cek: dilewati:agen_claude|desain langsung diambil alih agen Claude/.test(teks) ? true
           : /fse_cek: (sesuai|belum|masih|tidak|gagal)|Paket custom: audit kemiripan/.test(teks) ? false : null,
       };

@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Terbitkan sertifikat SSL (Let's Encrypt lewat DirectAdmin) untuk domain situs.
+
+Sampai 2026-09-22 installer hanya MEMBACA status sertifikat (`ssl_cert:mismatch` di dry-run,
+`ssl_tidak_valid` di QA) dan tidak pernah memintanya, sehingga situs Paket F/E/biasa selesai
+tanpa HTTPS sampai ada yang memasangnya manual di panel (swan-jaya.com, winskokoa.com,
+advokatsugriwossmgroup.com, pemdeslampok.com: sertifikat baru terbit berjam-jam sesudah run).
+
+Alur (satu koneksi SSH):
+  1. DNS domain & www diresolve DI SINI (resolver publik, bukan DNS server tujuan yang bisa
+     menjawab dari zona lokalnya sendiri) lalu dicocokkan dengan SEMUA IP server tujuan —
+     domain klien sering diarahkan ke IP alias (103.103.175.183/184), bukan target_host.
+  2. Sertifikat yang masih berlaku >30 hari dan memuat nama domainnya dibiarkan (`sudah_ada`).
+  3. `letsencrypt.sh request <domain>` (DirectAdmin), lalu berkas .cert dibaca ulang untuk
+     memastikan hasilnya benar-benar memuat domain ini — keluaran skrip tidak dipercaya.
+  4. Terakhir sertifikat diperiksa dari luar (koneksi TLS ke domain:443).
+
+Tidak pernah menggagalkan instalasi: semua hasil hanya dicatat. DNS belum mengarah (domain baru,
+nameserver belum dipindah) bukan kegagalan — dilewati dengan catatan supaya run berikutnya mencoba lagi.
+
+  site-ssl <manifest> [--paksa] [--coba]
+     --paksa  minta sertifikat baru walau yang lama masih berlaku
+     --coba   hanya periksa & laporkan, tanpa meminta sertifikat
+Keluaran baris terakhir: `ssl: <status>` — terbit|sudah_ada|dilewati:<alasan>|gagal:<alasan>.
+"""
+import os
+import re
+import shlex
+import socket
+import ssl
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+RESOLVER = ('1.1.1.1', '8.8.8.8')
+# Sisa berlaku minimum; di bawah ini sertifikat diperbarui sekalian.
+SISA_DETIK = 30 * 24 * 3600
+
+REMOTE = r'''
+LE=/usr/local/directadmin/scripts/letsencrypt.sh
+CONF="/usr/local/directadmin/data/users/$U/domains/$D.conf"
+CERT="/usr/local/directadmin/data/users/$U/domains/$D.cert"
+[ -x "$LE" ] || { echo "ssl: dilewati:letsencrypt_script_tidak_ada"; exit 0; }
+[ -f "$CONF" ] || { echo "ssl: dilewati:domain_tidak_ada_di_da"; exit 0; }
+
+# IP domain (dari resolver publik) harus salah satu IP server ini; kalau tidak, tantangan
+# Let's Encrypt pasti gagal dan percobaannya hanya menghabiskan jatah rate limit.
+ip_server=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')
+cocok=0
+for i in $IP_DNS; do case " $ip_server " in *" $i "*) cocok=1;; esac; done
+if [ "$cocok" != 1 ]; then
+  echo "ssl: dilewati:dns_belum_mengarah:${IP_DNS:-tanpa_a_record}"
+  exit 0
+fi
+
+punya_cert() {
+  [ -s "$CERT" ] || return 1
+  openssl x509 -in "$CERT" -noout -checkend "$SISA" >/dev/null 2>&1 || return 1
+  openssl x509 -in "$CERT" -noout -ext subjectAltName 2>/dev/null | grep -qF "DNS:$D"
+}
+habis() { openssl x509 -in "$CERT" -noout -enddate 2>/dev/null | cut -d= -f2; }
+
+if punya_cert && [ "$PAKSA" != 1 ]; then
+  echo "ssl: sudah_ada:$(habis)"
+  exit 0
+fi
+if [ "$COBA" = 1 ]; then
+  echo "ssl: perlu_terbit${IP_DNS:+ (dns ok)}"
+  exit 0
+fi
+
+keluaran=$("$LE" request "$D" 2>&1)
+if punya_cert; then
+  echo "ssl: terbit:$(habis)"
+  exit 0
+fi
+# www saja kadang tidak cukup: coba sekali lagi dengan apex + www eksplisit.
+keluaran2=$("$LE" request "$D,www.$D" 2>&1)
+if punya_cert; then
+  echo "ssl: terbit:$(habis)"
+  exit 0
+fi
+alasan=$(printf '%s\n%s\n' "$keluaran" "$keluaran2" | grep -iE 'error|fail|unable|invalid|urn:ietf' | tail -1)
+echo "ssl: gagal:${alasan:-$(printf '%s' "$keluaran2" | tail -1)}"
+'''
+
+
+def baca_manifest(path):
+    cfg = {}
+    for baris in Path(path).read_text(errors='replace').splitlines():
+        kunci, pisah, nilai = baris.partition('=')
+        if pisah and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kunci.strip()):
+            cfg[kunci.strip()] = nilai.strip()
+    return cfg
+
+
+def a_record(nama):
+    """A record dari resolver publik. DNS server tujuan tidak dipakai: server yang juga
+    melayani DNS-nya sendiri akan menjawab dari zona lokal walau nameserver domain belum pindah."""
+    hasil = []
+    for resolver in RESOLVER:
+        try:
+            run = subprocess.run(['dig', '+short', '+time=3', '+tries=1', 'A', nama, f'@{resolver}'],
+                                 capture_output=True, text=True, timeout=15)
+            hasil = [b.strip() for b in run.stdout.splitlines()
+                     if re.match(r'^\d+\.\d+\.\d+\.\d+$', b.strip())]
+        except (OSError, subprocess.SubprocessError):
+            hasil = []
+        if hasil:
+            return hasil
+    try:  # dig tidak ada / resolver publik diblokir
+        return [i[4][0] for i in socket.getaddrinfo(nama, None, socket.AF_INET, socket.SOCK_STREAM)]
+    except OSError:
+        return []
+
+
+def cek_publik(domain, timeout=15):
+    """Sertifikat seperti yang dilihat pengunjung: valid / nama tidak cocok / tidak ada."""
+    konteks = ssl.create_default_context()
+    try:
+        with socket.create_connection((domain, 443), timeout=timeout) as mentah:
+            with konteks.wrap_socket(mentah, server_hostname=domain) as aman:
+                sisa = aman.getpeercert().get('notAfter', '')
+        return f'valid:{sisa}'
+    except ssl.SSLCertVerificationError as e:
+        return 'belum_valid:' + str(getattr(e, 'verify_message', '') or e)[:60]
+    except (OSError, ssl.SSLError) as e:
+        return f'tidak_terjangkau:{type(e).__name__}'
+
+
+def main():
+    argv = sys.argv[1:]
+    opsi = [a for a in argv if a.startswith('--')]
+    args = [a for a in argv if not a.startswith('--')]
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    coba = '--coba' in opsi
+    cfg = baca_manifest(args[0])
+    domain = (cfg.get('domain') or '').lower()
+    da_user, host = cfg.get('da_user', ''), cfg.get('target_host', '')
+    if not (domain and da_user and host):
+        print('ssl: dilewati:manifest_tidak_lengkap')
+        return 0
+    # Staging velocitydeveloper.co/<domain>: sertifikat milik domain staging, bukan domain klien.
+    if cfg.get('docroot') or cfg.get('site_url'):
+        print('ssl: dilewati:staging')
+        return 0
+    if os.environ.get('INSTALL_MODE') == 'dry-run' and not coba:
+        print('ssl: dilewati:dry_run')
+        return 0
+    kunci = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not (kunci and Path(kunci).is_file()):
+        print('ssl: dilewati:tanpa_kunci_ssh')
+        return 0
+
+    ip = a_record(domain)
+    ip += [i for i in a_record(f'www.{domain}') if i not in ip]
+    ssh = ['ssh', '-i', kunci, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=20', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{host}"]
+    env = (f"U={shlex.quote(da_user)}\nD={shlex.quote(domain)}\nIP_DNS={shlex.quote(' '.join(ip))}\n"
+           f"SISA={SISA_DETIK}\nPAKSA={'1' if '--paksa' in opsi else '0'}\nCOBA={'1' if coba else '0'}\n")
+    try:
+        run = subprocess.run(ssh + ['bash', '-s'], input=env + REMOTE,
+                             capture_output=True, text=True, timeout=600)
+    except subprocess.SubprocessError as e:
+        print(f'ssl: gagal:ssh_{type(e).__name__}')
+        return 0
+    baris = [b for b in run.stdout.splitlines() if b.startswith('ssl: ')]
+    hasil = baris[-1] if baris else 'ssl: gagal:' + (
+        (run.stderr.strip().splitlines() or ['tanpa_keluaran'])[-1][:120])
+    # Pemeriksaan dari luar hanya berarti kalau sertifikatnya memang ada/baru dipasang.
+    if hasil.startswith(('ssl: terbit', 'ssl: sudah_ada')):
+        print(f'ssl: publik:{cek_publik(domain)}', flush=True)
+    print(hasil, flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

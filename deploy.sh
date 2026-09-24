@@ -12,7 +12,7 @@ python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scr
 node --check scripts/referensi-desain.js
 node --check scripts/potret-halaman
 node --check scripts/banding-potret
-python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/theme-paket-biasa scripts/brain-data scripts/brain-aktivitas scripts/claude-pakai
+python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/theme-paket-biasa scripts/site-ssl scripts/permintaan-form scripts/permintaan-claude scripts/permintaan-claude-alat scripts/brain-data scripts/brain-aktivitas scripts/claude-pakai
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga tema FSE: markup blok templates/parts/patterns harus valid menurut parser
 # editor WordPress (kode 3 = alat node belum terpasang di mesin ini, dilewati).
@@ -66,6 +66,7 @@ install -m 644 web/installer/alur.js "$WEB_ROOT/lama/installer/alur.js"
 install -d -m 755 "$WEB_ROOT/v2-assets"
 rsync -a --delete web-vue/dist/v2-assets/ "$WEB_ROOT/v2-assets/"
 install -m 644 web-vue/dist/ikon.png "$WEB_ROOT/ikon.png"
+install -m 644 web-vue/dist/favicon.svg "$WEB_ROOT/favicon.svg"
 install -m 644 web-vue/dist/index.html "$WEB_ROOT/index.html"
 install -d -m 755 "$WEB_ROOT/brain"
 install -m 644 web/brain/index.html "$WEB_ROOT/brain/index.html"

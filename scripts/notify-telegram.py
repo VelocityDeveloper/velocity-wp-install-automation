@@ -10,6 +10,7 @@ ditelan dan hanya dilaporkan lewat exit code (0 terkirim, 1 tidak).
 import html
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -319,8 +320,8 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
         if status == 'CHECK':
             # Terpasang, tapi pemeriksaan akhir (scripts/site-qa) menemukan masalah.
             return (f'🟡 <b>Instalasi selesai, perlu dicek</b>\n{head}{links}\n'
-                    f'Catatan: <code>{stage}</code>{perbaikan}')
-        return f'✅ <b>Instalasi selesai</b>\n{head}{links}'
+                    f'Catatan: <code>{stage}</code>{perbaikan}{permintaan_form(domain) if "permintaan_form_klien" in stage else ""}')
+        return f'✅ <b>Instalasi selesai</b>\n{head}{permintaan_selesai_agen(domain)}{links}'
     if status == 'CLAIMED':
         return (f'🤖 <b>Diambil alih autopilot</b>\n{head}'
                 f'Tahap: <code>{stage}</code>')
@@ -329,6 +330,49 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
                 f'Alasan: <code>{stage}</code>')
     return (f'❌ <b>Instalasi gagal</b>\n{head}'
             f'Tahap: <code>{stage}</code>')
+
+
+def hasil_agen_permintaan(domain, umur_maks=12 * 3600):
+    """Hasil terakhir agen permintaan klien (scripts/permintaan-claude), bila masih baru."""
+    berkas = Path('/var/lib/velocity/permintaan-claude') / domain / 'hasil.json'
+    try:
+        if time.time() - berkas.stat().st_mtime > umur_maks:
+            return {}
+        return json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def permintaan_form(domain):
+    """Isi PESAN TAMBAHAN klien yang belum dikerjakan (scripts/permintaan-form), untuk pesan CHECK,
+    plus butir yang tidak bisa diselesaikan agen Claude (scripts/permintaan-claude) beserta alasannya."""
+    try:
+        teks = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / 'permintaan-form'), domain, '--teks'],
+                              capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        teks = ''
+    if not teks:
+        return ''
+    teks = teks if len(teks) <= 700 else teks[:700] + '…'
+    agen = hasil_agen_permintaan(domain)
+    sisa = ''
+    if agen.get('butir') or agen.get('sisa'):
+        ikon = {'selesai': '✅', 'perlu_manusia': '🙋', 'tidak_bisa': '❌'}
+        sisa = '\nHasil agen Claude:\n' + '\n'.join(
+            f"{ikon.get(b.get('status'), '•')} {html.escape(str(b.get('permintaan', ''))[:120])}"
+            + (f" — <i>{html.escape(str(b.get('hasil', ''))[:200])}</i>" if b.get('status') != 'selesai' else '')
+            for b in (agen.get('butir') or agen.get('sisa'))[:8]) + '\n'
+    return (f'\n\n📝 <b>Permintaan klien di form belum selesai dikerjakan</b> (wajib, isi form = acuan):\n'
+            f'<blockquote>{html.escape(teks)}</blockquote>{sisa}\n'
+            f'Sesudah dikerjakan: <code>scripts/permintaan-form {html.escape(domain)} --selesai "catatan"</code>')
+
+
+def permintaan_selesai_agen(domain):
+    """Baris laporan SUCCESS: permintaan form dikerjakan agen Claude di run ini."""
+    agen = hasil_agen_permintaan(domain)
+    if agen.get('status') != 'selesai':
+        return ''
+    return f"📝 Permintaan form dikerjakan agen Claude: {html.escape(str(agen.get('ringkasan', ''))[:400])}\n"
 
 
 def send(token, chat, text):

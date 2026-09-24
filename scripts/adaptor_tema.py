@@ -363,16 +363,27 @@ def isi_nilai(nilai, data, item=None):
 # ---------- pemeriksaan hasil ----------
 
 def periksa_beranda(domain, slug, data, adaptor):
-    """(lulus, alasan). Beranda dibuka lewat pratinjau (maintenance mode meloloskan is_preview)."""
+    """(lulus, alasan). Beranda dibuka lewat pratinjau (maintenance mode meloloskan is_preview).
+
+    lulus None = TIDAK BISA DIPERIKSA (beranda tak terjangkau / masih halaman maintenance):
+    bukan bukti adaptornya salah, jadi pemanggil tidak boleh mencabut hasilnya.
+    cahayaratupetir.com 2026-09-22: sertifikat SSL domain belum terbit (masih milik domain
+    lain di server) -> urlopen gagal verifikasi -> beranda yang sudah terisi dicabut, situs
+    selesai sebagai halaman teks polos. Yang diperiksa di sini isi halaman, bukan sertifikat,
+    jadi verifikasi SSL dimatikan."""
+    import ssl
     url = (f'{situs_url(domain)}/{slug}/?preview=true' if slug
            else situs_url(domain) + '/')
+    konteks = ssl.create_default_context()
+    konteks.check_hostname = False
+    konteks.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=40) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=40, context=konteks) as r:
             halaman = r.read().decode(errors='replace')
     except Exception as e:
-        return False, f'beranda_tidak_terbuka:{type(e).__name__}'
+        return None, f'beranda_tidak_terbuka:{type(e).__name__}'
     if 'maintenance-shell' in halaman:
-        return False, 'beranda_masih_halaman_maintenance'
+        return None, 'beranda_masih_halaman_maintenance'
     import html as html_mod
     polos = html_mod.unescape(re.sub(r'<[^>]+>', ' ', halaman))
     polos = re.sub(r'\s+', ' ', polos)

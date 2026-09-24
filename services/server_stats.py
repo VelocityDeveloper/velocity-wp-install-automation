@@ -36,15 +36,20 @@ def memory():
     return {'used': used, 'total': total, 'percent': round(100 * used / total, 1)}
 
 
-def payload():
-    stat = os.statvfs('/')
+def disk(path):
+    stat = os.statvfs(path)
     total = stat.f_blocks * stat.f_frsize
     free = stat.f_bavail * stat.f_frsize
     used = total - free
+    return {'used': used, 'total': total, 'free': free, 'percent': round(100 * used / total, 1)}
+
+
+def payload():
     return {
         'cpu': cpu_percent(),
         'memory': memory(),
-        'disk': {'used': used, 'total': total, 'percent': round(100 * used / total, 1)},
+        'disk': disk('/'),
+        'disk_home': disk('/home'),
         'load': [round(x, 2) for x in os.getloadavg()],
         'uptime': round(float(open('/proc/uptime').read().split()[0])),
         'cores': os.cpu_count() or 1,
@@ -251,6 +256,143 @@ def backup_status():
     return out
 
 
+PROJECTS_FILE = os.environ.get('LOCAL_PROJECTS_FILE', '/opt/velocity-wp-install-automation/config/local-projects.json')
+_PROJECTS_CACHE = {'ts': 0.0, 'data': None}
+_PROJECTS_TTL = 10.0
+_PROJECTS_LOCK = threading.Lock()
+
+
+def _jalankan(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip()
+    except (subprocess.TimeoutExpired, OSError):
+        return ''
+
+
+def _layanan(nama):
+    keluaran = _jalankan(['/usr/bin/systemctl', 'show', f'{nama}.service', '--timestamp=unix',
+                          '--property=ActiveState', '--property=SubState',
+                          '--property=ActiveEnterTimestamp', '--property=MemoryCurrent'])
+    props = dict(l.split('=', 1) for l in keluaran.splitlines() if '=' in l)
+    mulai = props.get('ActiveEnterTimestamp', '').lstrip('@')
+    memori = props.get('MemoryCurrent', '')
+    return {
+        'nama': nama,
+        'aktif': props.get('ActiveState') == 'active',
+        'status': f"{props.get('ActiveState', '?')}/{props.get('SubState', '?')}",
+        'sejak': int(mulai) if mulai.isdigit() else None,
+        'memori': int(memori) if memori.isdigit() else None,
+    }
+
+
+def _cek_http(port):
+    # Tanpa mengikuti redirect: 302 ke halaman login berarti aplikasinya hidup.
+    mulai = time.monotonic()
+    try:
+        keluaran = subprocess.run(
+            ['/usr/bin/curl', '-s', '-o', '/dev/null', '-m', '4', '-A', 'velocity-dashboard/1.0',
+             '-w', '%{http_code}', f'http://127.0.0.1:{int(port)}/'],
+            capture_output=True, text=True, timeout=6).stdout.strip()
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        keluaran = ''
+    kode = int(keluaran) if keluaran.isdigit() else 0
+    return {'kode': kode, 'ms': round((time.monotonic() - mulai) * 1000)}
+
+
+def _git(folder):
+    if not os.path.isdir(os.path.join(folder, '.git')):
+        return None
+    git = ['/usr/bin/git', '-c', 'safe.directory=*', '-C', folder]
+    cabang = _jalankan(git + ['rev-parse', '--abbrev-ref', 'HEAD'])
+    akhir = _jalankan(git + ['log', '-1', '--format=%h%x1f%ct%x1f%s']).split('\x1f')
+    remote = re.sub(r'//[^@/]*@', '//', _jalankan(git + ['remote', 'get-url', 'origin']))
+    ubah = _jalankan(git + ['status', '--porcelain', '--untracked-files=no'])
+    return {
+        'cabang': cabang or None,
+        'commit': akhir[0] if len(akhir) == 3 else None,
+        'waktu': int(akhir[1]) if len(akhir) == 3 and akhir[1].isdigit() else None,
+        'pesan': akhir[2] if len(akhir) == 3 else None,
+        'remote': re.sub(r'\.git$', '', remote) or None,
+        'berubah': len(ubah.splitlines()) if ubah else 0,
+    }
+
+
+def _periksa_project(p):
+    hasil = dict(p)
+    hasil['layanan'] = [_layanan(n) for n in p.get('layanan', [])]
+    hasil['http'] = _cek_http(p['port']) if p.get('port') else None
+    hasil['git'] = _git(p['folder']) if p.get('folder') else None
+    return hasil
+
+
+def projects_status():
+    """Project yang berjalan di Local PC: identitas dari PROJECTS_FILE, status diperiksa langsung."""
+    with _PROJECTS_LOCK:
+        if _PROJECTS_CACHE['data'] and time.time() - _PROJECTS_CACHE['ts'] < _PROJECTS_TTL:
+            return _PROJECTS_CACHE['data']
+        try:
+            with open(PROJECTS_FILE) as f:
+                daftar = json.load(f).get('projects', [])
+        except (OSError, ValueError) as e:
+            return {'error': f'daftar_project_tidak_terbaca: {e}', 'projects': []}
+        hasil = [None] * len(daftar)
+
+        def kerja(i, p):
+            hasil[i] = _periksa_project(p)
+        utas = [threading.Thread(target=kerja, args=(i, p)) for i, p in enumerate(daftar)]
+        for t in utas:
+            t.start()
+        for t in utas:
+            t.join()
+        data = {'projects': hasil, 'diperiksa': int(time.time())}
+        _PROJECTS_CACHE.update(ts=time.time(), data=data)
+        return data
+
+
+# Akun uji tiap project disimpan terpisah dari repo (berisi kata sandi), dibaca setiap
+# permintaan supaya suntingan dari dashboard langsung tampil tanpa menunggu cache status.
+PROJECTS_LOGIN_FILE = os.environ.get('LOCAL_PROJECTS_LOGIN_FILE', '/etc/velocity/secrets/local-projects-login.json')
+
+
+def projects_login():
+    try:
+        with open(PROJECTS_LOGIN_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def simpan_login(body):
+    pid = str(body.get('id', ''))
+    try:
+        with open(PROJECTS_FILE) as f:
+            ids = {p.get('id') for p in json.load(f).get('projects', [])}
+    except (OSError, ValueError):
+        ids = set()
+    if pid not in ids:
+        return 'project_tidak_dikenal'
+    path = str(body.get('path', '') or '').strip()[:200]
+    if path and not path.startswith('/'):
+        return 'path_harus_diawali_garis_miring'
+    akun = []
+    for a in body.get('akun') or []:
+        if not isinstance(a, dict):
+            return 'akun_tidak_valid'
+        baris = {k: str(a.get(k, '') or '').strip()[:200] for k in ('peran', 'user', 'sandi')}
+        if baris['user'] or baris['sandi']:
+            akun.append(baris)
+    if len(akun) > 20:
+        return 'akun_terlalu_banyak'
+    semua = projects_login()
+    semua[pid] = {'path': path, 'akun': akun}
+    sementara = PROJECTS_LOGIN_FILE + '.tmp'
+    with open(os.open(sementara, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+        json.dump(semua, f, ensure_ascii=False, indent=2)
+    os.replace(sementara, PROJECTS_LOGIN_FILE)
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, status, data):
         body = json.dumps(data, separators=(',', ':')).encode()
@@ -269,6 +411,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/backup':
             self.json_response(200, backup_status())
             return
+        if path == '/api/projects':
+            data = dict(projects_status())
+            login = projects_login()
+            data['projects'] = [{**p, 'login': login.get(p['id'])} for p in data.get('projects', [])]
+            self.json_response(200, data)
+            return
         if path == '/api/stats/history':
             self.json_response(200, history((parse_qs(query).get('range') or ['1h'])[0]))
             return
@@ -278,6 +426,9 @@ class Handler(BaseHTTPRequestHandler):
         self.json_response(200, payload())
 
     def do_POST(self):
+        if self.path == '/api/projects/login':
+            self.simpan_login()
+            return
         if self.path not in ('/api/shutdown', '/api/restart'):
             self.send_error(404)
             return
@@ -300,6 +451,32 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.json_response(202, {'status': 'restart_scheduled'})
             subprocess.Popen(['/usr/bin/systemctl', 'reboot'], start_new_session=True)
+
+    def simpan_login(self):
+        # Sama dengan kontrol daya: hanya dari LAN/Tailscale dan dari halaman dashboard sendiri.
+        try:
+            client = ip_address(self.headers.get('X-Real-IP', self.client_address[0]))
+        except ValueError:
+            client = None
+        origin = self.headers.get('Origin', '')
+        origin_host = urlsplit(origin).hostname if origin else None
+        host = self.headers.get('Host', '').split(':', 1)[0]
+        if client is None or not any(client in network for network in LAN_NETWORKS) or origin_host != host:
+            self.json_response(403, {'error': 'forbidden'})
+            return
+        try:
+            panjang = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(min(panjang, 65536)) or b'{}') if panjang <= 65536 else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            self.json_response(400, {'error': 'body_tidak_valid'})
+            return
+        galat = simpan_login(body)
+        if galat:
+            self.json_response(400, {'error': galat})
+            return
+        self.json_response(200, {'ok': True, 'login': projects_login().get(body['id'])})
 
     def log_message(self, *_):
         pass

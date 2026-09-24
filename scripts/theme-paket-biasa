@@ -159,7 +159,10 @@ def foto_klien(domain):
                 w, h = ImageOps.exif_transpose(im).size
         except Exception:
             continue
-        if min(w, h) >= 500:
+        # 400 px (bukan 500): foto proyek kiriman WhatsApp yang ditempel di Word umumnya ±470x600
+        # (cahayaratupetir.com 2026-09-24: ambang 500 membuang 33 dari 36 foto klien). Banner tetap
+        # memakai foto lanskap terbesar karena urutan di bawah.
+        if min(w, h) >= 400:
             hasil.append((p, w, h))
     # Lanskap besar dulu untuk banner.
     return sorted(hasil, key=lambda x: (x[1] / x[2] < 1.2, -(x[1] * x[2])))
@@ -307,6 +310,11 @@ def susun(domain, cfg, isi, kontak):
     }
 
 
+# Banner (.velocity-banner-*) & gambar selebar layar (div.text-center.my-5>img.w-100): velocity-perusahaan1
+# menaruh kotak teks banner start-10 + w-100 (meluber ke kanan), judul 6.7vw !important (karena itu
+# aturan di bawah juga !important), dan banner kedua setinggi fotonya — dengan
+# judul panjang & foto potret klien, subjudul tertimpa kartu layanan dan foto setinggi ±1.366 px
+# (cahayaratupetir.com 2026-09-24).
 CSS = '''/* velocity-tampilan-klasik */
 .vk-kartu{border:1px solid var(--bs-border-color-translucent);border-top:3px solid var(--bs-primary);border-radius:var(--bs-border-radius);padding:1rem;background:#fff;margin:1rem 0}
 .vk-kartu h2{font-size:1.1rem;margin:0 0 .6rem}
@@ -347,6 +355,11 @@ ul.vk-sosmed>li::before{content:none!important}
 @media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:767.98px){.navigation-brand-logo img,.custom-logo-link img{max-height:64px}}
 @media (max-width:575.98px){.home-wrapper .position-relative.overflow-hidden>.position-absolute .col-md-7{max-width:78%}.velocity-home-title{font-size:17px;line-height:23px;margin-bottom:.25rem!important}.velocity-home-desc{display:none}}
+.velocity-banner-title,.velocity-banner-subtitle{max-width:min(80%,900px);padding-right:1rem}
+.velocity-banner-title{font-size:clamp(1.4rem,3.6vw,3.1rem)!important;line-height:1.15}
+.velocity-banner-subtitle{font-size:clamp(.9rem,1.3vw,1.2rem)!important;line-height:1.45}
+div.text-center.my-5>img.w-100{max-height:min(460px,40vw);object-fit:cover}
+@media (max-width:575.98px){.velocity-banner-subtitle{display:none}}
 /* /velocity-tampilan-klasik */'''
 
 
@@ -1047,6 +1060,10 @@ def main():
         if lulus:
             at.simpan_adaptor(info, {**catatan_ai, 'status': 'terverifikasi', 'alasan': ''})
             print('tampilan: adaptor_ai_terverifikasi')
+        elif lulus is None:
+            # Beranda tak terjangkau (SSL/jaringan/maintenance) bukan bukti adaptornya salah:
+            # hasil dibiarkan terpasang, status adaptor tidak diubah.
+            print(f'tampilan: adaptor_ai_tidak_bisa_diperiksa:{alasan}')
         else:
             print(f'tampilan: adaptor_ai_gagal_diperiksa:{alasan}')
             (kerja / 'data.json').write_text(json.dumps({'tema': tema}))
