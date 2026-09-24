@@ -645,6 +645,16 @@ if ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
     $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
 }
 $kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
+// Tema dengan acuan footer sendiri (velocity-toko21: kosong, persis demo — keputusan user 2026-09-24):
+// widget footer buatan installer/bawaan WordPress dicabut, footer hanya hak cipta dari tema.
+if (function_exists('velocity_tema_widget_footer') && !velocity_tema_widget_footer()) {
+    foreach (['footer-widget-1', 'footer-widget-2', 'footer-widget-3', 'footer-widget-4'] as $id) {
+        if (!isset($wp_registered_sidebars[$id]) || empty($sb[$id]) || !$boleh($sb[$id])) { continue; }
+        $hapus_bawaan($sb[$id]); $sb[$id] = []; $ubah[] = $id;
+    }
+    echo "tampilan: footer_acuan_tema:kosong\n";
+    $kaki = [];
+}
 foreach ($kaki as [$id, $k]) {
     if (!isset($wp_registered_sidebars[$id]) || !$boleh($sb[$id] ?? [])) { continue; }
     if (empty($W[$k])) {
