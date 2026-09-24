@@ -228,6 +228,8 @@ def setor(url, berkas_kunci, isi, sidik):
     except (OSError, urllib.error.URLError) as e:
         rinci = e.read(300).decode(errors="ignore") if isinstance(e, urllib.error.HTTPError) else ""
         print(f"setor gagal: {e} {rinci}", file=sys.stderr)
+        # sidik lama dipertahankan supaya dicoba lagi, tapi baru sesudah jeda (tidak tiap menit)
+        catatan.write_text(json.dumps({**st, "waktu": time.time(), "gagal": f"{e} {rinci}"[:300]}))
 
 
 def muat_json(p, bawaan):
