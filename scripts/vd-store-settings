@@ -10,6 +10,11 @@ VD Store (Katalog, Cek Ongkir, Profil Saya, Keranjang, Checkout, Terima Kasih, T
 Order). Halaman terbit yang sudah memuat shortcode-nya dipakai lebih dulu, jadi run ulang
 tidak membuat halaman ganda.
 
+VD Ongkir (keputusan user 2026-09-24): sesudah VD Store terpasang, rajaongkir_api_key diisi kunci
+VD Ongkir dari /etc/velocity/secrets/vd_ongkir_api_key (hanya bila masih kosong, isian PM tidak ditimpa),
+lalu asal pengiriman dicari lewat API ongkir dari isian form "asal pengiriman" (cadangan: alamat toko).
+Asal yang sudah terisi tidak ditimpa.
+
 Rekening (keputusan user 2026-09-24): nomor rekening kosong selalu diisi 123456789 a/n Rekening
 Contoh; tanpa bank di form dibuat satu rekening contoh BCA. "Profil Saya" = akun pelanggan, BUKAN Tentang Kami.
 """
@@ -27,6 +32,7 @@ sys.path.insert(0, str(HERE))
 from client_form import read_client_form
 
 ROOT = Path('/home/project')
+KUNCI_ONGKIR = Path('/etc/velocity/secrets/vd_ongkir_api_key')
 ON_PROGRESS = Path('/home/On Progress')
 
 def manifest(path):
@@ -98,11 +104,14 @@ def main():
         'banks': banks,
         'couriers': couriers,
         'categories': categories,
-        'origin_text': origin,
+        'origin_text': origin or kontak['address'],
+        'ongkir_key': KUNCI_ONGKIR.read_text().strip() if KUNCI_ONGKIR.is_file() else '',
         'province_id': cfg.get('shipping_origin_province_id', ''),
         'city_id': cfg.get('shipping_origin_city_id', ''),
         'subdistrict_id': cfg.get('shipping_origin_district_id', '') or cfg.get('shipping_origin_subdistrict_id', ''),
     }
+    if not data['ongkir_key']:
+        print(f'vd_store_settings: ongkir_api_key:tidak_ada:{KUNCI_ONGKIR}')
     key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     if not key or not Path(key).is_file():
         print('vd_store_settings: kunci SSH tidak ada')
@@ -146,14 +155,38 @@ if (!empty($d["couriers"])) {
   foreach($lama as $k=>$v){ $kk=is_string($k)&&isset($kl[$k])?$k:$kode($v); if($kk)$c[]=$kk; }
   foreach($d["couriers"] as $n){ $kk=$kode($n); if($kk)$c[]=$kk; else echo "kurir_tidak_dikenal:".$n."\n"; }
   $c=array_values(array_unique($c)); if($c)$s["shipping_couriers"]=$c; }
+// VD Ongkir (user 2026-09-24): kunci diisi bila kosong; kunci isian PM tidak ditimpa.
+if (trim((string)($s["rajaongkir_api_key"]??""))==="" && ($d["ongkir_key"]??"")!=="") { $s["rajaongkir_api_key"]=(string)$d["ongkir_key"]; echo "ongkir_api_key:diisi\n"; }
+if (trim((string)($s["rajaongkir_base_url"]??""))==="") $s["rajaongkir_base_url"]="https://ongkir.velocitydeveloper.co/api/v3";
 if ($d["province_id"]!=="" && $d["city_id"]!=="" && $d["subdistrict_id"]!=="") { $s["shipping_origin_province"]=(string)$d["province_id"]; $s["shipping_origin_city"]=(string)$d["city_id"]; $s["shipping_origin_subdistrict"]=(string)$d["subdistrict_id"]; echo "origin:manifest_ids\n"; }
-elseif ($d["origin_text"]!=="" && !empty($s["rajaongkir_api_key"])) {
-  $base=rtrim((string)($s["rajaongkir_base_url"]??"https://ongkir.velocitydeveloper.co/api/v3"),"/"); $h=["headers"=>["key"=>$s["rajaongkir_api_key"]],"timeout"=>20];
+elseif (trim((string)($s["shipping_origin_subdistrict"]??""))!=="") { echo "origin:sudah_ada:".$s["shipping_origin_subdistrict"]."\n"; }
+elseif ($d["origin_text"]==="") { echo "origin:dilewati:tanpa_alamat\n"; }
+elseif (empty($s["rajaongkir_api_key"])) { echo "origin:dilewati:tanpa_kunci_api\n"; }
+else {
+  // Cocokkan per KATA UTUH: semua kata nama wilayah harus ada di teks. Kata yang dipakai provinsi/kota
+  // dibuang sekali agar "Jawa Barat" tidak ikut memilih "Bandung Barat"; dulu pencocokan potongan kata
+  // membuat "Jawa Barat" jatuh ke "Nusa Tenggara Barat (NTB)" (provinsi pertama di daftar API).
+  $base=rtrim((string)$s["rajaongkir_base_url"],"/"); $h=["headers"=>["key"=>$s["rajaongkir_api_key"]],"timeout"=>20];
   $get=function($u)use($h){$r=wp_remote_get($u,$h);if(is_wp_error($r))return []; $j=json_decode(wp_remote_retrieve_body($r),true);return is_array($j["data"]??null)?$j["data"]:($j["rajaongkir"]["results"]??[]);};
-  $norm=function($v){return strtolower(preg_replace("/[^a-z0-9]+/i","",$v));}; $q=$norm($d["origin_text"]); $pick=function($rows,$need,$name)use($norm){foreach($rows as $x){$label=(string)($x["name"]??$x["province"]??$x["city_name"]??$x["subdistrict_name"]??"");if($label!==""&&($norm($label)===$need||strpos($norm($label),$need)!==false))return $x;}return null;};
-  $provs=$get($base."/destination/province"); $tokens=preg_split("/[^a-z0-9]+/i",strtolower($d["origin_text"]),-1,PREG_SPLIT_NO_EMPTY); $match=function($label)use($norm,$tokens){$n=$norm($label);foreach($tokens as $t){$t=$norm($t);if(strlen($t)>=4&&strpos($n,$t)!==false)return true;}return false;}; $p=null;
-  foreach($provs as $x){if($match((string)($x["name"]??$x["province"]??""))){$p=$x;break;}}
-  if($p){$pid=(string)($p["id"]??$p["province_id"]??"");$cities=$get($base."/destination/city/".$pid);foreach($cities as $x){$cid=(string)($x["id"]??$x["city_id"]??"");$ds=$get($base."/destination/district/".$cid);foreach($ds as $dist){if($match((string)($dist["name"]??$dist["subdistrict_name"]??""))){$s["shipping_origin_province"]=$pid;$s["shipping_origin_city"]=$cid;$s["shipping_origin_subdistrict"]=(string)($dist["id"]??$dist["subdistrict_id"]??"");echo "origin:api_lookup\n";break 2;}}}}
+  $abai=["kec","kecamatan","kota","kab","kabupaten","kel","kelurahan","desa","provinsi","prov","di","dki","dan","jl","jalan","no","rt","rw","kode","pos"];
+  $kata=function($v)use($abai){ $w=preg_split("/[^a-z0-9]+/",strtolower(preg_replace("/\([^)]*\)/"," ",(string)$v)),-1,PREG_SPLIT_NO_EMPTY); return array_values(array_filter($w,function($x)use($abai){return !in_array($x,$abai,true)&&!ctype_digit($x);})); };
+  $nama=function($x){return (string)($x["name"]??$x["province"]??$x["city_name"]??$x["subdistrict_name"]??"");};
+  $skor=function($n,$tok)use($kata){ $w=$kata($n); if(!$w)return 0; foreach($w as $x){ if(!in_array($x,$tok,true))return 0; } return count($w); };
+  $terbaik=function($rows,$tok)use($skor,$nama){ $b=null;$bs=0; foreach($rows as $x){ $k=$skor($nama($x),$tok); if($k>$bs){$bs=$k;$b=$x;} } return [$b,$bs]; };
+  $buang=function($n,$tok)use($kata){ foreach($kata($n) as $x){ $i=array_search($x,$tok,true); if($i!==false) array_splice($tok,$i,1); } return $tok; };
+  $tok=$kata($d["origin_text"]); $provs=$get($base."/destination/province");
+  list($p,)=$terbaik($provs,$tok); $tokP=$p?$buang($nama($p),$tok):$tok;
+  // Provinsi tak disebut: cari kotanya di semua provinsi (sekali jalan saat instalasi).
+  $pc=null;$c=null;$cs=0; foreach(($p?[$p]:$provs) as $pp){ $pid=(string)($pp["id"]??$pp["province_id"]??""); $cities=$get($base."/destination/city/".$pid); list($x,$k)=$terbaik($cities,$tokP); if($k>$cs){$cs=$k;$c=$x;$pc=$pp;} if($p&&!$c) $semua=$cities; }
+  $hasil=null;
+  if ($c) { $cid=(string)($c["id"]??$c["city_id"]??""); $ds=$get($base."/destination/district/".$cid); list($dist,)=$terbaik($ds,$buang($nama($c),$tokP)); if(!$dist) list($dist,)=$terbaik($ds,$tokP);
+    // Kecamatan tak disebut: perkiraan = kecamatan bernama kota (mis. TEGAL BARAT) atau yang pertama; PM mengecek.
+    if(!$dist&&$ds){ $kk=$kata($nama($c)); foreach($ds as $x){ if(array_intersect($kk,$kata($nama($x)))){$dist=$x;break;} } $dist=$dist?:$ds[0]; echo "origin:perkiraan:kecamatan_tidak_disebut\n"; }
+    if($dist) $hasil=[$pc,$c,$dist]; }
+  elseif ($p) { $bs=0; foreach(($semua??[]) as $cc){ $ds=$get($base."/destination/district/".(string)($cc["id"]??$cc["city_id"]??"")); list($x,$k)=$terbaik($ds,$tokP); if($k>$bs){$bs=$k;$hasil=[$p,$cc,$x];} } }
+  if ($hasil) { list($hp,$hc,$hd)=$hasil; $s["shipping_origin_province"]=(string)($hp["id"]??$hp["province_id"]??""); $s["shipping_origin_city"]=(string)($hc["id"]??$hc["city_id"]??""); $s["shipping_origin_subdistrict"]=(string)($hd["id"]??$hd["subdistrict_id"]??"");
+    echo "origin:api_lookup:".$nama($hd)." / ".$nama($hc)." / ".$nama($hp)."\n"; }
+  else { echo "origin:tidak_ditemukan:".$d["origin_text"]."\n"; }
 }
 update_option("wp_store_settings",$s);
 // Halaman toko (Pengaturan VD Store > Halaman > generate), keputusan user 2026-09-17. Halaman terbit yang sudah

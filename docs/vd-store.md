@@ -53,6 +53,19 @@ Alur installer paket Toko Online **biasa** (child theme klasik, bukan FSE), `scr
 Situs yang sudah ter-deploy (log berisi `SUCCESS: COMPLETE`) dilewati langkah 2–4 dan aturan logo
 baru; `toko-biasa --paksa` hanya dengan persetujuan user.
 
+## VD Ongkir & asal pengiriman (keputusan user 2026-09-24)
+
+Semua paket toko online (custom maupun biasa), sesudah VD Store terpasang, `scripts/vd-store-settings`:
+
+- mengisi `wp_store_settings.rajaongkir_api_key` dengan kunci VD Ongkir dari
+  `/etc/velocity/secrets/vd_ongkir_api_key` (base URL `https://ongkir.velocitydeveloper.co/api/v3`)
+  — hanya bila masih kosong, kunci isian PM tidak ditimpa; log `ongkir_api_key:diisi`;
+- mengisi asal pengiriman (`shipping_origin_province/city/subdistrict`): ID manifest
+  `shipping_origin_*_id` bila ada, selain itu dicari lewat API dari isian form "asal pengiriman"
+  (cadangan: alamat toko). Pencocokan per kata utuh provinsi → kota → kecamatan; kecamatan tak disebut
+  → perkiraan (kecamatan bernama kota / pertama, log `origin:perkiraan`). Asal yang sudah terisi tidak
+  ditimpa. Log: `origin:api_lookup:<kec> / <kota> / <prov>`, `origin:tidak_ditemukan:<teks>`.
+
 ## Menampilkan produk
 
 Selalu lewat shortcode VD Store (blok `core/shortcode`):

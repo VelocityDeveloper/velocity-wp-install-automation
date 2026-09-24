@@ -158,13 +158,15 @@
       // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
       // Dua simpul berpenanda log sama, dibedakan cabang paketnya. Simpul toko custom di baris -1
       // supaya garis Paket G / Portal ke "Baca referensi" tidak menembus kotak.
-      { id: 'vdstoreCustom', kol: 6, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
+      { id: 'vdstoreCustom', kol: 6, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
         selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
-        ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
+        ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t)
+          ? 'plugin, pengaturan & halaman toko siap' + (/origin:api_lookup/.test(t) ? ', asal kirim terisi' : /origin:tidak_ditemukan/.test(t) ? ', asal kirim belum' : '')
           : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoCustom) },
-      { id: 'vdstore', kol: 8, jalur: 4, nama: 'VD Store', ket0: 'plugin, pengaturan & halaman toko', mulai: /\] VD Store$/,
+      { id: 'vdstore', kol: 8, jalur: 4, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
         selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
-        ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'plugin, pengaturan & halaman toko siap'
+        ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t)
+          ? 'plugin, pengaturan & halaman toko siap' + (/origin:api_lookup/.test(t) ? ', asal kirim terisi' : /origin:tidak_ditemukan/.test(t) ? ', asal kirim belum' : '')
           : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
       // Toko Online biasa (2026-09-23, scripts/toko-biasa): menu toko sesudah halaman VD Store digenerate,
       // produk dari folder produk klien (atau 5 contoh) sesudah finishing. Situs lama dilewati.
