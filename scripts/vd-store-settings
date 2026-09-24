@@ -8,7 +8,10 @@ Halaman toko (keputusan user 2026-09-17): sesudah pengaturan disimpan, halaman d
 Pengaturan VD Store > Halaman dibuat lewat SettingsController::generate_pages() milik
 VD Store (Katalog, Cek Ongkir, Profil Saya, Keranjang, Checkout, Terima Kasih, Tracking
 Order). Halaman terbit yang sudah memuat shortcode-nya dipakai lebih dulu, jadi run ulang
-tidak membuat halaman ganda. "Profil Saya" = akun pelanggan, BUKAN Tentang Kami.
+tidak membuat halaman ganda.
+
+Rekening (keputusan user 2026-09-24): nomor rekening kosong selalu diisi 123456789 a/n Rekening
+Contoh; tanpa bank di form dibuat satu rekening contoh BCA. "Profil Saya" = akun pelanggan, BUKAN Tentang Kami.
 """
 import base64
 import json
@@ -123,6 +126,15 @@ if (!empty($d["banks"])) {
     $ada=false; foreach($a as $x){ if(($x["bank_name"]??"")===$baru["bank_name"]&&(string)($x["custom_bank_name"]??"")===$baru["custom_bank_name"]){$ada=true;break;} }
     if(!$ada) $a[]=$baru+["bank_logo_id"=>0,"bank_account"=>"","bank_holder"=>""]; }
   $s["payment_methods"]=array_values(array_unique(array_merge((array)($s["payment_methods"]??[]),["bank_transfer"]))); $s["store_bank_accounts"]=$a; }
+// Rekening belum ada (keputusan user 2026-09-24): nomor kosong SELALU diisi 123456789 a/n Rekening Contoh,
+// dan tanpa bank sama sekali dibuat satu rekening contoh BCA — penanda yang diganti PM, bukan data asli.
+$rek=array_values(array_filter((array)($s["store_bank_accounts"]??[]),"is_array"));
+if(!$rek){ $rek[]=["bank_name"=>"BCA","custom_bank_name"=>"","bank_logo_id"=>0,"bank_account"=>"","bank_holder"=>""];
+  $s["payment_methods"]=array_values(array_unique(array_merge((array)($s["payment_methods"]??[]),["bank_transfer"]))); }
+foreach($rek as $i=>$x){ if(trim((string)($x["bank_account"]??""))===""){ $rek[$i]["bank_account"]="123456789";
+    if(trim((string)($x["bank_holder"]??""))==="") $rek[$i]["bank_holder"]="Rekening Contoh";
+    echo "rekening_contoh:".($x["bank_name"]??"")."\n"; } }
+$s["store_bank_accounts"]=$rek;
 if (!empty($d["couriers"])) {
   // shipping_couriers = DAFTAR KODE kurir VD Store (wp_store_courier_labels: jne, tiki, sicepat, jnt, ...).
   // Dulu tersimpan {"jne":"JNE"}: admin mencentang lewat in_array(kode, nilai) -> semua kurir tampak mati,

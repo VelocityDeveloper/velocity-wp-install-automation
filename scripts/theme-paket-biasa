@@ -622,7 +622,21 @@ $hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, $mi
 };
 $W = $d['widget']; $semua = []; $ubah = [];
 $utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isset($wp_registered_sidebars['sidebar-1']) ? 'sidebar-1' : '');
-if ($utama && $boleh($sb[$utama] ?? [])) {
+// Tema yang membawa susunan widget acuannya sendiri (velocity-toko21: Kategori, Cari Produk, Bank,
+// Ekspedisi, Sosial Media, Hubungi Kami — sama dengan demo toko21.velocitydeveloper.com, keputusan
+// user 2026-09-24) memakai susunan itu, bukan widget umum konsultasi/layanan/artikel.
+$acuan = function_exists('velocity_tema_widget_sidebar') ? (array) velocity_tema_widget_sidebar() : [];
+if ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
+    $hapus_bawaan($sb[$utama] ?? []);
+    $baru = [];
+    foreach ($acuan as [$judul, $isi]) {
+        $n = 300; while (isset($tx[$n])) { $n++; }
+        $tx[$n] = ['title' => $judul, 'text' => $isi, 'filter' => false, 'visual' => false];
+        $baru[] = "text-$n";
+    }
+    $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
+    echo 'tampilan: widget_sidebar_acuan_tema:' . count($baru) . "\n";
+} elseif ($utama && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
     $baru = empty($W['konsultasi']) ? [] : [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
     if (!empty($W['layanan'])) { $baru[] = $buat_html($W['layanan'][0], $W['layanan'][1]); }
