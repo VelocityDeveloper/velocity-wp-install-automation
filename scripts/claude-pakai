@@ -221,6 +221,9 @@ def setor(url, berkas_kunci, isi, sidik):
             "Authorization": "Bearer " + kunci,
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # WAJIB: LiteSpeed WAF hosting memblokir IP kantor 10 menit ke SEMUA situs
+            # servernya bila melihat UA bawaan skrip (Python-urllib) — kejadian 24 Sep 2026.
+            "User-Agent": "velocity-claude-pakai/1.0 (+Local PC kantor)",
         })
         with urllib.request.urlopen(req, timeout=30) as r:
             jawab = r.read(300).decode(errors="ignore")
