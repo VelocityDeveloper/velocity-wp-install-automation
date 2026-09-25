@@ -162,7 +162,8 @@ def take(domain, journal):
         return f"klaim_gagal:{res.get('error') or code}"
     journal[domain] = {'phase': 'claimed', 'claimed_at': utcnow().isoformat()}
     write_json(JOURNAL, journal)
-    code, res = api('POST', '/api/installer/generate', {'domain': domain})
+    # Generate ikut membaca form lewat agen Claude (scripts/baca-form-claude, s.d. 5 menit).
+    code, res = api('POST', '/api/installer/generate', {'domain': domain}, timeout=480)
     if code != 200:
         return f"generate_gagal:{res.get('error') or code}"
     started = utcnow().isoformat()

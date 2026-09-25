@@ -8,7 +8,9 @@ sebaliknya: .docx, .doc (OLE), .odt, PDF berteks.
 fields = "Label: isi" (parse_fields) + isian di bawah judul bagian template
 (parse_sections, audit 2026-09-24) yang hanya mengisi label yang belum ada.
 """
+import hashlib
 import html
+import json
 import re
 import subprocess
 import zipfile
@@ -279,11 +281,96 @@ def parse_sections(lines):
     return hasil
 
 
-def read_client_form(folder):
-    """Gabungan teks + field terurai dari semua form di folder project."""
+# Hasil baca agen Claude Code (scripts/baca-form-claude, keputusan user 2026-09-25): per folder proyek,
+# berlaku selama md5 berkas form sama.
+FORM_CLAUDE = Path('/var/lib/velocity/form-claude')
+
+
+def berkas_form(folder):
     folder = Path(folder)
-    docs = sorted(p for p in folder.glob('*')
-                  if p.is_file() and p.name.upper().startswith('FORM ISIAN'))
+    if not folder.is_dir():
+        return []
+    return sorted(p for p in folder.glob('*') if p.is_file() and p.name.upper().startswith('FORM ISIAN'))
+
+
+def md5_form(berkas):
+    h = hashlib.md5()
+    for p in berkas:
+        h.update(p.name.encode())
+        h.update(p.read_bytes())
+    return h.hexdigest() if berkas else ''
+
+
+def hasil_claude(folder, berkas=None):
+    """Data terstruktur hasil baca agen Claude untuk folder ini, atau None (belum dibaca / form berubah)."""
+    folder = Path(folder)
+    berkas = berkas_form(folder) if berkas is None else berkas
+    try:
+        simpan = json.loads((FORM_CLAUDE / f'{folder.name.lower()}.json').read_text())
+    except (OSError, ValueError):
+        return None
+    data = simpan.get('data')
+    return data if isinstance(data, dict) and berkas and simpan.get('md5') == md5_form(berkas) else None
+
+
+def fields_dari_claude(d):
+    """Data agen -> label field yang dipakai skrip lama (data_klien, judul situs manifest, site-finish,
+    vd-store-settings, paket-g-konten, AI konten). Urutan penting: pemakai mengambil label cocok pertama."""
+    def teks(x):
+        return ' '.join(str(x or '').split()) if not isinstance(x, str) or '\n' not in x else str(x).strip()
+    kontak = d.get('kontak_web') or {}
+
+    def nomor(n):
+        # "+62 857 9608 5227" / "0812-3456-789": tanpa spasi & strip supaya dikenali nomor_wa (allikan.com).
+        return re.sub(r'(?<=\d)[\s.-]+(?=\d)', '', re.sub(r'^\+62[\s.-]+', '+62', str(n).strip()))
+    # Alamat tanpa label: alamat_kontak_web mengambil baris beralamat apa adanya.
+    baris_kontak = [f'WA: {nomor(n)}' for n in kontak.get('wa') or []] + [f'Telp: {nomor(n)}' for n in kontak.get('telepon') or []] \
+        + [f'Email: {e}' for e in kontak.get('email') or []] + ([kontak['alamat']] if kontak.get('alamat') else []) \
+        + ([f"Maps: {kontak['maps']}"] if kontak.get('maps') else []) \
+        + [f"{x.get('jenis', '')}: {x.get('url', '')}" for x in kontak.get('sosmed') or [] if x.get('url')]
+    bio = d.get('biodata') or {}
+    toko = d.get('toko') or {}
+    warna = d.get('warna') or {}
+    ref = [r.get('url', '') + (f" ({r['catatan']})" if r.get('catatan') else '') for r in d.get('referensi_desain') or []]
+    ref_isi = [r.get('url', '') + (f" ({r['catatan']})" if r.get('catatan') else '') for r in d.get('referensi_konten') or []]
+    pasangan = [
+        ('Nama Perusahaan / Instansi', d.get('nama_usaha')), ('Slogan', d.get('slogan')), ('Domain', d.get('domain')),
+        ('Kontak untuk di web', '\n'.join(baris_kontak) or kontak.get('teks')),
+        ('Paket Website Yang Anda Pilih', d.get('paket')),
+        ('Susunan menu atas', ', '.join(d.get('menu_atas') or [])), ('Isi menu atas', d.get('isi_menu')),
+        ('Desain yang dipilih', d.get('desain_dipilih')), ('Website referensi', '\n'.join(ref)),
+        ('Referensi konten', '\n'.join(ref_isi)), ('Konsep desain sendiri', d.get('konsep_desain')),
+        # Kata warna saja (pick_colors mencari kata warna); kalimat klien tetap di label kedua.
+        ('Warna tema web', ', '.join(warna.get('warna') or [])), ('Keterangan warna', warna.get('teks')),
+        ('Nama Toko', toko.get('nama_toko')), ('Bank pembayaran', toko.get('bank')),
+        ('Asal pengiriman', toko.get('asal_pengiriman')), ('Ekspedisi pengiriman', toko.get('ekspedisi')),
+        ('Kategori Produk', toko.get('kategori_produk')), ('Ongkir otomatis', toko.get('ongkir_otomatis')),
+        ('Layanan / produk', d.get('layanan_produk')), ('Data tambahan', d.get('data_tambahan')),
+        ('Pesan tambahan', d.get('pesan_tambahan')),
+        # Biodata pemilik (administrasi) — label sama dengan form supaya penyaring data pemilik tetap bekerja.
+        ('Nama anda', bio.get('nama')), ('Nama Perusahaan', bio.get('nama_perusahaan')),
+        ('Alamat lengkap', bio.get('alamat')), ('Kota/ Kabupaten', bio.get('kota')), ('Propinsi', bio.get('provinsi')),
+        ('Kodepos', bio.get('kodepos')), ('WhatsApp', nomor(bio.get('wa') or '')), ('Email', bio.get('email')),
+    ]
+    fields = {k: teks(v) for k, v in pasangan if teks(v)}
+    if d.get('tolak_biodata_tampil'):
+        fields['Biodata tidak boleh tampil'] = 'ya'
+    # Rubrik portal berita: paket-g-konten mengenalinya dari isi "berisi berita ...".
+    for r in d.get('rubrik') or []:
+        nama = teks(r.get('nama'))
+        if nama and nama.lower() not in {k.lower() for k in fields}:
+            isi = teks(r.get('isi'))
+            fields[nama.upper()] = isi if re.search(r'berisi\s+(berita|artikel|info)', isi, re.I) else f'berisi berita {isi or nama.lower()}'.strip()
+    return fields
+
+
+def read_client_form(folder):
+    """Gabungan teks + field terurai dari semua form di folder project.
+
+    Sumber field: hasil baca agen Claude (scripts/baca-form-claude) bila ada & form tidak berubah;
+    tanpa itu pengurai pola (parse_fields + parse_sections). 'sumber' = 'claude' | 'pola'."""
+    folder = Path(folder)
+    docs = berkas_form(folder)
     text, fields, unread = [], {}, []
     for doc in docs:
         lines = extract_text(doc)
@@ -299,7 +386,19 @@ def read_client_form(folder):
         for k, v in parse_sections(lines).items():
             if k.lower() not in ada:
                 fields.setdefault(k, v)
-    return {'text': '\n'.join(text), 'fields': fields, 'unreadable': unread}
+    data = hasil_claude(folder, docs)
+    if data is None:
+        return {'text': '\n'.join(text), 'fields': fields, 'unreadable': unread, 'sumber': 'pola', 'data': None}
+    # Agen yang menentukan isian klien; field pola hanya pelengkap label yang tidak dikenal skema
+    # (mis. "Tiktok", "Maps"), tanpa rubrik/warna/kontak/nama versi pola yang bisa berupa contoh template.
+    hasil = fields_dari_claude(data)
+    kunci = {k.lower() for k in hasil}
+    for k, v in fields.items():
+        if k.lower() in kunci or re.search(r'berisi\s+(berita|artikel|info)', v, re.I) \
+                or re.search(r'^(nama|warna|kontak|slogan|email|e-mail|alamat|kota|prop|kode ?pos|hp|telp|wa|whats)', k, re.I):
+            continue
+        hasil[k] = v
+    return {'text': '\n'.join(text), 'fields': hasil, 'unreadable': unread, 'sumber': 'claude', 'data': data}
 
 
 # Kalimat bawaan template di bagian PESAN TAMBAHAN (bukan tulisan klien).

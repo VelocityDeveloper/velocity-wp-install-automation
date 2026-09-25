@@ -92,38 +92,49 @@
     const SIMPUL = [
       { id: 'validasi', kol: 0, jalur: 1, nama: 'Validasi manifest', mulai: /\] RUNNING: VALIDATING/, selesai: /\] RUNNING: RUNNING_INSTALLER/,
         gagal: /\] FAILED: manifest_missing/, aktif: () => true },
-      { id: 'mode', kol: 1, jalur: 1, cek: true, nama: 'Mode run?', mulai: /\] RUNNING: VALIDATING/, aktif: () => true,
+      // Form klien dibaca agen Claude Code (keputusan user 2026-09-25, scripts/baca-form-claude): isian klien
+      // dipisah dari teks template, hasil disimpan per isi form & dipakai semua langkah sesudahnya.
+      { id: 'bacaForm', kol: 1, jalur: 1, nama: 'Baca form klien', ket0: 'dikerjakan agen Claude',
+        mulai: /\] Baca form klien \(agen Claude\)/, selesai: /\] Baca form klien \(agen Claude\): form_claude: (baru|tetap|tanpa_form|lewati)/,
+        gagal: /\] Baca form klien \(agen Claude\): form_claude: gagal/,
+        ketHasil: t => { const m = /form_claude: (baru|tetap|tanpa_form|lewati|gagal)(?: nama='([^']*)')?/.exec(t);
+          return !m ? null : m[1] === 'baru' ? 'dibaca agen Claude' + (m[2] ? ': ' + m[2] : '')
+            : m[1] === 'tetap' ? 'hasil baca agen Claude (form tidak berubah)'
+            : m[1] === 'tanpa_form' ? 'form tidak ada'
+            : m[1] === 'lewati' ? 'dimatikan, pakai pengurai pola' : 'gagal, pakai pengurai pola'; },
+        aktif: () => true },
+      { id: 'mode', kol: 2, jalur: 1, cek: true, nama: 'Mode run?', mulai: /\] RUNNING: VALIDATING/, aktif: () => true,
         ket: c => ({ 'dry-run': 'dry run', apply: 'apply', finish: 'finish' }[c.mode] || 'menunggu') },
-      { id: 'terpasang', kol: 2, jalur: 0, nama: 'WordPress sudah ada', ket0: 'mode finish, tanpa install', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+      { id: 'terpasang', kol: 3, jalur: 0, nama: 'WordPress sudah ada', ket0: 'mode finish, tanpa install', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /http_check:/, aktif: hanyaMode('finish') },
-      { id: 'install', kol: 2, jalur: 1, nama: 'Install WordPress', ket0: 'paket terbaru (API/GitHub), SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+      { id: 'install', kol: 3, jalur: 1, nama: 'Install WordPress', ket0: 'paket terbaru (API/GitHub), SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /install_complete|http_check:/, gagal: /remote_failed/, aktif: hanyaMode('apply') },
-      { id: 'server', kol: 2, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+      { id: 'server', kol: 3, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /"dry_run":"ok"|\] SUCCESS: DRY_RUN_OK/, gagal: /remote_not_ready|"status":"error"/,
         ketHasil: t => (/"dry_run":"ok"/.test(t) ? 'server tujuan siap' : null), aktif: hanyaMode('dry-run') },
-      { id: 'dryselesai', kol: 3, jalur: 3, nama: 'Selesai dry run', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: DRY_RUN_OK/,
+      { id: 'dryselesai', kol: 4, jalur: 3, nama: 'Selesai dry run', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: DRY_RUN_OK/,
         gagal: /\] FAILED: /, aktif: hanyaMode('dry-run') },
-      { id: 'http', kol: 3, jalur: 1, nama: 'Cek HTTP situs', ket0: 'aset inti WordPress', mulai: /http_check:/, selesai: /http_check: 200/,
+      { id: 'http', kol: 4, jalur: 1, nama: 'Cek HTTP situs', ket0: 'aset inti WordPress', mulai: /http_check:/, selesai: /http_check: 200/,
         gagal: /http_check: (?!200)\d+/, aktif: tanpaDry },
       // Sertifikat SSL (permintaan user 2026-09-23, scripts/site-ssl): diterbitkan lewat
       // letsencrypt.sh DirectAdmin sebelum tema/konten/QA. DNS belum mengarah ke server =
       // dilewati dengan catatan, bukan gagal.
-      { id: 'ssl', kol: 4, jalur: 1, nama: 'Terbitkan SSL', ket0: 'Let\'s Encrypt lewat DirectAdmin',
+      { id: 'ssl', kol: 5, jalur: 1, nama: 'Terbitkan SSL', ket0: 'Let\'s Encrypt lewat DirectAdmin',
         mulai: /\] Terbitkan SSL$/, selesai: /^ssl: (terbit|sudah_ada|dilewati|gagal)/,
         gagal: /^ssl: gagal/, ketHasil: hasilSsl, aktif: tanpaDry },
-      { id: 'paket', kol: 5, jalur: 1, cek: true, nama: 'Cek paket', mulai: /http_check: 200/, aktif: tanpaDry,
+      { id: 'paket', kol: 6, jalur: 1, cek: true, nama: 'Cek paket', mulai: /http_check: 200/, aktif: tanpaDry,
         ket: (c, row) => row.paket || 'paket tidak terbaca' },
       // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
       // di installer-runner): hasilnya (fse-rencana/<domain>/desain-referensi.json) jadi acuan utama
       // tata letak & gaya beranda, jadi langkah ini berdiri sendiri di bagan.
-      { id: 'referensi', kol: 7, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah — bahan agen Claude',
+      { id: 'referensi', kol: 8, jalur: 0, nama: 'Baca referensi', ket0: 'ukur DOM, menu & wadah — bahan agen Claude',
         mulai: /Paket custom: cek referensi desain di form/, selesai: /referensi: (ada:|tidak_ada|gagal:)/,
         gagal: /referensi: gagal:/, ketHasil: hasilReferensi, aktif: c => dan(tanpaDry(c), c.custom) },
       // Keputusan user 2026-09-21: DESAIN_CLAUDE=1 + referensi ada -> langkah ini dikerjakan agen
       // Claude (desain-claude --tahap=tema): fse-apply --tema memasang dasar velocity-fse + palet,
       // lalu agen menyusun header, footer & CSS dari referensi. Selesai = baris akhir
       // `desain_claude_tema:`; tanpa agen, selesai saat gerbang "Sesuai referensi?" mulai.
-      { id: 'fse', kol: 8, jalur: 0, nama: 'Tema FSE', ket0: 'referensi ada: agen Claude; lainnya velocity-fse',
+      { id: 'fse', kol: 9, jalur: 0, nama: 'Tema FSE', ket0: 'referensi ada: agen Claude; lainnya velocity-fse',
         mulai: /Paket custom: (tema FSE|tema dilewati)/,
         selesai: /desain_claude_tema: (sesuai|belum_mirip|ditolak|lewati|gagal)|tema dilewati/,
         lewati: /Paket custom: tema dilewati/, ketHasil: hasilTemaAgen,
@@ -131,7 +142,7 @@
       // Gerbang sebelum konten AI (keputusan user 2026-09-16): hasil langkah tema dibandingkan dengan
       // rencana referensi desain klien (scripts/fse-cek-referensi). Belum sesuai -> balik ke langkah
       // tema (maks FSE_CEK_MAKS percobaan), sesuai -> lanjut. Log: `fse_cek: sesuai|belum_sesuai:...`.
-      { id: 'cekTema', kol: 9, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse_cek: |tema dilewati/,
+      { id: 'cekTema', kol: 10, jalur: 0, cek: true, nama: 'Sesuai referensi?', mulai: /fse_cek: |tema dilewati/,
         aktif: c => dan(tanpaDry(c), c.custom),
         ket: (c, row) => {
           const t = (row.log || []).join('\n');
@@ -144,38 +155,38 @@
           if (/fse_cek: (gagal|tidak bisa)/.test(t)) return 'tidak bisa diperiksa';
           return 'menunggu';
         } },
-      { id: 'childF', kol: 7, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
+      { id: 'childF', kol: 8, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
-      { id: 'childToko', kol: 7, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
+      { id: 'childToko', kol: 8, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
       // Paket E: temanya ditentukan paketnya sendiri (velocity-pakete), bukan referensi di form,
       // dan sudah aktif sebelum konten AI ditulis (keputusan user 2026-09-16).
-      { id: 'childE', kol: 7, jalur: 2, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
+      { id: 'childE', kol: 8, jalur: 2, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.e) },
-      { id: 'childLain', kol: 7, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi (demo / web luar) ada di API', mulai: CHILD_THEME,
+      { id: 'childLain', kol: 8, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi (demo / web luar) ada di API', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko)) },
       // VD Store (keputusan user 2026-09-17): Toko Online Custom memasang & mengatur VD Store DULU,
       // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
       // Dua simpul berpenanda log sama, dibedakan cabang paketnya. Simpul toko custom di baris -1
       // supaya garis Paket G / Portal ke "Baca referensi" tidak menembus kotak.
-      { id: 'vdstoreCustom', kol: 6, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
+      { id: 'vdstoreCustom', kol: 7, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
         selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
         ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t)
           ? 'plugin, pengaturan & halaman toko siap' + (/origin:api_lookup/.test(t) ? ', asal kirim terisi' : /origin:tidak_ditemukan/.test(t) ? ', asal kirim belum' : '')
           : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoCustom) },
-      { id: 'vdstore', kol: 8, jalur: 4, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
+      { id: 'vdstore', kol: 9, jalur: 4, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
         selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
         ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t)
           ? 'plugin, pengaturan & halaman toko siap' + (/origin:api_lookup/.test(t) ? ', asal kirim terisi' : /origin:tidak_ditemukan/.test(t) ? ', asal kirim belum' : '')
           : /vd_store: selesai/.test(t) ? 'plugin terpasang' : null), aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
       // Toko Online biasa (2026-09-23, scripts/toko-biasa): menu toko sesudah halaman VD Store digenerate,
       // produk dari folder produk klien (atau 5 contoh) sesudah finishing. Situs lama dilewati.
-      { id: 'menuToko', kol: 9, jalur: 4, nama: 'Menu toko', ket0: 'Beranda, Produk, Pricelist, Keranjang, Cek Ongkir, Tracking, Berita',
+      { id: 'menuToko', kol: 10, jalur: 4, nama: 'Menu toko', ket0: 'Beranda, Produk, Pricelist, Keranjang, Cek Ongkir, Tracking, Berita',
         mulai: /\] Toko biasa: menu toko/, selesai: /menu: (tersusun|dibiarkan)|toko: dilewati/,
         ketHasil: t => { const m = /menu: tersusun:(\d+)/.exec(t); return m ? m[1] + ' item menu'
           : /menu: dibiarkan/.test(t) ? 'dibiarkan: sudah disunting' : /toko: dilewati:situs_sudah_terpasang/.test(t) ? 'dilewati: situs lama' : null; },
         aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
-      { id: 'produkToko', kol: 12, jalur: 4, nama: 'Produk toko', ket0: 'folder produk → store_product (gambar < 100 KB), atau 5 contoh',
+      { id: 'produkToko', kol: 13, jalur: 4, nama: 'Produk toko', ket0: 'folder produk → store_product (gambar < 100 KB), atau 5 contoh',
         mulai: /\] Toko biasa: produk/, selesai: /produk: (dibuat|contoh_sudah_ada|contoh_dilewati|dilewati)|toko: dilewati/,
         ketHasil: t => { const s = /toko: produk: sumber=(folder|contoh) jumlah=(\d+)/.exec(t);
           if (/toko: dilewati:situs_sudah_terpasang/.test(t)) return 'dilewati: situs lama';
@@ -183,47 +194,47 @@
         aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
       // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
       // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
-      { id: 'isiKlasik', kol: 9, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
+      { id: 'isiKlasik', kol: 10, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
         mulai: /\] Isi contoh \(tema klasik\)/, selesai: /konten: (isi contoh dibuat|memakai isi contoh|isi tersimpan|gagal)/,
         gagal: /konten: gagal/, ketHasil: t => { const m = /konten: isi contoh dibuat \(([^)]*)\)/.exec(t); return m ? m[1] : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-      { id: 'konten', kol: 10, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
+      { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
         selesai: /AI content generation completed/, aktif: tanpaDry },
-      { id: 'finishing', kol: 11, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
-      { id: 'baru', kol: 12, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
+      { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
-      { id: 'bersih', kol: 13, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
+      { id: 'bersih', kol: 14, jalur: 2, nama: 'Bersih-bersih', ket0: 'tema & plugin bawaan', mulai: /\] Bersihkan tema & plugin bawaan/,
         selesai: /cleanup_done/, aktif: c => dan(tanpaDry(c), c.installBaru) },
-      { id: 'isi', kol: 14, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
+      { id: 'isi', kol: 15, jalur: 1, cek: true, nama: 'Paket custom?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.custom === null ? 'paket tidak terbaca' : c.custom ? 'ya: G / Portal / Toko Online Custom' : 'tidak') },
-      { id: 'fotoSlot', kol: 15, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
+      { id: 'fotoSlot', kol: 16, jalur: 0, nama: 'Foto slot desain', ket0: 'hero, tentang, layanan, galeri',
         mulai: /Paket custom: foto per slot desain/, aktif: c => dan(tanpaDry(c), c.custom) },
-      { id: 'dealerUnit', kol: 16, jalur: 0, nama: 'Unit mobil & foto dealer', ket0: 'CPT mobil, foto seksi',
+      { id: 'dealerUnit', kol: 17, jalur: 0, nama: 'Unit mobil & foto dealer', ket0: 'CPT mobil, foto seksi',
         mulai: /Paket custom: unit mobil & foto dealer/, selesai: /dealer: unit_terbit=/,
         ketHasil: t => { const m = /dealer: unit_terbit=(\d+)/.exec(t); return m ? m[1] + ' unit terbit' : null; },
         aktif: c => dan(tanpaDry(c), c.custom, c.dealer) },
-      { id: 'klinikFoto', kol: 16, jalur: 2, nama: 'Foto seksi klinik', ket0: 'dari mockup klien',
+      { id: 'klinikFoto', kol: 17, jalur: 2, nama: 'Foto seksi klinik', ket0: 'dari mockup klien',
         mulai: /Paket custom: foto seksi klinik/, selesai: /klinik: foto_di_media=|klinik: data_tidak_ada/,
         ketHasil: t => { const m = t.match(/klinik: slot:/g); return m ? m.length + ' slot foto' : null; },
         aktif: c => dan(tanpaDry(c), c.custom, c.klinik) },
       // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
       // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
       // blok berita per kategori (theme-paket-biasa, 2026-09-18).
-      { id: 'tampilan', kol: 15, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget; berita: menu kategori',
+      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget; berita: menu kategori',
         mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
         ketHasil: t => (/tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori'
           : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
           : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null),
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
-      { id: 'paketTour', kol: 17, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
+      { id: 'paketTour', kol: 18, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
         mulai: /\] Paket tour$/, selesai: /paket_tour: (selesai|dilewati)/, gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)/,
         ketHasil: t => { if (/paket_tour: dilewati/.test(t)) return 'dilewati (bukan tema tour)';
           const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
           return m ? (+m[1] + +m[2]) + ' paket' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-      { id: 'fotoKlasik', kol: 18, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
+      { id: 'fotoKlasik', kol: 19, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
         mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
         ketHasil: t => {
           const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
@@ -232,14 +243,14 @@
           return (bank ? bank[1] + ' foto bank' : '0 foto bank') + (sisa ? ' + ' + sisa[1] + ' foto klien/sampul' : '');
         },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-      { id: 'halaman', kol: 17, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda + halaman dari menu referensi', mulai: /Paket custom: halaman blok & menu/,
+      { id: 'halaman', kol: 18, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda + halaman dari menu referensi', mulai: /Paket custom: halaman blok & menu/,
         // Halaman susunan agen (fse-rencana/<domain>/claude/<slug>.html) menimpa hasil generator di
         // fse-apply --isi (log `fse: halaman_claude:<slug>`).
         ketHasil: t => { const m = t.match(/fse: halaman_claude:/g);
           return m ? m.length + ' halaman dari agen Claude'
             : AMBIL_ALIH_AGEN.test(t) ? 'titik awal, halaman akhir oleh agen Claude' : null; },
         aktif: c => dan(tanpaDry(c), c.custom) },
-      { id: 'fotoArtikel', kol: 18, jalur: 0, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul', mulai: /Paket custom: foto utama artikel/,
+      { id: 'fotoArtikel', kol: 19, jalur: 0, nama: 'Foto utama artikel', ket0: 'Pexels, sisa: foto klien/sampul', mulai: /Paket custom: foto utama artikel/,
         selesai: /foto_artikel: \d+\/\d+ diisi/,
         ketHasil: t => {
           const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
@@ -248,7 +259,7 @@
           return (bank ? bank[1] + ' foto Pexels/bank' : '0 foto bank') + (sisa ? ' + ' + sisa[1] + ' foto klien/sampul' : '');
         },
         aktif: c => dan(tanpaDry(c), c.custom) },
-      { id: 'visual', kol: 19, jalur: 0, nama: 'Cek visual', ket0: 'desktop & HP + banding referensi ke Telegram', mulai: /Paket custom: cek visual/,
+      { id: 'visual', kol: 20, jalur: 0, nama: 'Cek visual', ket0: 'desktop & HP + banding referensi ke Telegram', mulai: /Paket custom: cek visual/,
         selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung) },
       // Audit kemiripan (permintaan user 2026-09-17, scripts/fse-audit-kemiripan): tampilan situs jadi
       // diukur dengan pengukur referensi lalu dinilai per bagian (header, footer, beranda per seksi,
@@ -256,7 +267,7 @@
       // Belum mirip -> tema + halaman FSE digenerate ulang lalu diaudit lagi (installer-runner
       // audit_kemiripan, maks FSE_MIRIP_MAKS, berhenti kalau skor tidak naik); sisa beda dikirim
       // sebagai daftar "perlu diperbaiki" di laporan Telegram.
-      { id: 'mirip', kol: 20, jalur: 0, cek: true, nama: 'Mirip referensi?', ket0: 'header, footer, beranda per seksi',
+      { id: 'mirip', kol: 21, jalur: 0, cek: true, nama: 'Mirip referensi?', ket0: 'header, footer, beranda per seksi',
         mulai: /Paket custom: audit kemiripan/, selesai: /kemiripan: (sesuai|belum_mirip:|tidak_ada_referensi|gagal:)/,
         ket: (c, row) => hasilMirip(segmenRun(row).join('\n')) || 'menunggu',
         aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung === null ? null : !c.agenLangsung) },
@@ -265,7 +276,7 @@
       // sendiri; skor turun dibanding generator -> hasilnya dicabut. Sejak 2026-09-19 paket custom yang
       // punya referensi langsung ke agen sesudah foto artikel (agen_langsung di runner): gerbang tema &
       // audit kemiripan dilewati, cek visual dijalankan sesudah agen.
-      { id: 'agenClaude', kol: 21, jalur: 0, nama: 'Agen desain Claude', ket0: 'desain + audit + ulang sendiri',
+      { id: 'agenClaude', kol: 22, jalur: 0, nama: 'Agen desain Claude', ket0: 'desain + audit + ulang sendiri',
         mulai: /belum mirip, desain diambil alih agen Claude|desain_claude: audit awal/, selesai: SELESAI_AGEN,
         gagal: /desain_claude: gagal/, ketHasil: hasilAgen,
         aktif: c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung) },
@@ -273,14 +284,14 @@
       // DESAIN_CLAUDE=1 -> sesudah foto artikel agen Claude langsung mengambil alih (gerbang tema &
       // audit kemiripan dilewati), lalu cek visual desain akhir. Lajur 1 sendiri supaya tidak
       // menumpang simpul jalur lama.
-      { id: 'agenLangsung', kol: 19, jalur: 1, nama: 'Agen desain Claude', ket0: 'langsung dari referensi: desain + audit sendiri',
+      { id: 'agenLangsung', kol: 20, jalur: 1, nama: 'Agen desain Claude', ket0: 'langsung dari referensi: desain + audit sendiri',
         mulai: /desain langsung diambil alih agen Claude/, selesai: SELESAI_AGEN,
         gagal: /desain_claude: gagal/, ketHasil: hasilAgen, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
-      { id: 'visualAkhir', kol: 20, jalur: 1, nama: 'Cek visual', ket0: 'desain akhir agen, desktop & HP ke Telegram',
+      { id: 'visualAkhir', kol: 21, jalur: 1, nama: 'Cek visual', ket0: 'desain akhir agen, desktop & HP ke Telegram',
         mulai: /Paket custom: cek visual/, selesai: /visual: folder=/, aktif: c => dan(tanpaDry(c), c.custom, c.agenLangsung) },
       // Agen permintaan form (keputusan user 2026-09-24, scripts/permintaan-claude, PERMINTAAN_CLAUDE=1):
       // pesan tambahan di form klien dikerjakan Claude sebagai user situs sebelum pemeriksaan akhir.
-      { id: 'permintaan', kol: 22, jalur: 1, nama: 'Permintaan form', ket0: 'pesan tambahan klien, dikerjakan agen Claude',
+      { id: 'permintaan', kol: 23, jalur: 1, nama: 'Permintaan form', ket0: 'pesan tambahan klien, dikerjakan agen Claude',
         mulai: /\] Permintaan form klien \(agen Claude\)/, selesai: /^permintaan_claude: (selesai \d|sebagian:|lewati:)/m,
         gagal: /^permintaan_claude: gagal:/m,
         ketHasil: t => { let m = /^permintaan_claude: selesai (\d+)\/\d+ butir/m.exec(t);
@@ -291,21 +302,21 @@
         aktif: c => dan(tanpaDry(c), c.permintaanClaude) },
       // + permintaan klien di FORM 5 pesan tambahan (scripts/permintaan-form, keputusan user 2026-09-24):
       // belum ditandai selesai = "perlu dicek" berisi permintaannya.
-      { id: 'qa', kol: 23, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten, permintaan form', mulai: /qa_result:/, selesai: /qa_result:/,
+      { id: 'qa', kol: 24, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten, permintaan form', mulai: /qa_result:/, selesai: /qa_result:/,
         ketHasil: t => (/permintaan_form: belum_dikerjakan/.test(t) ? 'permintaan form klien belum dikerjakan'
           : /permintaan_form: sudah_dikerjakan/.test(t) ? 'permintaan form klien sudah dikerjakan' : null), aktif: tanpaDry },
-      { id: 'maint', kol: 24, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
+      { id: 'maint', kol: 25, jalur: 1, cek: true, nama: 'Masa pembelajaran?', mulai: /qa_result:/, aktif: tanpaDry,
         ket: c => (c.mode === 'finish' ? 'mode finish, tanpa maintenance'
           : c.maintLewat !== null ? (c.maintLewat ? 'ya' : 'tidak') : c.custom === null ? 'menunggu' : c.custom ? 'ya: paket custom' : 'tidak') },
-      { id: 'maintLewat', kol: 25, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
+      { id: 'maintLewat', kol: 26, jalur: 0, nama: 'Tanpa maintenance', ket0: 'situs dibiarkan terbuka', mulai: /maintenance_dilewati/,
         selesai: /maintenance_dilewati/, aktif: c => dan(hanyaMode('apply')(c), c.maintLewat ?? c.custom) },
-      { id: 'maintOn', kol: 25, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
+      { id: 'maintOn', kol: 26, jalur: 2, nama: 'Maintenance mode', ket0: 'halaman perawatan', mulai: /\] Maintenance mode/,
         selesai: /maintenance: maintenance_(enabled|active|skip)/,
         aktif: c => dan(hanyaMode('apply')(c), (c.maintLewat ?? c.custom) === null ? null : !(c.maintLewat ?? c.custom)) },
-      { id: 'selesai', kol: 26, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
+      { id: 'selesai', kol: 27, jalur: 1, nama: 'Selesai', mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: /, gagal: /\] FAILED: /, aktif: tanpaDry },
       // Trap EXIT runner (juga saat run gagal): berkas milik root dari WP-CLI dikembalikan ke user situs,
       // supaya pasang plugin/tema dari wp-admin tidak gagal (scripts/pemilik_wp.py, 2026-09-18).
-      { id: 'pemilik', kol: 27, jalur: 1, nama: 'Kepemilikan wp-content', ket0: 'chown ke user situs',
+      { id: 'pemilik', kol: 28, jalur: 1, nama: 'Kepemilikan wp-content', ket0: 'chown ke user situs',
         mulai: /\] Kepemilikan wp-content/, selesai: /pemilik: (wp_content_dirapikan|sudah_benar|dilewati)/,
         gagal: /pemilik: (gagal|chown_gagal)/,
         ketHasil: t => {
@@ -319,7 +330,7 @@
     // [dari, ke, label, syarat]. Tanpa syarat: garis dari simpul pengecekan aktif kalau tujuannya
     // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
     const GARIS = [
-      ['validasi', 'mode'],
+      ['validasi', 'bacaForm'], ['bacaForm', 'mode'],
       ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'server', 'dry run'],
       ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
       ['http', 'ssl'], ['ssl', 'paket'],

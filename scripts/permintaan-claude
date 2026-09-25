@@ -180,8 +180,11 @@ def cadangkan(cfg, domain):
     skrip = (
         'set -e\n'
         'C="$HOME/velocity-cadangan"; mkdir -p "$C"; chmod 700 "$C"\n'
+        # mariadb-dump bawaan DirectAdmin mencari /tmp/mysql.sock walau my.cnf menunjuk tempat lain.
+        'SOK=; for s in /tmp/mysql.sock /var/lib/mysql/mysql.sock /run/mysqld/mysqld.sock /var/run/mysqld/mysqld.sock; do\n'
+        '  [ -S "$s" ] && { SOK="--socket=$s"; break; }; done\n'
         f'php -d memory_limit=512M /usr/local/bin/wp --path={shlex.quote(situs.docroot)} --allow-root '
-        f'db export "$C/{nama}" --quiet 2>&1\n'
+        f'db export "$C/{nama}" $SOK --quiet 2>&1\n'
         f'gzip -f "$C/{nama}"\n'
         # Simpan 5 cadangan terakhir per domain.
         f'ls -1t "$C"/{domain}-permintaan-*.sql.gz | tail -n +6 | xargs -r rm -f\n'

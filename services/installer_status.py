@@ -82,6 +82,9 @@ AI_PERAN_TETAP = (
     ('desain_claude', 'Desain FSE paket custom: tata letak, CSS & halaman', 'desain-claude', 'DESAIN_CLAUDE', '0'),
     ('permintaan_claude', 'Permintaan klien di form (pesan tambahan): halaman, data, menu', 'permintaan-claude',
      'PERMINTAAN_CLAUDE', '1'),
+    # Pembacaan FORM ISIAN (scripts/baca-form-claude, keputusan user 2026-09-25): selalu menyala.
+    ('baca_form', 'Baca form isian klien: nama, kontak, warna, referensi, pesan tambahan', 'baca-form-claude',
+     'BACA_FORM_CLAUDE', '1'),
 )
 # Model agen = Opus terbaru yang dikenal CLI Claude (diresolve & disimpan scripts/desain-claude).
 DESAIN_CLAUDE_MODEL = Path('/var/lib/velocity/desain-claude-model.json')
@@ -383,7 +386,8 @@ def manifest_target(manifest):
     return None
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'scripts'
+sys.path.insert(0, str(SCRIPTS_DIR))
 from client_form import read_client_form
 from hosting_notes import read_hosting_notes
 
@@ -1003,6 +1007,14 @@ def generate_manifest(domain: str):
             _ensure_secrets(domain)
             _sync_hosting_notes(domain, manifest, allow_regenerate=False)
             return {'generated': False, 'reason': 'already_valid'}, None
+    # Form klien dibaca agen Claude Code dulu (scripts/baca-form-claude, keputusan user 2026-09-25):
+    # judul situs & data lain di bawah memakai hasilnya. Tersimpan per isi form; gagal/timeout =
+    # read_client_form kembali ke pengurai pola.
+    try:
+        subprocess.run([sys.executable, str(SCRIPTS_DIR / 'baca-form-claude'), domain],
+                       capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        pass
     # derive defaults; ssh target from server store (managed via /server/ panel), fallback static
     labels = domain.split('.')[0]
     # DirectAdmin limit = 8 chars, prioritize username from notes if present

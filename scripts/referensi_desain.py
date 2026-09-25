@@ -138,10 +138,19 @@ def referensi_form(domain):
         return {'url': lokal, 'catatan': 'desain dikirim klien di folder proyek', 'sumber': 'desain_klien'}
     try:
         from client_form import read_client_form
-        teks = read_client_form(ON_PROGRESS / domain).get('text') or ''
+        form = read_client_form(ON_PROGRESS / domain)
+        teks = form.get('text') or ''
     except Exception:
         return {}
     bukan = r'velocitydeveloper|alamatwebcontoh|example\.|suryagrup\.com|^(https?://)?(www\.)?contoh\.|' + re.escape(domain)
+    if form.get('sumber') == 'claude':
+        # Form dibaca agen Claude (scripts/baca-form-claude): referensi DESAIN sudah dipisah dari contoh
+        # template & dari web sumber isi ("materi ambil dari ..."), jadi tidak ditebak lagi dari teks.
+        for r in (form.get('data') or {}).get('referensi_desain') or []:
+            url = cari_alamat(str(r.get('url') or ''), bukan)
+            if url:
+                return {'url': url, 'catatan': str(r.get('catatan') or '')[:400]}
+        return {}
     awal = re.search(r'INGIN\s+DICONTOH|YANG\s+ANDA\s+SUKAI\s+DESAINNYA', teks, re.I)
     potong = ''
     if awal:

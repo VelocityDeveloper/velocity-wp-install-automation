@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Baca FORM ISIAN klien dengan agen Claude Code (keputusan user 2026-09-25: "rubah saja sistem
+pembacaan form pakai agen claude code").
+
+Pengurai pola (client_form.parse_fields/parse_sections) hanya mengenal bentuk tetap; audit
+2026-09-24 atas 2.882 form menemukan contoh template terbaca sebagai isian ("Misal: ... biru dan
+hijau" jadi warna klien), nama usaha di bawah judul terlewat, kontak web tidak terbaca, dan 6 jenis
+template yang terus bertambah. Claude membaca teks form utuh dan memisahkan isian klien dari teks
+template, lalu mengisi skema JSON tetap (--json-schema). Tanpa alat (--tools ''): hanya membaca.
+
+  baca-form-claude <domain|folder> [--paksa] [--coba]
+     --paksa   baca ulang walau form tidak berubah
+     --coba    cetak teks yang akan dikirim, tanpa memanggil Claude
+Hasil: /var/lib/velocity/form-claude/<nama-folder>.json {md5, waktu, model, data} — dipakai
+client_form.read_client_form selama md5 berkas form sama; tanpa hasil, read_client_form kembali ke
+pengurai pola. Model: Opus terbaru (sama dengan agen desain). Baris password/sandi tidak dikirim.
+Saklar: BACA_FORM_CLAUDE=0 (env / env autopilot) mematikan.
+Keluaran baris terakhir: form_claude: <baru|tetap|tanpa_form|lewati:dimatikan|gagal:...>; kode 0 kecuali salah pakai.
+"""
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import client_form  # noqa: E402
+
+TUGAS = HERE.parent / 'templates' / 'baca-form-claude' / 'tugas.md'
+ON_PROGRESS = Path('/home/On Progress')
+TEKS_MAKS = 40_000
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def s(desk=''):
+    return {'type': 'string', 'description': desk} if desk else {'type': 'string'}
+
+
+def objek(props):
+    return {'type': 'object', 'properties': props, 'required': list(props), 'additionalProperties': False}
+
+
+def daftar(item):
+    return {'type': 'array', 'items': item}
+
+
+# Semua kunci wajib ada (isian kosong = ""/[]), supaya pemakai tidak perlu memeriksa keberadaan kunci.
+SKEMA = objek({
+    'template': s('paket_biasa | paket_g | toko | portal_berita | compro_pdf | sekolah | landing | marketplace | lain'),
+    'domain': s(),
+    'nama_usaha': s('nama usaha/instansi/media/toko yang tampil di website'),
+    'slogan': s(),
+    'kontak_web': objek({
+        'wa': daftar(s()), 'telepon': daftar(s()), 'email': daftar(s()), 'alamat': s(), 'maps': s(),
+        'sosmed': daftar(objek({'jenis': s(), 'url': s()})), 'teks': s('isian kontak publik apa adanya'),
+    }),
+    'biodata': objek({
+        'nama': s(), 'nama_perusahaan': s(), 'alamat': s(), 'kota': s(), 'provinsi': s(), 'kodepos': s(),
+        'wa': s(), 'email': s(),
+    }),
+    'tolak_biodata_tampil': {'type': 'boolean'},
+    'paket': s(),
+    'menu_atas': daftar(s()),
+    'isi_menu': s(),
+    'desain_dipilih': s(),
+    'referensi_desain': daftar(objek({'url': s(), 'catatan': s()})),
+    'referensi_konten': daftar(objek({'url': s(), 'catatan': s()})),
+    'konsep_desain': s(),
+    'warna': objek({'warna': daftar(s()), 'teks': s()}),
+    'rubrik': daftar(objek({'nama': s(), 'isi': s()})),
+    'toko': objek({'nama_toko': s(), 'bank': s(), 'asal_pengiriman': s(), 'ekspedisi': s(),
+                   'kategori_produk': s(), 'ongkir_otomatis': s()}),
+    'layanan_produk': s(),
+    'data_tambahan': s(),
+    'pesan_tambahan': s(),
+    'catatan': s('hal yang ragu/bertentangan di form'),
+})
+
+
+def teks_form(folder):
+    """Teks gabungan semua FORM ISIAN (tanpa sisa biner .doc & baris sandi) + md5 berkasnya."""
+    berkas = client_form.berkas_form(folder)
+    bagian = []
+    for p in berkas:
+        baris, sebelum = [], None
+        for b in client_form.extract_text(p):
+            b = ' '.join(str(b).split())
+            if not b or client_form.CRED_LABEL.search(b.split(':', 1)[0]) and ':' in b:
+                continue
+            # Sisa biner .doc: sebagian besar bukan huruf ASCII / tanpa kata.
+            if sum(c.isascii() and c.isprintable() for c in b) < 0.9 * len(b) or not re.search(r'[A-Za-z]{3}', b):
+                continue
+            if b != sebelum:
+                baris.append(b)
+            sebelum = b
+        bagian.append(f'===== {p.name} =====\n' + '\n'.join(baris))
+    return '\n\n'.join(bagian)[:TEKS_MAKS], client_form.md5_form(berkas)
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    opsi = {a[2:] for a in sys.argv[1:] if a.startswith('--')}
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    # Saklar BACA_FORM_CLAUDE=0 (env atau /etc/velocity/installer-autopilot.env) = pakai pengurai pola saja.
+    saklar = os.environ.get('BACA_FORM_CLAUDE')
+    if saklar is None:
+        try:
+            saklar = next((b.split('=', 1)[1].strip() for b in reversed(Path(
+                '/etc/velocity/installer-autopilot.env').read_text().splitlines()) if b.startswith('BACA_FORM_CLAUDE=')), '1')
+        except OSError:
+            saklar = '1'
+    if saklar == '0' and 'paksa' not in opsi:
+        print('form_claude: lewati:dimatikan')
+        return 0
+    folder = Path(args[0])
+    if not folder.is_dir():
+        folder = ON_PROGRESS / args[0].strip()
+    if not folder.is_dir():
+        folder = ON_PROGRESS / args[0].strip().lower()
+    teks, md5 = teks_form(folder)
+    if not md5:
+        print('form_claude: tanpa_form')
+        return 0
+    simpan = client_form.FORM_CLAUDE / f'{folder.name.lower()}.json'
+    try:
+        lama = json.loads(simpan.read_text())
+    except (OSError, ValueError):
+        lama = {}
+    if lama.get('md5') == md5 and lama.get('data') and 'paksa' not in opsi:
+        print('form_claude: tetap')
+        return 0
+    prompt = TUGAS.read_text().replace('{{FOLDER}}', folder.name).replace('{{TEKS}}', teks)
+    if 'coba' in opsi:
+        print(prompt)
+        return 0
+
+    DC = muat('desain_claude', HERE / 'desain-claude')
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    opus = DC.opus_terbaru(env)
+    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus, ANTHROPIC_SMALL_FAST_MODEL=opus)
+    mulai = time.time()
+    try:
+        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'opus', '--output-format', 'json',
+                              '--no-session-persistence', '--tools', '', '--json-schema', json.dumps(SKEMA)],
+                             capture_output=True, text=True, timeout=600, env=env, cwd='/tmp')
+        hasil = json.loads(run.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f'form_claude: gagal:{type(e).__name__}')
+        return 0
+    data = hasil.get('structured_output')
+    catat_pemakaian(DC, folder.name, hasil)
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        print(f"form_claude: gagal:{str(hasil.get('result') or 'tanpa_json')[:200]}")
+        return 0
+    client_form.FORM_CLAUDE.mkdir(parents=True, exist_ok=True)
+    sementara = simpan.with_suffix('.tmp')
+    sementara.write_text(json.dumps({
+        'md5': md5, 'waktu': datetime.now().astimezone().isoformat(timespec='seconds'),
+        'model': ','.join(hasil.get('modelUsage') or {}) or opus, 'detik': round(time.time() - mulai),
+        'biaya_usd': round(float(hasil.get('total_cost_usd') or 0), 4), 'data': data}, ensure_ascii=False, indent=1))
+    sementara.replace(simpan)
+    print(f"form_claude: baru nama={data.get('nama_usaha', '')!r} template={data.get('template', '')} "
+          f"detik={round(time.time() - mulai)}")
+    return 0
+
+
+def catat_pemakaian(DC, domain, hasil):
+    """Satu baris per model ke usage.jsonl (halaman /ai/), peran baca_form."""
+    for model, u in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain,
+            'run': os.environ.get('VELOCITY_RUN_ID') or 'baca-form-claude', 'mode': os.environ.get('INSTALL_MODE', '') or 'baca-form',
+            'peran': 'baca_form', 'script': 'baca-form-claude', 'sumber': 'claude', 'model_id': 'claude-code',
+            'model': model, 'permintaan': 1, 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar,
+            'total_tokens': masuk + baca + buat + keluar, 'input_tokens': masuk, 'cache_read_tokens': baca,
+            'cache_creation_tokens': buat, 'biaya_usd': round(float(u.get('costUSD') or 0), 4),
+            'ok': not hasil.get('is_error'), 'giliran': hasil.get('num_turns'),
+        }
+        try:
+            with open(DC.AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+
+if __name__ == '__main__':
+    sys.exit(main())

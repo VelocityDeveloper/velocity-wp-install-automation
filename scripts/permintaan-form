@@ -46,7 +46,11 @@ def main():
         print(__doc__)
         return 2
     domain = domain_dari(args[0])
-    teks = pesan_tambahan(read_client_form(ON_PROGRESS / domain).get('text', ''))
+    form = read_client_form(ON_PROGRESS / domain)
+    teks_pola = pesan_tambahan(form.get('text', ''))
+    # Form yang sudah dibaca agen Claude (scripts/baca-form-claude): pesan tambahan versi agen, yang
+    # tahu mana kalimat template. Tanda selesai lama (md5 versi pola) tetap diakui di bawah.
+    teks = str((form.get('data') or {}).get('pesan_tambahan') or '').strip() if form.get('sumber') == 'claude' else teks_pola
     if '--teks' in sys.argv:
         print(teks)
         return 0
@@ -66,7 +70,8 @@ def main():
                                       .isoformat(timespec='seconds'), 'catatan': ket}, ensure_ascii=False, indent=1))
         print('permintaan_form: ditandai_selesai')
         return 0
-    if catatan.get('md5') == md5 and catatan.get('selesai'):
+    md5_pola = hashlib.md5(re.sub(r'\s+', ' ', teks_pola).encode()).hexdigest()
+    if catatan.get('md5') in (md5, md5_pola) and catatan.get('selesai'):
         print('permintaan_form: sudah_dikerjakan')
     else:
         print(f'permintaan_form: belum_dikerjakan:{md5[:8]}')

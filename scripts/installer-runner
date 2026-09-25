@@ -388,6 +388,11 @@ state RUNNING VALIDATING
 printf '[%s] Mode run: %s | paket: %s\n' "$(date -Is)" "$MODE" \
   "$(sed -n 's/^paket=//p' "$MANIFEST" 2>/dev/null | head -1 || true)" >> "$LOG"
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
+# Form klien dibaca agen Claude Code (keputusan user 2026-09-25, scripts/baca-form-claude): sekali per
+# isi form — biasanya sudah saat manifest dibuat, jadi di sini langsung "tetap". Semua langkah sesudah
+# ini membaca hasilnya lewat client_form.read_client_form; gagal = kembali ke pengurai pola.
+printf '[%s] Baca form klien (agen Claude): %s\n' "$(date -Is)" \
+  "$(timeout 660 /usr/bin/python3 "$SCRIPTS/baca-form-claude" "$DOMAIN" 2>&1 | tail -1 || echo 'form_claude: gagal:timeout')" >> "$LOG"
 state RUNNING RUNNING_INSTALLER
 # Awal log run ini: dipakai untuk tahu apakah run ini memasang WordPress dari awal.
 run_start=$(( $(wc -l < "$LOG") + 1 ))

@@ -1018,7 +1018,9 @@ def main():
         address = ', '.join(p for p in (field(fields, r'^alamat'), field(fields, r'^kota'), field(fields, r'^prop')) if p)
     compro = data_compro(domain)
     # Slogan: tulisan klien di form → slogan di company profile → buatan AI.
-    tagline = slogan(form['text']) or compro.get('slogan') or ai_tagline(domain)
+    # Form dibaca agen Claude: slogan dari hasilnya (field 'Slogan'); tanpa itu tebakan dari teks.
+    tagline = ((field(fields, r'^slogan$') if form.get('sumber') == 'claude' else '') or slogan(form['text'])
+               or compro.get('slogan') or ai_tagline(domain))
     css = colors_css(pick_colors(field(fields, r'warna tema')))
     seo = seo_dasar(domain, title, tagline)
     _, photos = client_assets(folder)
