@@ -1,0 +1,27 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/social",
+ "title": "Media Sosial",
+ "category": "velocity-blocks",
+ "icon": "share",
+ "description": "Ikon media sosial dari Tampilan → Data Situs.",
+ "attributes": {
+  "size": {
+   "type": "string",
+   "default": "md"
+  },
+  "justify": {
+   "type": "string",
+   "default": "left"
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

@@ -29,6 +29,21 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
    popup ber-tombol Previous/Next; jangan membuat grid foto dari HTML/kolom biasa atau `<a href>` ke file.
 5. Rapi di desktop (1366) **dan HP (390)**: tidak ada scroll horizontal, padding/margin konsisten,
    teks terbaca (kontras), gambar tidak pecah, latar video/foto menutupi seksi penuh.
+6. **Seksi halaman = blok ala page builder (Velocity Blocks `vb/*`)**, supaya klien bisa menambah,
+   mengubah, menghapus, dan men-drag seksi sendiri, memilih ikon, dan mengatur tautan langsung di kanvas
+   (seperti Beaver Builder/Elementor). Kamus bloknya ada di `kerja/velocity-blocks.md`; sumbernya bisa
+   dibaca di `{{VB}}`. Aturannya:
+   - Tiap seksi dibungkus `vb/section` (latar, overlay foto, jarak, lebar). Tata kolom memakai `vb/grid` / `vb/row`.
+     Isinya: `vb/heading`, `vb/icon-box`, `vb/card`, `vb/button`, `vb/stat`, `vb/steps`, `vb/testimonials`,
+     `vb/faq`, `vb/logos`, `vb/carousel`, `vb/box`, dan blok lain di kamus. Teks biasa dan foto boleh
+     `core/paragraph`/`core/image` di dalam wadah vb.
+   - Teks, ikon, dan tautan ditulis sebagai **atribut blok** (title/text/icon/url/label), jangan di HTML.
+     `core/html`, `core/shortcode`, dan grid/kartu yang disusun dari `<div>` buatan sendiri **dilarang** untuk isi.
+   - Tetap memakai blok bawaan untuk: `velocity/kontak`, `velocity/form-kirim`, peta, galeri
+     (`core/gallery`), menu (`core/navigation`), header dan footer (template part).
+   - Gaya blok vb diatur lewat atributnya (bg, boxStyle, padding, columns, dll.) dan variabel `--vb-*`
+     (sudah dipetakan ke palet situs). CSS di `gaya.css` hanya untuk penyesuaian yang tidak bisa diatur dari
+     atribut. Jangan memakai `!important` pada warna, padding, atau ukuran yang bisa diatur klien.
 
 {{TOKO}}
 ## Yang boleh kamu tulis (hanya di folder kerja ini: `{{FOLDER}}`)

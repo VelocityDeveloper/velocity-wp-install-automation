@@ -1,0 +1,52 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/button",
+ "title": "Tombol",
+ "category": "velocity-blocks",
+ "icon": "button",
+ "description": "Tombol berikon; tautan dan ikon diatur langsung di kanvas.",
+ "attributes": {
+  "text": {
+   "type": "string",
+   "default": "Button"
+  },
+  "icon": {
+   "type": "string",
+   "default": ""
+  },
+  "iconPos": {
+   "type": "string",
+   "default": "before"
+  },
+  "url": {
+   "type": "string",
+   "default": ""
+  },
+  "newTab": {
+   "type": "boolean",
+   "default": false
+  },
+  "variant": {
+   "type": "string",
+   "default": "primary"
+  },
+  "size": {
+   "type": "string",
+   "default": "md"
+  },
+  "waMessage": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

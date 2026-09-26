@@ -43,6 +43,30 @@ const namaBlok = (fs.existsSync(blokTema) ? fs.readdirSync(blokTema) : [])
 for (const nama of namaBlok.length ? namaBlok : ['velocity/topbar', 'velocity/populer', 'velocity/kontak', 'velocity/form-kirim', 'velocity/hak-cipta', 'velocity/judul-arsip']) {
   blocks.registerBlockType(nama, { apiVersion: 3, title: nama, category: 'theme', edit: () => null, save: () => null });
 }
+// Blok Velocity Blocks (vb/*, templates/plugins/velocity-blocks): semua dirender PHP. Wadah
+// menyimpan InnerBlocks.Content (tanpa pembungkus), sisanya save() null (self-closing).
+// Daftar wadah dibaca dari assets/editor.js supaya blok baru tidak perlu ditulis dua kali.
+const vbAkar = path.join(__dirname, '..', 'templates', 'plugins', 'velocity-blocks');
+if (fs.existsSync(path.join(vbAkar, 'blocks'))) {
+  const edJs = fs.readFileSync(path.join(vbAkar, 'assets', 'editor.js'), 'utf8');
+  const wadah = new Set();
+  const daftar = [...edJs.matchAll(/(?:daftarkan|pratinjau)\(\s*'(vb\/[a-z0-9-]+)'/g)];
+  daftar.forEach((m, i) => {
+    const akhir = i + 1 < daftar.length ? daftar[i + 1].index : edJs.length;
+    if (edJs.slice(m.index, akhir).includes('InnerBlocks.Content')) wadah.add(m[1]);
+  });
+  const { InnerBlocks } = modul('@wordpress/block-editor');
+  for (const d of fs.readdirSync(path.join(vbAkar, 'blocks'))) {
+    const f = path.join(vbAkar, 'blocks', d, 'block.json');
+    if (!fs.existsSync(f)) continue;
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    blocks.registerBlockType(j.name, {
+      apiVersion: 3, title: j.name, category: 'widgets', attributes: j.attributes || {},
+      supports: j.supports || {}, parent: j.parent, edit: () => null,
+      save: wadah.has(j.name) ? () => modul('@wordpress/element').createElement(InnerBlocks.Content) : () => null,
+    });
+  }
+}
 // Blok Contact Form 7 (formulir situs sejak 2026-09-19): save() disalin dari plugin
 // (includes/block-editor/index.js) — div berisi shortcode form.
 const el = modul('@wordpress/element');

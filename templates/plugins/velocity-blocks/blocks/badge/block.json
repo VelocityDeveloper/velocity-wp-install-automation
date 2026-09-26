@@ -1,0 +1,27 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/badge",
+ "title": "Lencana",
+ "category": "velocity-blocks",
+ "icon": "tag",
+ "description": "Pil kecil berikon.",
+ "attributes": {
+  "icon": {
+   "type": "string",
+   "default": "circle-check"
+  },
+  "text": {
+   "type": "string",
+   "default": "Badge"
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

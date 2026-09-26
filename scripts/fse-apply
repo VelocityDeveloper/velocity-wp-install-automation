@@ -916,7 +916,112 @@ def langkah_tema(cfg, situs, coba):
         print(f"fse: tema_tidak_aktif (aktif={akhir['tema']})")
         return 1
     print(f"fse: tema_siap:{SLUG}:{akhir['versi']}")
+    pasang_velocity_blocks(cfg, situs, data['situs']['jenis'])
     return 0
+
+
+VB_SUMBER = HERE.parent / 'templates' / 'plugins' / 'velocity-blocks'
+
+PHP_VB = r"""
+if ( ! function_exists( 'get_plugins' ) ) require_once ABSPATH . 'wp-admin/includes/plugin.php';
+$p = get_plugins();
+$berkas = 'velocity-blocks/velocity-blocks.php';
+$hasil = array( 'versi' => isset( $p[ $berkas ] ) ? $p[ $berkas ]['Version'] : '', 'aktif' => is_plugin_active( $berkas ),
+    'milik_installer' => (bool) get_option( 'velocity_installer_vb' ),
+    'berita' => function_exists( 'vb_modul' ) && vb_modul( 'berita' ) );
+if ( ! empty( $d['setel'] ) ) {
+    if ( ! $hasil['aktif'] && $hasil['versi'] ) { activate_plugin( $berkas ); $hasil['aktif'] = is_plugin_active( $berkas ); }
+    update_option( 'velocity_installer_vb', 1, false );
+    // vb_modul hanya diisi sekali: pilihan PM sesudahnya tidak ditimpa run berikutnya.
+    if ( false === get_option( 'vb_modul', false ) ) {
+        update_option( 'vb_modul', $d['modul'] );
+        $hasil['modul_diisi'] = true;
+    }
+    $hasil['modul'] = get_option( 'vb_modul' );
+    // Data Situs plugin (tombol WA, Info Kontak, Sosmed vb/*) diisi dari velocity_situs tema.
+    // Ditulis ulang hanya selama isinya masih persis tulisan installer terakhir (belum disunting PM).
+    $s = get_option( 'velocity_situs', array() );
+    $s = is_array( $s ) ? $s : array();
+    $kontak = array();
+    foreach ( array( 'alamat' => 'alamat', 'whatsapp' => 'wa', 'telepon' => 'telp', 'email' => 'email_publik', 'jam' => 'jam' ) as $jenis => $k ) {
+        if ( ! empty( $s[ $k ] ) && is_string( $s[ $k ] ) ) {
+            $kontak[] = array( 'jenis' => $jenis, 'label' => '', 'isi' => 'whatsapp' === $jenis ? '+' . ltrim( $s[ $k ], '+' ) : $s[ $k ] );
+        }
+    }
+    $baru = array( 'nama' => (string) ( $s['nama'] ?? get_bloginfo( 'name' ) ), 'slogan' => (string) ( $s['slogan'] ?? '' ),
+        'wa' => (string) ( $s['wa'] ?? '' ), 'wa_pesan' => '', 'peta' => (string) ( $s['alamat'] ?? '' ), 'kontak' => $kontak,
+        'sosmed' => function_exists( 'vb_daftar_bawaan' ) ? vb_daftar_bawaan()['sosmed'] : array() );
+    $lama = get_option( 'vb_situs', false );
+    if ( false === $lama || md5( wp_json_encode( $lama ) ) === get_option( 'velocity_installer_vb_situs' ) ) {
+        update_option( 'vb_situs', $baru );
+        update_option( 'velocity_installer_vb_situs', md5( wp_json_encode( get_option( 'vb_situs' ) ) ), false );
+        $hasil['situs_diisi'] = true;
+    }
+}
+vfse_keluar( $hasil );
+"""
+
+
+def vb_berita_aktif(situs):
+    """Beranda portal berita memakai blok vb/* hanya bila plugin Velocity Blocks dari installer
+    aktif dengan modul berita menyala; situs lama tetap memakai susunan Query Loop."""
+    try:
+        ada = situs.php(PHP_VB)
+    except RuntimeError:
+        return False
+    return bool(ada.get('aktif') and ada.get('milik_installer') and ada.get('berita'))
+
+
+def versi_vb():
+    m = re.search(r'^\s*\*\s*Version:\s*(\S+)', (VB_SUMBER / 'velocity-blocks.php').read_text(), re.M)
+    return m.group(1) if m else ''
+
+
+def modul_vb(cfg, jenis):
+    """Modul katalog Velocity Blocks per paket. Produk/portofolio/sewa/RFQ membawa CPT sendiri,
+    jadi dimatikan (katalog situs sudah punya rumah: CPT tema / VD Store); blok portal berita
+    hanya untuk situs berita."""
+    return {'produk': 0, 'rfq': 0, 'portofolio': 0, 'sewa': 0, 'berita': 1 if jenis == 'berita' else 0}
+
+
+def pasang_velocity_blocks(cfg, situs, jenis):
+    """Blok ala page builder (Velocity Blocks, vb/*) untuk semua build FSE installer
+    (keputusan user 2026-09-26): seksi disusun dari blok yang bisa di-drag, ikon & tautan
+    dipilih di kanvas. Salinan per situs yang dipasang tangan (tanpa penanda
+    velocity_installer_vb) tidak diperbarui — situs yang sudah deploy tidak diubah."""
+    if not (VB_SUMBER / 'velocity-blocks.php').is_file():
+        print('fse: velocity_blocks_dilewati:sumber_tidak_ada')
+        return False
+    versi = versi_vb()
+    ada = situs.php(PHP_VB)
+    if ada['versi'] and not ada['milik_installer']:
+        print(f"fse: velocity_blocks_dibiarkan:{ada['versi']} (salinan situs, bukan dari installer)")
+        return True
+    if not ada['versi'] or versi_tuple(ada['versi']) < versi_tuple(versi):
+        tujuan = f'/tmp/velocity-blocks-{versi}-{os.getpid()}.zip'
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_lokal = Path(tmp) / 'velocity-blocks.zip'
+            with zipfile.ZipFile(zip_lokal, 'w', zipfile.ZIP_DEFLATED) as z:
+                for f in sorted(VB_SUMBER.rglob('*')):
+                    if f.is_file():
+                        z.write(f, 'velocity-blocks/' + str(f.relative_to(VB_SUMBER)))
+            kirim = subprocess.run(situs.ssh + [f'cat > {tujuan}'], input=zip_lokal.read_bytes(),
+                                   capture_output=True, timeout=180)
+        if kirim.returncode != 0:
+            print('fse: velocity_blocks_gagal_kirim')
+            return False
+        d = shlex.quote(situs.docroot)
+        run = situs.bash(
+            f'php -d memory_limit=512M /usr/local/bin/wp plugin install {tujuan} --force --activate --path={d} --allow-root 2>&1 | tail -1; '
+            f'rm -f {tujuan}; chown -R --reference={d}/wp-content/plugins {d}/wp-content/plugins/velocity-blocks 2>/dev/null || true')
+        print('fse: velocity_blocks ' + re.sub(r'\s+', ' ', run.stdout).strip()[:160])
+    akhir = situs.php(PHP_VB, {'setel': True, 'modul': modul_vb(cfg, jenis)})
+    if akhir['versi'] != versi or not akhir['aktif']:
+        print(f"fse: velocity_blocks_gagal (versi={akhir['versi'] or '-'} aktif={akhir['aktif']})")
+        return False
+    aktif = ','.join(k for k, v in (akhir.get('modul') or {}).items() if v) or '-'
+    print(f"fse: velocity_blocks_siap:{versi} modul={aktif}")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1230,6 +1335,60 @@ def beranda_berita(q, sd, info):
     tata = barisan([kolom(seksi, '68%'), kolom([blok('template-part', {'slug': 'sidebar'})], '32%')],
                    kelas='vf-tata', align='wide')
     return '\n\n'.join([judul(esc(sd['nama']), 1, 'screen-reader-text'), atas, tata])
+
+
+def vb(nama, attrs=None, anak=None):
+    """Markup blok Velocity Blocks: anak None = blok dinamis self-closing, selain itu wadah
+    (save = InnerBlocks.Content, jadi tanpa HTML pembungkus). Sama dengan vb_pola_blok() plugin."""
+    teks = ' ' + json.dumps(attrs, ensure_ascii=False, separators=(',', ':')) if attrs else ''
+    if anak is None:
+        return f'<!-- wp:vb/{nama}{teks} /-->'
+    return f'<!-- wp:vb/{nama}{teks} -->\n' + '\n'.join(anak) + f'\n<!-- /wp:vb/{nama} -->'
+
+
+def beranda_berita_vb(sd, info):
+    """Portal berita dari blok Velocity Blocks (keputusan user 2026-09-26, pola jurnalsquad.com):
+    tiap seksi = vb/section berisi Judul Rubrik + Daftar Berita + Kotak, jadi klien tinggal pilih
+    kategori/jumlah/tata letak di sidebar, drag, salin, atau hapus seksi — tanpa Query Loop mentah.
+    Susunannya sama dengan pola plugin (inc/berita.php: pembuka, rubrik, terbaru)."""
+    arsip = (info['halaman'].get('berita') or {}).get('url') or info['home'] + 'berita/'
+
+    def seksi(anak):
+        return vb('section', {'align': 'full', 'bg': 'none', 'padding': 'xs', 'width': 'wide'}, anak)
+
+    def kotak_daftar(judul_kotak, posts, url=''):
+        kepala = dict({'title': judul_kotak, 'size': 'sm', 'level': 3}, **({'url': url} if url else {}))
+        return vb('box', {}, [vb('news-heading', kepala), vb('posts', posts)])
+
+    kiri = vb('box', {'boxStyle': 'plain', 'padding': 'none', 'gap': 'md', 'fill': False}, [
+        vb('posts', {'layout': 'overlay', 'count': 1, 'imageHeight': 440, 'titleSize': 'xl'}),
+        vb('posts', {'layout': 'overlay', 'count': 2, 'offset': 1, 'columns': 2, 'columnsTablet': 2, 'imageHeight': 240}),
+    ])
+    bagian = [judul(esc(sd['nama']), 1, 'screen-reader-text'),
+              seksi([vb('grid', {'columns': 2, 'columnsTablet': 1, 'columnsMobile': 1, 'gap': 'md', 'ratio': '2-1'}, [
+                  kiri, kotak_daftar('Terpopuler', {'layout': 'list', 'count': 5, 'orderBy': 'popular'})])])]
+    rubrik = [(r, info['kategori'][r['slug']]) for r in sd['rubrik'] if info['kategori'].get(r['slug'])]
+    for r, kat in rubrik:
+        nama = r['judul']
+        bagian.append(seksi([
+            vb('news-heading', {'title': nama, 'url': kat['url']}),
+            vb('grid', {'columns': 3, 'columnsTablet': 2, 'columnsMobile': 1, 'gap': 'md'}, [
+                vb('posts', {'layout': 'overlay', 'count': 1, 'category': int(kat['id']), 'fill': True, 'imageHeight': 380}),
+                kotak_daftar(f'Terpopuler {nama}', {'layout': 'list', 'count': 4, 'category': int(kat['id']), 'orderBy': 'popular'}),
+                kotak_daftar(f'Terbaru {nama}', {'layout': 'list', 'count': 4, 'category': int(kat['id']), 'offset': 1}),
+            ]),
+        ]))
+    samping = [kotak_daftar(r['judul'], {'layout': 'list', 'count': 3, 'category': int(kat['id'])}, kat['url'])
+               for r, kat in rubrik[-2:]]
+    bagian.append(seksi([
+        vb('news-heading', {'title': 'Berita Terbaru', 'url': arsip}),
+        vb('grid', {'columns': 2, 'columnsTablet': 1, 'columnsMobile': 1, 'gap': 'lg', 'ratio': '2-1', 'valign': 'start'}, [
+            vb('box', {'fill': False}, [vb('posts', {'layout': 'excerpt', 'count': 8})]),
+            vb('box', {'boxStyle': 'plain', 'padding': 'none', 'gap': 'lg', 'fill': False}, samping
+               or [vb('posts', {'layout': 'list', 'count': 5, 'orderBy': 'popular'})]),
+        ]),
+    ]))
+    return '\n\n'.join(bagian)
 
 
 SAMPUL = '\n\n'.join([
@@ -3454,7 +3613,12 @@ def langkah_isi(cfg, situs, coba):
 
     # Beranda: tata letak penuh (Query Loop per rubrik / seksi perusahaan).
     if berita:
-        beranda = beranda_sorotan(q, sd, info) if sd['gaya'] == 'sorotan' else beranda_berita(q, sd, info)
+        if sd['gaya'] == 'sorotan':
+            beranda = beranda_sorotan(q, sd, info)
+        elif vb_berita_aktif(situs):
+            beranda = beranda_berita_vb(sd, info)
+        else:
+            beranda = beranda_berita(q, sd, info)
     else:
         # Gaya "sorotan" baru ada untuk portal berita; perusahaan tetap susunan bawaan.
         info['domain'] = domain

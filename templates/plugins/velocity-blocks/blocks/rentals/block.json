@@ -1,0 +1,26 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/rentals",
+ "title": "Daftar Sewa (Harga)",
+ "category": "velocity-blocks",
+ "icon": "tag",
+ "description": "Kartu unit sewa dari menu Scooter: foto, label harga, nama, merek, tombol pesan WhatsApp.",
+ "keywords": [ "sewa", "rental", "harga", "scooter", "motor" ],
+ "attributes": {
+  "count": { "type": "number", "default": 0 },
+  "columns": { "type": "number", "default": 4 },
+  "columnsTablet": { "type": "number", "default": 2 },
+  "columnsMobile": { "type": "number", "default": 1 },
+  "buttonText": { "type": "string", "default": "Pesan Sekarang" },
+  "waMessage": { "type": "string", "default": "Halo, saya ingin menyewa {nama}. Apakah unitnya tersedia?" },
+  "emptyPrice": { "type": "string", "default": "Tanya admin" },
+  "ratio": { "type": "string", "default": "4/3" }
+ },
+ "supports": { "anchor": true, "html": false, "align": [ "wide", "full" ] },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

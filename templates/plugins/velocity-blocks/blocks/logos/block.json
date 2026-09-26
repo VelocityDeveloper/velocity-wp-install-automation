@@ -1,0 +1,52 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/logos",
+ "title": "Carousel Logo",
+ "category": "velocity-blocks",
+ "icon": "images-alt2",
+ "description": "Deretan logo (sertifikasi, klien, mitra) yang berjalan terus. Tambah, ganti, hapus, dan geser logo di dalamnya.",
+ "attributes": {
+  "speed": {
+   "type": "number",
+   "default": 35
+  },
+  "logoHeight": {
+   "type": "number",
+   "default": 72
+  },
+  "showLabel": {
+   "type": "boolean",
+   "default": true
+  },
+  "cardStyle": {
+   "type": "string",
+   "default": "card"
+  },
+  "animate": {
+   "type": "boolean",
+   "default": true
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false,
+  "align": [
+   "wide",
+   "full"
+  ]
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "keywords": [
+  "logo",
+  "carousel",
+  "marquee",
+  "sertifikat",
+  "klien",
+  "partner"
+ ]
+}

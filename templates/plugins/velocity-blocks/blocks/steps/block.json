@@ -1,0 +1,24 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/steps",
+ "title": "Alur Langkah",
+ "category": "velocity-blocks",
+ "icon": "editor-ol",
+ "description": "Deret langkah bernomor dengan garis penghubung.",
+ "attributes": {
+  "style": {
+   "type": "string",
+   "default": "timeline"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

@@ -507,3 +507,24 @@ Kasus nyata:
 - **Ruang kosong besar karena peta dobel** (anaksegalabangsa.com, bagian di atas).
 - **Kartu tidak seragam**: satu kartu lokasi berisi blok gradien sementara dua
   lainnya foto — diganti gambar dengan rasio yang sama.
+
+## Blok ala page builder: Velocity Blocks di semua build FSE (2026-09-26)
+
+Permintaan user: blok yang dibuat installer harus reusable dan mudah diedit klien, seperti Beaver
+Builder/Elementor: drag-drop, pilih ikon, atur tautan langsung di kanvas, tambah/ubah/hapus blok.
+
+- Sumber plugin: `templates/plugins/velocity-blocks` (1.9.1, berasal dari salinan jurnalsquad.com 1.9.0,
+  ditambah pemetaan `--vb-*` ke preset palet tema aktif di `vb_css_preset()`).
+- `fse-apply --tema` → `pasang_velocity_blocks()`: pasang/aktifkan plugin, beri penanda
+  `velocity_installer_vb`, isi `vb_modul` sekali (katalog produk/rfq/portofolio/sewa mati, berita hanya
+  untuk portal berita), isi `vb_situs` (Data Situs: WA/kontak/sosmed) dari `velocity_situs` selama
+  isinya belum disunting PM (hash `velocity_installer_vb_situs`). Salinan plugin per situs yang dipasang
+  tangan (tanpa penanda) tidak ditimpa. Log: `fse: velocity_blocks_siap:<versi> modul=...`.
+- Agen desain Claude (`templates/desain-claude/tugas.md` aturan 6): seksi = `vb/section` + `vb/grid`
+  + blok isi vb/*; kamus blok per situs ditulis ke `claude/kerja/velocity-blocks.md`.
+- Generator portal berita: `beranda_berita_vb()` (pola jurnalsquad) bila plugin installer aktif dengan
+  modul berita; situs lama tetap `beranda_berita()` (Query Loop).
+- Validator `scripts/cek-blok` mengenal vb/*: wadah (save = `InnerBlocks.Content`, dibaca dari
+  `assets/editor.js`) ditulis tanpa HTML pembungkus, sisanya self-closing.
+- Menambah blok/versi plugin: ubah di `templates/plugins/velocity-blocks`, naikkan `Version` — situs
+  bertanda installer ikut diperbarui pada run `--tema` berikutnya.

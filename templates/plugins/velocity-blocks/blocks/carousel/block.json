@@ -1,0 +1,33 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/carousel",
+ "title": "Geser (Carousel)",
+ "category": "velocity-blocks",
+ "icon": "slides",
+ "description": "Wadah geser untuk blok apa pun (kartu portofolio, kotak ikon, foto). Tambah, ubah, hapus, dan geser isinya seperti blok biasa.",
+ "attributes": {
+  "perView": { "type": "number", "default": 3 },
+  "perViewTablet": { "type": "number", "default": 2 },
+  "perViewMobile": { "type": "number", "default": 1 },
+  "autoplay": { "type": "boolean", "default": false },
+  "interval": { "type": "number", "default": 6 },
+  "showArrows": { "type": "boolean", "default": true },
+  "showDots": { "type": "boolean", "default": true },
+  "tone": { "type": "string", "default": "auto" },
+  "label": { "type": "string", "default": "" },
+  "align": { "type": "string" }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false,
+  "align": [ "wide", "full" ]
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "viewScript": "vb-view",
+ "keywords": [ "carousel", "slider", "geser", "portofolio" ]
+}

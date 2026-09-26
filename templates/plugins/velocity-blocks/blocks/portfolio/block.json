@@ -1,0 +1,95 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/portfolio",
+ "title": "Portofolio",
+ "category": "velocity-blocks",
+ "icon": "portfolio",
+ "description": "Daftar karya dari menu Portofolio: grid kartu, carousel, slider foto besar, atau ubin foto dengan filter kategori. Isi diatur di menu Portofolio (tambah, ubah urutan, hapus).",
+ "attributes": {
+  "layout": {
+   "type": "string",
+   "default": "grid"
+  },
+  "count": {
+   "type": "number",
+   "default": 9
+  },
+  "columns": {
+   "type": "number",
+   "default": 3
+  },
+  "columnsTablet": {
+   "type": "number",
+   "default": 2
+  },
+  "columnsMobile": {
+   "type": "number",
+   "default": 1
+  },
+  "category": {
+   "type": "string",
+   "default": ""
+  },
+  "showFilter": {
+   "type": "boolean",
+   "default": false
+  },
+  "filterAll": {
+   "type": "string",
+   "default": "Semua"
+  },
+  "showExcerpt": {
+   "type": "boolean",
+   "default": true
+  },
+  "linkTo": {
+   "type": "string",
+   "default": "detail"
+  },
+  "linkLabel": {
+   "type": "string",
+   "default": ""
+  },
+  "autoplay": {
+   "type": "boolean",
+   "default": false
+  },
+  "ratio": {
+   "type": "string",
+   "default": "16/10"
+  },
+  "align": {
+   "type": "string"
+  },
+  "orderBy": {
+   "type": "string",
+   "default": "urutan"
+  },
+  "interval": {
+   "type": "number",
+   "default": 5
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false,
+  "align": [
+   "wide",
+   "full"
+  ]
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "viewScript": "vb-view",
+ "keywords": [
+  "portofolio",
+  "portfolio",
+  "karya",
+  "project",
+  "klien"
+ ]
+}

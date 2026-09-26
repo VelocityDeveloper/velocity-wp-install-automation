@@ -134,7 +134,9 @@
       // Claude (desain-claude --tahap=tema): fse-apply --tema memasang dasar velocity-fse + palet,
       // lalu agen menyusun header, footer & CSS dari referensi. Selesai = baris akhir
       // `desain_claude_tema:`; tanpa agen, selesai saat gerbang "Sesuai referensi?" mulai.
-      { id: 'fse', kol: 9, jalur: 0, nama: 'Tema FSE', ket0: 'referensi ada: agen Claude; lainnya velocity-fse',
+      // Sejak 2026-09-26 fse-apply --tema juga memasang plugin Velocity Blocks (blok vb/* ala page
+      // builder; log `fse: velocity_blocks_siap:<versi>`) — seksi halaman disusun dari blok itu.
+      { id: 'fse', kol: 9, jalur: 0, nama: 'Tema FSE', ket0: 'velocity-fse + Velocity Blocks; referensi ada: agen Claude',
         mulai: /Paket custom: (tema FSE|tema dilewati)/,
         selesai: /desain_claude_tema: (sesuai|belum_mirip|ditolak|lewati|gagal)|tema dilewati/,
         lewati: /Paket custom: tema dilewati/, ketHasil: hasilTemaAgen,

@@ -1,0 +1,44 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/grid",
+ "title": "Grid Kolom",
+ "category": "velocity-blocks",
+ "icon": "grid-view",
+ "description": "Susun blok dalam kolom (jumlah kolom desktop/tablet/HP bisa diatur).",
+ "attributes": {
+  "columns": {
+   "type": "number",
+   "default": 3
+  },
+  "columnsTablet": {
+   "type": "number",
+   "default": 2
+  },
+  "columnsMobile": {
+   "type": "number",
+   "default": 1
+  },
+  "gap": {
+   "type": "string",
+   "default": "md"
+  },
+  "valign": {
+   "type": "string",
+   "default": "stretch"
+  },
+  "ratio": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

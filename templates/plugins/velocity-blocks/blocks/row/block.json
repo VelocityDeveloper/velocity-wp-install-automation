@@ -1,0 +1,32 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/row",
+ "title": "Baris",
+ "category": "velocity-blocks",
+ "icon": "ellipsis",
+ "description": "Deret blok mendatar (tombol, lencana) yang turun baris di layar kecil.",
+ "attributes": {
+  "justify": {
+   "type": "string",
+   "default": "left"
+  },
+  "gap": {
+   "type": "string",
+   "default": "sm"
+  },
+  "valign": {
+   "type": "string",
+   "default": "center"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

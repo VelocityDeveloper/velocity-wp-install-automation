@@ -1,0 +1,35 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/contact-info",
+ "title": "Info Kontak",
+ "category": "velocity-blocks",
+ "icon": "phone",
+ "description": "Daftar kontak dari Tampilan → Data Situs.",
+ "attributes": {
+  "layout": {
+   "type": "string",
+   "default": "list"
+  },
+  "show": {
+   "type": "array",
+   "default": []
+  },
+  "showLabel": {
+   "type": "boolean",
+   "default": true
+  },
+  "perJenis": {
+   "type": "number",
+   "default": 0
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

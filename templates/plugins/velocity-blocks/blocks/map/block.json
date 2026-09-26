@@ -1,0 +1,27 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/map",
+ "title": "Peta",
+ "category": "velocity-blocks",
+ "icon": "location",
+ "description": "Google Maps dari alamat Data Situs atau pencarian sendiri.",
+ "attributes": {
+  "query": {
+   "type": "string",
+   "default": ""
+  },
+  "height": {
+   "type": "number",
+   "default": 380
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

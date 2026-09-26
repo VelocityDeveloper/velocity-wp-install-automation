@@ -1,0 +1,31 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/faq-item",
+ "title": "Pertanyaan FAQ",
+ "category": "velocity-blocks",
+ "icon": "editor-help",
+ "description": "Satu pertanyaan + jawaban.",
+ "attributes": {
+  "question": {
+   "type": "string",
+   "default": ""
+  },
+  "answer": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "html": false,
+  "reusable": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "parent": [
+  "vb/faq"
+ ]
+}

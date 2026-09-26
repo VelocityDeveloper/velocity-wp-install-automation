@@ -1,0 +1,36 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/box",
+ "title": "Kotak",
+ "category": "velocity-blocks",
+ "icon": "archive",
+ "description": "Wadah berlatar putih/bayangan untuk mengelompokkan blok (mis. Judul Rubrik + Daftar Berita di kolom samping).",
+ "attributes": {
+  "boxStyle": {
+   "type": "string",
+   "default": "shadow"
+  },
+  "padding": {
+   "type": "string",
+   "default": "md"
+  },
+  "gap": {
+   "type": "string",
+   "default": "sm"
+  },
+  "fill": {
+   "type": "boolean",
+   "default": true
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

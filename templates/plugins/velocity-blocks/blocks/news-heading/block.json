@@ -1,0 +1,52 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/news-heading",
+ "title": "Judul Rubrik",
+ "category": "velocity-blocks",
+ "icon": "heading",
+ "description": "Judul seksi berita dengan batang aksen, ikon opsional, dan tautan \"Lihat Lainnya\" yang diatur langsung di kanvas.",
+ "attributes": {
+  "title": {
+   "type": "string",
+   "default": ""
+  },
+  "level": {
+   "type": "number",
+   "default": 2
+  },
+  "icon": {
+   "type": "string",
+   "default": ""
+  },
+  "linkLabel": {
+   "type": "string",
+   "default": "Lihat Lainnya"
+  },
+  "url": {
+   "type": "string",
+   "default": ""
+  },
+  "newTab": {
+   "type": "boolean",
+   "default": false
+  },
+  "headStyle": {
+   "type": "string",
+   "default": "bar"
+  },
+  "size": {
+   "type": "string",
+   "default": "md"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

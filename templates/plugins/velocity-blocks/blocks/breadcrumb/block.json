@@ -1,0 +1,41 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/breadcrumb",
+ "title": "Remah Halaman",
+ "category": "velocity-blocks",
+ "icon": "arrow-right-alt2",
+ "description": "Jejak halaman: Beranda › halaman induk › halaman ini. Terisi otomatis.",
+ "keywords": [
+  "breadcrumb",
+  "remah",
+  "navigasi"
+ ],
+ "attributes": {
+  "homeLabel": {
+   "type": "string",
+   "default": "Beranda"
+  },
+  "uppercase": {
+   "type": "boolean",
+   "default": true
+  },
+  "searchLabel": {
+   "type": "string",
+   "default": "Pencarian"
+  }
+ },
+ "usesContext": [
+  "postId",
+  "postType"
+ ],
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

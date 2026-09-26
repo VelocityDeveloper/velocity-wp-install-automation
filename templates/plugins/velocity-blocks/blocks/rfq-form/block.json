@@ -1,0 +1,24 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/rfq-form",
+ "title": "Form Pemesanan",
+ "category": "velocity-blocks",
+ "icon": "email",
+ "description": "Form pemesanan / permintaan penawaran; kiriman masuk ke email dan menu Pemesanan Masuk.",
+ "attributes": {
+  "buttonText": {
+   "type": "string",
+   "default": "Kirim Pesan"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

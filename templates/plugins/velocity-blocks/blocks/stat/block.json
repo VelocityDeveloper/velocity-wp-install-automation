@@ -1,0 +1,31 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/stat",
+ "title": "Angka Statistik",
+ "category": "velocity-blocks",
+ "icon": "chart-bar",
+ "description": "Angka besar + label.",
+ "attributes": {
+  "value": {
+   "type": "string",
+   "default": "100+"
+  },
+  "label": {
+   "type": "string",
+   "default": "Label"
+  },
+  "icon": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

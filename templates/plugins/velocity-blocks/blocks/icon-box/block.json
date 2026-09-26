@@ -1,0 +1,68 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/icon-box",
+ "title": "Kotak Ikon",
+ "category": "velocity-blocks",
+ "icon": "screenoptions",
+ "description": "Ikon + judul + teks + tautan. Untuk keunggulan, fitur, sertifikasi.",
+ "attributes": {
+  "icon": {
+   "type": "string",
+   "default": "leaf"
+  },
+  "iconUrl": {
+   "type": "string",
+   "default": ""
+  },
+  "iconId": {
+   "type": "number",
+   "default": 0
+  },
+  "title": {
+   "type": "string",
+   "default": "Feature title"
+  },
+  "text": {
+   "type": "string",
+   "default": ""
+  },
+  "url": {
+   "type": "string",
+   "default": ""
+  },
+  "newTab": {
+   "type": "boolean",
+   "default": false
+  },
+  "linkLabel": {
+   "type": "string",
+   "default": ""
+  },
+  "layout": {
+   "type": "string",
+   "default": "top"
+  },
+  "boxStyle": {
+   "type": "string",
+   "default": "card"
+  },
+  "iconStyle": {
+   "type": "string",
+   "default": "soft"
+  },
+  "align": {
+   "type": "string",
+   "default": "left"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

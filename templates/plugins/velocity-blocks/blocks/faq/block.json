@@ -1,0 +1,43 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/faq",
+ "title": "FAQ (Akordeon)",
+ "category": "velocity-blocks",
+ "icon": "editor-help",
+ "description": "Daftar tanya-jawab yang bisa dibuka-tutup. Tambah, ubah, hapus, dan geser pertanyaan di dalamnya.",
+ "attributes": {
+  "style": {
+   "type": "string",
+   "default": "card"
+  },
+  "openFirst": {
+   "type": "boolean",
+   "default": true
+  },
+  "singleOpen": {
+   "type": "boolean",
+   "default": true
+  },
+  "schema": {
+   "type": "boolean",
+   "default": true
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "viewScript": "vb-view",
+ "keywords": [
+  "faq",
+  "accordion",
+  "pertanyaan",
+  "tanya jawab"
+ ]
+}

@@ -1,0 +1,52 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/heading",
+ "title": "Judul Seksi",
+ "category": "velocity-blocks",
+ "icon": "heading",
+ "description": "Label kecil + judul + subjudul, rata kiri/tengah.",
+ "attributes": {
+  "eyebrow": {
+   "type": "string",
+   "default": ""
+  },
+  "title": {
+   "type": "string",
+   "default": "Section title"
+  },
+  "subtitle": {
+   "type": "string",
+   "default": ""
+  },
+  "level": {
+   "type": "number",
+   "default": 2
+  },
+  "align": {
+   "type": "string",
+   "default": "left"
+  },
+  "size": {
+   "type": "string",
+   "default": "lg"
+  },
+  "divider": {
+   "type": "boolean",
+   "default": false
+  },
+  "pill": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

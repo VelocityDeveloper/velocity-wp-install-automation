@@ -1,0 +1,72 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/section",
+ "title": "Seksi",
+ "category": "velocity-blocks",
+ "icon": "align-center",
+ "description": "Wadah seksi halaman: latar warna/foto, overlay, jarak, lebar isi. Seret blok apa saja ke dalamnya.",
+ "attributes": {
+  "align": {
+   "type": "string",
+   "default": "full"
+  },
+  "bg": {
+   "type": "string",
+   "default": "none"
+  },
+  "bgColor": {
+   "type": "string",
+   "default": ""
+  },
+  "bgUrl": {
+   "type": "string",
+   "default": ""
+  },
+  "bgId": {
+   "type": "number",
+   "default": 0
+  },
+  "overlay": {
+   "type": "number",
+   "default": 60
+  },
+  "overlayType": {
+   "type": "string",
+   "default": "solid"
+  },
+  "padding": {
+   "type": "string",
+   "default": "lg"
+  },
+  "width": {
+   "type": "string",
+   "default": "wide"
+  },
+  "minHeight": {
+   "type": "number",
+   "default": 0
+  },
+  "tone": {
+   "type": "string",
+   "default": "auto"
+  },
+  "valign": {
+   "type": "string",
+   "default": "center"
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "align": [
+   "wide",
+   "full"
+  ],
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

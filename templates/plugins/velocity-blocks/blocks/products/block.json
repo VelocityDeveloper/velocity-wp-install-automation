@@ -1,0 +1,53 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/products",
+ "title": "Katalog Produk",
+ "category": "velocity-blocks",
+ "icon": "products",
+ "description": "Produk dari menu Produk: tab per kategori atau grid.",
+ "attributes": {
+  "layout": {
+   "type": "string",
+   "default": "tabs"
+  },
+  "category": {
+   "type": "string",
+   "default": ""
+  },
+  "count": {
+   "type": "number",
+   "default": 8
+  },
+  "columns": {
+   "type": "number",
+   "default": 4
+  },
+  "showViewAll": {
+   "type": "boolean",
+   "default": true
+  },
+  "viewAllLabel": {
+   "type": "string",
+   "default": "View all products"
+  },
+  "showExcerpt": {
+   "type": "boolean",
+   "default": false
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false,
+  "align": [
+   "wide",
+   "full"
+  ]
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "viewScript": "vb-view"
+}

@@ -37,6 +37,7 @@ import fcntl
 import importlib.machinery
 import importlib.util
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -52,6 +53,9 @@ ALAT = HERE / 'desain-claude-alat'
 TEMA = ROOT / 'templates' / 'tema-fse'
 TUGAS = ROOT / 'templates' / 'desain-claude' / 'tugas.md'
 TOKO = ROOT / 'templates' / 'desain-claude' / 'toko-vd-store.md'
+# Blok ala page builder (keputusan user 2026-09-26): seksi halaman disusun dari Velocity Blocks
+# (vb/*) yang dipasang fse-apply --tema, supaya klien bisa drag-drop, pilih ikon & tautan di kanvas.
+VB = ROOT / 'templates' / 'plugins' / 'velocity-blocks'
 KUNCI = Path('/var/lib/velocity/desain-claude.lock')
 AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
 CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
@@ -201,7 +205,48 @@ def siapkan(cfg, folder):
     bahan = FA.Situs(cfg).php(PHP_BAHAN)
     (kerja / 'palet.json').write_text(json.dumps(bahan.pop('palet'), ensure_ascii=False, indent=1))
     (kerja / 'isi.json').write_text(json.dumps(bahan, ensure_ascii=False, indent=1))
+    (kerja / 'velocity-blocks.md').write_text(ringkasan_vb(cfg))
     return bahan
+
+
+def blok_vb(cfg):
+    """Blok vb/* yang terdaftar di situs ini (blok modul yang dimatikan tidak ada di editor)."""
+    if not (VB / 'blocks').is_dir():
+        return []
+    mati = {k for k, v in FA.modul_vb(cfg, 'perusahaan').items() if not v}
+    peta = {'products': 'produk', 'product-details': 'produk', 'rfq-form': 'rfq', 'portfolio': 'portofolio',
+            'rentals': 'sewa', 'booking-form': 'sewa', 'posts': 'berita', 'news-heading': 'berita'}
+    hasil = []
+    for d in sorted((VB / 'blocks').iterdir()):
+        if (d / 'block.json').is_file() and peta.get(d.name) not in mati:
+            hasil.append(json.loads((d / 'block.json').read_text()))
+    return hasil
+
+
+def ringkasan_vb(cfg):
+    """Kamus blok untuk agen: nama, fungsi, wadah/bukan, atribut + bawaan, nama ikon."""
+    js = (VB / 'assets' / 'editor.js').read_text() if (VB / 'assets' / 'editor.js').is_file() else ''
+    daftar = list(re.finditer(r"(?:daftarkan|pratinjau)\(\s*'(vb/[a-z0-9-]+)'", js))
+    wadah = {m.group(1) for i, m in enumerate(daftar)
+             if 'InnerBlocks.Content' in js[m.start():daftar[i + 1].start() if i + 1 < len(daftar) else len(js)]}
+    baris = ['# Velocity Blocks (vb/*) yang terpasang di situs ini', '',
+             f'Sumber lengkap (baca saja): `{VB}` — `blocks/<nama>/render.php` (HTML keluaran & kelas CSS),',
+             '`assets/editor.js` (pilihan nilai tiap atribut: cari `Pilih(` / `options` di blok itu), `assets/blok.css`.',
+             '', 'WADAH = tulis `<!-- wp:vb/x {...} -->` + blok anak + `<!-- /wp:vb/x -->` TANPA HTML pembungkus.',
+             'Bukan wadah = self-closing `<!-- wp:vb/x {...} /-->`. Atribut yang sama dengan bawaan tidak perlu ditulis.', '']
+    for j in blok_vb(cfg):
+        nama = j['name']
+        attrs = ', '.join(f"{k}={json.dumps(v.get('default', ''), ensure_ascii=False)}"
+                          for k, v in (j.get('attributes') or {}).items())
+        induk = f" · hanya di dalam {', '.join(j['parent'])}" if j.get('parent') else ''
+        baris.append(f"- **{nama}** ({j.get('title', '')}{' · WADAH' if nama in wadah else ''}{induk}): "
+                     f"{j.get('description', '')}\n  atribut: {attrs}")
+    try:
+        ikon = sorted(json.loads((VB / 'assets' / 'ikon.json').read_text()))
+        baris += ['', 'Nama ikon (atribut `icon`): ' + ', '.join(ikon)]
+    except (OSError, ValueError):
+        pass
+    return '\n'.join(baris) + '\n'
 
 
 TAHAP_TEKS = {
@@ -232,11 +277,12 @@ footer & `gaya.css` sudah kamu susun di tahap tema: pertahankan dan lanjutkan da
 
 def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False):
     blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
+    blok_tema += ', Velocity Blocks: ' + ', '.join(j['name'] for j in blok_vb(cfg))
     target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
     ganti = {
         '{{DOMAIN}}': domain, '{{PAKET}}': cfg.get('paket', ''), '{{REFERENSI}}': referensi,
         '{{FOLDER}}': str(folder / 'claude'), '{{RENCANA}}': str(folder), '{{ALAT}}': str(ALAT),
-        '{{TEMA}}': str(TEMA), '{{BLOK_TEMA}}': blok_tema, '{{PUTARAN}}': str(putaran),
+        '{{TEMA}}': str(TEMA), '{{VB}}': str(VB), '{{BLOK_TEMA}}': blok_tema, '{{PUTARAN}}': str(putaran),
         '{{HALAMAN}}': ', '.join(t.replace('__', '/') for t in target) or 'beranda, tentang-kami, galeri, hubungi-kami',
     }
     prompt = TUGAS.read_text().replace('{{TAHAP}}', TAHAP_TEKS[TAHAP])
@@ -282,7 +328,7 @@ def jalankan_claude(folder, env, menit, prompt):
         '--output-format', 'stream-json', '--verbose',
         '--no-session-persistence',
         '--permission-mode', 'acceptEdits',
-        '--add-dir', str(folder), str(TEMA),
+        '--add-dir', str(folder), str(TEMA), str(VB),
         '--allowedTools', 'Read', 'Write', 'Edit', 'Glob', 'Grep', f'Bash({ALAT}:*)',
         # Rahasia klien (password DA/DB/WP, kunci SSH, token) & kredensial Claude tidak boleh dibaca.
         '--disallowedTools', 'WebFetch', 'WebSearch', 'Agent', 'Read(//etc/**)', 'Read(//root/**)',

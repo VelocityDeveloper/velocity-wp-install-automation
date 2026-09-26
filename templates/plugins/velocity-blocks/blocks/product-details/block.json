@@ -1,0 +1,23 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/product-details",
+ "title": "Detail Produk",
+ "category": "velocity-blocks",
+ "icon": "list-view",
+ "description": "Varian, spesifikasi, kegunaan, dan tombol permintaan penawaran produk yang sedang dibuka.",
+ "attributes": {
+  "rfqUrl": {
+   "type": "string",
+   "default": "/contact/#rfq"
+  }
+ },
+ "supports": {
+  "html": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

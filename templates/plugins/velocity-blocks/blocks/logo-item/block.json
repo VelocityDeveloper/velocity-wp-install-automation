@@ -1,0 +1,43 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/logo-item",
+ "title": "Logo",
+ "category": "velocity-blocks",
+ "icon": "format-image",
+ "description": "Satu logo + keterangan + tautan (opsional).",
+ "attributes": {
+  "imageUrl": {
+   "type": "string",
+   "default": ""
+  },
+  "imageId": {
+   "type": "number",
+   "default": 0
+  },
+  "label": {
+   "type": "string",
+   "default": ""
+  },
+  "url": {
+   "type": "string",
+   "default": ""
+  },
+  "newTab": {
+   "type": "boolean",
+   "default": false
+  }
+ },
+ "supports": {
+  "html": false,
+  "reusable": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "parent": [
+  "vb/logos"
+ ]
+}

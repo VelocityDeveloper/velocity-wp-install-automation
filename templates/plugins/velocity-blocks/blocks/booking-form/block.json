@@ -1,0 +1,28 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/booking-form",
+ "title": "Form Booking WhatsApp",
+ "category": "velocity-blocks",
+ "icon": "calendar-alt",
+ "description": "Kartu form singkat (nama, tanggal, pilihan unit) yang mengirim pesanan lewat WhatsApp.",
+ "keywords": [ "booking", "pesan", "sewa", "whatsapp", "form" ],
+ "attributes": {
+  "title": { "type": "string", "default": "Pesan Scooter Anda" },
+  "labelName": { "type": "string", "default": "Nama Lengkap" },
+  "placeholderName": { "type": "string", "default": "Tulis nama lengkap Anda" },
+  "labelDate": { "type": "string", "default": "Tanggal Sewa" },
+  "labelUnit": { "type": "string", "default": "Pilih Scooter" },
+  "placeholderUnit": { "type": "string", "default": "-- Pilih scooter --" },
+  "buttonText": { "type": "string", "default": "Kirim via WhatsApp" },
+  "note": { "type": "string", "default": "" },
+  "intro": { "type": "string", "default": "Halo, saya ingin memesan scooter." }
+ },
+ "supports": { "anchor": true, "html": false },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "viewScript": "vb-view"
+}

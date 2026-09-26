@@ -1,0 +1,47 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/testimonial",
+ "title": "Item Testimoni",
+ "category": "velocity-blocks",
+ "icon": "admin-comments",
+ "description": "Satu testimoni: kutipan, bintang, nama, jabatan/asal, foto (opsional).",
+ "attributes": {
+  "quote": {
+   "type": "string",
+   "default": ""
+  },
+  "name": {
+   "type": "string",
+   "default": ""
+  },
+  "role": {
+   "type": "string",
+   "default": ""
+  },
+  "rating": {
+   "type": "number",
+   "default": 5
+  },
+  "photoUrl": {
+   "type": "string",
+   "default": ""
+  },
+  "photoId": {
+   "type": "number",
+   "default": 0
+  }
+ },
+ "supports": {
+  "html": false,
+  "reusable": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "parent": [
+  "vb/testimonials"
+ ]
+}

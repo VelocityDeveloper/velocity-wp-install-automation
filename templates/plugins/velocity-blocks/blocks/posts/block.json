@@ -1,0 +1,100 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/posts",
+ "title": "Daftar Berita",
+ "category": "velocity-blocks",
+ "icon": "list-view",
+ "description": "Berita terbaru/terpopuler dari kategori pilihan: foto berlapis, baris, daftar dengan ringkasan, atau grid kartu.",
+ "attributes": {
+  "layout": {
+   "type": "string",
+   "default": "overlay"
+  },
+  "category": {
+   "type": "number",
+   "default": 0
+  },
+  "count": {
+   "type": "number",
+   "default": 4
+  },
+  "offset": {
+   "type": "number",
+   "default": 0
+  },
+  "orderBy": {
+   "type": "string",
+   "default": "date"
+  },
+  "columns": {
+   "type": "number",
+   "default": 1
+  },
+  "columnsTablet": {
+   "type": "number",
+   "default": 1
+  },
+  "columnsMobile": {
+   "type": "number",
+   "default": 1
+  },
+  "gap": {
+   "type": "string",
+   "default": "md"
+  },
+  "imageHeight": {
+   "type": "number",
+   "default": 420
+  },
+  "fill": {
+   "type": "boolean",
+   "default": false
+  },
+  "thumbPos": {
+   "type": "string",
+   "default": "right"
+  },
+  "titleSize": {
+   "type": "string",
+   "default": "md"
+  },
+  "showCategory": {
+   "type": "boolean",
+   "default": true
+  },
+  "showDate": {
+   "type": "boolean",
+   "default": true
+  },
+  "showExcerpt": {
+   "type": "boolean",
+   "default": true
+  },
+  "excerptLength": {
+   "type": "number",
+   "default": 24
+  },
+  "excludeCurrent": {
+   "type": "boolean",
+   "default": false
+  },
+  "emptyText": {
+   "type": "string",
+   "default": "Belum ada berita."
+  }
+ },
+ "supports": {
+  "anchor": true,
+  "html": false,
+  "align": [
+   "wide",
+   "full"
+  ]
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php"
+}

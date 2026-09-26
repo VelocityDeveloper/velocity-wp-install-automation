@@ -1,0 +1,36 @@
+{
+ "$schema": "https://schemas.wp.org/trunk/block.json",
+ "apiVersion": 3,
+ "name": "vb/step",
+ "title": "Langkah",
+ "category": "velocity-blocks",
+ "icon": "marker",
+ "description": "Satu langkah di Alur Langkah.",
+ "attributes": {
+  "title": {
+   "type": "string",
+   "default": "Step title"
+  },
+  "text": {
+   "type": "string",
+   "default": ""
+  },
+  "icon": {
+   "type": "string",
+   "default": ""
+  }
+ },
+ "supports": {
+  "html": false,
+  "reusable": false
+ },
+ "textdomain": "velocity-blocks",
+ "editorScript": "vb-editor",
+ "editorStyle": "vb-editor",
+ "style": "vb-blok",
+ "render": "file:./render.php",
+ "parent": [
+  "vb/steps"
+ ],
+ "usesContext": []
+}
