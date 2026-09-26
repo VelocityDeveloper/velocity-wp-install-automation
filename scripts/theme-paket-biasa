@@ -657,6 +657,21 @@ if ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
     $baru[] = "recent-posts-$n";
     $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
 }
+// Area widget tambahan acuan tema (keputusan user 2026-09-26, velocity-toko14: sidebar kiri = main-sidebar di atas,
+// sidebar kanan = secondary-sidebar) lewat velocity_tema_widget_area() = ['<id area>' => [[judul, isi], ...]].
+// Aturan sama dengan sidebar utama: area yang sudah disunting orang dibiarkan.
+foreach (function_exists('velocity_tema_widget_area') ? (array) velocity_tema_widget_area() : [] as $area => $daftar_acuan) {
+    if (!isset($wp_registered_sidebars[$area]) || !$daftar_acuan || !$boleh($sb[$area] ?? [])) { continue; }
+    $hapus_bawaan($sb[$area] ?? []);
+    $baru = [];
+    foreach ((array) $daftar_acuan as [$judul, $isi]) {
+        $n = 300; while (isset($tx[$n])) { $n++; }
+        $tx[$n] = ['title' => $judul, 'text' => $isi, 'filter' => false, 'visual' => false];
+        $baru[] = "text-$n";
+    }
+    $sb[$area] = $baru; $ubah[] = $area; $semua = array_merge($semua, $baru);
+    echo "tampilan: widget_area_acuan_tema:$area:" . count($baru) . "\n";
+}
 $kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
 // Tema dengan acuan footer sendiri (velocity-toko21: kosong, persis demo — keputusan user 2026-09-24):
 // widget footer buatan installer/bawaan WordPress dicabut, footer hanya hak cipta dari tema.
