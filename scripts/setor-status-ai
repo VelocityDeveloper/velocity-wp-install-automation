@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Setor status automation installer per domain ke CRM (label "AI" di new.velocitydeveloper.net/project_list/).
+
+Permintaan user 2026-09-26: di daftar project CRM terlihat mana yang sudah dikerjakan AI, mana yang
+gagal, mana yang belum, sesuai status terakhir di automation. CRM di hosting tidak bisa menjangkau
+Local PC, jadi Local PC yang menyetor (pola sama dengan claude-pakai --setor / menu Token Claude).
+
+  setor-status-ai [--url URL] [--kunci BERKAS] [--cetak]
+     --cetak   tampilkan isi setoran tanpa mengirim
+
+Sumber: /api/installer (installer-status.service, daftar yang sama dengan /installer/wordpress).
+Status per domain: selesai | gagal | berjalan | antre. Domain yang belum disentuh automation tidak
+dikirim; CRM memberinya label kuning untuk jenis project di `jenis_install`.
+Dikirim bila isinya berubah, atau paling lambat tiap jam supaya CRM tahu datanya masih segar.
+"""
+import argparse
+import hashlib
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'services'))
+from installer_status import INSTALL_JENIS  # noqa: E402
+
+API_LOKAL = 'http://127.0.0.1:9121/api/installer'
+URL_CRM = 'https://new.velocitydeveloper.net/api/api/public/installer-status'
+KUNCI = '/etc/velocity/secrets/project_list_api_key'
+CATATAN = Path('/var/lib/velocity/setor-status-ai.json')
+SEGARKAN = 3600
+
+
+def alasan_gagal(log):
+    """Sebab gagal yang terbaca dari log run terakhir: galat JSON installer, atau baris sebelum FAILED."""
+    akhir = max((n for n, b in enumerate(log) if 'FAILED:' in b), default=None)
+    if akhir is None:
+        return ''
+    for b in reversed(log[:akhir]):
+        if 'FAILED:' in b or 'RUNNING:' in b:
+            break
+        if b.startswith('{'):
+            try:
+                j = json.loads(b)
+            except ValueError:
+                continue
+            if j.get('status') == 'error':
+                return ' '.join(x for x in (str(j.get('error') or ''), str(j.get('problems') or '')) if x)[:200]
+    sisa = [b for b in (re.sub(r'^\[[^\]]*\]\s*', '', b).strip() for b in log[:akhir])
+            if b and not b.startswith(('telegram:', 'pemilik:'))]
+    if not sisa:
+        return ''
+    # "Terakhiri"/"Dimatikan" = pesan bash saat langkah dibunuh (timeout); sebut langkahnya.
+    if re.fullmatch(r'(Terakhiri|Terminated|Dimatikan|Killed)\b.*', sisa[-1]) and len(sisa) > 1:
+        return f'dihentikan ({sisa[-1]}) saat: {sisa[-2]}'[:200]
+    return sisa[-1][:200]
+
+
+def status_domain(x):
+    """Baris /api/installer -> {status, tahap, pesan, waktu, mode, detik} atau None (belum disentuh)."""
+    st, sumber = x.get('status') or '', x.get('source') or ''
+    terakhir = (x.get('lama') or {}).get('terakhir') or {}
+    hasil = {'tahap': x.get('stage') or '', 'pesan': '', 'waktu': x.get('updated_at') or '',
+             'mode': terakhir.get('mode') or '', 'detik': terakhir.get('detik')}
+    if sumber == 'agen':
+        return {**hasil, 'status': 'berjalan', 'pesan': 'Agen desain Claude mengerjakan tema'}
+    if st == 'RUNNING':
+        return {**hasil, 'status': 'berjalan'}
+    if st == 'FAILED' or st == 'installer_error':
+        return {**hasil, 'status': 'gagal', 'pesan': alasan_gagal(x.get('log') or []) or x.get('message') or ''}
+    if sumber == 'selesai':
+        return {**hasil, 'status': 'selesai', 'tahap': 'COMPLETE'}
+    if x.get('claim') or x.get('manifest'):
+        return {**hasil, 'status': 'antre', 'pesan': st}
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--url', default=URL_CRM)
+    ap.add_argument('--kunci', default=KUNCI)
+    ap.add_argument('--cetak', action='store_true')
+    a = ap.parse_args()
+
+    with urllib.request.urlopen(API_LOKAL, timeout=60) as r:
+        baris = json.load(r).get('domains') or []
+    domain = {}
+    for x in baris:
+        s = status_domain(x)
+        if s:
+            domain[str(x['domain']).lower()] = s
+    isi = {'jenis_install': sorted(INSTALL_JENIS), 'domain': dict(sorted(domain.items()))}
+    sidik = hashlib.sha1(json.dumps(isi, sort_keys=True).encode()).hexdigest()
+    isi['dibuat'] = int(time.time())
+    if a.cetak:
+        print(json.dumps(isi, ensure_ascii=False, indent=1))
+        return 0
+
+    try:
+        st = json.loads(CATATAN.read_text())
+    except (OSError, ValueError):
+        st = {}
+    if st.get('sidik') == sidik and not st.get('gagal') and time.time() - st.get('waktu', 0) < SEGARKAN:
+        return 0
+    try:
+        req = urllib.request.Request(a.url, data=json.dumps(isi).encode(), method='POST', headers={
+            'Authorization': 'Bearer ' + Path(a.kunci).read_text().strip(),
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            # WAJIB: UA bawaan Python-urllib memicu blokir IP kantor oleh LiteSpeed WAF hosting (24 Sep 2026).
+            'User-Agent': 'velocity-setor-status-ai/1.0 (+Local PC kantor)',
+        })
+        with urllib.request.urlopen(req, timeout=30) as r:
+            jawab = r.read(300).decode(errors='ignore')
+        CATATAN.write_text(json.dumps({'sidik': sidik, 'waktu': time.time(), 'domain': len(domain), 'jawab': jawab}))
+        print(f'setor: {len(domain)} domain -> {jawab}')
+    except (OSError, urllib.error.URLError) as e:
+        rinci = e.read(300).decode(errors='ignore') if isinstance(e, urllib.error.HTTPError) else ''
+        CATATAN.write_text(json.dumps({**st, 'waktu': time.time(), 'gagal': f'{e} {rinci}'[:300]}))
+        print(f'setor gagal: {e} {rinci}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

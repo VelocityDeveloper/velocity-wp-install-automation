@@ -1,0 +1,7 @@
+[Unit]
+Description=Setor status automation installer per domain ke CRM (label AI di project_list)
+After=network-online.target installer-status.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/setor-status-ai
