@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Warna tombol VD Store mengikuti warna utama situs (permintaan klien, keputusan user 2026-09-26).
+
+Pemakaian: vd-store-warna <manifest>
+           vd-store-warna --paksa <manifest>   juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
+
+Semua paket toko online (Custom & biasa): wp_store_settings theme_primary = warna utama situs,
+theme_primary_hover = warna itu digelapkan 15%. Dijalankan runner SESUDAH tema, finishing & isi
+selesai (warna FSE baru ada sesudah fse-apply, CSS warna form baru ada sesudah site-finish).
+
+Warna utama situs, urutan pertama yang ada:
+  1. tema blok (velocity-fse): palet global slug "primary"
+  2. CSS warna installer dari "WARNA TEMA WEB" di form (--velocity-primary, site-finish)
+  3. child theme toko: --velocitytoko-color-main (Customizer "Warna Utama" velocity-tokoN)
+  4. tema induk velocity: --bs-primary (Theme Colors > Primary)
+Tidak ketemu = pengaturan VD Store dibiarkan (log warna:tidak_ditemukan).
+"""
+import importlib.machinery
+import importlib.util
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import cari_logo  # noqa: E402
+
+PHP = r'''
+if (!defined("WP_STORE_VERSION")) { echo "dilewati:vd_store_tidak_aktif\n"; return; }
+$hex = function ($v) { $v = sanitize_hex_color(trim((string) $v)); return $v ? strtolower($v) : ""; };
+$var = function ($css, $nama) use ($hex) {
+    return preg_match_all("/--" . preg_quote($nama, "/") . "\s*:\s*(#[0-9a-fA-F]{3,6})\b/", (string) $css, $m) ? $hex(end($m[1])) : "";
+};
+$warna = ""; $sumber = "";
+if (function_exists("wp_is_block_theme") && wp_is_block_theme()) {
+    $palet = wp_get_global_settings(["color", "palette"]);
+    foreach (["custom", "theme"] as $asal) {
+        foreach ((array) ($palet[$asal] ?? []) as $p) {
+            if (($p["slug"] ?? "") === "primary" && ($w = $hex($p["color"] ?? ""))) { $warna = $w; $sumber = "palet_fse_$asal"; break 2; }
+        }
+    }
+}
+if (!$warna && ($w = $var(wp_get_custom_css(), "velocity-primary"))) { $warna = $w; $sumber = "css_warna_form"; }
+if (!$warna) {
+    // CSS inline tema klasik (Customizer child toko & tema induk) dicetak lewat wp_head.
+    ob_start(); do_action("wp_enqueue_scripts"); wp_print_styles(); do_action("wp_head"); $head = ob_get_clean();
+    foreach (["velocitytoko-color-main" => "warna_utama_child_toko", "bs-primary" => "primary_tema_induk"] as $nama => $s) {
+        if ($w = $var($head, $nama)) { $warna = $w; $sumber = $s; break; }
+    }
+}
+if (!$warna) { echo "warna:tidak_ditemukan\n"; return; }
+$rgb = array_map("hexdec", str_split(strlen($warna) === 4 ? preg_replace("/(.)/", "$1$1", substr($warna, 1)) : substr($warna, 1), 2));
+$hover = "#" . implode("", array_map(function ($c) { return sprintf("%02x", (int) round($c * 0.85)); }, $rgb));
+$s = (array) get_option("wp_store_settings", []);
+$lama = ($s["theme_primary"] ?? "") . "/" . ($s["theme_primary_hover"] ?? "");
+$s["theme_primary"] = $warna; $s["theme_primary_hover"] = $hover;
+update_option("wp_store_settings", $s);
+echo "warna:$warna hover:$hover sumber:$sumber lama:$lama\n";
+'''
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+def manifest(path):
+    out = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        k, sep, v = line.partition('=')
+        if sep:
+            out[k.strip()] = v.strip()
+    return out
+
+
+def main():
+    args = sys.argv[1:]
+    paksa = '--paksa' in args
+    args = [a for a in args if a != '--paksa']
+    if len(args) != 1:
+        print('usage: vd-store-warna [--paksa] <manifest>')
+        return 2
+    cfg = manifest(args[0])
+    if 'tokoonline' not in re.sub(r'\s+', '', cfg.get('paket', '').lower()):
+        print('vd_store_warna: dilewati:paket_bukan_toko_online')
+        return 0
+    domain = cfg.get('domain', '').lower()
+    if cari_logo.sudah_terpasang(domain) and not paksa:
+        print('vd_store_warna: dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+        return 0
+    finish = muat('site_finish', 'site-finish')
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    root = finish.docroot(domain, cfg.get('da_user', ''))
+    skrip = ('export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\n'
+             'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+             f'php -d memory_limit=512M "$WP_BIN" eval "$(cat <<\'VDWARNA\'\n{PHP}\nVDWARNA\n)" '
+             f'--path={shlex.quote(root)} --allow-root 2>&1 | grep -v "Warning:" || true\n')
+    run = subprocess.run(ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=300)
+    for baris in (run.stdout + run.stderr).splitlines():
+        if baris.strip():
+            print('vd_store_warna: ' + baris.strip()[:200])
+    return 0 if run.returncode == 0 else 1
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    raise SystemExit(kode)

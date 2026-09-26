@@ -483,6 +483,11 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
     echo "[$(date -Is)] Permintaan form klien (agen Claude)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/permintaan-claude" "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
+  # Toko online (Custom & biasa): warna primary/hover VD Store = warna utama situs (permintaan
+  # klien, keputusan user 2026-09-26). Sesudah tema, finishing & permintaan form supaya warna
+  # akhirnya yang dipakai. Paket non-toko & situs yang sudah ter-deploy dilewati skripnya sendiri.
+  echo "[$(date -Is)] VD Store: warna ikut situs" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/vd-store-warna" "$MANIFEST" >> "$LOG" 2>&1 || true
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"
   problems=$(python3 -c 'import json, sys

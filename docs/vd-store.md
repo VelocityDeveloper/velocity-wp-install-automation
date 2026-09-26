@@ -80,6 +80,14 @@ Selalu lewat shortcode VD Store (blok `core/shortcode`):
 Menu "Produk" = arsip `/produk/` dengan submenu `store_product_cat` (`menu_produk()` di
 `scripts/fse-apply`).
 
+## Warna tombol VD Store
+
+`wp_store_settings` `theme_primary` / `theme_primary_hover` (CSS `--primary-color` /
+`--primary-color-hover`) diisi `scripts/vd-store-warna` sesudah tema, finishing & permintaan form:
+primary = warna utama situs (palet FSE slug `primary` → CSS warna form `--velocity-primary` →
+`--velocitytoko-color-main` child toko → `--bs-primary` tema induk), hover = primary digelapkan 15%.
+Semua paket toko online, hanya instalasi baru (permintaan klien, keputusan user 2026-09-26).
+
 ## Yang tidak boleh
 
 - Mendaftarkan CPT produk lain (`product`, `produk`, dsb.) atau taksonominya. Tema velocity-fse

@@ -536,6 +536,20 @@ else
   echo "captcha_skip:sudah_diatur" >&2
 fi
 
+# Komentar dimatikan lewat "Fully Disable Comments" velocity-addons (keputusan user 2026-09-26):
+# menu Komentar, widget & form komentar hilang. Hanya instalasi baru (SITUS_BARU=1) dan sekali
+# per situs (velocity_installer_komentar), jadi pilihan PM sesudahnya tidak ditimpa.
+if [[ "$SITUS_BARU" != 1 ]]; then
+  echo "komentar_skip:situs_sudah_terpasang" >&2
+elif [[ -n "$(wp option get velocity_installer_komentar 2>/dev/null || true)" ]]; then
+  echo "komentar_skip:sudah_diatur" >&2
+elif ! wp plugin is-active velocity-addons >/dev/null 2>&1; then
+  echo "komentar_skip:velocity_addons_tidak_aktif" >&2
+else
+  wp option update fully_disable_comment 1 >/dev/null && wp option update velocity_installer_komentar "$(date -Is)" >/dev/null \
+    && echo "komentar_dimatikan" >&2
+fi
+
 if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; then
   wp option update floating_whatsapp 1 >/dev/null
   wp option update nomor_whatsapp "$WA" >/dev/null
@@ -1109,6 +1123,7 @@ def main():
             f'SEO_DESC={shlex.quote(seo["desc"])}',
             f'SEO_KEYWORDS={shlex.quote(seo["keywords"])}',
             f'CSS={shlex.quote(css)}',
+            f'SITUS_BARU={0 if cari_logo.sudah_terpasang(domain) else 1}',
         ])
         # Hanya secret per domain yang disalin dari catatan hosting PM; file password
         # bersama lama tidak boleh dipasang lagi. Dikirim lewat stdin, tidak dicetak.

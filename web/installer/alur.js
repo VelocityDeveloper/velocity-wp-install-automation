@@ -202,7 +202,7 @@
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
         selesai: /AI content generation completed/, aktif: tanpaDry },
-      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
       { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
@@ -302,6 +302,14 @@
           if ((m = /^permintaan_claude: (lewati|gagal):(\S+)/m.exec(t))) return (m[1] === 'lewati' ? 'dilewati: ' : 'gagal: ') + m[2].replace(/_/g, ' ');
           return null; },
         aktif: c => dan(tanpaDry(c), c.permintaanClaude) },
+      // Toko online (keputusan user 2026-09-26, scripts/vd-store-warna): warna primary & hover VD Store
+      // = warna utama situs (palet FSE / warna form / Warna Utama child toko), sesudah tema & isi final.
+      { id: 'warnaToko', kol: 23, jalur: 3, nama: 'Warna VD Store', ket0: 'primary & hover ikut warna utama situs',
+        mulai: /\] VD Store: warna ikut situs/, selesai: /vd_store_warna: (warna:|dilewati|Could not)/,
+        ketHasil: t => { const m = /vd_store_warna: warna:(#[0-9a-f]+) hover:(#[0-9a-f]+)/.exec(t);
+          return m ? m[1] + ' / hover ' + m[2] : /vd_store_warna: warna:tidak_ditemukan/.test(t) ? 'warna situs tidak ditemukan'
+            : /vd_store_warna: dilewati:situs_sudah_terpasang/.test(t) ? 'dilewati: situs lama' : null; },
+        aktif: c => dan(tanpaDry(c), c.toko) },
       // + permintaan klien di FORM 5 pesan tambahan (scripts/permintaan-form, keputusan user 2026-09-24):
       // belum ditandai selesai = "perlu dicek" berisi permintaannya.
       { id: 'qa', kol: 24, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten, permintaan form', mulai: /qa_result:/, selesai: /qa_result:/,
@@ -371,7 +379,7 @@
       ['agenClaude', 'permintaan'],
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
       ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
-      ['permintaan', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
+      ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
     ];
