@@ -188,7 +188,9 @@
 	"templateParts": [
 		{ "name": "header", "title": "Header", "area": "header" },
 		{ "name": "footer", "title": "Footer", "area": "footer" },
-		{ "name": "sidebar", "title": "Kolom Samping", "area": "uncategorized" }
+		{ "name": "sidebar", "title": "Kolom Samping", "area": "uncategorized" },
+		{ "name": "arsip", "title": "Arsip Tulisan (global)", "area": "uncategorized" },
+		{ "name": "artikel", "title": "Isi Artikel (global)", "area": "uncategorized" }
 	],
 	"customTemplates": [
 		{ "name": "halaman-lebar", "title": "Halaman lebar (tanpa judul)", "postTypes": [ "page" ] }

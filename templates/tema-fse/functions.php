@@ -27,6 +27,7 @@ require get_theme_file_path('inc/ikon.php');
 require get_theme_file_path('inc/form.php');
 require get_theme_file_path('inc/cf7.php');
 require get_theme_file_path('inc/pengaturan.php');
+require get_theme_file_path('inc/iklan.php');
 require get_theme_file_path('inc/dealer.php');
 require get_theme_file_path('inc/produk.php');
 require get_theme_file_path('inc/referensi.php');

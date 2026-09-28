@@ -37,3 +37,9 @@ if (is_home()) {
 <div <?php echo get_block_wrapper_attributes(array('class' => 'vf-rubrik-bar')); ?>>
 	<h1><?php echo esc_html($judul); ?></h1>
 </div>
+<?php
+// Template part arsip global (portal berita): satu part untuk rubrik, tag, indeks & pencarian,
+// jadi kotak cari hanya muncul di halaman hasil pencarian.
+if (!empty($attributes['cari']) && is_search()) {
+    echo do_blocks('<!-- wp:search {"label":"Cari","showLabel":false,"buttonText":"Cari","className":"vf-cari-arsip"} /-->'); // phpcs:ignore
+}

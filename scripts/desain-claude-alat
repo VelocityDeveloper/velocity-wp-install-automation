@@ -17,6 +17,10 @@ Isi folder fse-rencana/<domain>/claude/ (ditulis agen):
                         jadi validasi blok, md5 "sudah disunting orang", menu & cek HTTP tetap sama
   bagian-header.html    template part header (wp_template_part situs, bukan berkas tema)
   bagian-footer.html    template part footer
+  bagian-sidebar.html   template part kolom samping (arsip/indeks berita; portal berita)
+  bagian-arsip.html     template part `arsip` (portal berita): SATU tata letak untuk semua daftar
+                        tulisan (rubrik, tag, penulis, tanggal, cari) — core/query inherit:true
+  bagian-artikel.html   template part `artikel` (portal berita): isi artikel tunggal (core/post-*)
   gaya.css              CSS tambahan situs (Site Editor → Gaya → CSS tambahan)
 
 Tahap tema (VELOCITY_DESAIN_TAHAP=tema, desain-claude --tahap=tema): halaman belum disusun,
@@ -37,7 +41,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BAGIAN = ('header', 'footer')
+BAGIAN = ('header', 'footer', 'sidebar', 'arsip', 'artikel')
 CSS_MAKS = 80_000
 
 
@@ -141,7 +145,7 @@ foreach ((array) $d['bagian'] as $slug => $baru) {
             'post_title' => ucfirst($slug), 'post_content' => wp_slash($baru)), true);
         if (is_wp_error($id) || !$id) { $hasil[] = 'bagian_gagal:' . $slug; continue; }
         wp_set_post_terms($id, array($tema), 'wp_theme');
-        wp_set_post_terms($id, array($slug), 'wp_template_part_area');
+        wp_set_post_terms($id, array(in_array($slug, array('header', 'footer'), true) ? $slug : 'uncategorized'), 'wp_template_part_area');
     }
     $simpan = (string) get_post_field('post_content', $id, 'raw');
     update_post_meta($id, '_velocity_claude_md5', md5($simpan));

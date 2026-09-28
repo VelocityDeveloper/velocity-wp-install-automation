@@ -472,6 +472,55 @@ situs** (company profile vs portal berita). Template tetap satu, variannya lewat
   `post_modified` karena installer sendiri menerbitkannya ulang; yang benar
   membandingkan isi dengan versi generator (md5).
 
+### Portal berita ikut jalur agen Claude (2026-09-28)
+
+Empat situs berita (anaksegalabangsa, j45news, jurnalsquad, potrethitamputih) semuanya
+mendapat gaya *sorotan*, dan dua di antaranya harus ditata ulang manual agar mirip
+referensinya. Ada tiga penyebab yang saling menutupi. Pertama, beranda berita hanya memilih
+satu dari dua pola siap pakai. Kedua, audit memberi beranda berita skor 100 otomatis
+(`susunan_dari_manifest`), dan gaya sorotan tidak menilai header. Ketiga, agen desain
+Claude sengaja melewati portal berita.
+
+- Di jalur `agen_langsung` runner memanggil `fse-apply --tema` dengan `VELOCITY_BERITA_AGEN=1`.
+  Portal berita lalu mendapat gaya `referensi` (tersimpan di `referensi.json`, `sumber: ukur_dom_agen`,
+  dan dipertahankan oleh `--isi` berikutnya). Akibatnya header dan footer referensi dipasang, beranda
+  generator `beranda_berita_vb` menjadi titik awal, dan `fse-audit-kemiripan` menilai beranda per seksi.
+- `desain-claude` tidak lagi melewati berita. Kamus bloknya memuat `vb/posts` dan `vb/news-heading`
+  (modul berita), aturan tambahannya ada di `templates/desain-claude/berita.md`, dan agen boleh
+  menulis `bagian-sidebar.html` (template part `sidebar`, dipakai arsip, indeks, dan pencarian).
+- Situs berita lama (klasik/sorotan) tidak berubah: gaya referensi hanya muncul bila env itu ada,
+  atau bila `referensi.json`-nya memang sudah `referensi`.
+- ~~Belum tercakup: template artikel tunggal dan arsip~~ → sejak velocity-fse 1.29.0 (lihat poin
+  arsip/artikel global di bawah).
+- Pengukur seksi untuk portal berita: beranda berwadah (kolom isi + kolom samping) tidak punya blok
+  selebar layar, sehingga `referensi-desain.js` dulu membaca seluruh beranda lingkar-jawa.com sebagai
+  satu "hero" setinggi 5113px dan skor beranda selalu 100. Dengan env `VELOCITY_UKUR_KOLOM=1`, seksi
+  yang lebih tinggi dari 2 layar dipecah di kolom terlebarnya menjadi blok-blok yang bertumpuk.
+  Daftar berulang (≥4 anak sekelas yang tingginya mirip, seperti feed berita terbaru) tetap dihitung
+  satu seksi. Hasil pada lingkar-jawa.com: 1 seksi menjadi 10. `referensi_desain.portal_berita()`
+  (tema.json jenis berita atau paket manifest) menyalakan env ini dan mencatat `ukur_kolom: true`
+  di desain-referensi.json (tembolok lama tanpa tanda ini diukur ulang). `fse-audit-kemiripan`
+  mengukur situs dengan mode yang sama bila tanda itu ada. Uji salinan j45news.id: beranda 100 → 79.
+  Situs non-berita tidak berubah.
+- **Arsip & artikel global + iklan** (permintaan user 2026-09-28, velocity-fse 1.29.0). Pada portal
+  berita bergaya `referensi` (`velocity_fse_arsip_global()`), semua daftar tulisan (rubrik, tag,
+  penulis, tanggal, pencarian, indeks) memakai `archive-berita` → template part `arsip` (query
+  `inherit:true`, jadi yang berbeda hanya query-nya), dan artikel memakai `single-berita` → part
+  `artikel`. Arsip produk/mobil tidak ikut. Agen menulis `bagian-arsip.html` dan `bagian-artikel.html`
+  (desain-claude-alat `BAGIAN`, area `uncategorized`) dengan meniru arsip rubrik dan artikel referensi.
+  `referensi-desain.js` (mode kolom) mengeluarkan `tautan_artikel`, lalu
+  `pilih_halaman_berita()` mengganti `artikel` dengan `arsip_rubrik` (menu pertama yang bukan
+  profil/kontak) dan `single` (`ukur_berita: 1`; tembolok lama diukur ulang). Audit membuka rubrik
+  terisi dan artikel terbaru situs lewat `PHP_BERITA`. Kemiripan beranda/arsip/artikel
+  ≥ `DESAIN_CLAUDE_AMBANG_IKLAN` (90): `sisip_iklan()` menyisipkan `velocity/iklan` (beranda: sela-1..4
+  merata di antara seksi puncak; arsip: sebelum `core/query`; artikel: sesudah `post-content`), lalu
+  pasang dan audit ulang, dengan log `desain_claude: iklan_disisipkan:` (bagan: keterangan agen).
+  Gambar, tautan, dan sembunyi per slot diatur di wp-admin → Tampilan → Iklan (opsi `velocity_iklan`).
+  Slot tanpa gambar tampil sebagai kotak "Ruang Iklan" yang tertaut ke Hubungi Kami.
+  Jebakan uji lokal: WP 7 + sqlite-database-integration butuh SQLite ≥ 3.37, sedangkan server ini
+  3.34. Solusinya: `LD_PRELOAD` libsqlite3 3.37.2 dari overlay kontainer Debian (versi 3.46 butuh
+  GLIBC 2.38). Jangan `pkill -f` dengan pola yang juga ada di perintah bash sendiri.
+
 ## Kerapian padding & margin desktop dan mobile
 
 Keputusan user 2026-09-14: tampilan wajib rapi di desktop **dan** HP, terutama

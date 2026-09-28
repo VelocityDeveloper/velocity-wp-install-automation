@@ -630,15 +630,37 @@ def rencana_global(ukur, ref, h, seksi, susunan, catatan):
     }
 
 
+# Versi pengukuran portal berita: 1 = arsip rubrik + artikel tunggal ikut diukur (2026-09-28).
+UKUR_BERITA = 1
+
+
+def portal_berita(domain):
+    """Situs portal berita? Dari tema.json generator atau paket di manifest (dipakai sebelum generator)."""
+    tema = Path('/var/lib/velocity/ai/generated') / f'{domain}-tema.json'
+    try:
+        if tema.is_file() and '"jenis": "berita"' in tema.read_text():
+            return True
+        return 'paket=Paket Portal Berita' in (Path('/home/project') / domain / f'{domain}.txt').read_text()
+    except OSError:
+        return False
+
+
+def env_ukur(kolom):
+    """Env node pengukur; kolom=True memecah beranda berwadah (portal berita) per blok di kolom isi."""
+    return dict(os.environ, VELOCITY_UKUR_KOLOM='1') if kolom else None
+
+
 def ukur_referensi(domain, url, segar=False):
     """Jalankan pengukur (sekali per URL) dan kembalikan rencana, atau (None, alasan)."""
     folder = RENCANA_DIR / domain
     folder.mkdir(parents=True, exist_ok=True)
     berkas = folder / 'desain-referensi.json'
+    kolom = portal_berita(domain)
     if not segar:
         try:
             lama = json.loads(berkas.read_text())
-            if lama.get('url') == url and lama.get('versi') == VERSI:
+            if (lama.get('url') == url and lama.get('versi') == VERSI and lama.get('ukur_kolom', False) == kolom
+                    and lama.get('ukur_berita', 0) == (UKUR_BERITA if kolom else 0)):
                 return lama, 'tembolok'
         except (OSError, ValueError):
             pass
@@ -646,14 +668,17 @@ def ukur_referensi(domain, url, segar=False):
     mentah.unlink(missing_ok=True)
     try:
         run = subprocess.run(['node', str(HERE / 'referensi-desain.js'), url, str(mentah), str(folder / 'referensi-potret.png')],
-                             capture_output=True, text=True, timeout=240)
+                             capture_output=True, text=True, timeout=240, env=env_ukur(kolom))
     except (OSError, subprocess.SubprocessError) as e:
         return None, f'pengukur_gagal:{type(e).__name__}'
     if not mentah.is_file():
         return None, (run.stdout.strip().splitlines() or ['pengukur_tanpa_hasil'])[-1][:120]
     ukur = json.loads(mentah.read_text())
     hasil = rencana(ukur, {'url': url})
-    hasil['halaman'] = ukur_halaman_dalam(folder, ukur)
+    if kolom:
+        hasil['ukur_kolom'] = True
+        hasil['ukur_berita'] = UKUR_BERITA
+    hasil['halaman'] = ukur_halaman_dalam(folder, ukur, kolom)
     return hasil, 'diukur'
 
 
@@ -686,9 +711,35 @@ def pilih_halaman_dalam(tautan, beranda, pohon=None):
     return pilih
 
 
-def ukur_halaman_dalam(folder, ukur_beranda):
+BUKAN_RUBRIK = r'about|tentang|profil|redaksi|kontak|contact|hubungi|galeri|gallery|pedoman|disclaimer|privacy|privasi|' \
+               r'kebijakan|karir|career|iklan|advertis|login|masuk|daftar|register|video|foto|epaper|e-paper|indeks'
+
+
+def pilih_halaman_berita(ukur_beranda, pilih):
+    """Portal berita: arsip satu rubrik (menu pertama yang bukan profil/kontak) dan satu artikel
+    tunggal dari beranda, menggantikan `artikel` (menu "Berita" portal = rubrik/beranda juga).
+    Keduanya ditiru template part global `arsip` & `artikel` tema."""
+    pilih = {k: v for k, v in pilih.items() if k != 'artikel'}
+    akar = urllib.parse.urlparse(ukur_beranda.get('url', ''))
+    for t in ukur_beranda.get('tautan_menu') or []:
+        u = urllib.parse.urlparse(t.get('url', ''))
+        jalur = u.path.strip('/').lower()
+        if not jalur or u.path.rstrip('/') == akar.path.rstrip('/') or u.netloc.replace('www.', '') != akar.netloc.replace('www.', ''):
+            continue
+        if re.search(BUKAN_RUBRIK, f"{jalur} {(t.get('teks') or '').lower()}"):
+            continue
+        pilih['arsip_rubrik'] = urllib.parse.urlunparse(u._replace(query='', fragment=''))
+        break
+    if ukur_beranda.get('tautan_artikel'):
+        pilih['single'] = ukur_beranda['tautan_artikel'][0]
+    return pilih
+
+
+def ukur_halaman_dalam(folder, ukur_beranda, kolom=False):
     """Ukur halaman dalam referensi (satu browser) -> {nama: rencana_halaman}. Gagal = {}."""
     pilih = pilih_halaman_dalam(ukur_beranda.get('tautan_menu'), ukur_beranda.get('url', ''), ukur_beranda.get('menu_pohon'))
+    if kolom:
+        pilih = pilih_halaman_berita(ukur_beranda, pilih)
     if not pilih:
         return {}
     argumen = []
@@ -697,7 +748,7 @@ def ukur_halaman_dalam(folder, ukur_beranda):
         argumen += [url, str(folder / f'referensi-ukur-{nama}.json'), str(folder / f'referensi-potret-{nama}.png')]
     try:
         subprocess.run(['node', str(HERE / 'referensi-desain.js')] + argumen,
-                       capture_output=True, text=True, timeout=180 + 90 * len(pilih))
+                       capture_output=True, text=True, timeout=180 + 90 * len(pilih), env=env_ukur(kolom))
     except (OSError, subprocess.SubprocessError):
         pass
     hasil = {}

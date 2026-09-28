@@ -5,10 +5,16 @@
 	"title": "Judul Arsip",
 	"category": "theme",
 	"icon": "heading",
-	"description": "Judul halaman arsip: nama halaman berita, kategori/rubrik, atau kata pencarian. Terisi otomatis.",
+	"description": "Judul halaman arsip: nama halaman berita, kategori/rubrik, atau kata pencarian. Terisi otomatis. Opsi \"cari\": kotak pencarian ikut tampil di halaman hasil pencarian (template part arsip global).",
 	"supports": {
 		"html": false
 	},
 	"editorScript": "velocity-fse-blok",
-	"render": "file:./render.php"
+	"render": "file:./render.php",
+	"attributes": {
+		"cari": {
+			"type": "boolean",
+			"default": false
+		}
+	}
 }

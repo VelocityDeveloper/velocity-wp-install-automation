@@ -47,7 +47,7 @@ const chrome = process.env.VELOCITY_CHROME
     .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
 
 // Dijalankan di dalam halaman. Tidak boleh memakai apa pun dari luar fungsi ini.
-function ukur() {
+function ukur(opsi = {}) {
   const vw = document.documentElement.clientWidth;
   // Warna CSS modern (oklab/oklch/color()) tidak cocok dengan pola rgb(): tombol
   // "Contact" northseaaconsulting.com berwarna oklab sehingga headernya terbaca tanpa
@@ -385,6 +385,36 @@ function ukur() {
     seksi.push(el);
   };
   pecah(document.body, 0);
+  // Portal berita (opsi.kolom, keputusan user 2026-09-28): beranda berwadah dengan kolom isi +
+  // kolom samping tidak punya blok selebar layar, jadi seluruh beranda lingkar-jawa.com terbaca
+  // satu "hero" 5113px dan audit beranda berita selalu 100. Seksi yang jauh lebih tinggi dari
+  // layar dipecah lagi di dalam kolom isinya: turun ke kolom terlebar, lalu anak yang bertumpuk
+  // selebar kolom itu menjadi seksi.
+  const pecahKolom = (el, dalam) => {
+    const k = kotak(el);
+    if (dalam > 12) return [el];
+    const anak = [...el.children].filter((c) => tampak(c) && kotak(c).h >= 40
+      && !['fixed', 'sticky', 'absolute'].includes(getComputedStyle(c).position));
+    const penuh = anak.filter((c) => kotak(c).w >= k.w * 0.85 && kotak(c).h >= 100);
+    const urut = penuh.map(kotak).sort((a, b) => a.y - b.y);
+    const menimpa = urut.slice(1).some((q, i) => q.y < urut[i].y + urut[i].h - 20);
+    // Daftar berulang (kartu artikel sekelas: feed "berita terbaru") = satu seksi, bukan per artikel.
+    const cap = (c) => `${c.tagName}.${c.classList[0] || ''}`;
+    const tinggi = penuh.map((c) => kotak(c).h);
+    const berulang = penuh.length >= 4 && penuh.every((c) => cap(c) === cap(penuh[0]))
+      && Math.max(...tinggi) <= Math.min(...tinggi) * 1.4;
+    if (berulang && dalam > 0) return [el];
+    if (penuh.length >= 2 && !berulang && !menimpa && penuh.reduce((t, c) => t + kotak(c).h, 0) >= k.h * 0.6) {
+      return penuh.flatMap((c) => (kotak(c).h > innerHeight * 1.5 ? pecahKolom(c, dalam + 1) : [c]));
+    }
+    const kolom = anak.filter((c) => kotak(c).w >= vw * 0.45 && kotak(c).h >= k.h * 0.5)
+      .sort((a, b) => kotak(b).w - kotak(a).w)[0];
+    return kolom ? pecahKolom(kolom, dalam + 1) : [el];
+  };
+  if (opsi.kolom) {
+    const hasil = seksi.flatMap((el) => (kotak(el).h > innerHeight * 2 ? pecahKolom(el, 0) : [el]));
+    seksi.splice(0, seksi.length, ...hasil);
+  }
 
   const judulGaya = (h) => {
     const g = getComputedStyle(h);
@@ -750,6 +780,28 @@ function ukur() {
         };
       }).filter((m) => m.label);
     })(),
+    // Portal berita: contoh tautan artikel di isi beranda (bukan menu/header/footer), untuk
+    // mengukur halaman artikel tunggal referensi. Artikel = slug panjang ber-tanda-hubung atau .html.
+    tautan_artikel: opsi.kolom ? (() => {
+      const hasil = [];
+      for (const a of document.querySelectorAll('a[href]')) {
+        if (hasil.length >= 5) break;
+        // Bukan closest('[class*=menu]'): kelas body/pembungkus tema berita sering memuat "menu".
+        if (a.closest('nav, footer') || (header && header.contains(a))
+          || (footer && footer.contains(a))) continue;
+        let u;
+        try { u = new URL(a.href); } catch (e) { continue; }
+        if (u.hostname.replace(/^www\./, '') !== host || u.hash) continue;
+        const jalur = decodeURIComponent(u.pathname).toLowerCase();
+        if (/\/(category|tag|author|page|kategori|topik|tags|feed|rubrik|indeks|search)\b|wp-|\.(jpe?g|png|webp|pdf)$/.test(jalur)) continue;
+        const slug = jalur.split('/').filter(Boolean).pop() || '';
+        if (!((slug.match(/-/g) || []).length >= 3 || /\.html?$/.test(slug))) continue;
+        if (teks(a).length < 20) continue;
+        const bersih = u.origin + u.pathname;
+        if (!hasil.includes(bersih)) hasil.push(bersih);
+      }
+      return hasil;
+    })() : [],
     seksi: hasilSeksi,
     font: {
       menu: (() => {
@@ -812,7 +864,7 @@ function ukur() {
           }));
         await page.evaluate(() => { document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo({ top: 0, behavior: 'instant' }); });
         await page.waitForTimeout(1500);
-        const data = await page.evaluate(ukur);
+        const data = await page.evaluate(ukur, { kolom: process.env.VELOCITY_UKUR_KOLOM === '1' });
         if (data.header && lengket) data.header.lengket = true;
         // Lebar isi di dua lebar layar: sama = wadah px tetap (kreditmotor.rmg.asia 1160px),
         // ikut membesar = wadah persen (kontraktorhijau.com 95%). Satu lebar saja tidak bisa

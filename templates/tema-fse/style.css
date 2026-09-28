@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.28.1
+Version: 1.29.0
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -3159,3 +3159,33 @@ body.vf-tampilan-2 .wps-price-range .wps-slider .wps-progress,
 body.vf-tampilan-2 .wps-label-badge.label-recommended { background: var(--wp--preset--color--primary); }
 body.vf-tampilan-2 .carousel-nav .carousel-cell.is-nav-selected { border-color: var(--wp--preset--color--primary); }
 body.vf-tampilan-2 .wps-price-range input[type="range"] { accent-color: var(--wp--preset--color--primary); }
+
+/* Slot iklan portal berita (blok velocity/iklan, Tampilan → Iklan). */
+.vf-iklan { margin-block: var(--wp--preset--spacing--40, 1.5rem); text-align: center; }
+.vf-iklan a { display: block; text-decoration: none; }
+.vf-iklan__gambar { display: block; width: 100%; height: auto; margin-inline: auto; }
+.vf-iklan--kosong a {
+	display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem;
+	min-height: 90px; padding: 1rem; border: 1px dashed currentColor; opacity: .7;
+	color: inherit; background: color-mix(in srgb, currentColor 4%, transparent);
+}
+.vf-iklan--kosong a:hover { opacity: 1; }
+.vf-iklan__label { font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; }
+.vf-iklan__ajak { font-size: .9rem; font-weight: 600; }
+.vf-samping .vf-iklan--kosong a { min-height: 250px; }
+
+/* Arsip global portal berita (parts/arsip.html): daftar foto kiri + teks. */
+.vf-daftar-berita { display: grid; gap: var(--wp--preset--spacing--30, 1.25rem); list-style: none; padding: 0; }
+.vf-daftar-berita__item { gap: 1rem; }
+.vf-daftar-berita__foto { flex: 0 0 34%; margin: 0; }
+.vf-daftar-berita__foto img { width: 100%; height: 100%; object-fit: cover; }
+.vf-daftar-berita__teks { flex: 1 1 auto; min-width: 0; }
+.vf-daftar-berita__teks > * { margin-block: 0 .35rem; }
+.vf-daftar-berita__judul { font-size: 1.15rem; line-height: 1.3; }
+.vf-daftar-berita__tanggal, .vf-daftar-berita__ringkas { font-size: .875rem; opacity: .8; }
+.vf-cari-arsip { margin-block: 0 1.25rem; }
+@media (max-width: 600px) {
+	.vf-daftar-berita__item { flex-wrap: wrap !important; }
+	.vf-daftar-berita__foto { flex-basis: 100%; }
+	.vf-daftar-berita__ringkas { display: none; }
+}

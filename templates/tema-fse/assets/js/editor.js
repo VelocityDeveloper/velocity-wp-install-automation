@@ -156,6 +156,29 @@
 		} );
 	}
 
+	// Iklan: pilih slot di panel samping; gambarnya diganti di Tampilan → Iklan.
+	if ( wp.blocks.getBlockType( 'velocity/iklan' ) === undefined && wp.components && wp.blockEditor.InspectorControls ) {
+		var slotIklan = [ 'atas', 'sela-1', 'sela-2', 'sela-3', 'sela-4', 'arsip', 'artikel', 'samping' ];
+		wp.blocks.registerBlockType( 'velocity/iklan', {
+			edit: function ( props ) {
+				return el( 'div', useBlockProps(),
+					el( wp.blockEditor.InspectorControls, null,
+						el( wp.components.PanelBody, { title: 'Slot iklan' },
+							el( wp.components.SelectControl, {
+								label: 'Slot',
+								help: 'Gambar & tautan tiap slot diatur di Tampilan → Iklan.',
+								value: props.attributes.slot,
+								options: slotIklan.map( function ( s ) { return { label: s, value: s }; } ),
+								onChange: function ( v ) { props.setAttributes( { slot: v } ); },
+							} ) ) ),
+					el( ServerSideRender, { block: 'velocity/iklan', attributes: props.attributes } ) );
+			},
+			save: function () {
+				return null;
+			},
+		} );
+	}
+
 	[
 		'velocity/topbar',
 		'velocity/populer',

@@ -6,7 +6,8 @@ referensi tidak membaik walau diulang. Di sini Claude Code (headless, mode agen)
 pembacaan referensi & penyusunan desain di atas tema velocity-fse, lalu mengaudit dan mengulang
 sendiri sampai mirip:
 
-  1. prasyarat: referensi ada, tema velocity-fse aktif, bukan portal berita / gaya_beranda manual
+  1. prasyarat: referensi ada, tema velocity-fse aktif, tanpa gaya_beranda manual (portal berita
+     ikut sejak 2026-09-28: aturan tambahan templates/desain-claude/berita.md)
   2. bahan: hasil generator sekarang (titik awal), template part tema, palet, isi & foto situs
   3. audit awal (fse-audit-kemiripan) = skor pembanding
   4. `claude -p` dengan templates/desain-claude/tugas.md; alat shell satu-satunya =
@@ -53,6 +54,7 @@ ALAT = HERE / 'desain-claude-alat'
 TEMA = ROOT / 'templates' / 'tema-fse'
 TUGAS = ROOT / 'templates' / 'desain-claude' / 'tugas.md'
 TOKO = ROOT / 'templates' / 'desain-claude' / 'toko-vd-store.md'
+BERITA = ROOT / 'templates' / 'desain-claude' / 'berita.md'
 # Blok ala page builder (keputusan user 2026-09-26): seksi halaman disusun dari Velocity Blocks
 # (vb/*) yang dipasang fse-apply --tema, supaya klien bisa drag-drop, pilih ikon & tautan di kanvas.
 VB = ROOT / 'templates' / 'plugins' / 'velocity-blocks'
@@ -121,6 +123,9 @@ TAHAP = 'halaman'
 # Bagian yang dinilai di tahap tema: halaman belum disusun, jadi beranda & halaman dalam diabaikan.
 BAGIAN_TEMA = ('header', 'footer', 'gaya')
 AMBANG = 80
+# Portal berita yang terlalu mirip referensi (permintaan user 2026-09-28): iklan disisipkan di antara
+# seksi beranda, di arsip, dan di artikel supaya tidak menjiplak utuh; gambarnya diganti di Tampilan → Iklan.
+AMBANG_IKLAN = int(os.environ.get('DESAIN_CLAUDE_AMBANG_IKLAN') or 90)
 
 
 def muat(nama, path):
@@ -200,7 +205,7 @@ def siapkan(cfg, folder):
     for berkas in folder.glob('*.html'):
         if not berkas.name.endswith('.tersimpan.html') and not (awal / berkas.name).exists():
             shutil.copy2(berkas, awal / berkas.name)
-    for bagian in ('header', 'footer'):
+    for bagian in ('header', 'footer', 'sidebar', 'arsip', 'artikel'):
         shutil.copy2(TEMA / 'parts' / f'{bagian}.html', awal / 'tema-parts' / f'{bagian}.html')
     bahan = FA.Situs(cfg).php(PHP_BAHAN)
     (kerja / 'palet.json').write_text(json.dumps(bahan.pop('palet'), ensure_ascii=False, indent=1))
@@ -213,7 +218,8 @@ def blok_vb(cfg):
     """Blok vb/* yang terdaftar di situs ini (blok modul yang dimatikan tidak ada di editor)."""
     if not (VB / 'blocks').is_dir():
         return []
-    mati = {k for k, v in FA.modul_vb(cfg, 'perusahaan').items() if not v}
+    jenis = 'berita' if portal_berita(cfg.get('domain', '').lower()) else 'perusahaan'
+    mati = {k for k, v in FA.modul_vb(cfg, jenis).items() if not v}
     peta = {'products': 'produk', 'product-details': 'produk', 'rfq-form': 'rfq', 'portfolio': 'portofolio',
             'rentals': 'sewa', 'booking-form': 'sewa', 'posts': 'berita', 'news-heading': 'berita'}
     hasil = []
@@ -289,6 +295,8 @@ def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False):
     # Hanya Toko Online Custom yang memakai VD Store (bukan WooCommerce): aturan produk store_product
     # disisipkan; toko online biasa tidak lewat jalur ini (keputusan user 2026-09-23).
     prompt = prompt.replace('{{TOKO}}', TOKO.read_text() if FA.toko_custom(cfg) and vd_store else '')
+    # Portal berita (keputusan user 2026-09-28): beranda dinamis per rubrik + kolom samping.
+    prompt = prompt.replace('{{BERITA}}', BERITA.read_text() if portal_berita(domain) else '')
     for k, v in ganti.items():
         prompt = prompt.replace(k, v)
     return prompt
@@ -412,7 +420,8 @@ def catat_pemakaian(domain, hasil):
             log(f'pemakaian_tidak_tercatat:{e}')
 
 
-BERKAS_TEMA = ('bagian-header.html', 'bagian-footer.html', 'gaya.css')
+BERKAS_TEMA = ('bagian-header.html', 'bagian-footer.html', 'bagian-sidebar.html', 'bagian-arsip.html',
+               'bagian-artikel.html', 'gaya.css')
 
 
 def simpan_tema_lama(folder):
@@ -444,6 +453,91 @@ def cabut(folder, env):
     log('cabut: ' + ' | '.join(b for b in teks.splitlines() if b.startswith(('pasang:', 'fse: halaman', 'cek:')))[:600])
     jalankan_alat(env, 'audit')
     return simpan
+
+
+TOKEN_BLOK = re.compile(r'<!--\s+(/?)wp:([a-z0-9/-]+)(?:\s+(?:\{.*?\}\s+)?)?(/?)-->', re.S)
+
+
+def akhir_blok_puncak(html):
+    """Posisi akhir tiap blok tingkat atas (urutan dokumen)."""
+    akhir, dalam = [], 0
+    for m in TOKEN_BLOK.finditer(html):
+        tutup, _, sendiri = m.group(1), m.group(2), m.group(3)
+        if sendiri:
+            if dalam == 0:
+                akhir.append(m.end())
+        elif tutup:
+            dalam -= 1
+            if dalam == 0:
+                akhir.append(m.end())
+        else:
+            dalam += 1
+    return akhir
+
+
+def iklan(slot):
+    return f'\n\n<!-- wp:velocity/iklan {{"slot":"{slot}","align":"wide"}} /-->\n\n'
+
+
+def sisip_beranda(html):
+    """Iklan sela-1..4 di antara seksi beranda (sesudah seksi pertama, lalu merata); None = tak bisa."""
+    if '"slot":"sela-' in html:
+        return None
+    batas = akhir_blok_puncak(html)[:-1]  # sesudah seksi terakhir (sebelum footer) tidak perlu
+    if len(batas) < 2:
+        return None
+    k = min(4, len(batas))
+    pilih = [batas[i] for i in sorted({int(j * len(batas) / k) for j in range(k)})]
+    for i, pos in sorted(enumerate(pilih, 1), key=lambda x: -x[1]):
+        html = html[:pos] + iklan(f'sela-{i}') + html[pos:].lstrip('\n')
+    return html
+
+
+def sisip_arsip(html):
+    if '"slot":"arsip"' in html or '<!-- wp:query' not in html:
+        return None
+    pos = html.index('<!-- wp:query')
+    return html[:pos] + iklan('arsip').lstrip('\n') + html[pos:]
+
+
+def sisip_artikel(html):
+    m = re.search(r'<!-- wp:post-content\b.*?(?:/-->|<!-- /wp:post-content -->)', html, re.S)
+    if '"slot":"artikel"' in html or not m:
+        return None
+    return html[:m.end()] + iklan('artikel') + html[m.end():].lstrip('\n')
+
+
+def sisip_iklan(domain, folder, env, d):
+    """Skor >= AMBANG_IKLAN pada beranda/arsip/artikel portal berita: sisipkan velocity/iklan,
+    pasang, audit ulang. Berkas hasil agen (atau titik awal generator/tema) yang disisipi."""
+    if TAHAP != 'halaman' or not portal_berita(domain):
+        return
+    skor = d.get('skor') or {}
+    claude = folder / 'claude'
+    sasaran = (('beranda', claude / 'beranda.html', folder / 'beranda.html', sisip_beranda),
+               ('halaman_arsip_rubrik', claude / 'bagian-arsip.html', TEMA / 'parts' / 'arsip.html', sisip_arsip),
+               ('halaman_single', claude / 'bagian-artikel.html', TEMA / 'parts' / 'artikel.html', sisip_artikel))
+    ubah = []
+    for kunci, berkas, asal, fungsi in sasaran:
+        if kunci not in skor or int(skor[kunci]) < AMBANG_IKLAN:
+            continue
+        sumber = berkas if berkas.is_file() else asal
+        if not sumber.is_file():
+            continue
+        baru = fungsi(sumber.read_text())
+        if baru is None:
+            log(f'iklan_dilewati:{kunci} (sudah ada / seksi tak terbaca)')
+            continue
+        berkas.write_text(baru)
+        ubah.append(f'{kunci}={skor[kunci]}')
+    if not ubah:
+        return
+    _, teks = jalankan_alat(env, 'pasang')
+    log('iklan_disisipkan:' + ','.join(ubah) + ' | '
+        + ' | '.join(b for b in teks.splitlines() if b.startswith(('pasang:', 'cek:')))[:400])
+    jalankan_alat(env, 'audit')
+    akhir, d2 = skor_total(folder)
+    log('skor sesudah iklan: ' + ' '.join(f'{k}={v}' for k, v in (d2.get('skor') or {}).items()))
 
 
 def portal_berita(domain):
@@ -479,9 +573,6 @@ def main():
         return 0
     if cfg.get('gaya_beranda') and cfg['gaya_beranda'] != 'referensi':
         print(f"{awalan()}: lewati:gaya_beranda_manual:{cfg['gaya_beranda']}")
-        return 0
-    if portal_berita(domain):
-        print(f'{awalan()}: lewati:portal_berita')
         return 0
     if not Path(CLAUDE).exists():
         print(f'{awalan()}: gagal:claude_cli_tidak_ada')
@@ -537,6 +628,7 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
         return 2
     if d_awal.get('sesuai') and 'paksa' not in opsi:
         log(f'lewati:sudah_mirip skor={awal}', tanpa_waktu=True)
+        sisip_iklan(domain, folder, env, d_awal)
         return 0
     (folder / 'claude' / 'kerja' / 'tugas.json').write_text(json.dumps({
         'domain': domain, 'referensi': ref.get('url'), 'skor_awal': d_awal.get('skor'),
@@ -567,6 +659,8 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
         'skor_awal': d_awal.get('skor'), 'skor_akhir': d_akhir.get('skor'), 'menit': durasi,
         'kode_agen': kode, 'ringkasan_agen': (hasil.get('result') or '')[:4000]}, ensure_ascii=False, indent=1))
     log(f'{status} skor={awal}->{akhir} menit={durasi}', tanpa_waktu=True)
+    if not status.startswith('ditolak'):
+        sisip_iklan(domain, folder, env, d_akhir)
     return 0
 
 

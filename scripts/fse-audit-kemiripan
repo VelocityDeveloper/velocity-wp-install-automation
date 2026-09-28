@@ -81,6 +81,15 @@ $token = WP_Session_Tokens::get_instance($u[0]->ID)->create($exp);
 vfse_keluar(array('nama' => LOGGED_IN_COOKIE, 'nilai' => wp_generate_auth_cookie($u[0]->ID, $exp, 'logged_in', $token),
     'host' => (string) parse_url(home_url('/'), PHP_URL_HOST), 'id' => (int) $u[0]->ID, 'token' => $token, 'exp' => $exp));
 '''
+# Portal berita: halaman pembanding untuk template part global `arsip` & `artikel`.
+PHP_BERITA = r'''
+$post = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 1));
+$rubrik = get_terms(array('taxonomy' => 'category', 'hide_empty' => true, 'orderby' => 'count', 'order' => 'DESC',
+    'number' => 1, 'exclude' => array((int) get_option('default_category'))));
+if (is_wp_error($rubrik) || !$rubrik) { $rubrik = get_terms(array('taxonomy' => 'category', 'hide_empty' => true, 'number' => 1)); }
+vfse_keluar(array('single' => $post ? get_permalink($post[0]) : '',
+    'arsip_rubrik' => (!is_wp_error($rubrik) && $rubrik) ? get_term_link($rubrik[0]) : ''));
+'''
 PHP_HAPUS_TOKEN = r'''
 WP_Session_Tokens::get_instance((int) $d['id'])->destroy((string) $d['token']);
 vfse_keluar(array('ok' => 1));
@@ -402,6 +411,12 @@ def ukur_situs(domain, halaman, folder, cookie):
     if cookie:
         env['VELOCITY_UKUR_COOKIE'] = json.dumps(cookie)
     try:
+        # Portal berita: situs dipecah per blok kolom isi, sama seperti referensinya diukur.
+        if json.loads((folder.parent / 'desain-referensi.json').read_text()).get('ukur_kolom'):
+            env['VELOCITY_UKUR_KOLOM'] = '1'
+    except (OSError, ValueError):
+        pass
+    try:
         subprocess.run(['node', str(HERE / 'referensi-desain.js')] + argumen, capture_output=True, text=True,
                        timeout=180 + 90 * len(halaman), env=env)
     except (OSError, subprocess.SubprocessError):
@@ -483,6 +498,14 @@ def main():
         jalur = layanan_detail_situs(folder_rencana, home)
         if jalur:
             halaman['layanan_detail'] = jalur
+    if {'arsip_rubrik', 'single'} & set(ref.get('halaman') or {}):
+        try:
+            berita = (situs or fa.Situs(cfg)).php(PHP_BERITA)
+            for nama in ('arsip_rubrik', 'single'):
+                if nama in ref['halaman'] and isinstance(berita.get(nama), str) and berita[nama].startswith('http'):
+                    halaman[nama] = berita[nama]
+        except Exception as e:
+            print(f'kemiripan: halaman_berita_tidak_terbaca:{type(e).__name__}')
     folder = folder_rencana / 'audit'
     folder.mkdir(parents=True, exist_ok=True)
     try:

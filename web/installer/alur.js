@@ -24,11 +24,14 @@
     // Jejak run yang desainnya diambil alih agen Claude (lihat agen_langsung & audit_kemiripan di runner).
     const AMBIL_ALIH_AGEN = /fse_cek: dilewati:agen_claude|desain (langsung )?diambil alih agen Claude/;
     function hasilAgen(t) {
+      // Portal berita terlalu mirip (skor >= 90, keputusan user 2026-09-28): iklan disisipkan antar seksi.
+      const ik = /desain_claude: iklan_disisipkan:(\S+)/.exec(t);
+      const tambah = ik ? '; iklan disisipkan (' + ik[1].replace(/halaman_/g, '').replace(/=\d+/g, '') + ')' : '';
       const m = /desain_claude: (\S+).*?skor=(\d+)->(\d+) menit=([\d.]+)/.exec(t);
       if (m) return (m[1] === 'sesuai' ? 'mirip' : m[1].startsWith('ditolak') ? 'ditolak (skor turun), kembali ke generator'
-        : 'belum mirip') + ': skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit';
+        : 'belum mirip') + ': skor ' + m[2] + '→' + m[3] + ', ' + m[4] + ' menit' + tambah;
       const l = /desain_claude: (lewati|gagal):(\S+)/.exec(t);
-      return l ? l[1] + ': ' + l[2] : null;
+      return l ? l[1] + ': ' + l[2] + tambah : null;
     }
     // Langkah Tema FSE: hasil agen tahap tema, atau keterangan run lama (agen hanya di akhir).
     function hasilTemaAgen(t) {

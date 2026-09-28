@@ -169,6 +169,32 @@ add_filter('single_template_hierarchy', function ($templat) {
     return $templat;
 });
 
+// Portal berita bergaya "referensi" (jalur agen Claude, permintaan user 2026-09-28): SATU
+// template part `arsip` untuk semua daftar tulisan (rubrik, tag, penulis, tanggal, pencarian,
+// indeks) dan SATU `artikel` untuk single — yang berbeda hanya query bawaan halamannya
+// (inherit). Isi kedua part disusun agen mengikuti halaman rubrik & artikel referensi.
+function velocity_fse_arsip_global()
+{
+    return velocity_fse_jenis_berita() && velocity_fse_situs('gaya') === 'referensi';
+}
+
+foreach (array('category', 'tag', 'taxonomy', 'author', 'date', 'archive', 'search', 'home') as $jenis_arsip) {
+    add_filter($jenis_arsip . '_template_hierarchy', function ($templat) {
+        if (velocity_fse_arsip_global() && !is_post_type_archive(array('product', 'store_product', 'mobil'))
+            && !is_tax(array('product_cat', 'category-product'))) {
+            array_unshift($templat, 'archive-berita');
+        }
+        return $templat;
+    });
+}
+
+add_filter('single_template_hierarchy', function ($templat) {
+    if (velocity_fse_arsip_global() && is_singular('post')) {
+        array_unshift($templat, 'single-berita');
+    }
+    return $templat;
+});
+
 // 13 = 1 kartu selebar layar + 3 baris grid 4 kolom.
 add_action('pre_get_posts', function ($q) {
     if (!is_admin() && $q->is_main_query() && ($q->is_category() || $q->is_tag() || $q->is_tax())

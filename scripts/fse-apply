@@ -261,8 +261,12 @@ def referensi_desain(cfg, domain, jenis='berita'):
         hasil = dict(ref, gaya=paksa, sumber='manifest', fonts=fonts)
     elif not ref:
         hasil = {'gaya': 'klasik', 'sumber': 'tanpa_referensi'}
-    elif jenis != 'berita' and desain:
-        hasil = dict(ref, gaya='referensi', sumber='ukur_dom',
+    elif desain and (jenis != 'berita' or os.environ.get('VELOCITY_BERITA_AGEN') == '1'
+                     or (lama.get('gaya') == 'referensi' and lama.get('url') == ref['url'] and lama.get('jenis') == jenis)):
+        # Portal berita di jalur agen Claude (keputusan user 2026-09-28): bukan gaya klasik/sorotan
+        # siap pakai — header/footer ikut referensi, beranda vb/* jadi titik awal agen, dan audit
+        # menilai beranda per seksi. Pilihan ini bertahan untuk --isi & `alat pasang` berikutnya.
+        hasil = dict(ref, gaya='referensi', sumber='ukur_dom' if jenis != 'berita' else 'ukur_dom_agen',
                      fonts=[f for f in (desain['font']['teks'], desain['font']['judul']) if f])
     elif (lama.get('url') == ref['url'] and lama.get('gaya') in katalog and lama.get('gaya') != 'referensi'
           and lama.get('sumber') != 'manifest' and lama.get('jenis', 'berita') == jenis):

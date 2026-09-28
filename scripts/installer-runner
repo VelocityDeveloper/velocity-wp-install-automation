@@ -129,13 +129,14 @@ portal_berita() {
 # Claude sesudah referensi dibaca — gerbang fse-cek-referensi (ulang tema) dan audit + generate
 # ulang dilewati; velocity-fse + halaman generator tetap dipasang sekali sebagai titik awal agen.
 # Syaratnya sama dengan prasyarat scripts/desain-claude (selain itu agen melewati situsnya sendiri):
-# DESAIN_CLAUDE=1, referensi terbaca, bukan portal berita, tanpa gaya_beranda manual.
+# DESAIN_CLAUDE=1, referensi terbaca, tanpa gaya_beranda manual. Portal berita ikut sejak
+# keputusan user 2026-09-28 (dulu dikecualikan: gaya klasik/sorotan siap pakai sering tidak
+# mirip referensi, dan audit beranda berita selalu 100 sehingga tidak pernah diulang).
 agen_langsung() {
   [[ "$DESAIN_CLAUDE" == 1 ]] || return 1
   python3 -c 'import json, sys
 sys.exit(0 if (json.load(open(sys.argv[1])).get("url") or "").strip() else 1)' \
     "/var/lib/velocity/fse-rencana/$DOMAIN/desain-referensi.json" 2>/dev/null || return 1
-  ! portal_berita || return 1
   local gaya
   gaya=$(sed -n 's/^gaya_beranda=//p' "$MANIFEST" | head -1 | tr -d ' ')
   [[ -z "$gaya" || "$gaya" == referensi ]]
@@ -181,8 +182,9 @@ paket_g_tema() {
   if agen_langsung; then
     # fse-apply --tema tetap dijalankan sebagai dasar mekanis (aktifkan velocity-fse, palet klien,
     # data situs, rubrik yang dibaca konten AI); desain header/footer/CSS-nya disusun agen.
+    # VELOCITY_BERITA_AGEN: portal berita memakai gaya "referensi", bukan klasik/sorotan.
     printf '[%s] Paket custom: tema FSE oleh agen Claude (dasar velocity-fse)\n' "$(date -Is)" >> "$LOG"
-    /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1
+    VELOCITY_BERITA_AGEN=1 /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1
     /usr/bin/python3 "$SCRIPTS/desain-claude" --tahap=tema --paksa "$MANIFEST" >> "$LOG" 2>&1 || true
     printf '[%s] fse_cek: dilewati:agen_claude (tema disusun & diaudit agen Claude)\n' "$(date -Is)" >> "$LOG"
     return 0
