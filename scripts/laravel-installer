@@ -269,9 +269,11 @@ sed -i -E '/^\/(CLAUDE\.md|AGENTS\.md|boost\.json|\.mcp\.json|\.claude)$/d' .git
 # Workflow CI bawaan starter kit tidak dipakai (pola sia-vd) dan token gh tanpa scope `workflow`
 # ditolak GitHub saat push berkas .github/workflows (28 Sep elearning-vd)
 rm -rf .github/workflows; rmdir .github 2>/dev/null || true
+# Semua commit di repo ini (agen, webmaster, root) atas nama akun GitHub VelocityDeveloper (email noreply akun)
+git config user.name "Velocity Developer"
+git config user.email "76415135+VelocityDeveloper@users.noreply.github.com"
 git add -A
-git -c user.name="Velocity Developer" -c user.email="noreply@velocitydeveloper.com" \
-  commit -q -m "chore: kerangka awal $JUDUL (laravel new --vue, installer Velocity)"
+git commit -q -m "chore: kerangka awal $JUDUL (laravel new --vue, installer Velocity)"
 gh repo create "$GITHUB_ORG/$SLUG" --private --description "$JUDUL${KLIEN:+ — $KLIEN}" --source=. --remote=origin --push
 git log --oneline -1
 

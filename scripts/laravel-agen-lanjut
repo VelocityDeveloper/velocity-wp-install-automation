@@ -34,14 +34,18 @@ def main():
             continue
         if ringkas['install'].get('status') != 'ok' or any(f.get('status') == 'gagal' for f in fitur):
             continue
+        aksi = 'mulai'
         if not any(f.get('status') in ('antre', 'revisi', 'jalan') for f in fitur):
-            continue
+            # Fitur habis tapi deploy dev sebelum Review belum lolos (mesin mati saat deploy) -> deploy saja
+            if ringkas['tahap'] != 'agen' or status not in ('terputus', 'jalan'):
+                continue
+            aksi = 'deploy'
         req = urllib.request.Request(API.format(slug), method='POST',
-                                     data=json.dumps({'oleh': 'Otomatis (mesin nyala)', 'aksi': 'mulai'}).encode(),
+                                     data=json.dumps({'oleh': 'Otomatis (mesin nyala)', 'aksi': aksi}).encode(),
                                      headers={'Content-Type': 'application/json', 'User-Agent': 'laravel-agen-lanjut'})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                print(slug, 'dilanjutkan', r.read().decode()[:200])
+                print(slug, aksi, r.read().decode()[:200])
         except Exception as e:  # noqa: BLE001 — satu project gagal tidak menghentikan yang lain
             print(slug, 'gagal dilanjutkan:', e)
     return 0

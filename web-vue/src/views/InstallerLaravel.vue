@@ -93,7 +93,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
           <li><b>Brief</b> — PM menempel catatan/chat diskusi klien, Claude menyusun draf DESIGN.md + PRD, PM menyunting.</li>
           <li><b>Estimasi</b> — Claude memecah PRD jadi fitur + kriteria terima + jam (internal), PM menyesuaikan lalu mengunci.</li>
           <li><b>Install</b> — kerangka Laravel, database, layanan dev, repo GitHub privat; DESIGN.md & PRD ikut repo.</li>
-          <li><b>Agen</b> — Claude mengerjakan fitur satu per satu; tiap fitur dites & di-commit sesudah lolos verifikasi.</li>
+          <li><b>Agen</b> — Claude mengerjakan fitur satu per satu; tiap fitur dites &amp; di-commit sesudah lolos verifikasi. Sesudah fitur terakhir, dev di-deploy (composer, npm ci, build, migrate, restart, cek HTTP) — Review baru terbuka bila deploy lolos.</li>
           <li><b>Review</b> — webmaster mencentang checklist kriteria per fitur: OK atau Revisi (kembali ke agen).</li>
         </ol>
         <ul class="chip"><li v-for="s in STACK" :key="s">{{ s }}</li></ul>

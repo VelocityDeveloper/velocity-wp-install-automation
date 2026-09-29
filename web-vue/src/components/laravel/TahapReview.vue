@@ -47,6 +47,8 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
         <RouterLink to="/projects" class="tombol garis kecil">Akun uji</RouterLink>
       </div>
     </div>
+    <p v-if="d.agen?.deploy?.ok" class="redup kecil">Dev dideploy {{ tanggalWaktu(d.agen.deploy.waktu) }} dari commit <a :href="`${d.install.repo}/commit/${d.agen.deploy.commit}`" target="_blank" rel="noopener"><code>{{ d.agen.deploy.commit }}</code></a> — yang dicek di aplikasi dev = hasil terakhir agen.</p>
+    <p v-else-if="bisaDicek.some((x) => x.status === 'dites')" class="pesan-status waspada-teks">Dev belum dideploy untuk hasil terakhir agen — jalankan Deploy dev di tab Agen dulu supaya yang direview sesuai.</p>
     <p v-if="!bisaDicek.length" class="redup">Belum ada fitur yang selesai dikerjakan agen.</p>
 
     <div v-else class="dua">
@@ -120,6 +122,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
 .rinci h3 { font-size: 16px; }
 .rinci p { margin: 0; }
 .kecil { font-size: 12px; }
+.waspada-teks { color: var(--waspada); }
 code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .blok { padding: 10px 12px; border-radius: 10px; background: var(--kartu-2); font-size: 13.5px; }
 .blok ol, .blok ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 3px; color: var(--teks-2); }

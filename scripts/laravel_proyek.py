@@ -262,7 +262,8 @@ def tahap(p, fitur, inst):
     if any(f.get('status') in ('antre', 'jalan', 'gagal', 'revisi') for f in fitur):
         return 'agen'
     if any(f.get('status') == 'dites' for f in fitur):
-        return 'review'
+        # Review baru terbuka sesudah deploy dev terakhir lolos (laravel-agen, akhir run / tombol Deploy dev)
+        return 'review' if ((p.get('agen') or {}).get('deploy') or {}).get('ok') else 'agen'
     return 'selesai'
 
 
@@ -312,6 +313,10 @@ def detail(slug):
         'catatan_diagram': p.get('catatan_diagram') or [],
     }
 
+
+# Identitas commit repo installer Laravel = akun GitHub VelocityDeveloper (email noreply akun, supaya commit terhubung)
+GIT_NAMA = 'Velocity Developer'
+GIT_EMAIL = '76415135+VelocityDeveloper@users.noreply.github.com'
 
 ANSI_RE = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\].*?(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>78]')
 
@@ -623,10 +628,16 @@ def aksi_agen(slug, payload):
         ubah_proyek(slug, lambda p: p.setdefault('agen', {}).update(minta_berhenti=True))
         catat(slug, oleh, 'meminta agen berhenti sesudah fitur yang sedang dikerjakan')
         return {'ok': True}
-    if aksi != 'mulai':
+    if aksi not in ('mulai', 'deploy'):
         raise ValueError('invalid_aksi')
     if install_state(slug).get('status') != 'ok':
         raise ValueError('belum_diinstall')
+    if aksi == 'deploy':
+        pid, err = jalankan(slug, 'agen', [str(AGEN), slug, '--deploy'])
+        if err:
+            raise ValueError(err)
+        catat(slug, oleh, 'menjalankan deploy dev')
+        return {'pid': pid}
     ubah_proyek(slug, lambda p: p.setdefault('agen', {}).update(minta_berhenti=False))
     pid, err = jalankan(slug, 'agen', [str(AGEN), slug])
     if err:

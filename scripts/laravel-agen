@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Agen Claude Code mengerjakan fitur project Laravel satu per satu (tahap Agen).
 
-  laravel-agen <project-NNN>
+  laravel-agen <project-NNN>             kerjakan fitur antre/revisi, lalu deploy dev
+  laravel-agen <project-NNN> --deploy    hanya deploy dev (tombol "Deploy dev" di tab Agen)
 
 Per fitur (urutan fitur.json, status antre/revisi):
   1. tarik commit terbaru bila salinan kerja bersih; tunggu antrean agen bersama (desain-claude.lock)
@@ -11,6 +12,9 @@ Per fitur (urutan fitur.json, status antre/revisi):
   4. lolos -> commit `feat(Fxx): ...` + push, status `dites` + laporan agen per kriteria (bahan checklist webmaster)
      gagal -> status `gagal` + galat, perubahan dibiarkan (belum di-commit), agen berhenti
 Berhenti juga bila PM/webmaster menekan Hentikan (dicek di antara fitur).
+Semua fitur selesai -> DEPLOY DEV sebelum Review: salinan kerja wajib bersih & sudah di-push, lalu
+/root/<app>/deploy-dev.sh (composer install, npm ci, build, migrate, restart layanan) dan GET /login harus 200.
+Hasil di proyek.json agen.deploy; tahap Review baru terbuka bila deploy terakhir lolos. Gagal -> `deploy_gagal`.
 
 Jam mesin: Local PC hanya nyala 07.00–22.00. Fitur baru tidak dimulai bila perkiraan selesainya lewat 21.45
 (perkiraan = rata-rata menit aktual fitur sebelumnya di project ini, bawaan 45 menit) -> status `menunggu_pagi`;
@@ -263,8 +267,56 @@ def verifikasi(app, app_dir, pengguna, port):
     return True, info, ''
 
 
+def deploy_dev(slug, app, app_dir, port):
+    """Deploy dev sesudah semua fitur selesai, sebelum Review. -> lolos (bool); hasil dicatat di agen.deploy."""
+    log('')
+    log('===== DEPLOY DEV (sebelum Review) =====')
+    galat, http = '', ''
+    _, commit = sh(['git', 'rev-parse', '--short', 'HEAD'], app_dir)
+    skrip = Path('/root', app, 'deploy-dev.sh')
+    _, kotor = sh(['git', 'status', '--porcelain'], app_dir)
+    if kotor:
+        galat = 'Salinan kerja punya perubahan belum di-commit:\n' + ekor(kotor, 20)
+    if not galat:
+        sh(['git', 'fetch', '-q', 'origin'], app_dir, 120)
+        _, belum = sh(['git', 'rev-list', '--count', 'origin/main..HEAD'], app_dir)
+        if belum.strip() not in ('', '0'):
+            kode, keluar = sh(['git', 'push', '-q', 'origin', 'main'], app_dir, 180)
+            log(f'push {belum.strip()} commit tertinggal: ' + ('ok' if kode == 0 else 'GAGAL'))
+            if kode != 0:
+                galat = f'git push gagal: {ekor(keluar, 5)}'
+    if not galat and not skrip.is_file():
+        galat = f'{skrip} tidak ada (dibuat installer langkah 8)'
+    if not galat:
+        log(f'$ {skrip}')
+        kode, keluar = sh([str(skrip)], app_dir, 1800)
+        for b in ekor(keluar, 25).splitlines():
+            log(f'  {b}')
+        if kode != 0:
+            galat = f'$ {skrip} (kode {kode})\n{ekor(keluar, 60)}'
+    if not galat:
+        for _ in range(20):
+            _, http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/login'], app_dir, 15)
+            if http == '200':
+                break
+            time.sleep(1)
+        if http != '200':
+            galat = f'Aplikasi dev tidak menjawab sesudah deploy (GET /login HTTP {http}); cek journalctl -u {app}-dev'
+    _, commit = sh(['git', 'rev-parse', '--short', 'HEAD'], app_dir)
+    hasil = {'waktu': L.sekarang(), 'ok': not galat, 'commit': commit, 'http': http, 'galat': galat[-6000:]}
+    L.ubah_proyek(slug, lambda x: x.setdefault('agen', {}).update(deploy=hasil))
+    if galat:
+        log(f'DEPLOY DEV GAGAL: {galat.splitlines()[0][:300]}')
+        L.catat(slug, 'Agen Claude', f'deploy dev gagal (commit {commit})')
+    else:
+        log(f'Deploy dev lolos: commit {commit}, /login HTTP 200. Lanjut ke Review webmaster.')
+        L.catat(slug, 'Agen Claude', f'deploy dev lolos (commit {commit})')
+    return not galat
+
+
 def main():
-    if len(sys.argv) != 2 or not L.ID_RE.match(sys.argv[1]):
+    hanya_deploy = sys.argv[2:] == ['--deploy']
+    if len(sys.argv) not in (2, 3) or not L.ID_RE.match(sys.argv[1]) or (len(sys.argv) == 3 and not hanya_deploy):
         print(__doc__)
         return 2
     slug = sys.argv[1]
@@ -275,6 +327,12 @@ def main():
         log('Project belum terpasang; agen tidak bisa mulai.')
         return 1
     app_dir, pengguna, port = Path('/home', app), app.replace('-', ''), inst['port']
+    if hanya_deploy:
+        # status 'jalan' supaya mesin mati di tengah deploy tercatat 'terputus' dan dilanjutkan laravel-agen-lanjut
+        L.ubah_proyek(slug, lambda x: x.setdefault('agen', {}).update(status='jalan', fitur=None, deploy=None))
+        lolos = deploy_dev(slug, app, app_dir, port)
+        L.ubah_proyek(slug, lambda x: x.setdefault('agen', {}).update(status='selesai' if lolos else 'deploy_gagal'))
+        return 0 if lolos else 1
     DC = muat('desain_claude', HERE / 'desain-claude')
     env = dict(os.environ)
     if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
@@ -299,7 +357,9 @@ def main():
             break
         f = next((f for f in fitur if f['status'] in ('antre', 'revisi')), None)
         if not f:
-            log('Semua fitur sudah dikerjakan agen. Lanjut ke Review webmaster.')
+            log('Semua fitur sudah dikerjakan agen.')
+            if not deploy_dev(slug, app, app_dir, port):
+                akhir = 'deploy_gagal'
             break
         fid = f['id']
         perkiraan = perkiraan_menit(fitur)
@@ -321,7 +381,7 @@ def main():
         log(f"===== {fid} {f['judul']}{' (REVISI)' if f['status'] == 'revisi' else ''} =====")
         adalah_revisi = f['status'] == 'revisi'
         L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).update(status='jalan', mulai=L.sekarang()))
-        L.ubah_proyek(slug, lambda x: x['agen'].update(fitur=fid))
+        L.ubah_proyek(slug, lambda x: x['agen'].update(fitur=fid, deploy=None))
 
         kode, keluar = sh(['git', 'status', '--porcelain', '--untracked-files=no'], app_dir)
         if kode == 0 and not keluar:
@@ -374,7 +434,7 @@ def main():
             sh(['git', 'add', '-A'], app_dir)
             pesan = f"feat({fid.lower()}): {f['judul']}" + (' (revisi)' if adalah_revisi else '') + \
                 f"\n\n{laporan['ringkasan']}\n\nDikerjakan agen Claude Code (installer Velocity)."
-            kode, keluar = sh(['git', '-c', 'user.name=Velocity Agen Claude', '-c', 'user.email=noreply@velocitydeveloper.com',
+            kode, keluar = sh(['git', '-c', f'user.name={L.GIT_NAMA}', '-c', f'user.email={L.GIT_EMAIL}',
                                'commit', '-q', '-m', pesan], app_dir)
             if kode != 0 and 'nothing to commit' not in keluar:
                 galat = f'git commit gagal: {ekor(keluar, 10)}'
