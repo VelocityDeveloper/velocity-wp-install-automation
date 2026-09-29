@@ -1,0 +1,311 @@
+#!/bin/bash
+# Installer aplikasi Laravel standar tim (menu Installer > Laravel di dashboard).
+# Stack = installer resmi `laravel new --vue` (Laravel + Inertia + Vue + Tailwind + reka-ui,
+# Fortify, Wayfinder, Pest, Boost). Pola dev Local PC mengikuti sia-vd:
+#   /home/<slug>, user sistem <slug tanpa tanda hubung>, layanan <slug>-dev (artisan serve) + <slug>-queue,
+#   batas unggah di /etc/<slug>/php.d, pembaruan lewat /root/<slug>/deploy-dev.sh.
+# Masukan lewat env: SLUG, JUDUL, PORT (wajib), KLIEN, DOMAIN, OLEH (opsional).
+# Dari alur project (scripts/laravel_proyek.py): PROYEK_ID + PROYEK_DIR (DESIGN.md & PRD.md ikut ke repo),
+# LANJUT_AGEN=1 -> sesudah selesai langsung diserahkan ke scripts/laravel-agen.
+# Status tiap langkah ditulis ke /var/lib/velocity/laravel/<slug>.json (dibaca /api/laravel).
+# Aman diulang: tidak pernah menimpa folder, user, database, atau repo yang sudah ada.
+{
+set -Eeuo pipefail
+
+REPO_DIR=/opt/velocity-wp-install-automation
+STATE_DIR=/var/lib/velocity/laravel
+LARAVEL_BIN=/root/.config/composer/vendor/bin/laravel
+DB_ROOT_CNF=/etc/velocity/secrets/mariadb_root.cnf
+LOGIN_FILE=/etc/velocity/secrets/local-projects-login.json
+PROJECTS_FILE=$REPO_DIR/config/local-projects.json
+# Semua project -> velocitycustomer (laravel_proyek.org_github); org utama hanya bila diminta lewat env
+GITHUB_ORG=${GITHUB_ORG:-velocitycustomer}
+[[ $GITHUB_ORG =~ ^(velocitycustomer|Velocity-Developer)$ ]] || { echo "GITHUB_ORG tidak dikenal: $GITHUB_ORG"; exit 1; }
+LAN_IP=192.168.88.211
+export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
+
+: "${SLUG:?SLUG wajib}" "${JUDUL:?JUDUL wajib}" "${PORT:?PORT wajib}"
+KLIEN=${KLIEN:-}; DOMAIN=${DOMAIN:-}; OLEH=${OLEH:-dashboard}
+PROYEK_ID=${PROYEK_ID:-}; PROYEK_DIR=${PROYEK_DIR:-}; LANJUT_AGEN=${LANJUT_AGEN:-0}
+DIR=/home/$SLUG
+PENGGUNA=${SLUG//-/}
+DB_NAMA=${SLUG//-/_}
+URL="http://$LAN_IP:$PORT"
+STATE=$STATE_DIR/$SLUG.json
+LANGKAH=(periksa laravel env database akun konvensi layanan deploy github daftar)
+TOTAL=${#LANGKAH[@]}
+mkdir -p "$STATE_DIR"
+
+status() { # status <kunci>=<nilai JSON> ...
+  python3 - "$STATE" "$@" <<'PY'
+import json, sys, os
+p = sys.argv[1]
+d = json.load(open(p)) if os.path.exists(p) else {}
+for kv in sys.argv[2:]:
+    k, v = kv.split('=', 1)
+    d[k] = json.loads(v)
+tmp = p + '.tmp'
+json.dump(d, open(tmp, 'w'), ensure_ascii=False, indent=1)
+os.replace(tmp, p)
+PY
+}
+js() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+langkah() { # langkah <n> <judul>
+  echo; echo "==> [$1/$TOTAL] $2"
+  status "langkah=$1" "langkah_kunci=$(js "${LANGKAH[$(($1-1))]}")"
+}
+gagal() {
+  local kode=$? baris=$1
+  echo "!! GAGAL (baris $baris, kode $kode)"
+  status 'status="gagal"' "galat=$(js "Berhenti di baris $baris (kode $kode), lihat log")" "selesai=$(date +%s)"
+  exit "$kode"
+}
+trap 'gagal $LINENO' ERR
+
+status 'status="jalan"' "slug=$(js "$SLUG")" "judul=$(js "$JUDUL")" "klien=$(js "$KLIEN")" "domain=$(js "$DOMAIN")" \
+  "port=$PORT" "url=$(js "$URL")" "oleh=$(js "$OLEH")" "mulai=$(date +%s)" 'selesai=null' 'galat=null' "total=$TOTAL"
+
+# ---------------------------------------------------------------------------
+langkah 1 "Periksa nama, port, dan alat"
+[[ $SLUG =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]] || { echo "Nama project tidak sah: $SLUG"; false; }
+[[ $PORT =~ ^[0-9]+$ ]] && (( PORT >= 8050 && PORT <= 8999 )) || { echo "Port di luar 8050-8999: $PORT"; false; }
+[ ! -e "$DIR" ] || { echo "Folder $DIR sudah ada"; false; }
+! id "$PENGGUNA" &>/dev/null || { echo "User sistem $PENGGUNA sudah ada"; false; }
+! ss -ltn "sport = :$PORT" | grep -q LISTEN || { echo "Port $PORT sedang dipakai"; false; }
+! systemctl cat "$SLUG-dev" &>/dev/null || { echo "Layanan $SLUG-dev sudah ada"; false; }
+[ -r "$DB_ROOT_CNF" ] || { echo "Berkas $DB_ROOT_CNF belum ada (kredensial root MariaDB untuk membuat database)"; false; }
+MYSQL=(mysql --defaults-extra-file="$DB_ROOT_CNF")
+[ -z "$("${MYSQL[@]}" -Nse "SHOW DATABASES LIKE '$DB_NAMA'")" ] || { echo "Database $DB_NAMA sudah ada"; false; }
+gh auth status &>/dev/null || { echo "gh belum login"; false; }
+! gh repo view "$GITHUB_ORG/$SLUG" &>/dev/null || { echo "Repo $GITHUB_ORG/$SLUG sudah ada di GitHub"; false; }
+[ -x "$LARAVEL_BIN" ] || composer global require laravel/installer -q
+echo "OK: $("$LARAVEL_BIN" --version), PHP $(php -r 'echo PHP_VERSION;'), node $(node -v)"
+
+# ---------------------------------------------------------------------------
+langkah 2 "laravel new --vue (Inertia + Vue + Tailwind, Pest, Boost)"
+cd /home
+# npm run build di dalamnya mengambil font dari fonts.bunny.net; timeout jaringan sesaat
+# (28 Sep elearning-vd) -> ulangi dari awal. Folder aman dihapus: langkah 1 memastikan belum ada.
+for coba in 1 2 3; do
+  "$LARAVEL_BIN" new "$SLUG" --vue --pest --database=mariadb --npm --boost --no-interaction && break
+  (( coba < 3 )) || false
+  echo "!! laravel new gagal (percobaan $coba), ulangi 30 detik lagi"
+  rm -rf "$DIR"; sleep 30
+done
+cd "$DIR"
+[ -f artisan ] && [ -f resources/js/app.ts ] || { echo "Kerangka Laravel tidak lengkap"; false; }
+
+# ---------------------------------------------------------------------------
+langkah 3 "Atur .env (zona waktu, bahasa, driver)"
+DB_SANDI=$(openssl rand -hex 16)
+setenv() { # setenv KUNCI nilai — ganti baris yang ada, tambah bila belum ada
+  if grep -qE "^#? ?$1=" .env; then sed -i -E "s|^#? ?$1=.*|$1=$2|" .env; else echo "$1=$2" >> .env; fi
+}
+setenv APP_NAME "\"$JUDUL\""
+setenv APP_DEBUG false
+setenv APP_URL "$URL"
+setenv APP_TIMEZONE Asia/Jakarta
+setenv APP_LOCALE id
+setenv APP_FALLBACK_LOCALE id
+setenv APP_FAKER_LOCALE id_ID
+setenv LOG_LEVEL info
+setenv DB_CONNECTION mariadb
+setenv DB_HOST localhost
+setenv DB_SOCKET /var/lib/mysql/mysql.sock
+setenv DB_DATABASE "$DB_NAMA"
+setenv DB_USERNAME "$DB_NAMA"
+setenv DB_PASSWORD "$DB_SANDI"
+setenv SESSION_DRIVER file
+setenv CACHE_STORE file
+setenv QUEUE_CONNECTION database
+setenv MAIL_MAILER log
+# Contoh .env ikut disesuaikan (tanpa sandi) supaya klon baru langsung benar
+for k in APP_TIMEZONE=Asia/Jakarta APP_LOCALE=id APP_FALLBACK_LOCALE=id APP_FAKER_LOCALE=id_ID DB_CONNECTION=mariadb; do
+  sed -i -E "s|^#? ?${k%%=*}=.*|$k|" .env.example; grep -q "^${k%%=*}=" .env.example || echo "$k" >> .env.example
+done
+# config/app.php bawaan mengunci 'UTC'; buat mengikuti .env
+sed -i "s|'timezone' => 'UTC',|'timezone' => env('APP_TIMEZONE', 'Asia/Jakarta'),|" config/app.php
+grep -q "env('APP_TIMEZONE'" config/app.php
+npm run build   # ulang: VITE_APP_NAME ikut APP_NAME
+
+# ---------------------------------------------------------------------------
+langkah 4 "Buat database MariaDB + migrasi"
+"${MYSQL[@]}" <<SQL
+CREATE DATABASE \`$DB_NAMA\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER '$DB_NAMA'@'localhost' IDENTIFIED BY '$DB_SANDI';
+GRANT ALL PRIVILEGES ON \`$DB_NAMA\`.* TO '$DB_NAMA'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+php artisan config:clear -q
+php artisan migrate --force
+
+# ---------------------------------------------------------------------------
+langkah 5 "Seeder akun uji"
+# Sandi TIDAK ditulis di kode (repo naik ke GitHub): seeder membacanya dari env saat dijalankan,
+# lalu disimpan di kartu Project Lokal. Seeder aman diulang (firstOrCreate).
+ADMIN_EMAIL="admin@$SLUG.test"
+ADMIN_SANDI=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)
+cat > database/seeders/DatabaseSeeder.php <<PHP
+<?php
+
+namespace Database\\Seeders;
+
+use App\\Models\\User;
+use Illuminate\\Database\\Seeder;
+use Illuminate\\Support\\Str;
+
+class DatabaseSeeder extends Seeder
+{
+    /**
+     * Akun uji untuk dev. Sandi diambil dari SEED_ADMIN_PASSWORD saat seeding;
+     * bila kosong dibuat acak (sandi dev tersimpan di kartu Project Lokal dashboard kantor).
+     */
+    public function run(): void
+    {
+        // firstOrCreate: seeding ulang tidak menimpa sandi yang sudah diganti
+        User::firstOrCreate(
+            ['email' => '$ADMIN_EMAIL'],
+            [
+                'name' => 'Admin',
+                'password' => env('SEED_ADMIN_PASSWORD') ?: Str::password(16),
+                'email_verified_at' => now(),
+            ],
+        );
+    }
+}
+PHP
+SEED_ADMIN_PASSWORD=$ADMIN_SANDI php artisan db:seed --force
+echo "Akun uji: $ADMIN_EMAIL (sandi disimpan di kartu Project Lokal)"
+
+# ---------------------------------------------------------------------------
+langkah 6 "CLAUDE.md konvensi tim"
+sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{PORT}}|$PORT|g" -e "s|{{URL}}|$URL|g" \
+    -e "s|{{PENGGUNA}}|$PENGGUNA|g" -e "s|{{KLIEN}}|${KLIEN:--}|g" -e "s|{{DOMAIN}}|${DOMAIN:--}|g" \
+    -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" -e "s|{{TANGGAL}}|$(date +%F)|g" \
+    "$REPO_DIR/templates/laravel/CLAUDE.md" > CLAUDE.md
+[ -f AGENTS.md ] && printf '\n@AGENTS.md\n' >> CLAUDE.md
+# Spesifikasi dari PM (tahap Brief): DESIGN.md di akar (seperti sia-vd), PRD di docs/
+if [ -n "$PROYEK_DIR" ]; then
+  [ -s "$PROYEK_DIR/DESIGN.md" ] && cp "$PROYEK_DIR/DESIGN.md" DESIGN.md
+  mkdir -p docs
+  for f in PRD DATABASE FLOWCHART; do [ -s "$PROYEK_DIR/$f.md" ] && cp "$PROYEK_DIR/$f.md" "docs/$f.md"; done
+  ls -l DESIGN.md docs/ 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+langkah 7 "User sistem, systemd, firewall"
+useradd --system --no-create-home --home-dir "$DIR" --shell /sbin/nologin "$PENGGUNA"
+chown root:"$PENGGUNA" .env && chmod 640 .env
+chown -R "$PENGGUNA:$PENGGUNA" storage bootstrap/cache
+mkdir -p "/etc/$SLUG/php.d"
+cat > "/etc/$SLUG/php.d/zz-$SLUG.ini" <<INI
+; Batas unggah layanan $SLUG (flag php -d TIDAK diwarisi proses anak artisan serve, jadi lewat PHP_INI_SCAN_DIR).
+upload_max_filesize = 10M
+post_max_size = 55M
+INI
+SCAN_DIR=$(php --ini | sed -n 's/^Scan for additional .ini files in: //p')
+cat > "/etc/systemd/system/$SLUG-dev.service" <<UNIT
+[Unit]
+Description=$JUDUL dev - web :$PORT
+After=network.target mariadb.service
+
+[Service]
+User=$PENGGUNA
+Group=$PENGGUNA
+WorkingDirectory=$DIR
+Environment=PHP_CLI_SERVER_WORKERS=4
+Environment=PHP_INI_SCAN_DIR=$SCAN_DIR:/etc/$SLUG/php.d
+ExecStart=/usr/bin/php artisan serve --host=0.0.0.0 --port=$PORT --no-reload
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat > "/etc/systemd/system/$SLUG-queue.service" <<UNIT
+[Unit]
+Description=$JUDUL dev - queue worker
+After=network.target mariadb.service
+
+[Service]
+User=$PENGGUNA
+Group=$PENGGUNA
+WorkingDirectory=$DIR
+ExecStart=/usr/bin/php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now "$SLUG-dev" "$SLUG-queue"
+if systemctl is-active -q firewalld; then
+  firewall-cmd -q --permanent --add-port="$PORT/tcp" && firewall-cmd -q --reload
+fi
+for i in $(seq 1 20); do
+  KODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/login" || true)
+  [ "$KODE" = 200 ] && break; sleep 1
+done
+echo "GET $URL/login -> HTTP $KODE"
+[ "$KODE" = 200 ]
+
+# ---------------------------------------------------------------------------
+langkah 8 "Skrip deploy-dev.sh & deploy-prod.sh"
+mkdir -p "/root/$SLUG"
+sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{URL}}|$URL|g" -e "s|{{PENGGUNA}}|$PENGGUNA|g" \
+    -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" "$REPO_DIR/templates/laravel/deploy-dev.sh" > "/root/$SLUG/deploy-dev.sh"
+sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{DOMAIN}}|${DOMAIN}|g" \
+    "$REPO_DIR/templates/laravel/deploy-prod.sh" > "/root/$SLUG/deploy-prod.sh"
+[ -e "/root/$SLUG/prod.env" ] || sed -e "s|{{DOMAIN}}|${DOMAIN}|g" "$REPO_DIR/templates/laravel/prod.env" > "/root/$SLUG/prod.env"
+chmod 700 "/root/$SLUG/deploy-dev.sh" "/root/$SLUG/deploy-prod.sh"; chmod 600 "/root/$SLUG/prod.env"
+ls -l "/root/$SLUG"
+
+# ---------------------------------------------------------------------------
+langkah 9 "Repo GitHub $GITHUB_ORG/$SLUG (privat) + commit awal"
+[ -d .git ] || git init -q -b main
+# .gitignore bawaan Boost mengabaikan berkas agen; konvensi tim justru harus ikut repo
+sed -i -E '/^\/(CLAUDE\.md|AGENTS\.md|boost\.json|\.mcp\.json|\.claude)$/d' .gitignore
+# Workflow CI bawaan starter kit tidak dipakai (pola sia-vd) dan token gh tanpa scope `workflow`
+# ditolak GitHub saat push berkas .github/workflows (28 Sep elearning-vd)
+rm -rf .github/workflows; rmdir .github 2>/dev/null || true
+git add -A
+git -c user.name="Velocity Developer" -c user.email="noreply@velocitydeveloper.com" \
+  commit -q -m "chore: kerangka awal $JUDUL (laravel new --vue, installer Velocity)"
+gh repo create "$GITHUB_ORG/$SLUG" --private --description "$JUDUL${KLIEN:+ — $KLIEN}" --source=. --remote=origin --push
+git log --oneline -1
+
+# ---------------------------------------------------------------------------
+langkah 10 "Daftarkan ke Project Lokal"
+python3 - "$PROJECTS_FILE" "$LOGIN_FILE" <<PY
+import json, os, sys
+pf, lf = sys.argv[1:3]
+d = json.load(open(pf))
+d['projects'] = [p for p in d['projects'] if p.get('id') != '$SLUG']
+item = {'id': '$SLUG', 'nama': $(js "$JUDUL"), 'jenis': 'klien' if $(js "$KLIEN") else 'internal',
+        'stack': 'Laravel · Inertia/Vue', 'port': $PORT, 'folder': '$DIR',
+        'layanan': ['$SLUG-dev', '$SLUG-queue'],
+        'catatan': 'Dibuat installer Laravel $(date +%F). Update: /root/$SLUG/deploy-dev.sh'}
+if $(js "$DOMAIN"):
+    item['produksi'] = 'https://' + $(js "$DOMAIN")
+d['projects'].append(item)
+json.dump(d, open(pf + '.tmp', 'w'), ensure_ascii=False, indent=2); os.replace(pf + '.tmp', pf)
+l = json.load(open(lf)) if os.path.exists(lf) else {}
+l['$SLUG'] = {'path': '/login', 'akun': [{'peran': 'admin', 'user': $(js "$ADMIN_EMAIL"), 'sandi': $(js "$ADMIN_SANDI")}]}
+old = os.umask(0o077)
+json.dump(l, open(lf + '.tmp', 'w'), ensure_ascii=False, indent=2); os.replace(lf + '.tmp', lf)
+os.umask(old)
+PY
+chmod 600 "$LOGIN_FILE"
+
+status 'status="ok"' "selesai=$(date +%s)" "repo=$(js "https://github.com/$GITHUB_ORG/$SLUG")" "langkah=$TOTAL"
+echo; echo "SELESAI: $URL  (repo https://github.com/$GITHUB_ORG/$SLUG)"
+if [ "$LANJUT_AGEN" = 1 ] && [ -n "$PROYEK_ID" ]; then
+  echo "Diserahkan ke agen Claude (log di tab Agen)."
+  # Proses yang sama berlanjut jadi agen (pid tetap), jadi pekerjaan project tidak pernah kosong di antaranya
+  python3 -c "import sys; sys.path.insert(0, '$REPO_DIR/scripts'); import laravel_proyek as L; L.ubah_proyek('$PROYEK_ID', lambda p: (p['job'].update(jenis='agen'), p.setdefault('agen', {}).update(minta_berhenti=False)))"
+  trap - ERR
+  exec "$REPO_DIR/scripts/laravel-agen" "$PROYEK_ID" > "$PROYEK_DIR/log-agen.log" 2>&1
+fi
+exit 0
+}

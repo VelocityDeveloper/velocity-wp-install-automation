@@ -1194,6 +1194,11 @@ def start_run(domain: str, mode: str):
     return {'domain': domain, 'mode': mode, 'pid': p.pid}, 'started'
 
 
+# --- Alur project Laravel (menu Installer > Laravel) ---
+# Data, tahap, dan aksi ada di scripts/laravel_proyek.py (dipakai juga laravel-brief / laravel-agen).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
+import laravel_proyek  # noqa: E402
+
 # --- AI Model Management ---
 
 # ID model boleh memuat garis miring (permintaan user 2026-09-16): penyedia seperti
@@ -1744,6 +1749,8 @@ class Handler(BaseHTTPRequestHandler):
         # (satu berkas state + log): dikecualikan dari batas 30 req/60s supaya pantauan
         # realtime tidak berhenti karena 429. Semua endpoint lain tetap dibatasi.
         baca_bagan = path == '/api/installer' and 'domain' in parse_qs(parsed.query)
+        # Halaman project Laravel memantau log & status tiap 2-3 detik selama agen/installer berjalan
+        baca_bagan = baca_bagan or path.startswith('/api/laravel/p/')
         if not baca_bagan and not _rate_ok(ip):
             self._send_json({'error': 'rate_limited'}, 429)
             return
@@ -1756,6 +1763,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             self._send_json(servers_view())
+            return
+        if path == '/api/laravel' or path.startswith('/api/laravel/'):
+            if not _is_local_net(ip):
+                self._send_json({'error': 'forbidden'}, 403)
+                return
+            kode, obj = laravel_proyek.handle('GET', path, parsed.query, None)
+            self._send_json(obj, kode)
             return
         if path == '/api/installer/susulan':
             # Laporan scripts/audit-susulan: situs jadi yang belum ikut aturan terbaru (hanya dibaca).
@@ -1851,12 +1865,34 @@ class Handler(BaseHTTPRequestHandler):
                           '/api/servers', '/api/servers/delete', '/api/servers/default', '/api/servers/test',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
-        is_allowed = path in allowed_static or path.startswith('/api/ai/models/')
+        is_allowed = path in allowed_static or path.startswith('/api/ai/models/') or path.startswith('/api/laravel/')
         if not is_allowed:
             self.send_error(404)
             return
         if not _check_auth(self):
             self._send_json({'error': 'unauthorized'}, 401)
+            return
+        if path.startswith('/api/laravel/'):
+            # Membuat user sistem, layanan, database, repo GitHub, dan menjalankan agen: hanya dari LAN
+            # kantor/Tailscale, dan Origin wajib sama dengan Host supaya halaman lain tidak bisa memicunya.
+            origin = urlparse(self.headers.get('Origin') or '').netloc
+            if not _is_local_net(ip) or (origin and origin != (self.headers.get('Host') or '')):
+                self._send_json({'error': 'forbidden'}, 403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if length > 1_000_000:
+                    self._send_json({'error': 'payload_too_large'}, 413)
+                    return
+                payload = json.loads(self.rfile.read(length) or b'{}')
+            except (ValueError, OSError):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            kode, obj = laravel_proyek.handle('POST', path, '', payload)
+            self._send_json(obj, kode)
             return
         if path == '/api/packages/sync':
             self._send_json(packages_view(force=True))

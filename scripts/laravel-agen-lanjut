@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Lanjutkan agen project Laravel yang terhenti karena jam mesin (Local PC nyala 07.00–22.00).
+
+Dipanggil laravel-agen-lanjut.timer (sesudah boot + tiap jam 07–20). Project dilanjutkan bila status agennya
+`menunggu_pagi` / `terputus` / `menunggu_kuota` (kuota Claude habis, dicoba lagi tiap jam) / `jatah_habis`
+(jatah harian project habis — hanya dilanjutkan esok harinya) (atau `jalan` padahal prosesnya sudah mati = mesin mati mendadak), tidak ada proses
+berjalan, sudah terpasang, masih ada fitur antre/revisi, dan tidak ada fitur gagal. Agen yang dihentikan manual
+(`berhenti`) atau gagal TIDAK dilanjutkan otomatis. Mulai lewat API installer_status supaya prosesnya tercatat
+sama seperti tombol di dashboard.
+"""
+import json
+import sys
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import laravel_proyek as L  # noqa: E402
+
+API = 'http://127.0.0.1:9121/api/laravel/p/{}/agen'
+
+
+def main():
+    if not (7 <= datetime.now().hour < 21):
+        print('di luar jam mesin, dilewati')
+        return 0
+    for ringkas in L.daftar():
+        slug = ringkas['slug']
+        status = (ringkas.get('agen') or {}).get('status')
+        fitur = L.baca_json(L.folder(slug) / 'fitur.json', []) or []
+        if status not in ('menunggu_pagi', 'terputus', 'menunggu_kuota', 'jatah_habis', 'jalan') or ringkas.get('job'):
+            continue
+        if status == 'jatah_habis' and (ringkas.get('agen') or {}).get('jatah_tanggal') == datetime.now().strftime('%Y-%m-%d'):
+            continue
+        if ringkas['install'].get('status') != 'ok' or any(f.get('status') == 'gagal' for f in fitur):
+            continue
+        if not any(f.get('status') in ('antre', 'revisi', 'jalan') for f in fitur):
+            continue
+        req = urllib.request.Request(API.format(slug), method='POST',
+                                     data=json.dumps({'oleh': 'Otomatis (mesin nyala)', 'aksi': 'mulai'}).encode(),
+                                     headers={'Content-Type': 'application/json', 'User-Agent': 'laravel-agen-lanjut'})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                print(slug, 'dilanjutkan', r.read().decode()[:200])
+        except Exception as e:  # noqa: BLE001 — satu project gagal tidak menghentikan yang lain
+            print(slug, 'gagal dilanjutkan:', e)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

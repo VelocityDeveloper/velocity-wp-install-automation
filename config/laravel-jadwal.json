@@ -1,0 +1,8 @@
+{
+  "_catatan": "Dasar estimasi & jatah agen project Laravel (dibaca scripts/laravel_proyek.py, laravel-agen, tab Estimasi). Mesin nyala mesin_mulai-mesin_selesai. Kuota langganan Claude dipakai bersama webmaster & agen lain, jadi agen dibatasi: jatah satu project per hari = min(jam_agen_per_project_per_hari, jam_agen_total_per_hari / jumlah project di tahap Agen) (keputusan user 2026-09-25: 6 jam per project, dikurangi bila project padat). Runner laravel-agen berhenti bila jatah hari ini habis dan lanjut besok pagi.",
+  "mesin_mulai": 7,
+  "mesin_selesai": 22,
+  "jam_agen_per_project_per_hari": 6,
+  "jam_agen_total_per_hari": 10,
+  "jam_webmaster_per_hari": 7
+}

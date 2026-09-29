@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Tahap Brief & Estimasi project Laravel dengan Claude (tanpa alat, hanya menulis teks).
+
+  laravel-brief <project-NNN> susun     catatan.md -> DESIGN.md + PRD.md (draf untuk disunting PM)
+  laravel-brief <project-NNN> diagram   PRD.md -> DATABASE.md (ERD Mermaid) + FLOWCHART.md (alur proses Mermaid)
+  laravel-brief <project-NNN> estimasi  PRD.md + DESIGN.md + DATABASE.md -> fitur.json (fitur, kriteria terima, jam internal)
+Mode susun otomatis lanjut ke diagram (dua panggilan: keluaran satu panggilan tetap wajar panjangnya).
+
+Dijalankan dashboard lewat scripts/laravel_proyek.py (log: <proyek>/log-<jenis>.log). Versi sebelumnya
+disimpan sebagai <berkas>.<waktu>.bak supaya suntingan PM tidak hilang. Model = Opus terbaru
+(sama dengan agen desain); pemakaian token ke usage.jsonl peran laravel_brief.
+"""
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import laravel_proyek as L  # noqa: E402
+
+TEMPLATE = HERE.parent / 'templates' / 'laravel'
+
+SKEMA = {
+    'susun': {
+        'type': 'object', 'required': ['prd_md', 'design_md', 'ringkasan_pm'],
+        'properties': {
+            'prd_md': {'type': 'string'}, 'design_md': {'type': 'string'},
+            'ringkasan_pm': {'type': 'array', 'items': {'type': 'string'}},
+        },
+    },
+    'diagram': {
+        'type': 'object', 'required': ['database_md', 'flowchart_md', 'catatan'],
+        'properties': {
+            'database_md': {'type': 'string'}, 'flowchart_md': {'type': 'string'},
+            'catatan': {'type': 'array', 'items': {'type': 'string'}},
+        },
+    },
+    'estimasi': {
+        'type': 'object', 'required': ['fitur', 'tambahan'],
+        'properties': {
+            'tambahan': {'type': 'array', 'items': {
+                'type': 'object', 'required': ['judul', 'jam_agen', 'jam_webmaster'],
+                'properties': {'judul': {'type': 'string'}, 'jam_agen': {'type': 'number'},
+                               'jam_webmaster': {'type': 'number'}}}},
+            'fitur': {'type': 'array', 'items': {
+            'type': 'object', 'required': ['judul', 'deskripsi', 'kriteria', 'jam_agen', 'jam_webmaster'],
+            'properties': {
+                'judul': {'type': 'string'}, 'deskripsi': {'type': 'string'},
+                'kriteria': {'type': 'array', 'items': {'type': 'string'}},
+                'jam_agen': {'type': 'number'}, 'jam_webmaster': {'type': 'number'},
+            }}}},
+    },
+}
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def log(pesan):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {pesan}", flush=True)
+
+
+def cadangkan(slug, nama):
+    p = L.folder(slug) / nama
+    if p.is_file() and p.stat().st_size:
+        shutil.copy2(p, p.with_name(f"{nama}.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
+
+
+def prompt_untuk(slug, jenis, p):
+    t = (TEMPLATE / f'brief-{jenis}.md').read_text()
+    ganti = {'{{JUDUL}}': p.get('judul', ''), '{{KLIEN}}': p.get('klien') or '-', '{{DOMAIN}}': p.get('domain') or '-'}
+    if jenis == 'susun':
+        lama_prd, lama_design = L.baca_teks(slug, 'PRD.md').strip(), L.baca_teks(slug, 'DESIGN.md').strip()
+        lama = ''
+        if lama_prd or lama_design:
+            lama = ('Sudah ada draf sebelumnya (mungkin sudah disunting PM). PERTAHANKAN suntingan PM, perbarui hanya '
+                    'bagian yang berubah karena catatan baru.\n\n'
+                    f'<prd_lama>\n{lama_prd}\n</prd_lama>\n\n<design_lama>\n{lama_design}\n</design_lama>')
+        ganti.update({'{{CATATAN}}': L.baca_teks(slug, 'catatan.md'), '{{DOKUMEN_LAMA}}': lama,
+                      '{{CONTOH_DESIGN}}': (TEMPLATE / 'contoh-DESIGN.md').read_text()})
+    elif jenis == 'diagram':
+        lama_db, lama_flow = L.baca_teks(slug, 'DATABASE.md').strip(), L.baca_teks(slug, 'FLOWCHART.md').strip()
+        lama = ''
+        if lama_db or lama_flow:
+            lama = ('Sudah ada versi sebelumnya (mungkin sudah disunting PM). PERTAHANKAN suntingan PM, perbarui hanya yang '
+                    'berubah karena PRD.\n\n'
+                    f'<database_lama>\n{lama_db}\n</database_lama>\n\n<flowchart_lama>\n{lama_flow}\n</flowchart_lama>')
+        ganti.update({'{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DOKUMEN_LAMA}}': lama})
+    else:
+        ganti.update({'{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DESIGN}}': L.baca_teks(slug, 'DESIGN.md'),
+                      '{{DATABASE}}': L.baca_teks(slug, 'DATABASE.md') or '(belum ada)'})
+    for k, v in ganti.items():
+        t = t.replace(k, v)
+    return t
+
+
+def catat_pemakaian(DC, slug, jenis, hasil):
+    for model, u in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': slug,
+            'run': f'laravel-brief-{slug}', 'mode': jenis, 'peran': 'laravel_brief', 'script': 'laravel-brief',
+            'sumber': 'claude', 'model_id': 'claude-code', 'model': model, 'permintaan': 1,
+            'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+            'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
+            'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error'),
+            'giliran': hasil.get('num_turns'),
+        }
+        try:
+            with open(DC.AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[2] not in SKEMA or not L.ID_RE.match(sys.argv[1]):
+        print(__doc__)
+        return 2
+    slug, jenis = sys.argv[1], sys.argv[2]
+    p = L.baca_json(L.folder(slug) / 'proyek.json', {})
+    if not p:
+        log('project tidak ada')
+        return 1
+    DC = muat('desain_claude', HERE / 'desain-claude')
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    opus = DC.opus_terbaru(env)
+    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus, ANTHROPIC_SMALL_FAST_MODEL=opus)
+    kode = jalankan(DC, env, opus, slug, jenis, p)
+    if kode == 0 and jenis == 'susun':
+        log('')
+        kode = jalankan(DC, env, opus, slug, 'diagram', p)
+    return kode
+
+
+JUDUL_KERJA = {'susun': 'menyusun DESIGN.md + PRD.md dari catatan diskusi',
+               'diagram': 'menyusun relasi database (ERD) + flowchart dari PRD',
+               'estimasi': 'memecah PRD jadi fitur + estimasi'}
+
+
+def jalankan(DC, env, opus, slug, jenis, p):
+    prompt = prompt_untuk(slug, jenis, p)
+    log(f"Claude ({opus}) {JUDUL_KERJA[jenis]}…")
+    log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 2–6 menit.')
+    mulai = time.time()
+    try:
+        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'opus', '--output-format', 'json',
+                              '--no-session-persistence', '--tools', '', '--json-schema', json.dumps(SKEMA[jenis])],
+                             capture_output=True, text=True, timeout=1500, env=env, cwd='/tmp')
+        hasil = json.loads(run.stdout)
+    except subprocess.TimeoutExpired:
+        log('GAGAL: Claude tidak selesai dalam 25 menit')
+        return 1
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'GAGAL: {type(e).__name__}: {str(e)[:300]}')
+        return 1
+    catat_pemakaian(DC, slug, jenis, hasil)
+    data = hasil.get('structured_output')
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        log(f"GAGAL: {str(hasil.get('result') or 'tanpa keluaran JSON')[:400]}")
+        return 1
+    detik = round(time.time() - mulai)
+    biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
+
+    if jenis == 'susun':
+        for nama, kunci in (('PRD.md', 'prd_md'), ('DESIGN.md', 'design_md')):
+            cadangkan(slug, nama)
+            L.tulis_teks(slug, nama, data[kunci].strip() + '\n')
+        catatan_pm = [str(x) for x in data.get('ringkasan_pm') or []]
+        L.ubah_proyek(slug, lambda x: x.update(ringkasan_brief=catatan_pm))
+        log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). PRD {len(data["prd_md"]):,} karakter, '
+            f'DESIGN {len(data["design_md"]):,} karakter.')
+        for c in catatan_pm:
+            log(f'  • {c}')
+        L.catat(slug, 'Claude', 'menyusun draf DESIGN.md + PRD.md')
+    elif jenis == 'diagram':
+        for nama, kunci in (('DATABASE.md', 'database_md'), ('FLOWCHART.md', 'flowchart_md')):
+            cadangkan(slug, nama)
+            L.tulis_teks(slug, nama, data[kunci].strip() + '\n')
+        blok = sum(data[k].count('```mermaid') for k in ('database_md', 'flowchart_md'))
+        log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). {blok} diagram Mermaid.')
+        for c in data.get('catatan') or []:
+            log(f'  • {c}')
+        L.ubah_proyek(slug, lambda x: x.update(catatan_diagram=[str(c) for c in data.get('catatan') or []]))
+        L.catat(slug, 'Claude', 'menyusun relasi database & flowchart')
+    else:
+        fitur = L._bersihkan_fitur(data['fitur'])
+        cadangkan(slug, 'fitur.json')
+        L.ubah_fitur(slug, lambda f: f.__setitem__(slice(None), fitur))
+        tambahan = L.bersihkan_tambahan(data.get('tambahan') or [])
+        L.ubah_proyek(slug, lambda x: x.update(tambahan=tambahan))
+        for t in tambahan:
+            log(f"  + {t['judul']} — agen {t['jam_agen']} j, webmaster {t['jam_webmaster']} j")
+        log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). {len(fitur)} fitur, '
+            f'agen {sum(f["jam_agen"] for f in fitur):.1f} jam, webmaster {sum(f["jam_webmaster"] for f in fitur):.1f} jam.')
+        for f in fitur:
+            log(f"  {f['id']} {f['judul']} — {len(f['kriteria'])} kriteria, agen {f['jam_agen']} j, webmaster {f['jam_webmaster']} j")
+        L.catat(slug, 'Claude', f'memecah PRD jadi {len(fitur)} fitur')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    finally:
+        if len(sys.argv) > 1 and L.ID_RE.match(sys.argv[1]):
+            L.ubah_proyek(sys.argv[1], lambda p: p.pop('job', None))

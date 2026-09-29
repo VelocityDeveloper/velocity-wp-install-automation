@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+"""Agen Claude Code mengerjakan fitur project Laravel satu per satu (tahap Agen).
+
+  laravel-agen <project-NNN>
+
+Per fitur (urutan fitur.json, status antre/revisi):
+  1. tarik commit terbaru bila salinan kerja bersih; tunggu antrean agen bersama (desain-claude.lock)
+  2. `claude -p` (Opus terbaru) di /home/<app> dengan tugas templates/laravel/agen-fitur.md;
+     alat dibatasi (baca/tulis berkas + php artisan/composer/npm/pint/pest/git baca), tanpa web, tanpa commit
+  3. runner memverifikasi SENDIRI: pint, migrate dev, `php artisan test`, `npm run build`, dev /login HTTP 200
+  4. lolos -> commit `feat(Fxx): ...` + push, status `dites` + laporan agen per kriteria (bahan checklist webmaster)
+     gagal -> status `gagal` + galat, perubahan dibiarkan (belum di-commit), agen berhenti
+Berhenti juga bila PM/webmaster menekan Hentikan (dicek di antara fitur).
+
+Jam mesin: Local PC hanya nyala 07.00–22.00. Fitur baru tidak dimulai bila perkiraan selesainya lewat 21.45
+(perkiraan = rata-rata menit aktual fitur sebelumnya di project ini, bawaan 45 menit) -> status `menunggu_pagi`;
+batas waktu agen dipotong supaya berhenti sebelum 21.55. Mesin mati di tengah fitur (SIGTERM) -> `terputus`.
+Keduanya dilanjutkan otomatis oleh scripts/laravel-agen-lanjut (timer saat mesin nyala).
+Kuota langganan Claude dipakai bersama agen lain & webmaster; bila habis di tengah fitur -> `menunggu_kuota`
+(bukan gagal, perubahan dibiarkan), dicoba lagi tiap jam oleh laravel-agen-lanjut.
+Jatah harian per project (config/laravel-jadwal.json, L.jatah_agen_harian): min(6 jam, 10 jam / jumlah project di
+tahap Agen). Fitur baru tidak dimulai bila menit hari ini + perkiraan melewati jatah -> `jatah_habis`, lanjut besok
+pagi. Jatah bersifat lunak: fitur yang sudah berjalan dibiarkan selesai.
+Pemakaian token ke usage.jsonl peran laravel_agen (halaman /ai/ & /token).
+"""
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import laravel_proyek as L  # noqa: E402
+
+TUGAS = HERE.parent / 'templates' / 'laravel' / 'agen-fitur.md'
+MENIT_MIN, MENIT_MAKS = 30, 150
+# Jam mesin Local PC (nyala 07.00–22.00): fitur harus selesai sebelum BATAS_MULAI, agen dipotong di BATAS_KERAS
+BATAS_MULAI = (21, 45)
+BATAS_KERAS = (21, 55)
+PERKIRAAN_BAWAAN = 45  # menit per fitur sebelum ada data aktual
+KUOTA_RE = re.compile(r'usage limit|limit reached|rate.?limit|overloaded|\b429\b', re.I)
+SKEMA = {
+    'type': 'object', 'required': ['ringkasan', 'kriteria', 'cara_cek', 'catatan_webmaster', 'berkas'],
+    'properties': {
+        'ringkasan': {'type': 'string'},
+        'kriteria': {'type': 'array', 'items': {
+            'type': 'object', 'required': ['no', 'status', 'bukti'],
+            'properties': {'no': {'type': 'integer'}, 'status': {'type': 'string', 'enum': ['terpenuhi', 'sebagian', 'belum']},
+                           'bukti': {'type': 'string'}}}},
+        'cara_cek': {'type': 'array', 'items': {'type': 'string'}},
+        'catatan_webmaster': {'type': 'string'},
+        'berkas': {'type': 'array', 'items': {'type': 'string'}},
+    },
+}
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def log(pesan):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {pesan}", flush=True)
+
+
+def sh(perintah, cwd, timeout=900, env=None):
+    """-> (kode, keluaran gabungan). Tidak melempar galat."""
+    try:
+        r = subprocess.run(perintah, cwd=cwd, shell=isinstance(perintah, str), capture_output=True, text=True,
+                           timeout=timeout, env=env)
+        return r.returncode, L.bersih_terminal(r.stdout + r.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return 124, f'timeout {timeout} dtk'
+    except OSError as e:
+        return 127, str(e)
+
+
+def ekor(teks, n=40):
+    return '\n'.join(teks.splitlines()[-n:])
+
+
+def ringkas_langkah(blok):
+    if blok.get('type') == 'text':
+        teks = ' '.join(str(blok.get('text') or '').split())
+        return f'agen › {teks[:240]}' if teks else None
+    if blok.get('type') != 'tool_use':
+        return None
+    alat, masuk = blok.get('name', ''), blok.get('input') or {}
+    berkas = str(masuk.get('file_path') or '')
+    if alat == 'Read':
+        return f'agen › membaca {berkas}'
+    if alat in ('Write', 'Edit', 'MultiEdit'):
+        return f'agen › menulis {berkas}'
+    if alat == 'Bash':
+        return f"agen › $ {' '.join(str(masuk.get('command') or '').split())[:200]}"
+    if alat in ('Glob', 'Grep'):
+        return f"agen › mencari {masuk.get('pattern', '')}"
+    return f'agen › {alat}'
+
+
+def menit_sampai(jam_menit):
+    kini = datetime.now()
+    batas = kini.replace(hour=jam_menit[0], minute=jam_menit[1], second=0, microsecond=0)
+    return (batas - kini).total_seconds() / 60
+
+
+def perkiraan_menit(fitur):
+    """Perkiraan lama satu fitur dari data aktual project ini (rata-rata x1,2), bawaan 45 menit."""
+    aktual = [float(x['hasil']['menit']) for x in fitur
+              if x.get('status') in ('dites', 'ok') and (x.get('hasil') or {}).get('menit')]
+    return max(15, sum(aktual) / len(aktual) * 1.2) if aktual else PERKIRAAN_BAWAAN
+
+
+def prompt_fitur(p, fitur, f):
+    kriteria = '\n'.join(f"{i}. {k['teks']}" for i, k in enumerate(f['kriteria'], 1))
+    revisi = ''
+    if f.get('revisi'):
+        revisi = '## REVISI dari webmaster (wajib ditangani; fitur ini sudah pernah dikerjakan & di-commit)\n\n' + '\n'.join(
+            f"- ({datetime.fromtimestamp(r['waktu']).strftime('%d %b %H:%M')}, {r['oleh']}) {r['catatan']}"
+            for r in f['revisi'][-5:]) + '\n'
+    galat = ''
+    if (f.get('hasil') or {}).get('galat'):
+        galat = ('## Percobaan sebelumnya GAGAL diverifikasi runner\n\nPerubahan percobaan itu masih ada (belum di-commit). '
+                 'Lanjutkan dan perbaiki. Keluaran terakhir:\n```\n' + f['hasil']['galat'][-3000:] + '\n```\n')
+    if f.get('terputus'):
+        galat += ('## Sesi sebelumnya untuk fitur ini TERPUTUS (mesin dimatikan)\n\nPerubahan yang belum di-commit masih ada. '
+                  'Periksa `git status` / `git diff` dulu, lanjutkan dari situ, jangan mulai dari nol.\n')
+    selesai = '\n'.join(f"- {x['id']} {x['judul']}" for x in fitur if x['status'] in ('dites', 'ok')) or '- (belum ada)'
+    ganti = {'{{JUDUL}}': p['judul'], '{{ID}}': f['id'], '{{JUDUL_FITUR}}': f['judul'], '{{DESKRIPSI}}': f.get('deskripsi') or '',
+             '{{KRITERIA}}': kriteria, '{{REVISI}}': revisi, '{{GALAT_LALU}}': galat, '{{SELESAI}}': selesai}
+    t = TUGAS.read_text()
+    for k, v in ganti.items():
+        t = t.replace(k, v)
+    return t
+
+
+def jalankan_claude(DC, app_dir, prompt, menit, env):
+    env = {k: v for k, v in env.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    opus = DC.opus_terbaru(env)
+    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus,
+               ANTHROPIC_SMALL_FAST_MODEL=opus, CLAUDE_CODE_SUBAGENT_MODEL=opus)
+    log(f'model agen: {opus}, batas {menit} menit')
+    perintah = [
+        DC.CLAUDE, '-p', prompt, '--model', 'opus',
+        '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+        '--permission-mode', 'acceptEdits', '--json-schema', json.dumps(SKEMA),
+        '--allowedTools', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite',
+        'Bash(php artisan:*)', 'Bash(php -l:*)', 'Bash(composer:*)', 'Bash(npm:*)', 'Bash(npx:*)',
+        'Bash(vendor/bin/pint:*)', 'Bash(vendor/bin/pest:*)', 'Bash(vendor/bin/phpstan:*)',
+        'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(ls:*)',
+        # Rahasia (kredensial DB root, token GitHub, .env) & data project lain tidak boleh dibaca
+        '--disallowedTools', 'WebFetch', 'WebSearch', 'Bash(git push:*)', 'Bash(git commit:*)', 'Bash(git reset:*)',
+        'Bash(git checkout:*)', 'Read(//etc/**)', 'Read(//root/**)', 'Read(//var/lib/velocity/**)',
+        'Read(./.env)', 'Edit(./.env)', 'Write(./.env)',
+    ]
+    mulai = time.time()
+    hasil, permintaan = {}, set()
+    proses = subprocess.Popen(perintah, cwd=app_dir, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    habis = threading.Timer(menit * 60, proses.kill)
+    habis.start()
+    try:
+        for baris in proses.stdout:
+            try:
+                ev = json.loads(baris)
+            except ValueError:
+                continue
+            if ev.get('type') == 'assistant':
+                pesan = ev.get('message') or {}
+                permintaan.add(pesan.get('id'))
+                for blok in pesan.get('content') or []:
+                    r = ringkas_langkah(blok)
+                    if r:
+                        log(r)
+            elif ev.get('type') == 'result':
+                hasil = ev
+        kode = proses.wait()
+    finally:
+        habis.cancel()
+    hasil['menit'] = round((time.time() - mulai) / 60, 1)
+    hasil['timeout'] = not hasil.get('type') and time.time() - mulai >= menit * 60 - 5
+    hasil['kode_keluar'] = kode
+    hasil['permintaan'] = len(permintaan)
+    return hasil
+
+
+def catat_pemakaian(DC, slug, fid, hasil):
+    for model, u in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': slug,
+            'run': f'laravel-agen-{slug}-{fid}', 'mode': 'agen', 'peran': 'laravel_agen', 'script': 'laravel-agen',
+            'sumber': 'claude', 'model_id': 'claude-code', 'model': model, 'permintaan': hasil.get('permintaan') or 1,
+            'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+            'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
+            'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error'),
+            'giliran': hasil.get('num_turns'),
+        }
+        try:
+            with open(DC.AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+
+def hasil_tes(keluaran):
+    """Boost membuat `php artisan test` mencetak satu baris JSON {"tool":"pest","result":..,"passed":..}."""
+    for baris in reversed(keluaran.splitlines()):
+        baris = baris.strip()
+        if baris.startswith('{') and '"tool"' in baris:
+            try:
+                j = json.loads(baris)
+                return int(j.get('passed') or 0), int(j.get('failed') or 0) + int(j.get('errors') or 0)
+            except ValueError:
+                pass
+    m = re.search(r'Tests:\s+(?:(\d+) failed[^\d]*)?(\d+) passed', keluaran)
+    return (int(m.group(2)), int(m.group(1) or 0)) if m else (0, 0)
+
+
+def verifikasi(app, app_dir, pengguna, port):
+    """Runner memeriksa sendiri hasil agen. -> (lolos, info, galat)"""
+    info = {}
+    langkah = [
+        ('pint', 'vendor/bin/pint', 300),
+        ('migrate', 'php artisan migrate --force', 300),
+        ('tes', 'php artisan test --compact', 900),
+        ('build', 'npm run build', 600),
+    ]
+    for nama, perintah, batas in langkah:
+        log(f'verifikasi: {perintah}')
+        kode, keluar = sh(perintah, app_dir, timeout=batas)
+        if nama == 'tes':
+            info['tes_lulus'], info['tes_gagal'] = hasil_tes(keluar)
+            log(f"  tes: {info['tes_lulus']} lolos, {info['tes_gagal']} gagal")
+        if kode != 0:
+            return False, info, f'$ {perintah} (kode {kode})\n{ekor(keluar, 60)}'
+    sh(['chown', '-R', f'{pengguna}:{pengguna}', 'storage', 'bootstrap/cache'], app_dir)
+    sh(['php', 'artisan', 'optimize:clear', '-q'], app_dir)
+    sh(['chown', '-R', f'{pengguna}:{pengguna}', 'storage', 'bootstrap/cache'], app_dir)
+    sh(['systemctl', 'restart', f'{app}-dev', f'{app}-queue'], app_dir)
+    kode_http = '000'
+    for _ in range(20):
+        time.sleep(1)
+        _, kode_http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/login'], app_dir, 15)
+        if kode_http == '200':
+            break
+    log(f'  dev /login HTTP {kode_http}')
+    if kode_http != '200':
+        return False, info, f'Aplikasi dev tidak menjawab (GET /login HTTP {kode_http}); cek journalctl -u {app}-dev'
+    return True, info, ''
+
+
+def main():
+    if len(sys.argv) != 2 or not L.ID_RE.match(sys.argv[1]):
+        print(__doc__)
+        return 2
+    slug = sys.argv[1]
+    p = L.baca_json(L.folder(slug) / 'proyek.json', {})
+    inst = L.install_state(slug)
+    app = p.get('app')
+    if not app or inst.get('status') != 'ok':
+        log('Project belum terpasang; agen tidak bisa mulai.')
+        return 1
+    app_dir, pengguna, port = Path('/home', app), app.replace('-', ''), inst['port']
+    DC = muat('desain_claude', HERE / 'desain-claude')
+    env = dict(os.environ)
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    # Fitur yang tertinggal "jalan" dari run yang mati mendadak (mesin mati) diantrekan lagi dan ditandai terputus
+    L.ubah_fitur(slug, lambda fs: [x.update(status='antre', terputus=True) for x in fs if x.get('status') == 'jalan'])
+    L.ubah_proyek(slug, lambda x: x.setdefault('agen', {}).update(status='jalan', mulai=L.sekarang(), fitur=None))
+    log(f'Agen mulai untuk {p["judul"]} ({app_dir}, dev http://192.168.88.211:{port}); '
+        f'jatah hari ini {L.jatah_agen_harian(slug):.1f} jam, terpakai {L.menit_agen_hari_ini(L.baca_json(L.folder(slug) / "fitur.json", [])):.0f} menit')
+    akhir = 'selesai'
+    while True:
+        p = L.baca_json(L.folder(slug) / 'proyek.json', {})
+        if (p.get('agen') or {}).get('minta_berhenti'):
+            log('Dihentikan atas permintaan (sesudah fitur terakhir selesai).')
+            akhir = 'berhenti'
+            break
+        fitur = L.baca_json(L.folder(slug) / 'fitur.json', [])
+        gagal = next((f for f in fitur if f['status'] == 'gagal'), None)
+        if gagal:
+            log(f"{gagal['id']} masih GAGAL — tekan Ulangi di tab Agen atau perbaiki manual dulu. Agen berhenti.")
+            akhir = 'gagal'
+            break
+        f = next((f for f in fitur if f['status'] in ('antre', 'revisi')), None)
+        if not f:
+            log('Semua fitur sudah dikerjakan agen. Lanjut ke Review webmaster.')
+            break
+        fid = f['id']
+        perkiraan = perkiraan_menit(fitur)
+        jatah = L.jatah_agen_harian(slug) * 60
+        terpakai = L.menit_agen_hari_ini(fitur)
+        if terpakai > 0 and terpakai + perkiraan > jatah:
+            log(f"Jatah agen hari ini untuk project ini habis ({terpakai:.0f} dari {jatah:.0f} menit; perkiraan {fid} "
+                f"{perkiraan:.0f} menit). Kuota Claude dipakai bersama — dilanjutkan otomatis besok pagi.")
+            L.ubah_proyek(slug, lambda x: x['agen'].update(jatah_tanggal=datetime.now().strftime('%Y-%m-%d')))
+            akhir = 'jatah_habis'
+            break
+        sisa_menit = menit_sampai(BATAS_MULAI)
+        if sisa_menit < perkiraan:
+            log(f"Waktu mesin hari ini tidak cukup untuk {fid} (perkiraan {perkiraan:.0f} menit, sisa {max(0, sisa_menit):.0f} menit "
+                f"sebelum 21.45). Dilanjutkan otomatis saat mesin nyala besok pagi.")
+            akhir = 'menunggu_pagi'
+            break
+        log('')
+        log(f"===== {fid} {f['judul']}{' (REVISI)' if f['status'] == 'revisi' else ''} =====")
+        adalah_revisi = f['status'] == 'revisi'
+        L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).update(status='jalan', mulai=L.sekarang()))
+        L.ubah_proyek(slug, lambda x: x['agen'].update(fitur=fid))
+
+        kode, keluar = sh(['git', 'status', '--porcelain', '--untracked-files=no'], app_dir)
+        if kode == 0 and not keluar:
+            kode, keluar = sh(['git', 'pull', '-q', '--ff-only', 'origin', 'main'], app_dir, 120)
+            log('git pull: ' + ('ok' if kode == 0 else f'gagal ({ekor(keluar, 3)})'))
+        else:
+            log('Salinan kerja punya perubahan belum di-commit; dilanjutkan tanpa pull.')
+
+        menit = int(min(MENIT_MAKS, max(MENIT_MIN, float(f.get('jam_agen') or 1) * 60 * 2), menit_sampai(BATAS_KERAS)))
+        L.DASAR.mkdir(parents=True, exist_ok=True)
+        with open('/var/lib/velocity/desain-claude.lock', 'w') as kunci:
+            try:
+                fcntl.flock(kunci, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                log('Menunggu antrean agen Claude (agen lain sedang bekerja)…')
+                fcntl.flock(kunci, fcntl.LOCK_EX)
+            hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f), menit, env)
+        catat_pemakaian(DC, slug, fid, hasil)
+        hari_ini = datetime.now().strftime('%Y-%m-%d')
+        L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).setdefault('riwayat_menit', []).append(
+            {'hari': hari_ini, 'menit': hasil['menit']}))
+        laporan = hasil.get('structured_output') if isinstance(hasil.get('structured_output'), dict) else None
+        biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
+        log(f"agen selesai: {hasil['menit']} menit, {hasil.get('num_turns') or '?'} giliran, setara API ${biaya}")
+
+        galat = ''
+        info = {}
+        teks_hasil = f"{hasil.get('result') or ''} {hasil.get('subtype') or ''} {hasil.get('api_error_status') or ''}"
+        if hasil.get('is_error') and KUOTA_RE.search(teks_hasil):
+            # Kuota langganan habis (dipakai bersama webmaster & agen lain): tunggu, jangan dianggap gagal
+            log(f'{fid} tertunda: kuota Claude habis ({teks_hasil.strip()[:160]}). Dicoba lagi otomatis tiap jam.')
+            L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).update(status='antre', terputus=True))
+            akhir = 'menunggu_kuota'
+            break
+        if hasil.get('timeout') and menit_sampai(BATAS_KERAS) <= 1:
+            # Dipotong karena jam mesin, bukan karena fiturnya bermasalah: lanjutkan besok, bukan "gagal"
+            log(f'{fid} dipotong karena mesin segera mati; dilanjutkan besok pagi dari perubahan yang sudah ada.')
+            L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).update(status='antre', terputus=True))
+            akhir = 'menunggu_pagi'
+            break
+        if hasil.get('timeout'):
+            galat = f'Agen melewati batas {menit} menit.'
+        elif hasil.get('is_error') or not laporan:
+            galat = 'Agen berhenti tanpa laporan: ' + str(hasil.get('result') or hasil.get('subtype') or 'tanpa keluaran')[:1500]
+        else:
+            lolos, info, galat = verifikasi(app, app_dir, pengguna, port)
+
+        commit = ''
+        if not galat:
+            sh(['git', 'add', '-A'], app_dir)
+            pesan = f"feat({fid.lower()}): {f['judul']}" + (' (revisi)' if adalah_revisi else '') + \
+                f"\n\n{laporan['ringkasan']}\n\nDikerjakan agen Claude Code (installer Velocity)."
+            kode, keluar = sh(['git', '-c', 'user.name=Velocity Agen Claude', '-c', 'user.email=noreply@velocitydeveloper.com',
+                               'commit', '-q', '-m', pesan], app_dir)
+            if kode != 0 and 'nothing to commit' not in keluar:
+                galat = f'git commit gagal: {ekor(keluar, 10)}'
+            else:
+                _, commit = sh(['git', 'rev-parse', '--short', 'HEAD'], app_dir)
+                kode, keluar = sh(['git', 'push', '-q', 'origin', 'main'], app_dir, 180)
+                log(f'commit {commit}, push: ' + ('ok' if kode == 0 else f'GAGAL ({ekor(keluar, 3)})'))
+
+        def simpan(fs):
+            x = next(x for x in fs if x['id'] == fid)
+            x['hasil'] = {'waktu': L.sekarang(), 'menit': hasil['menit'], 'biaya_usd': biaya, 'giliran': hasil.get('num_turns'),
+                          'commit': commit, **info, 'galat': galat[-6000:] if galat else ''}
+            if laporan:
+                x['hasil'].update(ringkasan=laporan['ringkasan'], cara_cek=laporan['cara_cek'],
+                                  catatan_webmaster=laporan['catatan_webmaster'], berkas=laporan['berkas'][:60])
+                per_no = {k.get('no'): k for k in laporan['kriteria']}
+                for i, k in enumerate(x['kriteria'], 1):
+                    a = per_no.get(i) or {}
+                    k['agen'] = {'status': a.get('status', 'belum'), 'bukti': str(a.get('bukti') or '')[:600]}
+                    k['cek'] = False
+            x['status'] = 'gagal' if galat else 'dites'
+            x.pop('terputus', None)
+        L.ubah_fitur(slug, simpan)
+        if galat:
+            log(f'{fid} GAGAL: {galat.splitlines()[0][:300]}')
+            L.catat(slug, 'Agen Claude', f'{fid} gagal diverifikasi')
+            akhir = 'gagal'
+            break
+        L.catat(slug, 'Agen Claude', f"{fid} selesai ({info.get('tes_lulus', 0)} tes lolos, commit {commit})")
+    L.ubah_proyek(slug, lambda x: x['agen'].update(status=akhir, fitur=None, selesai=L.sekarang()))
+    return 0 if akhir != 'gagal' else 1
+
+
+def _sigterm(*_):
+    # Mesin dimatikan: keluar lewat finally supaya status tercatat 'terputus' (dilanjutkan otomatis)
+    raise SystemExit(143)
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _sigterm)
+    try:
+        sys.exit(main())
+    finally:
+        if len(sys.argv) > 1 and L.ID_RE.match(sys.argv[1]):
+            def _(p):
+                p.pop('job', None)
+                # Runner berhenti di tengah (SIGTERM mesin mati / galat) -> terputus, dilanjutkan laravel-agen-lanjut
+                p.setdefault('agen', {})
+                if p['agen'].get('status') == 'jalan':
+                    p['agen'].update(status='terputus', fitur=None)
+            L.ubah_proyek(sys.argv[1], _)
+            L.ubah_fitur(sys.argv[1], lambda fs: [x.update(status='antre', terputus=True) for x in fs if x.get('status') == 'jalan'])

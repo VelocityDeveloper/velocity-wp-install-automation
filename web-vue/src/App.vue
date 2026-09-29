@@ -32,7 +32,10 @@ const backupBerikut = computed(() => {
 
 const NAV = [
   { ke: '/', label: 'Dashboard', ikon: 'dashboard' },
-  { ke: '/installer', label: 'Installer', ikon: 'installer' },
+  { grup: 'installer', label: 'Installer', ikon: 'installer', anak: [
+    { ke: '/installer/wordpress', label: 'WordPress', ikon: 'wordpress' },
+    { ke: '/installer/laravel', label: 'Aplikasi Custom', ikon: 'laravel' },
+  ] },
   { ke: '/ai', label: 'AI Model', ikon: 'ai' },
   // Grup bersub-menu: induknya tombol buka-tutup, bukan tautan
   { grup: 'claude', label: 'Claude', ikon: 'claude', anak: [
