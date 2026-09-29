@@ -42,6 +42,7 @@ import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageOps
+from folder_klien import folder_klien
 
 HERE = Path(__file__).resolve().parent
 SEMENTARA = []  # folder kerja yang dihapus di akhir run (bukan --coba)
@@ -151,9 +152,15 @@ def sampul_kategori(judul, nama, warna, tujuan):
 
 def foto_klien(domain):
     finish = muat('site_finish', HERE / 'site-finish')
-    _, foto = finish.client_assets(ON_PROGRESS / domain)
+    _, foto = finish.client_assets(folder_klien(domain))
     hasil = []
+    folder = folder_klien(domain)
     for p in foto:
+        try:
+            if any(LOGO_KLIEN_RE.search(b) for b in p.relative_to(folder).parts):
+                continue  # logo klien/mitra: dipasang di seksi Klien Kami (logo_klien_asli)
+        except ValueError:
+            pass
         try:
             with Image.open(p) as im:
                 w, h = ImageOps.exif_transpose(im).size
@@ -166,6 +173,78 @@ def foto_klien(domain):
             hasil.append((p, w, h))
     # Lanskap besar dulu untuk banner.
     return sorted(hasil, key=lambda x: (x[1] / x[2] < 1.2, -(x[1] * x[2])))
+
+
+# Logo klien/mitra kiriman klien: berkas atau folder bernama klien/client/mitra/partner/customer.
+LOGO_KLIEN_RE = re.compile(r'klien|client|customer|pelanggan|mitra|partner|rekanan', re.I)
+KLIEN_MAKS = 12
+KLIEN_CONTOH = 6
+
+
+def logo_klien_asli(domain):
+    """Logo klien/mitra dari folder klien (bukan logo situs sendiri)."""
+    folder = folder_klien(domain)
+    if not folder.is_dir():
+        return []
+    hasil = []
+    for p in sorted(folder.rglob('*')):
+        if not p.is_file() or p.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
+            continue
+        if not any(LOGO_KLIEN_RE.search(b) for b in p.relative_to(folder).parts):
+            continue
+        try:
+            with Image.open(p) as im:
+                if min(im.size) < 40:
+                    continue
+        except Exception:
+            continue
+        hasil.append(p)
+    return hasil[:KLIEN_MAKS]
+
+
+def kanvas_logo(sumber, tujuan, lebar=360, tinggi=200):
+    """Logo dipasang utuh (tidak dipotong) di tengah kanvas putih."""
+    im = ImageOps.exif_transpose(Image.open(sumber)).convert('RGBA')
+    im.thumbnail((lebar - 60, tinggi - 50), Image.LANCZOS)
+    kanvas = Image.new('RGB', (lebar, tinggi), (255, 255, 255))
+    kanvas.paste(im, ((lebar - im.width) // 2, (tinggi - im.height) // 2), im)
+    kanvas.save(tujuan, quality=88, optimize=True)
+    return tujuan
+
+
+def logo_contoh(nomor, tujuan, lebar=360, tinggi=200):
+    """Logo CONTOH abu-abu (bentuk + "Logo Klien N") selama klien belum mengirim logo kliennya;
+    seksi Klien Kami tema tidak kosong dan PM tinggal menggantinya (permintaan user 2026-09-29)."""
+    from PIL import ImageFont
+    def huruf(besar):
+        for f in ('/usr/share/fonts/urw-base35/NimbusSans-Bold.otf', '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf'):
+            try:
+                return ImageFont.truetype(f, besar)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+    abu, muda = (150, 156, 164), (205, 209, 214)
+    im = Image.new('RGB', (lebar, tinggi), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    teks, f = f'Logo Klien {nomor}', huruf(30)
+    lebar_teks = d.textlength(teks, font=f)
+    x0 = int((lebar - (56 + 16 + lebar_teks)) / 2)
+    y0, s = tinggi // 2 - 28, 56
+    bentuk = nomor % 4
+    if bentuk == 1:
+        d.ellipse((x0, y0, x0 + s, y0 + s), fill=abu)
+        d.ellipse((x0 + 16, y0 + 16, x0 + s - 16, y0 + s - 16), fill=(255, 255, 255))
+    elif bentuk == 2:
+        d.rounded_rectangle((x0, y0, x0 + s, y0 + s), radius=12, fill=abu)
+        d.rectangle((x0 + 14, y0 + 14, x0 + s - 14, y0 + s - 14), fill=muda)
+    elif bentuk == 3:
+        d.polygon([(x0 + s // 2, y0), (x0 + s, y0 + s), (x0, y0 + s)], fill=abu)
+    else:
+        d.polygon([(x0 + s // 2, y0), (x0 + s, y0 + s // 2), (x0 + s // 2, y0 + s), (x0, y0 + s // 2)], fill=abu)
+        d.ellipse((x0 + 20, y0 + 20, x0 + s - 20, y0 + s - 20), fill=(255, 255, 255))
+    d.text((x0 + s + 16, tinggi // 2 - 17), teks, font=f, fill=abu)
+    im.save(tujuan, quality=88, optimize=True)
+    return tujuan
 
 
 def foto_contoh(manifest, isi, slot):
@@ -222,7 +301,7 @@ def daftar_kontak(k, alamat=True):
     return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
 
 
-def susun(domain, cfg, isi, kontak):
+def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
     nama = cfg.get('site_title') or domain
     layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
     js = isi.get('judul_seksi') or {}
@@ -286,8 +365,9 @@ def susun(domain, cfg, isi, kontak):
             'layanan_repeater': [{'layanan_image': '{{id:layanan-%s}}' % l['slug'], 'layanan_title': l['judul'],
                                   'layanan_content': e(pendek(l.get('teks'), 150)), 'layanan_linktext': 'Selengkapnya',
                                   'layanan_link': f'/layanan/#{l["slug"]}'} for l in layanan],
-            'title_homelogo': '',
-            'logo_repeater': [],
+            # Klien Kami tidak dikosongkan: logo klien asli atau logo contoh (user 2026-09-29).
+            'title_homelogo': 'Klien Kami',
+            'logo_repeater': [{'logo_image': '{{id:klien-%d}}' % i} for i in range(1, klien_n + 1)],
         },
     }
     # Nilai yang disimpan tema sendiri saat diaktifkan: dianggap belum diisi orang.
@@ -848,7 +928,7 @@ def foto_artikel(manifest, cfg, domain):
 GALERI_MAKS = 8
 
 
-def konteks_adaptor(cfg, domain, isi, kontak, galeri=0):
+def konteks_adaptor(cfg, domain, isi, kontak, galeri=0, klien=()):
     """Data untuk penanda adaptor AI (lihat adaptor_tema.PENANDA)."""
     nama = cfg.get('site_title') or domain
     js = isi.get('judul_seksi') or {}
@@ -875,6 +955,8 @@ def konteks_adaptor(cfg, domain, isi, kontak, galeri=0):
                            for k in isi.get('keunggulan') or [] if k.get('judul')],
             # Galeri hanya dari foto klien sendiri (galeri-<n>.jpg), bukan foto bank.
             'galeri': [{'slug': str(i), 'judul': f'Foto {nama} {i}'} for i in range(1, galeri + 1)],
+            # Logo klien/mitra: asli dari folder klien, atau logo contoh (lihat logo_klien_asli).
+            'klien': [{'slug': str(i), 'judul': j} for i, j in enumerate(klien, 1)],
         },
     }
 
@@ -948,7 +1030,11 @@ def main():
         kontak['telp'] = ''  # nomor yang sama cukup tampil sebagai WhatsApp
     print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
           f"email={'publik' if kontak['email'] else 'tidak_ada'}")
-    data = susun(domain, cfg, isi, kontak)
+    logo_klien = logo_klien_asli(domain)
+    klien_judul = ([re.sub(r'[-_]+', ' ', p.stem).strip().title() or f'Logo klien {i}' for i, p in enumerate(logo_klien, 1)]
+                   or [f'Logo klien {i} (contoh)' for i in range(1, KLIEN_CONTOH + 1)])
+    print(f"tampilan: logo_klien={'asli:' + str(len(logo_klien)) if logo_klien else 'contoh:' + str(KLIEN_CONTOH)}")
+    data = susun(domain, cfg, isi, kontak, len(klien_judul))
     data['berita'] = isi.get('jenis') == 'berita'
     data['template'] = {}
 
@@ -961,7 +1047,7 @@ def main():
     simpan = TEMBOLOK / domain
     galeri = [f'galeri-{i}' for i in range(1, GALERI_MAKS + 1)
               if i <= len(klien) or (simpan / f'galeri-{i}.jpg').is_file()]
-    info, catatan_ai, ctx = None, None, konteks_adaptor(cfg, domain, isi, kontak, len(galeri))
+    info, catatan_ai, ctx = None, None, konteks_adaptor(cfg, domain, isi, kontak, len(galeri), klien_judul)
     if key and Path(key).is_file():
         try:
             info = at.baca_tema(finish.ssh_command(cfg, key), finish.docroot(domain, cfg.get('da_user', '')), cfg.get('da_user', ''))
@@ -1033,6 +1119,18 @@ def main():
         cadangan = [k for k in ['tentang'] + [f'layanan-{l["slug"]}' for l in layanan] + ['hero'] if k in aset]
         if kunci not in aset and cadangan:
             aset[kunci] = potong(aset[cadangan[i % len(cadangan)]], 800, 800, kerja / f'{kunci}.jpg')
+    # Logo klien asli, atau logo contoh. Hasilnya selalu sama per sumber, jadi sidik md5-nya tetap
+    # dan run ulang memakai lampiran yang sudah ada (tanpa tembolok: logo asli yang dikirim
+    # belakangan langsung menggantikan contoh).
+    for i in range(1, len(klien_judul) + 1):
+        kunci = f'klien-{i}'
+        try:
+            if logo_klien:
+                aset[kunci] = kanvas_logo(logo_klien[i - 1], kerja / f'{kunci}.jpg')
+            else:
+                aset[kunci] = logo_contoh(i, kerja / f'{kunci}.jpg')
+        except Exception as e:
+            print(f'tampilan: logo_klien_gagal:{kunci}:{type(e).__name__}')
     if not coba:
         simpan.mkdir(parents=True, exist_ok=True)
         for kunci, berkas in aset.items():
@@ -1042,6 +1140,7 @@ def main():
     judul.update({f'layanan-{l["slug"]}': l['judul'] for l in layanan})
     judul.update({k: f"Foto {data['nama']}" for k in pendamping})
     judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
+    judul.update({f'klien-{i}': j for i, j in enumerate(klien_judul, 1)})
     # Hanya slot yang dirujuk pengaturan tema yang diunggah, dan potongan yang isinya sama
     # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
     # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.

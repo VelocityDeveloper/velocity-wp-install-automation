@@ -18,6 +18,8 @@ Bahasa nilai adaptor:
   {"__untuk__": "layanan", "isi": {..}} daftar berulang per layanan ({{l.judul}}, {{id:layanan}}, ...)
   {"__untuk__": "keunggulan", "isi": {..}}  per keunggulan ({{k.judul}}, {{k.teks}})
   {"__untuk__": "galeri", "isi": {..}}  per foto klien ({{g.judul}}, {{id:galeri}}, {{url:galeri}})
+  {"__untuk__": "klien", "isi": {..}}   per logo klien/mitra ({{c.judul}}, {{id:klien}}, {{url:klien}}):
+                                        logo asli dari folder klien, atau logo contoh bila tidak ada
   "{{id:foto1}}" .. "{{url:foto3}}"     foto pendamping (gambar kecil banner, dsb.)
   {"__json__": nilai}                   disimpan sebagai string JSON (repeater yang menyimpan teks JSON)
 """
@@ -67,10 +69,12 @@ PENANDA_ITEM = {
                 'l.rincian': 'rincian layanan dipisah koma', 'l.link': 'tautan ke bagian layanan itu'},
     'keunggulan': {'k.judul': 'judul keunggulan', 'k.teks': 'penjelasan keunggulan'},
     'galeri': {'g.judul': 'keterangan foto'},
+    'klien': {'c.judul': 'nama klien/mitra (teks alt logo)'},
 }
 GAMBAR = ('hero', 'tentang', 'logo', 'foto1', 'foto2', 'foto3')
-# Gambar per butir daftar: {{id:layanan}} di dalam "__untuk__": "layanan", {{id:galeri}} di dalam "galeri".
-GAMBAR_ITEM = ('layanan', 'galeri')
+# Gambar per butir daftar: {{id:layanan}} di dalam "__untuk__": "layanan", {{id:galeri}} di dalam "galeri",
+# {{id:klien}} di dalam "klien" (logo klien/mitra).
+GAMBAR_ITEM = ('layanan', 'galeri', 'klien')
 # Pengaturan seluruh situs, bukan isi beranda: tidak boleh diubah adaptor (AI sempat menulis
 # custom_logo "" yang akan menghapus logo klien, juga warna utama & tipe container).
 GLOBAL_RE = re.compile(r'^(custom_logo|site_icon|nav_menu_locations|sidebars_widgets|custom_css_post_id|'
@@ -213,8 +217,11 @@ ATURAN:
   widget, latar. Pengaturan header yang berisi data usaha (alamat, telepon, email, tagline) boleh.
 - Pakai format yang diharapkan kode (lihat sanitize_callback & cara template membaca nilainya): gambar sebagai ID
   kalau kode memakai wp_get_attachment_*/absint, sebagai URL kalau langsung dipakai di src/url().
-- Isi SEMUA bagian beranda yang punya data. Bagian yang tidak ada datanya (logo klien, testimoni, dsb.)
+- Isi SEMUA bagian beranda yang punya data. Bagian yang tidak ada datanya (testimoni, dsb.)
   kosongkan ("" atau []) supaya teks/gambar contoh bawaan tema tidak tampil.
+- Deret logo klien/partner/mitra di beranda SELALU diisi dengan {{"__untuk__": "klien", ...}} dan judulnya
+  "Klien Kami" (jangan dikosongkan): installer memasang logo klien asli, atau logo contoh bila klien belum
+  mengirim, supaya seksi itu tidak kosong (permintaan user 2026-09-29).
 - Galeri/portofolio foto di beranda SELALU diisi dengan {{"__untuk__": "galeri", ...}} (daftarnya boleh kosong
   saat dipasang; installer yang menentukan). Gambar pendamping/gambar kecil banner/slider tambahan diisi
   {{{{id:foto1}}}}..{{{{id:foto3}}}}, jangan dikosongkan.
@@ -350,7 +357,7 @@ def isi_nilai(nilai, data, item=None):
 
     def ganti(m):
         p = m.group(1).strip()
-        if re.fullmatch(r'(id|url):(layanan|galeri)', p) and item and item[0] == p.split(':')[1]:
+        if re.fullmatch(r'(id|url):(layanan|galeri|klien)', p) and item and item[0] == p.split(':')[1]:
             return '{{%s:%s-%s}}' % (p.split(':')[0], item[0], item[1]['slug'])
         if re.fullmatch(r'(id|url):[a-z]+[0-9]*', p):
             return m.group(0)
