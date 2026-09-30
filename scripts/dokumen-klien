@@ -62,7 +62,7 @@ DPI = 110
 TAJUK = {'struktur': 'Struktur Organisasi', 'legalitas': 'Legalitas'}
 CARI = {  # halaman tujuan yang sudah ada (judul/slug), dicek berurutan di situs
     'struktur': r'struktur',
-    'legalitas': r'legalitas|perizinan|legal',
+    'legalitas': r'legalitas|perizinan|\blegal\b',
     'daftar': r'tim|advokat|anggota|pengurus|pengajar|dokter|staf|paralegal',
 }
 
@@ -125,7 +125,8 @@ def kumpulkan(folder):
 def judul_dokumen(path):
     t = re.sub(r'[-_]+\d*$', '', path.stem)
     t = re.sub(r'[_]+', ' ', t).strip()
-    return t.title() if t.isupper() or t.islower() else t
+    # Singkatan di nama berkas (AHU, LBH, DKM) jangan jadi "Ahu Lbh Dkm"; huruf kecil semua → awal kapital.
+    return t[:1].upper() + t[1:] if t.islower() else t
 
 
 def render(path, kerja, kunci):
