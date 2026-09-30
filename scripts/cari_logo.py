@@ -409,8 +409,8 @@ def cari(domain, folder, compro=None):
             Path(hasil).unlink(missing_ok=True)
 
     # 3b. logo kop surat: gambar tertanam halaman 1 PDF klien, dipastikan Claude.
-    kop = logo_kop_pdf(domain, [p for p in berkas if p.suffix.lower() == '.pdf' and not adalah_form(p)],
-                       tujuan / 'logo-kop.png')
+    kop = None if lama else logo_kop_pdf(
+        domain, [p for p in berkas if p.suffix.lower() == '.pdf' and not adalah_form(p)], tujuan / 'logo-kop.png')
     if kop:
         return kop
 

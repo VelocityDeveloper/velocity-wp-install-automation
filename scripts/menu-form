@@ -5,7 +5,8 @@ Permintaan user 2026-09-30 (lbhdkm.or.id): form menulis "Tentang DKM terdiri: pr
 ... - tim hukum", "Layanan terdiri: Pidana, perdata, ...", "Advokasi ... berisi kegiatan", tetapi
 situs tetap bermenu bawaan installer (Beranda, Tentang Kami, Layanan, Galeri, Berita, Hubungi Kami).
 
-  menu-form <manifest> [--coba]
+  menu-form <manifest> [--coba] [--paksa]
+  --paksa  situs yang sudah ter-deploy (hanya setelah disetujui user)
 
 Susunan dibaca client_form.susunan_menu. Tiap butir dipetakan ke:
 - halaman bawaan installer menurut perannya (beranda, tentang, layanan, galeri, berita, kontak) —
@@ -316,6 +317,11 @@ def main():
         isi = {}
     if isi.get('jenis') == 'berita':
         print('menu_form: dilewati:portal_berita')
+        return 0
+    # Situs yang sudah ter-deploy tidak diubah tanpa persetujuan user (feedback 2026-09-23).
+    import cari_logo
+    if cari_logo.sudah_terpasang(domain) and '--paksa' not in sys.argv and not coba:
+        print('menu_form: dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
         return 0
     menu = client_form.susunan_menu(folder_klien(domain))
     if not menu:

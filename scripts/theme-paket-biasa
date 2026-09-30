@@ -301,11 +301,15 @@ def daftar_kontak(k, alamat=True):
     return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
 
 
+# Situs yang sudah ter-deploy tetap memakai aturan kartu lama (feedback 2026-09-23); diisi main().
+SITUS_LAMA = False
+
+
 def kartu_beranda(layanan):
     """Kartu layanan di beranda: 4 layanan → 3 kartu saja (satu kartu sisa di baris kedua tampak
     ganjil); 5 = 3 + 2 di tengah, 6 = 3 + 3 lewat CSS. Halaman Layanan & widget tetap memuat semua
     (permintaan user 2026-09-30, lbhdkm.or.id)."""
-    return layanan[:3] if len(layanan) == 4 else layanan
+    return layanan[:3] if len(layanan) == 4 and not SITUS_LAMA else layanan
 
 
 def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
@@ -1037,6 +1041,8 @@ def main():
         return 2
     if '--foto-artikel' in sys.argv:
         return foto_artikel(manifest, cfg, domain)
+    global SITUS_LAMA
+    SITUS_LAMA = muat('cari_logo', HERE / 'cari_logo.py').sudah_terpasang(domain) and '--paksa' not in sys.argv
     if re.sub(r'\s', '', cfg.get('paket', '').lower()) in PAKET_CUSTOM or cfg.get('tema_fse'):
         print('tampilan: dilewati:paket_custom_atau_tema_fse')
         return 0
