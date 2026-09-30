@@ -203,7 +203,7 @@
         mulai: /\] Isi contoh \(tema klasik\)/, selesai: /konten: (isi contoh dibuat|memakai isi contoh|isi tersimpan|gagal)/,
         gagal: /konten: gagal/, ketHasil: t => { const m = /konten: isi contoh dibuat \(([^)]*)\)/.exec(t); return m ? m[1] : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-      { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel', mulai: /Starting AI content generation/,
+      { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel; materi non-form dimuat utuh di Tentang Kami', mulai: /Starting AI content generation/,
         selesai: /AI content generation completed/, aktif: tanpaDry },
       { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
@@ -226,7 +226,7 @@
       // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
       // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
       // blok berita per kategori (theme-paket-biasa, 2026-09-18).
-      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda, layanan, kontak, widget; berita: menu kategori',
+      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan 4 sebaris / 5 = 3+2 / 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E; berita: menu kategori',
         mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
         ketHasil: t => (/tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori'
           : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'

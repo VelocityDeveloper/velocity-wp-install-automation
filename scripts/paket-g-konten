@@ -104,7 +104,10 @@ def rapikan(data):
         'warna': {'utama': '', 'aksen': ''},
     }
     slug_terpakai = set()
-    for l in (data.get('layanan') or [])[:4]:
+    # Jumlah layanan mengikuti materi klien (maks 9): batas lama 4 membuat layanan ke-5/6 di materi
+    # tidak pernah tampil, padahal beranda Paket E menyusun 4 sebaris, 5 = 3+2 di tengah, 6 = 3+3
+    # (permintaan user 2026-09-30, trimurtiekapaksi.com).
+    for l in (data.get('layanan') or [])[:9]:
         judul = teks(l.get('judul'), 60)
         if not judul:
             continue
@@ -114,7 +117,8 @@ def rapikan(data):
         slug_terpakai.add(slug)
         hasil['layanan'].append({
             'slug': slug, 'judul': judul, 'teks': teks(l.get('teks'), 240),
-            'rincian': [teks(r, 60) for r in (l.get('rincian') or []) if teks(r, 60)][:3],
+            # Rincian = poin materi klien per layanan; dulu dipotong 3 butir, sisa materi hilang.
+            'rincian': [teks(r, 120) for r in (l.get('rincian') or []) if teks(r, 120)][:12],
             'foto': teks(l.get('foto'), 60),
         })
     # Batas lama 4 memotong daftar produk/jenis yang ditulis lengkap di company profile
@@ -356,7 +360,7 @@ Kembalikan JSON dengan bentuk persis:
 "judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
 "slogan":"","profil":"","visi":"","misi":[""],"moto":"",
 "struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
-Jumlah wajib: layanan 4 (kecuali ada company profile: sesuai dokumen), produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
+Jumlah wajib: layanan = SETIAP layanan/program/bidang yang dijabarkan tersendiri di form atau dokumen klien (bagian bernomor, bonus/fasilitas utama seperti "Free ..." termasuk; paket yang terdiri dari beberapa bidang dipecah per bidang) — semua, minimal 3, maksimal 9; kalau klien tidak merinci: 4, "rincian" tiap layanan = SEMUA poin materi layanan itu dari dokumen klien (maksimal 12; tanpa materi: 3) — satu poin per butir, maksimal 80 karakter, jangan menggabungkan banyak poin jadi satu butir panjang, produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
         # Prompt isi contoh panjang: beri waktu lebih dari bawaan 120 detik.
         jawab = gen.ai_call(sistem, permintaan, model,

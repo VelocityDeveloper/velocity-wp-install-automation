@@ -430,6 +430,9 @@ ul.vk-sosmed>li::before{content:none!important}
 .home-wrapper .position-relative.overflow-hidden::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.25) 60%,rgba(0,0,0,0));z-index:1}
 .home-wrapper .position-relative.overflow-hidden>.position-absolute{z-index:2}
 .velocity-home-card h4{color:var(--bs-primary)}
+/* Kartu layanan beranda velocity-pakete: 4 = sebaris, 5 = 3 atas + 2 bawah di tengah, 6 = 3+3 (user 2026-09-30) */
+.home-wrapper .row:has(>div>.velocity-home-card){justify-content:center}
+@media (min-width:768px){.home-wrapper .row:has(>div:nth-of-type(4):last-of-type>.velocity-home-card)>div{flex:0 0 auto;width:25%}}
 .velocity-card-button .btn{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff}
 .velocity-card-button .btn:hover,.velocity-card-button .btn:focus{filter:brightness(1.12);color:#fff}
 @media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -686,6 +689,7 @@ $blok_w = get_option('widget_block', []); if (!is_array($blok_w)) { $blok_w = []
 $ch = get_option('widget_custom_html', []); if (!is_array($ch)) { $ch = []; }
 $tx = get_option('widget_text', []); if (!is_array($tx)) { $tx = []; }
 $rp = get_option('widget_recent-posts', []); if (!is_array($rp)) { $rp = []; }
+$sr = get_option('widget_search', []); if (!is_array($sr)) { $sr = []; }
 $bawaan = function ($w) use ($blok_w) {
     if (!preg_match('/^block-(\d+)$/', $w, $m)) { return false; }
     $c = (string) ($blok_w[(int) $m[1]]['content'] ?? '');
@@ -704,16 +708,21 @@ $buat_html = function ($judul, $isi) use (&$ch, &$nomor, $akar) {
     while (isset($ch[$nomor])) { $nomor++; }
     $ch[$nomor] = ['title' => $judul, 'content' => $akar($isi)]; return 'custom_html-' . $nomor++;
 };
-$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, $milik) {
+$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$sr, $milik) {
     foreach ((array) $daftar as $w) {
         if ($bawaan($w)) { unset($blok_w[(int) substr($w, 6)]); }
         elseif (in_array($w, (array) ($milik['__semua'] ?? []), true)) {
             [$jenis, $n] = [substr($w, 0, strrpos($w, '-')), (int) substr($w, strrpos($w, '-') + 1)];
-            if ($jenis === 'custom_html') { unset($ch[$n]); } elseif ($jenis === 'text') { unset($tx[$n]); } elseif ($jenis === 'recent-posts') { unset($rp[$n]); }
+            if ($jenis === 'custom_html') { unset($ch[$n]); } elseif ($jenis === 'text') { unset($tx[$n]); } elseif ($jenis === 'recent-posts') { unset($rp[$n]); } elseif ($jenis === 'search') { unset($sr[$n]); }
         }
     }
 };
 $W = $d['widget']; $semua = []; $ubah = [];
+// Tema bersidebar kiri (velocity-pakete mencetak secondary-sidebar sebagai kolom kiri): isinya
+// seperti demo pakete.velocitydeveloper.com — Cari, Artikel Terbaru, Pengunjung. Dulu kosong di
+// semua situs Paket E (trimurtiekapaksi.com, permintaan user 2026-09-30); Artikel Terbaru pindah
+// ke kiri supaya tidak tampil dobel di sidebar kanan.
+$kiri = (get_stylesheet() === 'velocity-pakete' && isset($wp_registered_sidebars['secondary-sidebar'])) ? 'secondary-sidebar' : '';
 $utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isset($wp_registered_sidebars['sidebar-1']) ? 'sidebar-1' : '');
 // Tema yang membawa susunan widget acuannya sendiri (velocity-toko21: Kategori, Cari Produk, Bank,
 // Ekspedisi, Sosial Media, Hubungi Kami — sama dengan demo toko21.velocitydeveloper.com, keputusan
@@ -733,8 +742,10 @@ if ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
     $baru = empty($W['konsultasi']) ? [] : [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
     if (!empty($W['layanan'])) { $baru[] = $buat_html($W['layanan'][0], $W['layanan'][1]); }
-    $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
-    $baru[] = "recent-posts-$n";
+    if (!$kiri) {
+        $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
+        $baru[] = "recent-posts-$n";
+    }
     $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
 }
 // Area widget tambahan acuan tema (keputusan user 2026-09-26, velocity-toko14: sidebar kiri = main-sidebar di atas,
@@ -751,6 +762,17 @@ foreach (function_exists('velocity_tema_widget_area') ? (array) velocity_tema_wi
     }
     $sb[$area] = $baru; $ubah[] = $area; $semua = array_merge($semua, $baru);
     echo "tampilan: widget_area_acuan_tema:$area:" . count($baru) . "\n";
+}
+if ($kiri && !in_array($kiri, $ubah, true) && $boleh($sb[$kiri] ?? [])) {
+    $hapus_bawaan($sb[$kiri] ?? []);
+    $n = 300; while (isset($sr[$n])) { $n++; } $sr[$n] = ['title' => 'Cari'];
+    $baru = ["search-$n"];
+    $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
+    $baru[] = "recent-posts-$n";
+    $n = 300; while (isset($tx[$n])) { $n++; }
+    $tx[$n] = ['title' => 'Pengunjung', 'text' => '[velocity-statistics style="list"]', 'filter' => 'content', 'visual' => true];
+    $baru[] = "text-$n";
+    $sb[$kiri] = $baru; $ubah[] = $kiri; $semua = array_merge($semua, $baru);
 }
 $kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
 // Tema dengan acuan footer sendiri (velocity-toko21: kosong, persis demo — keputusan user 2026-09-24):
@@ -778,8 +800,8 @@ foreach ($kaki as [$id, $k]) {
     } else { $sb[$id] = [$buat_html($W[$k][0], $W[$k][1])]; }
     $ubah[] = $id; $semua = array_merge($semua, $sb[$id]);
 }
-foreach (['_multiwidget'] as $x) { $ch[$x] = 1; $tx[$x] = 1; $rp[$x] = 1; $blok_w[$x] = 1; }
-update_option('widget_block', $blok_w); update_option('widget_custom_html', $ch); update_option('widget_text', $tx); update_option('widget_recent-posts', $rp);
+foreach (['_multiwidget'] as $x) { $ch[$x] = 1; $tx[$x] = 1; $rp[$x] = 1; $sr[$x] = 1; $blok_w[$x] = 1; }
+update_option('widget_block', $blok_w); update_option('widget_custom_html', $ch); update_option('widget_text', $tx); update_option('widget_recent-posts', $rp); update_option('widget_search', $sr);
 wp_set_sidebars_widgets($sb);
 $daftar_milik = [];
 foreach ($ubah as $id) { $daftar_milik[md5(wp_json_encode(array_values($sb[$id])))] = array_values($sb[$id]); }

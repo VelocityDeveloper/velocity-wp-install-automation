@@ -5,6 +5,7 @@ Reads manifest + client folder data, calls OpenAI-compatible API,
 generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
 """
 import hashlib
+import html
 import json
 import os
 import re
@@ -271,12 +272,49 @@ def ai_json_list(system_prompt, user_prompt, model, jenis):
     return None
 
 
-def generate_pages(site_title, domain, client_info, model):
-    """Generate 4 pages: Home, Profile, Gallery, Contact"""
+def materi_hilang(docs, pages, materi):
+    """Baris materi klien (selain FORM ISIAN) yang tidak muncul di halaman hasil AI.
+
+    Dicocokkan longgar: huruf/angka saja, 24 karakter pertama tiap baris (judul bagian,
+    butir daftar). Baris pendek (<4 huruf) & pemisah dilewati."""
+    def polos(t):
+        return re.sub(r'[^0-9a-z]+', '', html.unescape(re.sub(r'<[^>]+>', ' ', str(t))).lower())
+    # Hanya halaman profile: beranda velocity-pakete tidak mencetak isi halaman Beranda.
+    isi = polos(' '.join(str(p.get('content') or '') for p in pages or []
+                         if isinstance(p, dict) and p.get('slug') == 'profile'))
+    hilang = []
+    for nama, teks in docs['sources']:
+        if nama not in materi:
+            continue
+        for baris in teks.splitlines():
+            k = polos(baris)
+            if len(k) >= 4 and k[:24] not in isi:
+                hilang.append(baris.strip())
+    return hilang
+
+
+def generate_pages(site_title, domain, client_info, model, materi=()):
+    """Generate 4 pages: Home, Profile, Gallery, Contact
+
+    materi: nama dokumen klien selain FORM ISIAN (Materi.docx, compro). Isinya wajib tampil
+    utuh — batas 300-500 kata dulu membuat AI meringkas materi 7.000 karakter jadi beberapa
+    paragraf, daftar poin/tahapan/keunggulan hilang (trimurtiekapaksi.com 2026-09-29)."""
     system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
     
     client_info = client_info.strip() or '(tidak ada data klien)'
     
+    panjang_profil = '300-500 words'
+    aturan_materi = ''
+    if materi:
+        panjang_profil = 'as long as needed to hold the whole client material (no word limit)'
+        aturan_materi = f"""
+MATERI KLIEN ({', '.join(materi)}) WAJIB DIMUAT SELURUHNYA di halaman "profile" (Tentang Kami) — halaman "home" pada banyak tema tidak ditampilkan:
+- setiap bagian materi menjadi <h2>/<h3> dengan judul dari materi, urutan mengikuti materi;
+- setiap butir daftar (poin keunggulan, materi pelajaran, tahapan/jadwal, sasaran/peserta, fasilitas, catatan penting, ajakan pendaftaran, lokasi) ditulis sebagai <ul><li> — SEMUA butir, jangan diringkas, digabung, atau dibuang;
+- kalimat materi boleh dirapikan ejaannya tetapi maknanya tetap; emoji boleh dibuang;
+- kontak (telepon/WA/email) cukup di halaman "contact".
+"""
+
     user_prompt = f"""Generate WordPress page content for a website with these details:
 - Site title: {site_title}
 - Domain: {domain}
@@ -284,11 +322,11 @@ def generate_pages(site_title, domain, client_info, model):
 {client_info}
 
 {CONTENT_RULES}
-
+{aturan_materi}
 Generate 4 pages plus a tagline. Return JSON array:
 [
   {{"slug":"home","title":"Home","content":"<HTML homepage: hero heading and intro, products/services, advantages, call to action. 300-500 words.>"}},
-  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile. Include history, vision-mission, values, or team ONLY when they appear in the client data; silently skip missing parts. Never write that some information is unavailable or not provided. 300-500 words.>"}},
+  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile. Include history, vision-mission, values, or team ONLY when they appear in the client data; silently skip missing parts. Never write that some information is unavailable or not provided. {panjang_profil}.>"}},
   {{"slug":"gallery","title":"Gallery","content":"<HTML short intro for the photo gallery describing the client's products or activities. 60-120 words. Photos are added automatically.>"}},
   {{"slug":"contact","title":"Kontak","content":"<HTML contact info: public phone/WhatsApp, email, address, opening hours only if present in client data, plus an invitation to get in touch. 80-200 words. No form, no map.>"}},
   {{"slug":"tagline","title":"Tagline","content":"<client's slogan if present, otherwise a plain-text summary of the business, max 8 words, no HTML>"}}
@@ -785,7 +823,19 @@ def main():
         log('Pakai konten halaman tersimpan')
     else:
         log('Generating pages...')
-        pages = generate_pages(site_title, domain, client_info, model)
+        materi = [n for n, _ in docs['sources'] if not n.upper().startswith('FORM ISIAN')]
+        pages = generate_pages(site_title, domain, client_info, model, materi)
+        if pages and materi:
+            # AI tetap suka melewatkan butir (Push-up/Sit-up hilang di trimurtiekapaksi.com
+            # 2026-09-30): sekali ulang dengan daftar baris yang belum termuat.
+            hilang = materi_hilang(docs, pages, materi)
+            log(f'Materi klien belum termuat: {len(hilang)} baris')
+            if len(hilang) > 3:
+                ulang = generate_pages(site_title, domain, client_info + '\n\nBARIS MATERI YANG WAJIB ADA '
+                                       '(sebelumnya terlewat):\n' + '\n'.join(hilang), model, materi)
+                if ulang and len(materi_hilang(docs, ulang, materi)) < len(hilang):
+                    pages = ulang
+                    log(f'Materi klien belum termuat sesudah ulang: {len(materi_hilang(docs, pages, materi))} baris')
     if not pages:
         log('ERROR: Failed to generate pages')
         sys.exit(3)

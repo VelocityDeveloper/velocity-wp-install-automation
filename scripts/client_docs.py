@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from client_form import extract_text
@@ -20,8 +21,10 @@ OCR_PAGES = 6
 DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt'}
 # Dokumen yang biasanya paling kaya isi didahulukan saat anggaran karakter habis.
 PRIORITY = re.compile(r'profil|profile|compro|konsep|isian|menu|katalog', re.I)
-TOTAL_BUDGET = 16000
-PER_DOC_BUDGET = 7000
+# Materi.docx trimurtiekapaksi.com (±7.500 karakter) terpotong di 7.000: bagian Pendaftaran,
+# kuota, dan tagline penutup tidak pernah sampai ke AI (2026-09-30).
+TOTAL_BUDGET = 24000
+PER_DOC_BUDGET = 12000
 # Sengaja tanpa \b di belakang "pass": form nyata menulis "Passwordnya: ...".
 CRED = re.compile(r'pass(word)?|kata ?sandi|\bsandi\b|user ?name|\blogin\b|cpanel|\bpin\b|token|api[ _-]?key', re.I)
 # Teks panduan bawaan template form, bukan isian klien.
@@ -110,8 +113,12 @@ def _clean_lines(lines):
             continue
         if len(line) < 3 or line.lower() in seen or GUIDE.match(line):
             continue
-        # Sisa biner .doc (ÿÿÿ, nama font, id acak) gagal di sini.
-        if sum(1 for c in line if ALLOWED.match(c)) / len(line) < 0.9:
+        # Sisa biner .doc (ÿÿÿ, nama font, id acak) gagal di sini. Emoji (simbol So mulai U+2190,
+        # pengubah varian/ZWJ) tidak dihitung: "💪 Push-up" dulu dibuang sebagai sampah. Simbol
+        # ASCII/Latin-1 (© ° × ~ |) tetap dihitung — itu ciri sisa biner .doc.
+        huruf = [c for c in line if c not in '\ufe0f\u200d'
+                 and not (ord(c) >= 0x2190 and unicodedata.category(c) == 'So')]
+        if not huruf or sum(1 for c in huruf if ALLOWED.match(c) or c in '–—•…“”‘’') / len(huruf) < 0.9:
             continue
         if not re.search(r'[A-Za-z]{2}', line) and not re.search(r'\d{6}', line):
             continue
