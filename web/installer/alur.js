@@ -327,6 +327,13 @@
           return m ? m[1] + ' / hover ' + m[2] : /vd_store_warna: warna:tidak_ditemukan/.test(t) ? 'warna situs tidak ditemukan'
             : /vd_store_warna: dilewati:situs_sudah_terpasang/.test(t) ? 'dilewati: situs lama' : null; },
         aktif: c => dan(tanpaDry(c), c.toko) },
+      // Form meminta situs berbahasa Inggris (keputusan user 2026-09-30, scripts/bahasa-situs): sisa teks
+      // bawaan installer & tema (judul halaman, menu, widget, theme_mods, kategori) diterjemahkan.
+      { id: 'bahasa', kol: 23, jalur: 5, nama: 'Bahasa Inggris', ket0: 'teks bawaan diterjemahkan dari bahasa Indonesia',
+        mulai: /\] Bahasa situs/, selesai: /bahasa: (ditulis:|sudah_inggris|dilewati|gagal)/, gagal: /bahasa: gagal/,
+        ketHasil: t => { const m = /bahasa: (\d+) teks berbahasa Indonesia/.exec(t);
+          return m ? m[1] + ' teks diterjemahkan' : /bahasa: sudah_inggris/.test(t) ? 'sudah berbahasa Inggris' : null; },
+        aktif: c => dan(tanpaDry(c), c.inggris) },
       // + permintaan klien di FORM 5 pesan tambahan (scripts/permintaan-form, keputusan user 2026-09-24):
       // belum ditandai selesai = "perlu dicek" berisi permintaannya.
       { id: 'qa', kol: 24, jalur: 1, nama: 'Pemeriksaan akhir', ket0: 'SSL, menu, konten, permintaan form', mulai: /qa_result:/, selesai: /qa_result:/,
@@ -396,7 +403,7 @@
       ['agenClaude', 'permintaan'],
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
       ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
-      ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
+      ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['permintaan', 'bahasa', 'form: bahasa Inggris'], ['bahasa', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
     ];
@@ -465,6 +472,7 @@
         // Referensi ada + DESAIN_CLAUDE=1 (2026-09-19): agen langsung, tanpa gerbang tema & audit.
         // Saklar PERMINTAAN_CLAUDE: runner hanya mencetak barisnya kalau agen permintaan dijalankan.
         permintaanClaude: /\] Permintaan form klien \(agen Claude\)/.test(teks) ? true : /qa_result:/.test(teks) ? false : null,
+        inggris: /bahasa: dilewati:bahasa_indonesia/.test(teks) ? false : /bahasa: (\d+ teks|sudah_inggris|ditulis:)/.test(teks) ? true : /qa_result:/.test(teks) ? false : null,
         agenLangsung: /fse_cek: dilewati:agen_claude|desain langsung diambil alih agen Claude/.test(teks) ? true
           : /fse_cek: (sesuai|belum|masih|tidak|gagal)|Paket custom: audit kemiripan/.test(teks) ? false : null,
       };

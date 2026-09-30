@@ -452,6 +452,26 @@ elif [[ -n "$PREV_THEME" && "$PREV_THEME" != "__THEME_PKG__" && -f "$DOCROOT/wp-
 fi
 echo "active_theme:$(php -d memory_limit=512M "$WP_BIN" theme list --status=active --field=name --path="$DOCROOT" --allow-root 2>/dev/null | head -1 || true)" >&2
 
+# Child theme yang memakai Kirki untuk Customizer (mis. velocity-hukum1: `if (class_exists('Kirki'))`)
+# kehilangan seluruh pengaturannya tanpa plugin Kirki — dan API tema tidak mencatatnya di
+# plugin_wp_required (cepadtl.org 2026-09-30, permintaan user). Dipasang dari wordpress.org.
+TEMA_AKTIF=$(php -d memory_limit=512M "$WP_BIN" theme list --status=active --field=name --path="$DOCROOT" --allow-root 2>/dev/null | head -1 || true)
+if [[ -n "$TEMA_AKTIF" && -d "$DOCROOT/wp-content/themes/$TEMA_AKTIF" ]] \
+    && grep -rqsE 'Kirki::|class_exists\(.Kirki.\)' --include='*.php' "$DOCROOT/wp-content/themes/$TEMA_AKTIF"; then
+  # Kirki 6.x memeriksa berkas lewat WP_Filesystem; WP-CLI root (--allow-root, pemilik berkas beda)
+  # membuat WordPress memilih metode FTP dan Kirki fatal di ftp_nlist() -> SEMUA perintah wp berikutnya
+  # gagal (cepadtl.org 2026-09-30). FS_METHOD direct dipasang lebih dulu.
+  php -d memory_limit=512M "$WP_BIN" config set FS_METHOD direct --type=constant --path="$DOCROOT" --allow-root >/dev/null 2>&1 \
+    || echo "kirki:fs_method_gagal" >&2
+  if php -d memory_limit=512M "$WP_BIN" plugin is-active kirki --path="$DOCROOT" --allow-root 2>/dev/null; then
+    echo "kirki:sudah_aktif" >&2
+  elif php -d memory_limit=512M "$WP_BIN" plugin install kirki --activate --path="$DOCROOT" --allow-root >/dev/null 2>&1; then
+    echo "kirki:dipasang:$TEMA_AKTIF" >&2
+  else
+    echo "kirki:gagal_dipasang:$TEMA_AKTIF" >&2
+  fi
+fi
+
 # rename default DirectAdmin index.html so WordPress index.php takes over
 if [[ -f "$DOCROOT/index.html" ]]; then
   mv "$DOCROOT/index.html" "$DOCROOT/index.html.da.bak" 2>/dev/null && echo "renamed index.html -> index.html.da.bak" >&2 || true

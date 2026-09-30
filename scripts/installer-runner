@@ -499,6 +499,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # akhirnya yang dipakai. Paket non-toko & situs yang sudah ter-deploy dilewati skripnya sendiri.
   echo "[$(date -Is)] VD Store: warna ikut situs" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/vd-store-warna" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Form meminta situs berbahasa Inggris (keputusan user 2026-09-30, cepadtl.org): konten AI sudah
+  # berbahasa Inggris; sisa teks bawaan installer & tema (judul halaman, menu, widget, theme_mods,
+  # kategori, label WA) diterjemahkan di sini — paling akhir, sesudah semua langkah yang menulis teks.
+  # Situs berbahasa Indonesia dilewati skripnya sendiri.
+  echo "[$(date -Is)] Bahasa situs" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/bahasa-situs" "$MANIFEST" >> "$LOG" 2>&1 || true
   qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
   echo "qa_result: $qa" >> "$LOG"
   problems=$(python3 -c 'import json, sys

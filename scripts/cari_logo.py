@@ -9,6 +9,7 @@ logo di deck 24 halaman yang tidak terpilih, jadi situsnya sempat memakai logo c
 
 Urutan (yang lebih pasti lebih dulu):
   1. gambar di folder klien yang namanya menyebut logo/lambang/brand
+     (1c. gambar yang ditempel di bawah label "Logo" pada form .docx)
   2. logo hasil compro-klien (compro.json)
   3. gambar tertanam di PDF mana pun di folder klien (termasuk yang bukan compro)
   4. gambar tertanam di dokumen Office (.docx/.pptx) — logo kop surat & sampul proposal
@@ -251,6 +252,40 @@ def _dari_office(berkas, tujuan_dir):
     return None
 
 
+def logo_di_form(berkas, tujuan_dir):
+    """Gambar yang ditempel klien tepat di bawah/di samping label "Logo" pada form .docx, atau None.
+
+    cepadtl.org 2026-09-30: logo CEPAD berupa lukisan (banyak warna) ditempel di bawah "Logo :"
+    di form — ciri piksel logo menolaknya, padahal form sendiri menyatakan itulah logonya."""
+    try:
+        with zipfile.ZipFile(berkas) as z:
+            xml = z.read('word/document.xml').decode('utf-8', 'replace')
+            rels = z.read('word/_rels/document.xml.rels').decode('utf-8', 'replace')
+            paragraf = re.findall(r'<w:p[ >].*?</w:p>', xml, re.S)
+            for i, par in enumerate(paragraf):
+                teks = ''.join(re.findall(r'<w:t[^>]*>([^<]*)</w:t>', par)).strip()
+                if not re.match(r'^logo\b[^a-z]*$', teks, re.I):
+                    continue
+                for lanjut in paragraf[i:i + 4]:
+                    rid = re.search(r'r:embed="([^"]+)"', lanjut)
+                    if not rid:
+                        continue
+                    target = re.search(r'Id="%s"[^>]*Target="([^"]+)"|Target="([^"]+)"[^>]*Id="%s"'
+                                       % (re.escape(rid.group(1)), re.escape(rid.group(1))), rels)
+                    if not target:
+                        return None
+                    nama = 'word/' + (target.group(1) or target.group(2)).lstrip('/').removeprefix('word/')
+                    if Path(nama).suffix.lower() not in GAMBAR:
+                        return None
+                    keluar = tujuan_dir / f'form-{Path(nama).name}'
+                    keluar.write_bytes(z.read(nama))
+                    return keluar
+                return None
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return None
+    return None
+
+
 def logo_kop_pdf(domain, pdfs, tujuan):
     """(berkas PNG, sumber) logo dari gambar tertanam halaman 1 PDF klien (kop surat), atau None.
 
@@ -389,6 +424,13 @@ def cari(domain, folder, compro=None):
         if milik:
             pilih = max(milik, key=lambda p: (p.suffix.lower() == '.png', p.stat().st_size))
             return pilih, f'desain-klien:{pilih.name}'
+
+    # 1c. gambar yang ditempel di form tepat di bawah label "Logo"
+    for dok in [p for p in berkas if p.suffix.lower() == '.docx' and adalah_form(p)]:
+        (KELUAR / domain).mkdir(parents=True, exist_ok=True)
+        hasil = logo_di_form(dok, KELUAR / domain)
+        if hasil:
+            return hasil, f'form:{dok.name}'
 
     # 2. hasil potongan compro-klien
     logo_compro = Path(((compro or {}).get('logo') or {}).get('berkas', '') or '')

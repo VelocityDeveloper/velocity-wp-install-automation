@@ -169,6 +169,97 @@ def catat_token(model, usage, model_jawab, ok):
     except Exception as e:
         log(f'WARNING: pemakaian token tidak tercatat: {e}')
 
+_BAHASA = {}
+
+
+def bahasa_situs(domain=None):
+    """'en' | 'id' untuk domain yang dikerjakan (VELOCITY_DOMAIN dari installer-runner).
+    VELOCITY_BAHASA memaksa nilainya (uji)."""
+    paksa = os.environ.get('VELOCITY_BAHASA', '').strip().lower()
+    if paksa in ('en', 'id'):
+        return paksa
+    domain = domain or os.environ.get('VELOCITY_DOMAIN', '')
+    if not domain:
+        return 'id'
+    if domain not in _BAHASA:
+        try:
+            from client_form import bahasa_situs as dari_form
+            _BAHASA[domain] = dari_form(folder_klien(domain))
+        except Exception:
+            _BAHASA[domain] = 'id'
+    return _BAHASA[domain]
+
+
+def prompt_bahasa(system_prompt, user_prompt):
+    """Situs berbahasa Inggris (form klien, 2026-09-30 cepadtl.org): semua prompt penulis konten
+    ditulis untuk bahasa Indonesia, jadi instruksinya dialihkan di satu tempat ini."""
+    if bahasa_situs() != 'en':
+        return system_prompt, user_prompt
+    def ganti(t):
+        t = re.sub(r'\bBahasa Indonesia\b', 'English', t)
+        t = re.sub(r'\bberbahasa Indonesia\b', 'in English', t, flags=re.I)
+        return re.sub(r'\bIndonesian\b', 'English', t)
+    catatan = ('\n\nLANGUAGE OVERRIDE: the client ordered an ENGLISH website. Write every visible text '
+               '(titles, headings, body, excerpts, menu labels, category names, taglines, button labels) in '
+               'natural English, even when these instructions, examples, or the client data are in Indonesian. '
+               'Slugs in English too. Keep proper names, phone numbers, emails, and URLs unchanged.')
+    return ganti(system_prompt) + catatan, ganti(user_prompt)
+
+
+# Model berjenis agen Claude Code (halaman /ai/, provider 'claude_code', permintaan user 2026-09-30):
+# dipanggil lewat `claude -p` tanpa tools, bukan endpoint. Prompt lewat stdin (argv dibatasi 128 KB).
+CLAUDE_CLI = next((c for c in ('/root/.local/bin/claude', '/usr/local/bin/claude') if Path(c).is_file()), 'claude')
+CLAUDE_KUNCI = Path('/etc/velocity/secrets/anthropic_api_key')
+
+
+def claude_call(system_prompt, user_prompt, model, timeout=None):
+    import fcntl
+    from datetime import datetime, timezone
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    try:
+        kunci = CLAUDE_KUNCI.read_text().strip()
+        if kunci:
+            env['ANTHROPIC_API_KEY'] = kunci
+    except OSError:
+        pass
+    batas = max(timeout or int(os.environ.get('VELOCITY_AI_TIMEOUT', '120')), 300)
+    cmd = [CLAUDE_CLI, '-p', '--model', model.get('model') or 'opus', '--system-prompt', system_prompt,
+           '--output-format', 'json', '--no-session-persistence', '--tools', '']
+    try:
+        r = subprocess.run(cmd, input=user_prompt, capture_output=True, text=True, timeout=batas,
+                           env=env, cwd='/tmp', check=False)
+        hasil = json.loads(r.stdout or '{}')
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'ERROR: agen Claude gagal: {type(e).__name__}: {e}')
+        catat_token(model, {}, '', False)
+        return None
+    ok = not hasil.get('is_error') and bool(str(hasil.get('result') or '').strip())
+    for nama, u in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain_proses(),
+                 'run': os.environ.get('VELOCITY_RUN_ID', ''), 'mode': MODE, 'peran': model.get('peran', ''),
+                 'script': Path(sys.argv[0]).name, 'sumber': 'claude', 'model_id': model.get('id', ''), 'model': nama,
+                 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+                 'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': ok}
+        try:
+            with open(AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+    if not ok:
+        log(f"ERROR: agen Claude tanpa jawaban: {str(hasil.get('result') or r.stderr or 'kosong')[:300]}")
+        return None
+    content = str(hasil['result']).strip()
+    if content.startswith('```'):
+        lines = content.split('\n')[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        content = '\n'.join(lines)
+    return content
+
+
 def ai_call(system_prompt, user_prompt, model, timeout=None, max_tokens=None):
     """Call OpenAI-compatible API.
 
@@ -176,6 +267,7 @@ def ai_call(system_prompt, user_prompt, model, timeout=None, max_tokens=None):
     contoh tema butuh lebih lama: 2026-09-16 layanan AI melambat (prompt satu kalimat
     saja 57 detik) sehingga dua percobaan isi contoh habis waktu dan gagal.
     """
+    system_prompt, user_prompt = prompt_bahasa(system_prompt, user_prompt)
     api_key = model.get('api_key', '')
     if not api_key:
         log('ERROR: API key not found in model config')

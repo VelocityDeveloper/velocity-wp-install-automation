@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""Terjemahkan sisa teks berbahasa Indonesia di situs yang form-nya meminta bahasa Inggris.
+
+Pemakaian: bahasa-situs <manifest> [--coba]   (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Keputusan user 2026-09-30 (cepadtl.org "Bahasa yang digunakan, inggris"): konten AI sudah
+ditulis dalam bahasa Inggris lewat ai_call (ai-content-generator.prompt_bahasa), tetapi banyak
+teks bawaan installer & tema tetap berbahasa Indonesia — halaman Tentang Kami/Galeri/Hubungi
+Kami/Berita, label WhatsApp, judul seksi beranda di theme_mods, widget footer, kategori, tagline.
+Langkah ini dijalankan paling akhir (sesudah semua langkah yang menulis teks), hanya untuk situs
+berbahasa 'en' (client_form.bahasa_situs):
+
+  1. ambil: judul/isi/ringkasan post & halaman, nama & deskripsi term, opsi teks (blogdescription,
+     whatsapp_text, widget_*, theme_mods tema aktif) — hanya teks yang berciri bahasa Indonesia;
+  2. terjemahkan lewat AI (peran konten), tag HTML/komentar blok/shortcode/URL dipertahankan;
+  3. tulis balik. Slug halaman TIDAK diubah: langkah installer lain mencari halaman lewat slug
+     (tentang-kami, hubungi-kami, galeri, berita) dan apply ulang akan membuat halaman ganda.
+
+--coba: tampilkan rencana terjemahan tanpa menulis ke situs.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+TEMBOLOK = Path('/var/lib/velocity/bahasa')
+sys.path.insert(0, str(HERE))
+from client_form import bahasa_situs  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
+
+# Kata khas bahasa Indonesia (UI situs + kata fungsi). Satu kata cukup untuk teks pendek
+# ("Berita", "Galeri"); teks panjang butuh >= 2 supaya nama diri berbahasa lain tidak ikut.
+KATA_ID = set('''
+yang dan di ke dari untuk dengan kami anda kita ini itu atau pada adalah dalam akan tidak juga
+lebih selengkapnya baca lihat semua hubungi tentang berita galeri layanan beranda kebijakan
+privasi terbaru kontak alamat telepon profil visi misi produk artikel kategori cari pencarian
+halaman sebelumnya berikutnya kirim pesan nama mitra kerja sama tim keunggulan mengapa memilih
+pilih solusi terpercaya selamat datang lokasi jam buka informasi terkait populer arsip komentar
+oleh sekarang segera klik disini sini hak cipta dilindungi pengunjung hari minggu bulan tahun
+kegiatan pelatihan masyarakat pemuda perdamaian pembangunan tata kelola korupsi
+kolusi nepotisme kepemimpinan pengembangan kapasitas organisasi lembaga studi kunjungi ikuti
+kantor pusat jalan email_kami terima kasih silakan butuh bantuan konsultasi gratis unggulan
+'''.split())
+# URL, warna, email, angka, dan slug/kunci (huruf kecil bersambung - atau _). Judul satu kata
+# ("Berita", "Galeri", "Layanan") BUKAN slug dan tetap diperiksa KATA_ID.
+MELEWATI = re.compile(r'^(https?://|www\.|#[0-9a-f]{3,8}$|[\w.+-]+@[\w-]+\.[\w.]+$|[\d\s.,:+()/-]+$|[a-z0-9]+(?:[-_][a-z0-9]+)+$)', re.I)
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def berbahasa_id(teks):
+    polos = re.sub(r'<[^>]+>|\[[^\]]+\]|&\w+;', ' ', str(teks or ''))
+    if not polos.strip() or MELEWATI.match(polos.strip()):
+        return False
+    kata = re.findall(r'[a-z]+', polos.lower())
+    kena = sum(k in KATA_ID for k in kata)
+    return kena >= (1 if len(kata) <= 4 else 2)
+
+
+def daun(nilai, jalur=()):
+    """(jalur, teks) setiap string dalam nilai opsi (dict/list bersarang)."""
+    if isinstance(nilai, dict):
+        for k, v in nilai.items():
+            yield from daun(v, jalur + (k,))
+    elif isinstance(nilai, list):
+        for i, v in enumerate(nilai):
+            yield from daun(v, jalur + (i,))
+    elif isinstance(nilai, str):
+        yield jalur, nilai
+
+
+def pasang(nilai, jalur, baru):
+    for k in jalur[:-1]:
+        nilai = nilai[k]
+    nilai[jalur[-1]] = baru
+
+
+PHP_AMBIL = r'''<?php
+$tipe = array_values(array_diff(get_post_types(['public' => true]), ['attachment']));
+$tipe[] = 'nav_menu_item';
+$posts = [];
+foreach (get_posts(['post_type' => $tipe, 'post_status' => ['publish', 'draft', 'private'], 'numberposts' => -1]) as $p) {
+    $posts[$p->ID] = ['type' => $p->post_type, 'title' => $p->post_title, 'content' => $p->post_content, 'excerpt' => $p->post_excerpt];
+}
+$terms = [];
+foreach (get_terms(['taxonomy' => array_values(array_diff(get_taxonomies(['public' => true]), ['post_format'])), 'hide_empty' => false]) as $t) {
+    $terms[$t->term_id] = ['taxonomy' => $t->taxonomy, 'name' => $t->name, 'description' => $t->description];
+}
+global $wpdb;
+$nama = ['blogdescription', 'whatsapp_text', 'theme_mods_' . get_stylesheet(), 'theme_mods_' . get_template()];
+foreach ($wpdb->get_col("SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'widget\\_%'") as $n) { $nama[] = $n; }
+$opsi = [];
+foreach (array_unique($nama) as $n) { $v = get_option($n, null); if ($v !== null && $v !== false) { $opsi[$n] = $v; } }
+echo "@@JSON@@" . wp_json_encode(['posts' => $posts, 'terms' => $terms, 'options' => $opsi]) . "@@JSON@@";
+'''
+
+PHP_TULIS = r'''<?php
+$d = json_decode(file_get_contents($args[0]), true);
+$n = 0;
+foreach ($d['posts'] ?? [] as $id => $f) {
+    $ubah = ['ID' => (int) $id];
+    foreach (['title' => 'post_title', 'content' => 'post_content', 'excerpt' => 'post_excerpt'] as $k => $kolom) {
+        if (isset($f[$k])) { $ubah[$kolom] = $f[$k]; }
+    }
+    // wp_slash: wp_update_post membuang backslash (komentar blok berisi JSON).
+    if (!is_wp_error(wp_update_post(wp_slash($ubah), true))) { $n++; }
+}
+foreach ($d['terms'] ?? [] as $id => $f) {
+    $t = get_term((int) $id);
+    if ($t && !is_wp_error($t) && !is_wp_error(wp_update_term($t->term_id, $t->taxonomy, $f))) { $n++; }
+}
+foreach ($d['options'] ?? [] as $nama => $nilai) { update_option($nama, $nilai); $n++; }
+update_option('velocity_bahasa_situs', 'en');
+echo "bahasa: ditulis:$n\n";
+'''
+
+
+def jalankan_php(ssh, docroot, user, php, data=None):
+    """Kirim skrip PHP (+ berkas data JSON) lalu jalankan wp eval-file sebagai pemilik situs."""
+    muatan = json.dumps({'php': php, 'data': data or {}})
+    wp = 'php -d memory_limit=512M /usr/local/bin/wp eval-file "$T/s.php" "$T/d.json"'
+    perintah = (f'set -e; T=$(mktemp -d /tmp/velocity-bahasa.XXXXXX); python3 -c "import json,sys; d=json.load(sys.stdin); '
+                f'open(sys.argv[1]+\'/s.php\',\'w\').write(d[\'php\']); json.dump(d[\'data\'], open(sys.argv[1]+\'/d.json\',\'w\'))" "$T"; '
+                f'chmod 755 "$T"; chmod 644 "$T"/*; cd {shlex.quote(docroot)}; '
+                f'if id {shlex.quote(user)} >/dev/null 2>&1; then runuser -u {shlex.quote(user)} -- {wp} 2>&1 | grep -v Deprecated || true; '
+                f'else {wp} --allow-root 2>&1 | grep -v Deprecated || true; fi; rm -rf "$T"')
+    hasil = subprocess.run(ssh + [perintah], input=muatan.encode(), capture_output=True, timeout=900)
+    if hasil.returncode != 0:
+        raise RuntimeError(f"ssh_gagal:{hasil.returncode}:{hasil.stderr.decode(errors='replace').strip()[:200]}")
+    return hasil.stdout.decode(errors='replace')
+
+
+LABEL_STATISTIK = ('label_today_visits="Visits Today" label_today_visitors="Visitors Today" '
+                   'label_total_visits="Total Visits" label_total_visitors="Total Visitors" label_online="Visitors Online"')
+
+SISTEM = ('You translate Indonesian website text into natural, professional English for an English-language '
+          'website. Output ONLY one valid JSON object mapping each given key to its translation.')
+ATURAN = '''Rules:
+- Translate every value to English. A value that is already English stays as it is.
+- Keep HTML tags and attributes, WordPress block comments (<!-- wp:... -->), shortcodes [..], URLs,
+  emails, phone numbers, and proper names (organisation, people, places) exactly as they are.
+- Keep the same length and tone: short menu/button labels stay short ("Hubungi Kami" -> "Contact Us",
+  "Tentang Kami" -> "About Us", "Berita" -> "News", "Galeri" -> "Gallery", "Beranda" -> "Home",
+  "Kebijakan Privasi" -> "Privacy Policy", "Layanan" -> "Services").
+Return {"<key>": "<English text>", ...} with exactly the same keys.'''
+
+
+def terjemahkan(gen, model, butir):
+    """{kunci: teks} -> {kunci: terjemahan}; per kelompok ±6.000 karakter."""
+    hasil, kelompok, ukuran = {}, [], 0
+    antre = list(butir.items())
+    for i, (k, v) in enumerate(antre):
+        kelompok.append((k, v))
+        ukuran += len(v)
+        if ukuran < 6000 and i < len(antre) - 1:
+            continue
+        data = dict(kelompok)
+        for _ in range(2):
+            jawab = gen.ai_call(SISTEM, ATURAN + '\n\nINPUT:\n' + json.dumps(data, ensure_ascii=False),
+                                model, timeout=300, max_tokens=16000)
+            try:
+                keluar = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1], strict=False) if jawab else {}
+            except ValueError:
+                keluar = {}
+            baik = {k: v for k, v in keluar.items() if k in data and isinstance(v, str) and v.strip()}
+            hasil.update(baik)
+            data = {k: v for k, v in data.items() if k not in baik}
+            if not data:
+                break
+        kelompok, ukuran = [], 0
+    return hasil
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    gen = muat('ai_content_generator', HERE / 'ai-content-generator.py')
+    finish = muat('site_finish', HERE / 'site-finish')
+    cfg = gen.read_manifest(args[0])
+    domain = cfg.get('domain', '')
+    if bahasa_situs(folder_klien(domain)) != 'en':
+        print('bahasa: dilewati:bahasa_indonesia')
+        return 0
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '/root/.ssh/id_ed25519')
+    ssh = finish.ssh_command(cfg, key)
+    docroot = finish.docroot(domain, cfg.get('da_user', ''))
+    user = cfg.get('da_user', '')
+
+    keluar = jalankan_php(ssh, docroot, user, PHP_AMBIL)
+    m = re.search(r'@@JSON@@(.*)@@JSON@@', keluar, re.S)
+    if not m:
+        print('bahasa: gagal_ambil ' + keluar.strip()[:300])
+        return 1
+    situs = json.loads(m.group(1))
+
+    # Label statistik pengunjung (velocity-addons) tertanam bahasa Indonesia di plugin; shortcode
+    # menerima atribut label_*, jadi label Inggris ditulis langsung di shortcode widget.
+    tulis = {'posts': {}, 'terms': {}, 'options': {}}
+    opsi = situs.get('options') or {}
+    for nama, nilai in opsi.items():
+        for jalur, teks in daun(nilai):
+            if '[velocity-statistics' in teks and 'label_' not in teks:
+                baru = teks.replace('[velocity-statistics', '[velocity-statistics ' + LABEL_STATISTIK, 1)
+                if jalur:
+                    pasang(nilai, jalur, baru)
+                else:
+                    opsi[nama] = baru
+                tulis['options'][nama] = opsi[nama]
+                print(f'bahasa: label_statistik:{nama}')
+
+    butir = {}
+    for pid, f in (situs.get('posts') or {}).items():
+        for kolom in ('title', 'content', 'excerpt'):
+            if berbahasa_id(f.get(kolom)):
+                butir[f'p|{pid}|{kolom}'] = f[kolom]
+    for tid, f in (situs.get('terms') or {}).items():
+        for kolom in ('name', 'description'):
+            if berbahasa_id(f.get(kolom)):
+                butir[f't|{tid}|{kolom}'] = f[kolom]
+    for nama, nilai in (situs.get('options') or {}).items():
+        for jalur, teks in daun(nilai):
+            if berbahasa_id(teks):
+                butir['o|' + nama + '|' + json.dumps(jalur)] = teks
+    if not butir and not tulis['options']:
+        print('bahasa: sudah_inggris')
+        return 0
+    print(f'bahasa: {len(butir)} teks berbahasa Indonesia')
+
+    # Terjemahan ini sendiri tidak boleh ikut dialihkan prompt_bahasa ("Indonesian" -> "English").
+    os.environ['VELOCITY_BAHASA'] = 'id'
+    # Tembolok per teks sumber: jalan ulang (mode finish) tidak membayar AI untuk teks yang sama.
+    tembolok_f = TEMBOLOK / f'{domain}.json'
+    try:
+        tembolok = json.loads(tembolok_f.read_text())
+    except (OSError, ValueError):
+        tembolok = {}
+    terjemah = {k: tembolok[v] for k, v in butir.items() if v in tembolok}
+    baru = terjemahkan(gen, gen.get_model('konten'), {k: v for k, v in butir.items() if k not in terjemah})
+    terjemah.update(baru)
+    if baru:
+        tembolok.update({butir[k]: v for k, v in baru.items()})
+        TEMBOLOK.mkdir(parents=True, exist_ok=True)
+        tembolok_f.write_text(json.dumps(tembolok, ensure_ascii=False))
+    gagal = [k for k in butir if k not in terjemah]
+    if gagal:
+        print(f'bahasa: belum_terjemah:{len(gagal)} ' + ', '.join(gagal[:10]))
+
+    for k, v in terjemah.items():
+        jenis, id_, sisa = k.split('|', 2)
+        if jenis == 'p':
+            tulis['posts'].setdefault(id_, {})[sisa] = v
+        elif jenis == 't':
+            tulis['terms'].setdefault(id_, {})[sisa] = v
+        else:
+            jalur = tuple(json.loads(sisa))
+            if jalur:
+                pasang(opsi[id_], jalur, v)
+            else:
+                opsi[id_] = v
+            tulis['options'][id_] = opsi[id_]
+    for k, v in list(terjemah.items())[:40]:
+        print(f'bahasa: {k} | {butir[k][:60]!r} -> {v[:60]!r}')
+    if coba:
+        print('bahasa: --coba, situs tidak diubah')
+        return 0
+    print(jalankan_php(ssh, docroot, user, PHP_TULIS, tulis).strip())
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

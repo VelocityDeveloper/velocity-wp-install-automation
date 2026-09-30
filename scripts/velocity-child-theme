@@ -57,7 +57,8 @@ DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$')
 SLUG_RE = re.compile(r'^[a-z0-9-]+$')
 HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 SUB = re.compile(r'([a-z0-9-]+)\.velocitydeveloper\.com', re.I)
-LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih', re.I)
+# "Pilihan Desain: a3holding.org" (form non-template cepadtl.org 2026-09-30) juga label pilihan desain.
+LABEL = re.compile(r'(template|design|desain)\s+yang\s+(di)?pilih|pilihan\s+(desain|design|template|tema)', re.I)
 UA = {'User-Agent': 'velocity-installer/1.0'}
 # Web referensi klien sering di balik WAF yang menolak UA bot.
 UA_BROWSER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '

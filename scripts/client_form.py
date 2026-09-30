@@ -438,6 +438,32 @@ def read_client_form(folder):
     return {'text': '\n'.join(text), 'fields': hasil, 'unreadable': unread, 'sumber': 'claude', 'data': data}
 
 
+# Bahasa situs dari form (keputusan user 2026-09-30, cepadtl.org "Bahasa yang digunakan, inggris").
+# Dua bahasa sekaligus (Indonesia + Inggris, mis. GTranslate) tetap 'id': konten dasar berbahasa Indonesia.
+_BAHASA_EN = re.compile(
+    # "Bahasa yang digunakan, inggris" / "Language: English"
+    r'(bahasa|language)\s*(yang\s*)?(digunakan|dipakai|used)?\s*[:,]\s*(bahasa\s+)?(inggris|english)\b'
+    r'|\b(bahasa|language)\s+(yang\s+)?(digunakan|dipakai|web(site)?|situs)\s*[:,]?\s*(bahasa\s+)?(inggris|english)\b'
+    # "Web pakai bahasa inggris", "Mohon dibuat dalam bahasa inggris", "materi ... bahasa inggris"
+    r'|\b(web(site)?|situs|konten|materi|isi(an)?|dibuat|pakai|memakai|gunakan|menggunakan|translate|terjemah\w*)\b'
+    r'[^\n]{0,30}\b(bahasa|language)\s+(inggris|english)\b'
+    r'|\b(english|inggris)\s+(website|web|version|versi)\b', re.I)
+_BAHASA_ID = re.compile(r'\b(indonesia|indonesian)\b', re.I)
+
+
+def bahasa_situs(folder):
+    """'en' bila form meminta situs berbahasa Inggris (tanpa bahasa Indonesia), selain itu 'id'."""
+    hasil = read_client_form(folder)
+    teks = [hasil.get('text') or '']
+    data = hasil.get('data') or {}
+    teks += [str(data.get(k) or '') for k in ('data_tambahan', 'pesan_tambahan', 'catatan', 'konsep_desain')]
+    for baris in '\n'.join(teks).splitlines():
+        m = _BAHASA_EN.search(baris)
+        if m and not _BAHASA_ID.search(baris):
+            return 'en'
+    return 'id'
+
+
 # Kalimat bawaan template di bagian PESAN TAMBAHAN (bukan tulisan klien).
 _TEMPLATE_PESAN = re.compile(
     r'^(silah?kan anda sampaikan|silah?kan anda sampikan|setelah semua form|judul email|bantuanvelocity@|'
