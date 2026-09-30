@@ -150,6 +150,90 @@ def sampul_kategori(judul, nama, warna, tujuan):
     return tujuan
 
 
+# Slot iklan tema portal berita klasik, ukurannya mengikuti gambar di demo beritab1.velocitydeveloper.com
+# (banner_header1 970x90, banner_header2/home 970x250, banner_single1 500x65, iklan float 200x800,
+# sidebar 300x250 & 300x600). Demo memakai iklan merek sungguhan, jadi situs klien diberi banner
+# "Ruang Iklan" polos yang siap diganti pemilik (permintaan user 2026-09-30, sidoarjopos.id).
+UKURAN_IKLAN = ((970, 90), (970, 250), (500, 65), (200, 800), (300, 250), (300, 600))
+
+
+def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
+    """Banner "Ruang Iklan" di atas gradasi warna utama; teks menyesuaikan bentuk slot."""
+    from PIL import ImageFont
+    banner_polos(nama, warna, tujuan, lebar, tinggi)
+    im = Image.open(tujuan).convert('RGB')
+    d = ImageDraw.Draw(im)
+    def huruf(tebal, besar):
+        berkas = 'DejaVuSans-Bold.ttf' if tebal else 'DejaVuSans.ttf'
+        try:
+            return ImageFont.truetype(f'/usr/share/fonts/dejavu-sans-fonts/{berkas}', max(besar, 8))
+        except OSError:
+            return ImageFont.load_default()
+    ajakan = f'Pasang iklan Anda di {nama}'
+    d.rectangle([3, 3, lebar - 4, tinggi - 4], outline=(255, 255, 255), width=2)
+    if lebar / tinggi >= 4:
+        # Pita mendatar: "RUANG IKLAN | ajakan · kontak" dalam satu baris, huruf mengecil sampai muat.
+        # Kontak dibuang bila membuat tulisan terlalu kecil untuk dibaca (slot 500x65).
+        for sisi in [' · '.join(x for x in (ajakan, kontak) if x), ajakan]:
+            for besar in range(int(tinggi * .34), 7, -1):
+                fb, fs = huruf(True, besar), huruf(False, int(besar * .62))
+                lb, ls = d.textlength('RUANG IKLAN', font=fb), d.textlength(sisi, font=fs)
+                if lb + ls + besar * 1.6 <= lebar * .92:
+                    break
+            if fs.size >= 12:
+                break
+        x = (lebar - lb - ls - besar * 1.6) / 2
+        d.text((x, tinggi / 2), 'RUANG IKLAN', font=fb, fill=(255, 255, 255), anchor='lm')
+        x += lb + besar * .8
+        d.line([(x, tinggi * .28), (x, tinggi * .72)], fill=(255, 255, 255), width=2)
+        d.text((x + besar * .8, tinggi / 2), sisi, font=fs, fill=(235, 242, 252), anchor='lm')
+    else:
+        # Kotak/tegak: judul besar di tengah, ajakan & kontak dibungkus per kata di bawahnya.
+        fb = huruf(True, int(min(lebar * .15, tinggi * .16)))
+        fs = huruf(False, int(min(lebar * .075, tinggi * .075)))
+        # Alamat email tidak bisa dibungkus: huruf kecil diperkecil sampai kontak muat selebar slot.
+        while kontak and fs.size > 9 and d.textlength(kontak, font=fs) > lebar * .86:
+            fs = huruf(False, fs.size - 1)
+        def bungkus(teks, font):
+            baris, kini = [], ''
+            for k in teks.split():
+                uji = (kini + ' ' + k).strip()
+                if d.textlength(uji, font=font) > lebar * .84 and kini:
+                    baris.append(kini)
+                    kini = k
+                else:
+                    kini = uji
+            return baris + [kini] if kini else baris
+        judul = bungkus('RUANG IKLAN', fb) if d.textlength('RUANG IKLAN', font=fb) > lebar * .84 else ['RUANG IKLAN']
+        kecil = bungkus(ajakan, fs) + ([''] + bungkus(kontak, fs) if kontak else [])
+        tb, ts = fb.size * 1.2, fs.size * 1.45
+        y = (tinggi - len(judul) * tb - fs.size - len(kecil) * ts) / 2
+        for b in judul:
+            d.text((lebar / 2, y), b, font=fb, fill=(255, 255, 255), anchor='ma')
+            y += tb
+        d.line([(lebar * .38, y + fs.size * .4), (lebar * .62, y + fs.size * .4)], fill=(255, 255, 255), width=2)
+        y += fs.size
+        for b in kecil:
+            d.text((lebar / 2, y), b, font=fs, fill=(235, 242, 252), anchor='ma')
+            y += ts
+    im.save(tujuan, quality=88)
+    return tujuan
+
+
+def halaman_berita(nama, email):
+    """Halaman Redaksi & Pedoman Media Siber seperti demo beritab1, dipakai bila klien belum
+    mengirim materinya. Judul bagian <p><strong> (pola halaman situs berita buatan webmaster)."""
+    peran = ('Pemimpin Redaksi', 'Redaktur Pelaksana', 'Redaktur Desk', 'Kontributor', 'Fotografer', 'Desainer', 'Tim Digital')
+    redaksi = (f'<p>Berikut adalah susunan redaksi {e(nama)}:</p>\n'
+               + ''.join(f'<p><strong>{p}</strong></p>\n<ul>\n<li>–</li>\n</ul>\n' for p in peran)
+               + (f'<p><strong>Alamat Email Redaksi</strong></p>\n<p>{tautan_email(email)}</p>\n' if email else '')
+               + '<p>Struktur redaksi ini mencakup berbagai peran dalam manajemen dan produksi konten portal berita, '
+                 'mulai dari pemimpin redaksi, redaktur desk, kontributor, fotografer, desainer, hingga tim digital.</p>')
+    pedoman = (HERE.parent / 'templates' / 'portal-berita' / 'pedoman-media-siber.html').read_text()
+    return [{'judul': 'Redaksi', 'slug': 'redaksi', 'isi': redaksi},
+            {'judul': 'Pedoman Media Siber', 'slug': 'pedoman-media-siber', 'isi': pedoman}]
+
+
 def foto_klien(domain):
     finish = muat('site_finish', HERE / 'site-finish')
     _, foto = finish.client_assets(folder_klien(domain))
@@ -589,11 +673,43 @@ if ($berita_depan) {
     foreach ((array) get_theme_mods() as $k => $v) {
         if (!preg_match('/^image_iklan/', (string) $k) || !is_string($v) || $v === '') { continue; }
         $aid = attachment_url_to_postid($v);
-        if ($aid && get_post_meta($aid, '_velocity_tampilan_aset', true)) {
+        $sidik = $aid ? (string) get_post_meta($aid, '_velocity_tampilan_aset', true) : '';
+        if ($sidik !== '' && strpos($sidik, ':iklan-') === false) {
             remove_theme_mod($k); remove_theme_mod(preg_replace('/^image_/', 'link_', $k));
             echo "tampilan: berita_iklan_dikosongkan:$k\n";
         }
     }
+    // Khusus velocity-beritab1 (keputusan user 2026-09-30, sidoarjopos.id): banner, halaman Redaksi &
+    // Pedoman Media Siber, menu sekunder, dan widget mengikuti demo beritab1.velocitydeveloper.com.
+    // Tema berita lain disesuaikan dengan demo child theme masing-masing bila sudah diminta.
+    $beritab1 = get_stylesheet() === 'velocity-beritab1';
+    // Semua slot gambar panel "Berita Setting" (Banner Setting & Iklan Float) diisi banner "Ruang Iklan"
+    // seukuran demo, seperti demo yang tidak menyisakan slot kosong. Slot yang diisi orang dibiarkan.
+    $isi_iklan = [];
+    foreach ($beritab1 && isset($wpc) ? $wpc->controls() : [] as $c) {
+        $sek = $c->section ? $wpc->get_section($c->section) : null;
+        $nama_sek = $c->section . ' ' . ($sek ? $sek->title : '') . ' ' . ($sek && $sek->panel ? $sek->panel : '');
+        if (!($c instanceof WP_Customize_Media_Control) || !is_object($c->setting) || !preg_match('/banner|iklan|ads/i', $nama_sek . ' ' . $c->setting->id)) { continue; }
+        $k = $c->setting->id;
+        $ukuran = preg_match('/float|kiri|kanan|left|right/i', $k) ? '200x800'
+                : (preg_match('/single_?1/i', $k) ? '500x65' : (preg_match('/header_?2|home_?1/i', $k) ? '970x250' : '970x90'));
+        $aid = $media["iklan-$ukuran"] ?? 0;
+        if (!$aid) { continue; }
+        // Image/Upload control menyimpan URL, Media/Cropped control menyimpan ID lampiran.
+        $nilai = $c instanceof WP_Customize_Upload_Control && !($c instanceof WP_Customize_Cropped_Image_Control)
+            ? (string) wp_get_attachment_url($aid) : (string) $aid;
+        $kini = (string) get_theme_mod($k, '');
+        if ($kini !== '' && $kini !== (string) ($st['berita_iklan'][$k] ?? '')) { continue; }
+        if ($kini !== $nilai) { set_theme_mod($k, $nilai); }
+        $st['berita_iklan'][$k] = $nilai; $isi_iklan[] = "$k=$ukuran";
+    }
+    if ($isi_iklan) { echo 'tampilan: berita_iklan:' . implode(',', $isi_iklan) . "\n"; }
+    // Artikel tanpa meta 'hit' tidak ikut query "Populer" (meta_key hit) widget & tab tema: diberi 0,
+    // velocity-addons menaikkannya tiap kunjungan.
+    $tanpa_hit = !$beritab1 ? [] : get_posts(['post_type' => 'post', 'post_status' => 'publish', 'numberposts' => -1, 'fields' => 'ids',
+                            'meta_query' => [['key' => 'hit', 'compare' => 'NOT EXISTS']]]);
+    foreach ($tanpa_hit as $pid) { add_post_meta($pid, 'hit', 0, true); }
+    if ($tanpa_hit) { echo 'tampilan: berita_hit_awal:' . count($tanpa_hit) . "\n"; }
     // Menu: hanya menu buatan installer (halaman baku) yang disusun ulang.
     $baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan', 'redaksi',
              'pedoman media siber', 'privacy policy', 'kebijakan privasi'];
@@ -615,8 +731,8 @@ if ($berita_depan) {
             }
         }
         if ($mb) {
-            // Menu lama (halaman profil) pindah ke secondary, tanpa Beranda & Berita.
-            if (isset($GLOBALS['_wp_registered_nav_menus']['secondary']) && empty($lokasi['secondary'])) {
+            // Tema berita lain: menu lama (halaman profil) pindah ke secondary, tanpa Beranda & Berita.
+            if (!$beritab1 && isset($GLOBALS['_wp_registered_nav_menus']['secondary']) && empty($lokasi['secondary'])) {
                 foreach ($item_utama as $it) {
                     if (in_array(strtolower(trim($it->title)), ['beranda', 'home', 'berita'], true)) { wp_delete_post($it->ID, true); }
                 }
@@ -627,6 +743,44 @@ if ($berita_depan) {
             echo 'tampilan: berita_menu:' . count($kat_menu) . "_kategori\n";
         }
     } elseif (!$menu_baku && empty($st['berita_menu'])) { echo "tampilan: berita_menu_dibiarkan:disunting\n"; }
+    // Halaman Redaksi & Pedoman Media Siber (demo beritab1): isi contoh bila klien belum mengirim
+    // materinya; halaman yang sudah disunting orang dibiarkan.
+    foreach ($beritab1 ? (array) ($d['berita_halaman'] ?? []) : [] as $h) {
+        $ada = get_posts(['post_type' => 'page', 'name' => $h['slug'], 'post_status' => 'any', 'numberposts' => 1]);
+        if (!$ada) {
+            $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => $h['judul'],
+                                  'post_name' => $h['slug'], 'post_content' => $h['isi']], true);
+            if (!is_wp_error($id)) { $tandai($id); echo "tampilan: berita_halaman_dibuat:{$h['slug']}:$id\n"; }
+        } elseif ($milik_installer($ada[0]->ID) && $ada[0]->post_content !== $h['isi']) {
+            wp_update_post(['ID' => $ada[0]->ID, 'post_content' => $h['isi']]); $tandai($ada[0]->ID);
+            echo "tampilan: berita_halaman_diperbarui:{$h['slug']}\n";
+        }
+    }
+    // Menu sekunder (bar atas beritab1: Tentang Kami, Redaksi, Kontak, Pedoman Media Siber). Lokasinya
+    // 'secondary-menu', sedangkan langkah menu di atas hanya mengenal 'secondary', jadi bar atas
+    // sidoarjopos.id kosong. Lokasi yang diisi orang dibiarkan; menu milik installer dilengkapi.
+    $lok2 = $beritab1 && isset(get_registered_nav_menus()['secondary-menu']) ? 'secondary-menu' : '';
+    $lokasi = get_nav_menu_locations();
+    $m2 = (int) ($lokasi[$lok2] ?? 0);
+    if ($lok2 && (!$m2 || $m2 === (int) ($st['berita_menu2'] ?? 0))) {
+        if (!$m2) {
+            $obj = wp_get_nav_menu_object('Menu Profil');
+            $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
+        }
+        $ada_id = array_map(fn($it) => (int) $it->object_id, wp_get_nav_menu_items($m2) ?: []);
+        $n = count($ada_id) + 1; $tambah = [];
+        foreach (['tentang-kami', 'redaksi', 'galeri', 'hubungi-kami', 'pedoman-media-siber', 'kebijakan-privasi', 'privacy-policy'] as $slug) {
+            $p = get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]);
+            if (!$p || in_array($p[0]->ID, $ada_id, true)) { continue; }
+            if ($slug === 'privacy-policy' && get_posts(['post_type' => 'page', 'name' => 'kebijakan-privasi', 'post_status' => 'publish', 'numberposts' => 1])) { continue; }
+            wp_update_nav_menu_item($m2, 0, ['menu-item-object-id' => $p[0]->ID, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type',
+                'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
+            $ada_id[] = $p[0]->ID; $tambah[] = $slug;
+        }
+        $lokasi[$lok2] = $m2; set_theme_mod('nav_menu_locations', $lokasi);
+        $st['berita_menu2'] = $m2;
+        echo "tampilan: berita_menu_sekunder:$lok2" . ($tambah ? ':' . implode(',', $tambah) : '') . "\n";
+    } elseif ($lok2) { echo "tampilan: berita_menu_sekunder_dibiarkan:disunting\n"; }
 }
 
 // 3. Beranda: template + pengaturan tema
@@ -724,12 +878,23 @@ $buat_html = function ($judul, $isi) use (&$ch, &$nomor, $akar) {
     while (isset($ch[$nomor])) { $nomor++; }
     $ch[$nomor] = ['title' => $judul, 'content' => $akar($isi)]; return 'custom_html-' . $nomor++;
 };
-$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$sr, $milik) {
+// Jenis widget lain (media_image, velocity_posts_widget, categories) dimuat saat dipakai.
+$lain = [];
+$opsi_lain = function ($jenis) use (&$lain) {
+    if (!isset($lain[$jenis])) { $o = get_option("widget_$jenis", []); $lain[$jenis] = is_array($o) ? $o : []; }
+};
+$buat_lain = function ($jenis, $opsi) use (&$lain, $opsi_lain) {
+    $opsi_lain($jenis);
+    $n = 300; while (isset($lain[$jenis][$n])) { $n++; }
+    $lain[$jenis][$n] = $opsi; return "$jenis-$n";
+};
+$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$sr, &$lain, $opsi_lain, $milik) {
     foreach ((array) $daftar as $w) {
         if ($bawaan($w)) { unset($blok_w[(int) substr($w, 6)]); }
         elseif (in_array($w, (array) ($milik['__semua'] ?? []), true)) {
             [$jenis, $n] = [substr($w, 0, strrpos($w, '-')), (int) substr($w, strrpos($w, '-') + 1)];
             if ($jenis === 'custom_html') { unset($ch[$n]); } elseif ($jenis === 'text') { unset($tx[$n]); } elseif ($jenis === 'recent-posts') { unset($rp[$n]); } elseif ($jenis === 'search') { unset($sr[$n]); }
+            else { $opsi_lain($jenis); unset($lain[$jenis][$n]); }
         }
     }
 };
@@ -744,7 +909,39 @@ $utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isse
 // Ekspedisi, Sosial Media, Hubungi Kami — sama dengan demo toko21.velocitydeveloper.com, keputusan
 // user 2026-09-24) memakai susunan itu, bukan widget umum konsultasi/layanan/artikel.
 $acuan = function_exists('velocity_tema_widget_sidebar') ? (array) velocity_tema_widget_sidebar() : [];
-if ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
+// Portal berita velocity-beritab1 (widget Velocity Posts): sidebar & footer disusun seperti demo
+// beritab1.velocitydeveloper.com — iklan 300x250, galeri kategori teratas, iklan 300x600, Berita Populer,
+// daftar kategori kedua, tab Popular/Recent/Comment; footer logo + tentang, Kategori, Pengunjung.
+// Dulu memakai susunan umum (Hubungi Kami, Artikel Terbaru, Kontak) — sidoarjopos.id, user 2026-09-30.
+$berita_w = $berita_depan && get_stylesheet() === 'velocity-beritab1' && isset($GLOBALS['wp_widget_factory']->widgets['velocity_posts_widget']);
+$iklan_w = function ($ukuran) use ($media, $buat_lain) {
+    $aid = $media["iklan-$ukuran"] ?? 0;
+    if (!$aid) { return null; }
+    [$w, $h] = array_map('intval', explode('x', $ukuran));
+    return $buat_lain('media_image', ['attachment_id' => $aid, 'url' => wp_get_attachment_url($aid), 'title' => '', 'size' => 'full',
+        'width' => $w, 'height' => $h, 'caption' => '', 'alt' => 'Ruang iklan', 'link_type' => 'custom', 'link_url' => home_url('/hubungi-kami/'),
+        'image_classes' => '', 'link_classes' => '', 'link_rel' => '', 'link_target_blank' => false, 'image_title' => '']);
+};
+$pos_w = fn($judul, $layout, $kat, $jumlah, $urut = 'date') => $buat_lain('velocity_posts_widget', ['title' => $judul, 'layout' => $layout,
+    'kategori' => $kat ? (string) $kat : '', 'jumlah' => (string) $jumlah, 'kutipan' => '', 'orderby' => $urut, 'order' => 'DESC',
+    'viewers' => 'tidak', 'viewdate' => 'ya']);
+if ($utama && $berita_w && $boleh($sb[$utama] ?? [])) {
+    $hapus_bawaan($sb[$utama] ?? []);
+    $kat_w = get_categories(['hide_empty' => true, 'exclude' => [(int) get_option('default_category')]]);
+    usort($kat_w, fn($a, $b) => [$b->count, $a->term_id] <=> [$a->count, $b->term_id]);
+    $baru = array_values(array_filter([
+        $iklan_w('300x250'),
+        isset($kat_w[0]) ? $pos_w($kat_w[0]->name, 'gallery', $kat_w[0]->term_id, 4) : null,
+        $iklan_w('300x600'),
+        $pos_w('Berita Populer', 'list', '', 10, 'view'),
+        isset($kat_w[1]) ? $pos_w($kat_w[1]->name, 'list', $kat_w[1]->term_id, 5) : null,
+    ]));
+    $n = 300; while (isset($tx[$n])) { $n++; }
+    $tx[$n] = ['title' => '', 'text' => '[velocity-post-tabs]', 'filter' => false, 'visual' => false];
+    $baru[] = "text-$n";
+    $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
+    echo 'tampilan: widget_sidebar_berita:' . count($baru) . "\n";
+} elseif ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
     $baru = [];
     foreach ($acuan as [$judul, $isi]) {
@@ -800,6 +997,31 @@ if (function_exists('velocity_tema_widget_footer') && !velocity_tema_widget_foot
     }
     echo "tampilan: footer_acuan_tema:kosong\n";
     $kaki = [];
+} elseif ($berita_w) {
+    $logo = (int) get_theme_mod('custom_logo');
+    $meta = $logo ? wp_get_attachment_metadata($logo) : [];
+    $susun = [
+        'footer-widget-1' => fn() => array_values(array_filter([
+            $logo ? $buat_lain('media_image', ['attachment_id' => $logo, 'url' => wp_get_attachment_url($logo), 'title' => '', 'size' => 'full',
+                'width' => (int) ($meta['width'] ?? 0), 'height' => (int) ($meta['height'] ?? 0), 'caption' => '', 'alt' => get_bloginfo('name'),
+                'link_type' => 'custom', 'link_url' => home_url('/'), 'image_classes' => '', 'link_classes' => '', 'link_rel' => '',
+                'link_target_blank' => false, 'image_title' => '']) : null,
+            empty($W['footer_tentang']) ? null : $buat_html($logo ? '' : $W['footer_tentang'][0], $W['footer_tentang'][1]),
+        ])),
+        'footer-widget-2' => fn() => [$buat_lain('categories', ['title' => 'Kategori', 'count' => 0, 'hierarchical' => 0, 'dropdown' => 0])],
+        'footer-widget-3' => function () use (&$tx) {
+            $n = 300; while (isset($tx[$n])) { $n++; }
+            $tx[$n] = ['title' => 'Pengunjung', 'text' => '[velocity-statistics style="list"]', 'filter' => 'content', 'visual' => true];
+            return ["text-$n"];
+        },
+    ];
+    foreach ($susun as $id => $buat) {
+        if (!isset($wp_registered_sidebars[$id]) || !$boleh($sb[$id] ?? [])) { continue; }
+        $hapus_bawaan($sb[$id] ?? []);
+        $sb[$id] = $buat(); $ubah[] = $id; $semua = array_merge($semua, $sb[$id]);
+    }
+    echo "tampilan: footer_berita\n";
+    $kaki = [];
 }
 foreach ($kaki as [$id, $k]) {
     if (!isset($wp_registered_sidebars[$id]) || !$boleh($sb[$id] ?? [])) { continue; }
@@ -818,6 +1040,7 @@ foreach ($kaki as [$id, $k]) {
 }
 foreach (['_multiwidget'] as $x) { $ch[$x] = 1; $tx[$x] = 1; $rp[$x] = 1; $sr[$x] = 1; $blok_w[$x] = 1; }
 update_option('widget_block', $blok_w); update_option('widget_custom_html', $ch); update_option('widget_text', $tx); update_option('widget_recent-posts', $rp); update_option('widget_search', $sr);
+foreach ($lain as $jenis => $o) { $o['_multiwidget'] = 1; update_option("widget_$jenis", $o); }
 wp_set_sidebars_widgets($sb);
 $daftar_milik = [];
 foreach ($ubah as $id) { $daftar_milik[md5(wp_json_encode(array_values($sb[$id])))] = array_values($sb[$id]); }
@@ -1181,13 +1404,24 @@ def main():
     judul.update({k: f"Foto {data['nama']}" for k in pendamping})
     judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
     judul.update({f'klien-{i}': j for i, j in enumerate(klien_judul, 1)})
+    iklan = []
+    if data['berita'] and tema == 'velocity-beritab1':
+        # Portal berita velocity-beritab1: banner "Ruang Iklan" per ukuran slot + halaman Redaksi & Pedoman Media Siber.
+        for w, h in UKURAN_IKLAN:
+            kunci = f'iklan-{w}x{h}'
+            aset[kunci] = banner_iklan(w, h, data['nama'], (isi.get('warna') or {}).get('utama'),
+                                       kontak['email'] or (f"WA {kontak['wa_tampil']}" if kontak['wa_tampil'] else ''),
+                                       kerja / f'{kunci}.jpg')
+            judul[kunci] = f"Ruang iklan {w}x{h} {data['nama']}"
+            iklan.append(kunci)
+        data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
     # Hanya slot yang dirujuk pengaturan tema yang diunggah, dan potongan yang isinya sama
     # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
     # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.
     # Tema yang tidak terbaca: semua adaptor dipindai, karena server memilih mods dari tema aktifnya.
     rujukan = json.dumps([data['mods'].get(tema), data['bawaan'].get(tema)] if tema in data['mods']
                          else [data['mods'], data['bawaan']], ensure_ascii=False)
-    dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan))
+    dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan)) | set(iklan)
     data['aset'], per_md5 = {}, {}
     for k, p in aset.items():
         if k not in dipakai:
