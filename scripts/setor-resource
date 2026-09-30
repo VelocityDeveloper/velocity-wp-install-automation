@@ -18,10 +18,10 @@ Sumber:
 Cara hitung "lebih lambat" (sama dengan ukur manual 29 Sep):
   1. Tiap perintah diberi keadaan dari rata-rata sampel selama perintah berjalan (±30 dtk):
      normal, CPU puncak (≥ AMBANG_CPU), RAM puncak (≥ AMBANG_RAM), atau keduanya.
-  2. Waktu wajar per jenis perintah (build npm, composer, wp-cli, ...) = median saat normal, 7 hari.
+  2. Waktu wajar per jenis perintah (build npm, composer, wp-cli, ...) = median saat normal, 30 hari.
   3. Faktor lambat per keadaan per jenis = median(durasi ÷ waktu wajar) perintah di keadaan itu
      (jenis dengan < MIN_SAMPEL perintah memakai faktor gabungan keadaan itu). Faktor < 1 dianggap 1.
-  4. Tambahan waktu satu perintah = durasi × (1 − 1/faktor). Dijumlah per orang untuk 24 jam terakhir.
+  4. Tambahan waktu satu perintah = durasi × (1 − 1/faktor). Dijumlah per orang per 10 menit; halaman CRM yang memotong rentang (1 jam … bulan ini).
 """
 import argparse
 import bisect
@@ -52,8 +52,10 @@ WIB = timezone(timedelta(hours=7))
 AMBANG_CPU = 85.0
 AMBANG_RAM = 80.0
 MIN_SAMPEL = 8
-HARI_ACUAN = 7
-SIMPAN_HARI = 9
+HARI_ACUAN = 30          # waktu wajar & faktor lambat diambil dari 30 hari terakhir
+RENTANG_HARI = 32        # data yang disetor: cukup untuk pilihan "30 hari" dan "bulan ini"
+SIMPAN_HARI = 33
+EMBER = 600              # lambat per orang dikelompokkan per 10 menit
 
 JENIS = [('npm run build', 'build npm'), ('vite build', 'build npm'), ('npm ', 'npm lain'),
          ('playwright', 'pemotret halaman'), ('chromium', 'pemotret halaman'), ('chrome', 'pemotret halaman'),
@@ -177,30 +179,30 @@ def keadaan(sampel, waktu_s, t0, dur):
 
 
 def hitung_lambat(cache, sampel, sekarang):
+    """Tambahan waktu per orang & per jenis, dikelompokkan per 10 menit (halaman CRM memotong rentangnya)."""
     waktu_s = [x[0] for x in sampel]
     peta, divisi = peta_orang()
-    acuan_mulai = sekarang - HARI_ACUAN * 86400
     baris = []  # (t0, dur, jenis, keadaan, sid)
     for p, st in cache['berkas'].items():
         sid = sid_berkas(p)
         for t0, dur, j in st['cmd']:
-            if t0 < acuan_mulai:
+            if t0 < sekarang - RENTANG_HARI * 86400:
                 continue
             k = keadaan(sampel, waktu_s, t0, dur)
             if k:
                 baris.append((t0, dur, j, k, sid))
 
+    acuan_mulai = sekarang - HARI_ACUAN * 86400
     normal = defaultdict(list)
     for t0, dur, j, k, _ in baris:
-        if k == 'normal':
+        if k == 'normal' and t0 >= acuan_mulai:
             normal[j].append(dur)
     wajar = {j: statistics.median(v) for j, v in normal.items() if len(v) >= MIN_SAMPEL}
-    wajar_semua = statistics.median([d for v in normal.values() for d in v]) if normal else None
 
     rasio = defaultdict(list)  # (keadaan, jenis) -> [durasi / wajar]
     for t0, dur, j, k, _ in baris:
         w = wajar.get(j)
-        if k != 'normal' and w and w > 0.2:
+        if k != 'normal' and w and w > 0.2 and t0 >= acuan_mulai:
             rasio[(k, j)].append(dur / w)
     faktor, faktor_gab = {}, {}
     for k in ('cpu', 'ram', 'keduanya'):
@@ -210,52 +212,58 @@ def hitung_lambat(cache, sampel, sekarang):
             if kk == k and len(v) >= MIN_SAMPEL:
                 faktor[(k, j)] = max(1.0, statistics.median(v))
 
-    batas24 = sekarang - 86400
+    # orang: ember 10 menit -> [perintah, tunggu, perintah puncak, +cpu, +ram, +keduanya] (detik)
+    # sesi : ember 1 jam -> sid pendek, supaya jumlah sesi per rentang bisa dihitung di halaman
     orang = {}
-    jenis_24 = defaultdict(lambda: {'n': 0, 'n_puncak': 0, 'tunggu': 0.0, 'tambah': 0.0})
+    jenis = defaultdict(lambda: defaultdict(lambda: [0, 0, 0.0, 0.0]))  # jenis -> ember -> [n, n puncak, tunggu, tambah]
+    kol = {'cpu': 3, 'ram': 4, 'keduanya': 5}
     for t0, dur, j, k, sid in baris:
-        if t0 < batas24:
-            continue
         nama = peta.get(sid, 'Belum teridentifikasi')
-        o = orang.setdefault(nama, {'nama': nama, 'divisi': divisi.get(nama, ''), 'perintah': 0,
-                                    'tunggu_dtk': 0.0, 'perintah_puncak': 0,
-                                    'tambah_dtk': {'cpu': 0.0, 'ram': 0.0, 'keduanya': 0.0},
-                                    'sesi': set(), 'jam': defaultdict(float)})
-        o['perintah'] += 1
-        o['tunggu_dtk'] += dur
-        o['sesi'].add(sid)
-        jj = jenis_24[j]
-        jj['n'] += 1
-        jj['tunggu'] += dur
+        o = orang.setdefault(nama, {'nama': nama, 'divisi': divisi.get(nama, ''),
+                                    'ember': defaultdict(lambda: [0, 0.0, 0, 0.0, 0.0, 0.0]),
+                                    'sesi': defaultdict(set)})
+        e = o['ember'][int(t0 // EMBER)]
+        jj = jenis[j][int(t0 // EMBER)]
+        e[0] += 1
+        e[1] += dur
+        jj[0] += 1
+        jj[2] += dur
+        o['sesi'][int(t0 // 3600)].add(sid[:8])
         if k == 'normal':
             continue
-        f = faktor.get((k, j), faktor_gab[k])
-        tambah = dur * (1 - 1 / f)
-        o['perintah_puncak'] += 1
-        o['tambah_dtk'][k] += tambah
-        o['jam'][datetime.fromtimestamp(t0, WIB).strftime('%H')] += tambah
-        jj['n_puncak'] += 1
-        jj['tambah'] += tambah
-    hasil = []
-    for o in orang.values():
-        o['sesi'] = len(o['sesi'])
-        o['tunggu_dtk'] = round(o['tunggu_dtk'])
-        o['tambah_dtk'] = {k: round(v) for k, v in o['tambah_dtk'].items()}
-        o['jam'] = {k: round(v) for k, v in sorted(o['jam'].items()) if v >= 1}
-        hasil.append(o)
-    hasil.sort(key=lambda o: -sum(o['tambah_dtk'].values()))
+        tambah = dur * (1 - 1 / faktor.get((k, j), faktor_gab[k]))
+        e[2] += 1
+        e[kol[k]] += tambah
+        jj[1] += 1
+        jj[3] += tambah
+
+    def bulat(v):
+        return [round(x) if isinstance(x, float) else x for x in v]
     return {
-        'pengguna': hasil,
-        'jenis': [{'jenis': j, 'perintah': v['n'], 'perintah_puncak': v['n_puncak'],
-                   'tunggu_dtk': round(v['tunggu']), 'tambah_dtk': round(v['tambah']),
-                   'wajar_dtk': round(wajar[j], 1) if j in wajar else None,
+        'ember_dtk': EMBER,
+        'pengguna': [{'nama': o['nama'], 'divisi': o['divisi'],
+                      'ember': {str(k): bulat(v) for k, v in sorted(o['ember'].items())},
+                      'sesi': {str(k): sorted(v) for k, v in sorted(o['sesi'].items())}}
+                     for o in orang.values()],
+        'jenis': [{'jenis': j, 'wajar_dtk': round(wajar[j], 1) if j in wajar else None,
                    'faktor_cpu': round(faktor.get(('cpu', j), faktor_gab['cpu']), 2),
-                   'faktor_ram': round(faktor.get(('ram', j), faktor_gab['ram']), 2)}
-                  for j, v in sorted(jenis_24.items(), key=lambda x: -x[1]['tambah'])],
+                   'faktor_ram': round(faktor.get(('ram', j), faktor_gab['ram']), 2),
+                   'ember': {str(k): bulat(v) for k, v in sorted(e.items())}}
+                  for j, e in jenis.items()],
         'faktor_gabungan': {k: round(v, 2) for k, v in faktor_gab.items()},
-        'perintah_acuan': len(baris),
-        'wajar_semua_dtk': round(wajar_semua, 1) if wajar_semua else None,
+        'perintah_acuan': sum(1 for x in baris if x[0] >= acuan_mulai),
     }
+
+
+def seri_10menit(sampel):
+    """[t, cpu rata, ram rata, cpu maks, ram maks, menit CPU puncak, menit RAM puncak] per 10 menit."""
+    ember = defaultdict(list)
+    for t, c, m in sampel:
+        ember[t // 600 * 600].append((c, m))
+    return [[t, round(sum(x[0] for x in v) / len(v)), round(sum(x[1] for x in v) / len(v)),
+             round(max(x[0] for x in v)), round(max(x[1] for x in v)),
+             sum(1 for x in v if x[0] >= AMBANG_CPU), sum(1 for x in v if x[1] >= AMBANG_RAM)]
+            for t, v in sorted(ember.items())]
 
 
 def episode_puncak(sampel, kol, ambang, min_menit=3):
@@ -335,19 +343,21 @@ def main():
     tmp.replace(CACHE)
 
     sekarang = time.time()
-    sampel = baca_metrik(sekarang - (HARI_ACUAN + 1) * 86400)
-    s24 = [x for x in sampel if x[0] >= sekarang - 86400]
+    sampel = baca_metrik(sekarang - HARI_ACUAN * 86400 - 86400)
+    s32 = [x for x in sampel if x[0] >= sekarang - RENTANG_HARI * 86400]
     isi = {
         'dibuat': int(sekarang),
         'ambang': {'cpu': AMBANG_CPU, 'ram': AMBANG_RAM, 'hari_acuan': HARI_ACUAN},
         'kini': kini(),
-        'seri': [[t, round(c), round(m)] for t, c, m in s24],
-        'harian': ringkas_harian([x for x in sampel if x[0] >= sekarang - HARI_ACUAN * 86400]),
-        'episode': {'cpu': episode_puncak(s24, 0, AMBANG_CPU), 'ram': episode_puncak(s24, 1, AMBANG_RAM)},
+        # per menit 48 jam (1/6/12/24 jam & kemarin), per 10 menit 32 hari (7/30 hari & bulan ini)
+        'seri': [[t, round(c), round(m)] for t, c, m in s32 if t >= sekarang - 2 * 86400],
+        'seri10': seri_10menit(s32),
+        'harian': ringkas_harian(s32),
+        'episode': {'cpu': episode_puncak(s32, 0, AMBANG_CPU), 'ram': episode_puncak(s32, 1, AMBANG_RAM)},
         'lambat': hitung_lambat(cache, sampel, sekarang),
     }
     if a.cetak:
-        tampil = dict(isi, seri=f'{len(isi["seri"])} sampel')
+        tampil = dict(isi, seri=len(isi['seri']), seri10=len(isi['seri10']))
         print(json.dumps(tampil, ensure_ascii=False, indent=1))
         return 0
 
