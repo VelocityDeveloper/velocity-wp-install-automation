@@ -120,7 +120,14 @@ onBeforeUnmount(() => { wadah.value?.removeEventListener('wheel', gulir); pengam
 .alat { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .alat .tombol { min-width: 34px; }
 .persen { min-width: 48px; text-align: center; font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--teks-2); }
-.wadah { overflow: auto; cursor: grab; border-radius: 10px; background: rgba(8, 10, 23, .35); overscroll-behavior: contain; }
+/* Latar bertitik ala kanvas; background-attachment local supaya titik ikut bergeser bersama diagram */
+.wadah {
+  overflow: auto; cursor: grab; border-radius: 10px; overscroll-behavior: contain;
+  border: 1px solid var(--garis);
+  background-color: var(--kanvas);
+  background-image: radial-gradient(var(--kanvas-titik) 1.2px, transparent 1.4px);
+  background-size: 18px 18px; background-position: 9px 9px; background-attachment: local;
+}
 .wadah.menyeret { cursor: grabbing; user-select: none; }
 .isi { width: max-content; min-width: 100%; padding: 12px; }
 .isi :deep(svg) { display: block; margin: 0 auto; }

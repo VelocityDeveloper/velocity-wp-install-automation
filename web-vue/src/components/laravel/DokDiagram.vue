@@ -5,6 +5,7 @@
 import { ref, watch, nextTick, onMounted } from 'vue'
 import Dialog from '../Dialog.vue'
 import DiagramZoom from './DiagramZoom.vue'
+import { tema } from '../../tema.js'
 
 const props = defineProps({ md: { type: String, default: '' } })
 const wadah = ref(null)
@@ -13,19 +14,38 @@ const diagram = ref([])   // [{ svg, galat, kode, judul }]
 const besar = ref(null)
 
 let mermaid = null
+// Warna diagram ikut tema aktif; initialize diulang tiap render supaya ganti tema langsung terbawa
+// Node dibuat lebih terang dari latar bertitik (DiagramZoom) supaya kotak, garis & label tetap jelas
+const WARNA_DIAGRAM = {
+  dark: {
+    darkMode: true, background: '#0d1026', primaryColor: '#243060', primaryTextColor: '#f3f5ff',
+    primaryBorderColor: '#7aa2ff', secondaryColor: '#1a2146', tertiaryColor: '#141a38', lineColor: '#b3bae0',
+    textColor: '#f3f5ff', mainBkg: '#243060', nodeBorder: '#7aa2ff', clusterBkg: '#141a38', clusterBorder: '#5663a3',
+    edgeLabelBackground: '#1a2146', titleColor: '#f3f5ff',
+    attributeBackgroundColorOdd: '#1a2146', attributeBackgroundColorEven: '#212a55',
+  },
+  light: {
+    darkMode: false, background: '#f7f9fd', primaryColor: '#ffffff', primaryTextColor: '#10142b',
+    primaryBorderColor: '#2f5bea', secondaryColor: '#eef1f9', tertiaryColor: '#ffffff', lineColor: '#4a5275',
+    textColor: '#10142b', mainBkg: '#ffffff', nodeBorder: '#2f5bea', clusterBkg: '#eef2fb', clusterBorder: '#9aa6c8',
+    edgeLabelBackground: '#ffffff', titleColor: '#10142b',
+    attributeBackgroundColorOdd: '#ffffff', attributeBackgroundColorEven: '#f1f4fb',
+  },
+}
+// Garis & tepi lebih tebal, subgraph agak tembus supaya pola titik tetap terlihat di belakangnya
+const CSS_DIAGRAM = `
+  .node rect, .node polygon, .node circle, .node ellipse, .node path { stroke-width: 1.8px; }
+  .flowchart-link, .edgePath .path, .relationshipLine { stroke-width: 1.8px; }
+  .cluster rect { stroke-width: 1.4px; stroke-dasharray: 5 4; fill-opacity: .82; }
+  .cluster-label, .cluster-label span, .nodeLabel, .edgeLabel { font-weight: 500; }
+`
 async function muatMermaid() {
-  if (mermaid) return mermaid
-  mermaid = (await import('mermaid')).default
+  mermaid ||= (await import('mermaid')).default
   mermaid.initialize({
     startOnLoad: false, securityLevel: 'strict', theme: 'base',
     fontFamily: '"Plus Jakarta Sans", system-ui, sans-serif',
-    themeVariables: {
-      darkMode: true, background: '#151a33', primaryColor: '#1b2140', primaryTextColor: '#e8eaf6',
-      primaryBorderColor: '#5b8cff', secondaryColor: '#12162b', tertiaryColor: '#0f1224', lineColor: '#8a91b8',
-      textColor: '#e8eaf6', mainBkg: '#1b2140', nodeBorder: '#5b8cff', clusterBkg: '#12162b', clusterBorder: '#3a4478',
-      edgeLabelBackground: '#151a33', attributeBackgroundColorOdd: '#171c36', attributeBackgroundColorEven: '#1d2344',
-      fontSize: '14px',
-    },
+    themeVariables: { ...WARNA_DIAGRAM[tema.value === 'light' ? 'light' : 'dark'], fontSize: '14px' },
+    themeCSS: CSS_DIAGRAM,
     er: { useMaxWidth: false }, flowchart: { useMaxWidth: false, htmlLabels: true },
   })
   return mermaid
@@ -69,6 +89,7 @@ function pasang() {
   })
 }
 watch(() => props.md, render)
+watch(tema, render)
 onMounted(render)
 const jumlahGalat = () => diagram.value.filter((d) => d.galat).length
 </script>

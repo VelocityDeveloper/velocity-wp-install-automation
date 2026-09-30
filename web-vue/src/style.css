@@ -20,7 +20,13 @@
   --bahaya: #ff6b6b;
   --radius: 16px;
   --radius-kecil: 10px;
+  --kanvas: #0d1026;               /* latar diagram bertitik */
+  --kanvas-titik: rgba(150, 160, 210, .22);
   color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --kanvas: #f7f9fd;
+  --kanvas-titik: rgba(60, 75, 130, .24);
 }
 
 * { box-sizing: border-box; }
