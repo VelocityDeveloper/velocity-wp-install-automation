@@ -480,7 +480,12 @@ $tandai = function ($id) { update_post_meta($id, '_velocity_content_md5', md5(ge
 
 // 1. Media (dipakai ulang lewat sidik berkas)
 $media = [];
+// Logo klien hanya diunggah bila pengaturan tema aktif merujuknya. Tema yang tidak dikenal sisi
+// Python membuat semua adaptor dipindai, sehingga cepadtl.org (tema velocity saat instalasi,
+// 2026-09-30) mendapat 6 logo contoh yang tidak tampil di mana pun.
+$rujukan_tema = wp_json_encode([$d['mods'][$tema] ?? null, $d['bawaan'][$tema] ?? null]);
 foreach ($d['aset'] as $kunci => $a) {
+    if (strpos($kunci, 'klien-') === 0 && strpos($rujukan_tema, ":$kunci}}") === false) { continue; }
     // Potongan yang isinya sama persis dengan slot lain memakai lampiran slot itu.
     if (!empty($a['sama']) && isset($media[$a['sama']])) { $media[$kunci] = $media[$a['sama']]; continue; }
     $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
