@@ -371,8 +371,15 @@ $pasang = function ($hal, $kunci, $blok) {
     $p = get_post($hal); if (!$p) { return; }
     $blok = "<!-- velocity-dokumen:$kunci -->\n$blok<!-- /velocity-dokumen:$kunci -->\n";
     $pola = '/<!-- velocity-dokumen:' . preg_quote($kunci, '/') . ' -->.*?<!-- \/velocity-dokumen:' . preg_quote($kunci, '/') . ' -->\n?/s';
-    $isi = preg_match($pola, $p->post_content) ? preg_replace($pola, str_replace(['\\', '$'], ['\\\\', '\\$'], $blok), $p->post_content, 1)
-                                                 : $blok . $p->post_content;
+    if (preg_match($pola, $p->post_content)) {
+        $isi = preg_replace($pola, str_replace(['\\', '$'], ['\\\\', '\\$'], $blok), $p->post_content, 1);
+    } elseif (preg_match('/^\s*(<!-- wp:(paragraph|html)[^>]*-->\s*)?<p\b.{0,600}?<\/p>(\s*<!-- \/wp:paragraph -->)?\s*/s', $p->post_content, $m)
+              && ($m[2] ?? '') !== 'html') {
+        // Paragraf pembuka halaman tetap di atas (mis. "Tim Hukum ... terdiri atas advokat dan paralegal").
+        $isi = $m[0] . $blok . substr($p->post_content, strlen($m[0]));
+    } else {
+        $isi = $blok . $p->post_content;
+    }
     if ($isi !== $p->post_content) { wp_update_post(['ID' => $hal, 'post_content' => $isi]); }
     echo "dokumen_klien: terpasang:$kunci:$hal\n";
 };
