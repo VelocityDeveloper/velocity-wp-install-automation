@@ -31,6 +31,7 @@ import tempfile
 import zlib
 from collections import Counter
 from pathlib import Path
+from client_form import adalah_form
 
 ON_PROGRESS = Path('/home/On Progress')
 OUT_ROOT = Path('/var/lib/velocity/compro')
@@ -128,7 +129,7 @@ def cari_compro(domain):
     folder = ON_PROGRESS / domain
     if not folder.is_dir():
         return None
-    pdf = [p for p in folder.iterdir() if p.suffix.lower() == '.pdf' and not p.name.upper().startswith('FORM ISIAN')]
+    pdf = [p for p in folder.iterdir() if p.suffix.lower() == '.pdf' and not adalah_form(p)]
     # Berteks dulu (logo & warna merek hanya bisa diambil dari situ), baru nama yang
     # menyebut profil, baru yang paling besar.
     pdf.sort(key=lambda p: (not pdf_berteks(p), not PROFIL_RE.search(p.name), -p.stat().st_size))

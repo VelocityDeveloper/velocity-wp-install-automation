@@ -14,7 +14,7 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
-from client_form import extract_text
+from client_form import berkas_form, extract_text
 
 OCR_PAGES = 6
 
@@ -136,9 +136,12 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DO
     if not folder.is_dir():
         return result
     files = [p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in DOC_EXTS]
+    # Form klien = FORM ISIAN, atau dokumen lain yang isinya form bila FORM ISIAN tidak ada (2026-09-30).
+    form = {p for p in files if p.name.upper().startswith('FORM ISIAN')} | set(berkas_form(folder))
+    result['form'] = sorted(str(p.relative_to(folder)) for p in form)
     # Dokumen teks asli (docx/txt) didahulukan dari PDF: PDF sering hasil scan
     # yang hanya terbaca lewat OCR dan menghabiskan anggaran karakter.
-    files.sort(key=lambda p: (not p.name.upper().startswith('FORM ISIAN'),
+    files.sort(key=lambda p: (p not in form,
                               not PRIORITY.search(p.name), p.suffix.lower() == '.pdf', str(p).lower()))
     used = 0
     for path in files:
@@ -148,7 +151,7 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DO
                                               or 'credential' in path.name.lower()):
             continue
         lines = [' '.join(str(l).split()) for l in _doc_lines(path)]
-        if path.name.upper().startswith('FORM ISIAN'):
+        if path in form:
             lines = _mark_personal(lines)
         text = '\n'.join(_clean_lines(lines))
         if len(text) < 40:

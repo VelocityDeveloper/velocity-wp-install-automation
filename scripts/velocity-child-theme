@@ -617,8 +617,8 @@ def data_klien(domain, nama=''):
         from client_docs import collect_client_docs
         # Tanpa jatah prompt AI: kontak company profile biasanya di halaman terakhir
         # (medikaklinikteknologi.com: docx 30 rb karakter, kontak terpotong di 7000).
-        dokumen = '\n'.join(t for n, t in collect_client_docs(folder, 10 ** 7, 10 ** 7).get('sources', [])
-                            if not n.upper().startswith('FORM ISIAN'))
+        docs = collect_client_docs(folder, 10 ** 7, 10 ** 7)
+        dokumen = '\n'.join(t for n, t in docs.get('sources', []) if n not in docs.get('form', ()))
     except Exception:
         pass
 

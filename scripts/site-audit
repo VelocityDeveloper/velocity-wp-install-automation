@@ -403,8 +403,8 @@ def dokumen_klien(domain):
     try:
         sys.path.insert(0, str(HERE))
         from client_docs import collect_client_docs
-        return '\n'.join(t for n, t in collect_client_docs(Path('/home/On Progress') / domain, 10 ** 7, 10 ** 7).get('sources', [])
-                         if not n.upper().startswith('FORM ISIAN'))
+        docs = collect_client_docs(Path('/home/On Progress') / domain, 10 ** 7, 10 ** 7)
+        return '\n'.join(t for n, t in docs.get('sources', []) if n not in docs.get('form', ()))
     except Exception:
         return ''
 

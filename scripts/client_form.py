@@ -286,11 +286,48 @@ def parse_sections(lines):
 FORM_CLAUDE = Path('/var/lib/velocity/form-claude')
 
 
+# Form tanpa nama "FORM ISIAN" (keputusan user 2026-09-30, cepadtl.org "Form Data For Develop WEB.docx"):
+# dokumen lain di folder klien dipakai sebagai form bila isinya berbentuk form data website.
+FORM_EXTS = {'.doc', '.docx', '.odt', '.pdf'}
+_CIRI_FORM = (
+    r'\b(nama\s+domain|domain\s+name|domain)\s*:',
+    r'\bmenu\b',
+    r'\b(warna|colou?r)\b',
+    r'\b(desain|design|template|tema|theme)\b',
+    r'\b(e-?mail|telp|telepon|phone|whatsapp|wa|hp)\b\s*:',
+    r'\b(nama|name|alamat|address)\b[^:\n]{0,30}:',
+)
+
+
+def mirip_form(path):
+    """Isi dokumen berbentuk form data website: memuat label domain + minimal 4 ciri lain."""
+    teks = '\n'.join(extract_text(path)[:400]).lower()
+    ciri = [bool(re.search(c, teks)) for c in _CIRI_FORM]
+    return ciri[0] and sum(ciri) >= 5
+
+
 def berkas_form(folder):
+    """FORM ISIAN di folder klien; tanpa itu dokumen lain yang isinya berbentuk form
+    (berkas bernama "form"/"biodata" didahulukan, lalu yang lain)."""
     folder = Path(folder)
     if not folder.is_dir():
         return []
-    return sorted(p for p in folder.glob('*') if p.is_file() and p.name.upper().startswith('FORM ISIAN'))
+    semua = sorted(p for p in folder.glob('*') if p.is_file())
+    resmi = [p for p in semua if p.name.upper().startswith('FORM ISIAN')]
+    if resmi:
+        return resmi
+    calon = [p for p in semua if p.suffix.lower() in FORM_EXTS]
+    calon.sort(key=lambda p: not re.search(r'form|bio[\s_-]*data', p.name, re.I))
+    for p in calon:
+        if mirip_form(p):
+            return [p]
+    return []
+
+
+def adalah_form(path):
+    """Berkas ini form klien (FORM ISIAN, atau form cadangan terpilih berkas_form)?"""
+    path = Path(path)
+    return path.name.upper().startswith('FORM ISIAN') or path in berkas_form(path.parent)
 
 
 def md5_form(berkas):

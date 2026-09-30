@@ -27,6 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 import sys  # noqa: E402
 sys.path.insert(0, str(HERE))
+from client_form import adalah_form  # noqa: E402
 KELUAR = Path('/var/lib/velocity/logos')
 NAMA_LOGO = re.compile(r'logo|lambang|brand|logotype', re.I)
 # Subfolder acuan desain: isinya logo perusahaan LAIN (situs contoh), bukan logo klien.
@@ -299,7 +300,7 @@ def cari(domain, folder, compro=None):
     # 3. PDF lain (proposal, katalog, company profile yang tidak terpilih)
     pdf_terpakai = Path((compro or {}).get('pdf', '') or '')
     for pdf in [p for p in berkas if p.suffix.lower() == '.pdf' and p != pdf_terpakai
-                and not p.name.upper().startswith('FORM ISIAN')]:
+                and not adalah_form(p)]:
         hasil = _dari_pdf(pdf, tujuan / 'logo-pdf.png')
         if hasil and mirip_logo(hasil):
             return hasil, f'pdf:{pdf.name}'

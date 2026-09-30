@@ -833,7 +833,7 @@ def main():
         log('Pakai konten halaman tersimpan')
     else:
         log('Generating pages...')
-        materi = [n for n, _ in docs['sources'] if not n.upper().startswith('FORM ISIAN')]
+        materi = [n for n, _ in docs['sources'] if n not in docs.get('form', ())]
         pages = generate_pages(site_title, domain, client_info, model, materi)
         if pages and materi:
             # AI tetap suka melewatkan butir (Push-up/Sit-up hilang di trimurtiekapaksi.com
