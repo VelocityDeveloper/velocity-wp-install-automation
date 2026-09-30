@@ -150,11 +150,10 @@ def sampul_kategori(judul, nama, warna, tujuan):
     return tujuan
 
 
-# Slot iklan tema portal berita klasik, ukurannya mengikuti gambar di demo beritab1.velocitydeveloper.com
-# (banner_header1 970x90, banner_header2/home 970x250, banner_single1 500x65, iklan float 200x800,
-# sidebar 300x250 & 300x600). Demo memakai iklan merek sungguhan, jadi situs klien diberi banner
-# "Ruang Iklan" polos yang siap diganti pemilik (permintaan user 2026-09-30, sidoarjopos.id).
-UKURAN_IKLAN = ((970, 90), (970, 250), (500, 65), (200, 800), (300, 250), (300, 600))
+# Banner "Ruang Iklan" polos yang siap diganti pemilik, satu per ukuran slot iklan tema berita aktif
+# (permintaan user 2026-09-30, sidoarjopos.id). Demo tema memakai iklan merek sungguhan, jadi tidak
+# disalin. Widget sidebar velocity-beritab1 memakai iklan 300x250 & 300x600 seperti demonya.
+IKLAN_WIDGET_BERITAB1 = ('300x250', '300x600')
 
 
 def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
@@ -194,6 +193,8 @@ def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
         # Alamat email tidak bisa dibungkus: huruf kecil diperkecil sampai kontak muat selebar slot.
         while kontak and fs.size > 9 and d.textlength(kontak, font=fs) > lebar * .86:
             fs = huruf(False, fs.size - 1)
+        if kontak and d.textlength(kontak, font=fs) > lebar * .9:
+            kontak = ''  # slot terlalu sempit (150x500): kontak tidak ditampilkan daripada terpotong
         def bungkus(teks, font):
             baris, kini = [], ''
             for k in teks.split():
@@ -652,7 +653,8 @@ if ($berita_depan) {
     require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
     $blok_kat = [];
     try {
-        $wpc = new WP_Customize_Manager(); do_action('customize_register', $wpc);
+        // Kirki (tema berita1–18) mendaftarkan kontrolnya lewat global $wp_customize.
+        $wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
         $id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
         foreach ($wpc->controls() as $c) {
             $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['']);
@@ -679,29 +681,21 @@ if ($berita_depan) {
             echo "tampilan: berita_iklan_dikosongkan:$k\n";
         }
     }
-    // Khusus velocity-beritab1 (keputusan user 2026-09-30, sidoarjopos.id): banner & widget mengikuti demo
-    // beritab1.velocitydeveloper.com; tema berita lain disesuaikan dengan demo child theme masing-masing
-    // bila sudah diminta. Halaman Redaksi & Pedoman Media Siber + menu sekunder berlaku untuk semua tema berita.
+    // Khusus velocity-beritab1 (keputusan user 2026-09-30, sidoarjopos.id): widget mengikuti demo
+    // beritab1.velocitydeveloper.com. Banner, halaman Redaksi & Pedoman Media Siber, dan menu profil
+    // berlaku untuk semua tema berita.
     $beritab1 = get_stylesheet() === 'velocity-beritab1';
-    // Semua slot gambar panel "Berita Setting" (Banner Setting & Iklan Float) diisi banner "Ruang Iklan"
-    // seukuran demo, seperti demo yang tidak menyisakan slot kosong. Slot yang diisi orang dibiarkan.
+    // Setiap slot iklan tema (dibaca sisi Python dari Customizer, ukuran dari keterangan kontrolnya)
+    // diisi banner "Ruang Iklan" seukuran slot. Slot yang diisi orang dibiarkan.
     $isi_iklan = [];
-    foreach ($beritab1 && isset($wpc) ? $wpc->controls() : [] as $c) {
-        $sek = $c->section ? $wpc->get_section($c->section) : null;
-        $nama_sek = $c->section . ' ' . ($sek ? $sek->title : '') . ' ' . ($sek && $sek->panel ? $sek->panel : '');
-        if (!($c instanceof WP_Customize_Media_Control) || !is_object($c->setting) || !preg_match('/banner|iklan|ads/i', $nama_sek . ' ' . $c->setting->id)) { continue; }
-        $k = $c->setting->id;
-        $ukuran = preg_match('/float|kiri|kanan|left|right/i', $k) ? '200x800'
-                : (preg_match('/single_?1/i', $k) ? '500x65' : (preg_match('/header_?2|home_?1/i', $k) ? '970x250' : '970x90'));
-        $aid = $media["iklan-$ukuran"] ?? 0;
+    foreach ((array) ($d['berita_iklan'] ?? []) as $k => $slot) {
+        $aid = $media['iklan-' . $slot['ukuran']] ?? 0;
         if (!$aid) { continue; }
-        // Image/Upload control menyimpan URL, Media/Cropped control menyimpan ID lampiran.
-        $nilai = $c instanceof WP_Customize_Upload_Control && !($c instanceof WP_Customize_Cropped_Image_Control)
-            ? (string) wp_get_attachment_url($aid) : (string) $aid;
+        $nilai = $slot['simpan'] === 'id' ? (string) $aid : (string) wp_get_attachment_url($aid);
         $kini = (string) get_theme_mod($k, '');
         if ($kini !== '' && $kini !== (string) ($st['berita_iklan'][$k] ?? '')) { continue; }
         if ($kini !== $nilai) { set_theme_mod($k, $nilai); }
-        $st['berita_iklan'][$k] = $nilai; $isi_iklan[] = "$k=$ukuran";
+        $st['berita_iklan'][$k] = $nilai; $isi_iklan[] = "$k={$slot['ukuran']}";
     }
     if ($isi_iklan) { echo 'tampilan: berita_iklan:' . implode(',', $isi_iklan) . "\n"; }
     // Artikel tanpa meta 'hit' tidak ikut query "Populer" (meta_key hit) widget & tab tema: diberi 0,
@@ -773,6 +767,26 @@ if ($berita_depan) {
         $lokasi[$lok2] = $m2; set_theme_mod('nav_menu_locations', $lokasi);
         echo "tampilan: berita_menu_sekunder:$lok2" . ($tambah ? ':' . implode(',', $tambah) : '') . "\n";
     } elseif ($lok2) { echo "tampilan: berita_menu_sekunder_dibiarkan:terpasang\n"; }
+    else {
+        // Tema tanpa lokasi menu sekunder (berita6/15/17): Tentang Kami, Redaksi, Pedoman Media Siber
+        // masuk menu primary buatan installer sesudah kategori (user 2026-09-30). Sekali saja, supaya
+        // item yang dibuang orang tidak kembali.
+        $mb = (int) ($st['berita_menu'] ?? 0);
+        if ($mb && empty($st['berita_menu_profil']) && (int) (get_nav_menu_locations()['primary'] ?? 0) === $mb) {
+            $items = wp_get_nav_menu_items($mb) ?: [];
+            $ada_id = array_map(fn($it) => (int) $it->object_id, array_filter($items, fn($it) => $it->object === 'page'));
+            $n = count($items) + 1; $tambah = [];
+            foreach (['tentang-kami', 'redaksi', 'pedoman-media-siber'] as $slug) {
+                $p = get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]);
+                if (!$p || in_array($p[0]->ID, $ada_id, true)) { continue; }
+                wp_update_nav_menu_item($mb, 0, ['menu-item-object-id' => $p[0]->ID, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type',
+                    'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
+                $tambah[] = $slug;
+            }
+            $st['berita_menu_profil'] = gmdate('c');
+            echo 'tampilan: berita_menu_profil_di_primary:' . (implode(',', $tambah) ?: '-') . "\n";
+        }
+    }
 }
 
 // 3. Beranda: template + pengaturan tema
@@ -1075,6 +1089,37 @@ echo "kembalikan: selesai\n";
 '''
 
 
+SLOT_IKLAN_PHP = r'''<?php
+// Daftar slot gambar iklan/banner tema aktif (Customizer inti & Kirki) beserta ukurannya.
+require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+$slot = [];
+try {
+    $wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
+    foreach ($wpc->controls() as $c) {
+        if (!is_object($c->setting)) { continue; }
+        $gambar = $c instanceof WP_Customize_Media_Control || preg_match('/image|upload|media/i', (string) $c->type);
+        $sek = $c->section ? $wpc->get_section($c->section) : null;
+        $teks = implode(' ', [$c->setting->id, $c->label, $c->description, $c->section, $sek ? $sek->title : '', $sek && $sek->panel ? $sek->panel : '']);
+        if (!$gambar || !preg_match('/banner|iklan|\bads?\b|_ads?_|advert/i', $teks) || preg_match('/logo|favicon|background|latar/i', $c->setting->id)) { continue; }
+        $k = $c->setting->id;
+        if (preg_match('/(\d{2,4})\s*[x×]\s*(\d{2,4})/u', $c->label . ' ' . $c->description, $m)) { $ukuran = "$m[1]x$m[2]"; }
+        else {
+            // Tanpa keterangan ukuran (velocity-beritab1): ukuran gambar di demo tema.
+            $ukuran = preg_match('/float|kiri|kanan|left|right/i', $k) ? '200x800'
+                    : (preg_match('/single_?1/i', $k) ? '500x65' : (preg_match('/header_?2|home_?1/i', $k) ? '970x250' : '970x90'));
+        }
+        [$w, $h] = array_map('intval', explode('x', $ukuran));
+        if ($w < 60 || $h < 40 || $w > 2000 || $h > 2000) { continue; }
+        // Image/Upload control & Kirki (save_as url bawaan) menyimpan URL; Media/Cropped & save_as=id menyimpan ID.
+        $simpan = ($c instanceof WP_Customize_Upload_Control && !($c instanceof WP_Customize_Cropped_Image_Control))
+                  || (!($c instanceof WP_Customize_Media_Control) && (($c->choices['save_as'] ?? 'url') === 'url')) ? 'url' : 'id';
+        $slot[$k] = ['ukuran' => "{$w}x{$h}", 'simpan' => $simpan];
+    }
+} catch (Throwable $t) { echo 'slot_iklan_gagal: ' . $t->getMessage() . "\n"; }
+echo 'slot_iklan: ' . wp_json_encode($slot) . "\n";
+'''
+
+
 FOTO_ARTIKEL_PHP = r'''<?php
 $dir = rtrim($args[0] ?? '', '/');
 $d = json_decode(file_get_contents("$dir/data.json"), true);
@@ -1110,6 +1155,19 @@ foreach ($kosong as $p) {
 }
 echo 'foto_artikel: ' . $isi . '/' . count($kosong) . " diisi\n";
 '''
+
+
+def slot_iklan(cfg, domain):
+    """{setting: {'ukuran': 'WxH', 'simpan': 'url'|'id'}} slot gambar iklan tema aktif, dibaca dari
+    Customizer situs (ukuran dari keterangan kontrol tema, mis. "Iklan Header 728x90")."""
+    kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-slot-{domain}-'))
+    SEMENTARA.append(kerja)
+    keluar = kirim(cfg, kerja, SLOT_IKLAN_PHP, domain) or ''
+    m = re.search(r'^slot_iklan: (\{.*\}|\[\])\s*$', keluar, re.M)
+    try:
+        return (json.loads(m.group(1)) or {}) if m else {}
+    except ValueError:
+        return {}
 
 
 def kirim(cfg, kerja, php, domain):
@@ -1400,15 +1458,21 @@ def main():
     if data['berita']:
         # Halaman Redaksi & Pedoman Media Siber untuk semua tema berita (user 2026-09-30).
         data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
-    if data['berita'] and tema == 'velocity-beritab1':
-        # Banner "Ruang Iklan" per ukuran slot (khusus velocity-beritab1).
-        for w, h in UKURAN_IKLAN:
-            kunci = f'iklan-{w}x{h}'
+    if data['berita'] and not coba:
+        # Banner "Ruang Iklan" untuk setiap ukuran slot iklan tema berita aktif.
+        data['berita_iklan'] = slot_iklan(cfg, domain)
+        ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}
+        if tema == 'velocity-beritab1':
+            ukuran |= set(IKLAN_WIDGET_BERITAB1)
+        for u in sorted(ukuran):
+            w, h = (int(x) for x in u.split('x'))
+            kunci = f'iklan-{u}'
             aset[kunci] = banner_iklan(w, h, data['nama'], (isi.get('warna') or {}).get('utama'),
                                        kontak['email'] or (f"WA {kontak['wa_tampil']}" if kontak['wa_tampil'] else ''),
                                        kerja / f'{kunci}.jpg')
-            judul[kunci] = f"Ruang iklan {w}x{h} {data['nama']}"
+            judul[kunci] = f"Ruang iklan {u} {data['nama']}"
             iklan.append(kunci)
+        print(f"tampilan: slot_iklan={len(data['berita_iklan'])} ukuran={','.join(sorted(ukuran)) or '-'}")
     # Hanya slot yang dirujuk pengaturan tema yang diunggah, dan potongan yang isinya sama
     # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
     # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.
