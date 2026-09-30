@@ -1,0 +1,1282 @@
+{
+ "_keterangan": "Widget tema berita klasik seperti demo <tema>.velocitydeveloper.com, dipasang scripts/theme-paket-biasa untuk situs berita baru (beranda = tulisan terbaru). areas: id area widget -> item berurutan. jenis: iklan (banner Ruang Iklan seukuran), logo, tentang, statistik, text (judul/isi), widget/core (base = id_base, opsi = instance). kategori_ke N = kategori klien ke-N terbanyak artikelnya; {kat_id} {kat_slug} {kat_nama} diganti kategori itu; item dilewati bila kategorinya tidak ada. lewati: true = ada di demo tetapi tidak dipasang (Meta/Log in, embed Facebook demo, menu demo). Dibaca dari demo 2026-09-30.",
+ "velocity-berita-8": {
+  "slug": "velocity-berita-8",
+  "demo": "https://berita8.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_3_widget",
+     "opsi": {
+      "title": "Populer",
+      "style": "2",
+      "urutkan": "popular",
+      "jumlah": "6"
+     }
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "320x350"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_3_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_3_widget",
+     "opsi": {
+      "title": "Latest News",
+      "style": "3",
+      "urutkan": "recent",
+      "jumlah": "5"
+     }
+    }
+   ]
+  },
+  "catatan": "Widget kelas tema bernama *_berita_3 (warisan berita3): id_base 'posts_berita_3_widget' dan 'tabs_berita_3_widget'. Kunci posts: title, style ('1'-'5' -> module_vdposts 'posts'+style), urutkan (recent|popular via meta 'hit'), jumlah; TIDAK ada kunci kategori. Tabs: hanya title (demo kosong). Populer: style 2, 6 item, views menurun -> popular. Latest News: style 3 (thumbnail+excerpt), 5 item, urut tanggal -> recent. media_image-2 = s-ads.jpg 320x350 -> iklan. Footer child (inc/part-footer.php) hardcode copyright + ikon sosmed, tanpa widget; footer-widget-* induk tidak dirender. inc/part-sidebar.php kosong (0 byte)."
+ },
+ "velocity-berita1": {
+  "slug": "velocity-berita1",
+  "demo": "https://berita1.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_1_widget",
+     "opsi": {
+      "title": "Terbaru",
+      "style": "3",
+      "urutkan": "recent",
+      "kategori": "",
+      "jumlah": "5"
+     }
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "340x280"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_1_widget",
+     "opsi": {
+      "title": "Populer",
+      "style": "3",
+      "urutkan": "popular",
+      "kategori": "",
+      "jumlah": "5"
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_1_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "6",
+      "urutkan": "recent",
+      "kategori": "{kat_id}",
+      "jumlah": "4"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "336x280"
+    }
+   ],
+   "secondary-sidebar": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_1_widget",
+     "opsi": {
+      "title": "Terbaru",
+      "style": "4",
+      "urutkan": "recent",
+      "kategori": "",
+      "jumlah": "5"
+     }
+    }
+   ],
+   "footer-widget1": [
+    {
+     "jenis": "core",
+     "base": "search",
+     "opsi": {
+      "title": "Pencarian"
+     }
+    }
+   ],
+   "footer-widget2": [
+    {
+     "jenis": "tentang",
+     "judul": "About Us"
+    }
+   ],
+   "footer-widget3": [
+    {
+     "jenis": "iklan",
+     "ukuran": "640x352"
+    }
+   ],
+   "footer-widget4": [
+    {
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Categories",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
+    }
+   ]
+  },
+  "catatan": "Area milik child: main-sidebar, secondary-sidebar (kolom kiri col-2 di halaman arsip/kategori, left_sidebar()), footer-widget1..4 TANPA tanda hubung (part-footer.php: dynamic_sidebar('footer-widget'.$x)); footer-widget-1..4 induk tidak dipakai. Posts_Berita_1_Widget: kunci title/style/urutkan/kategori/jumlah; style = '1'..'6' -> module_vdposts('posts'+style) (demo: 3 = daftar thumbnail 1:1+tanggal/views+cuplikan, 6 = grid 2 kolom overlay, 4 = daftar judul ber-ikon); urutkan 'recent'|'popular' (popular = meta 'hit'); kategori = term_id (ID, bukan slug), '' = semua. Widget 'House' di demo berisi 4 tulisan kategori Nasional (kategori demo terbanyak) padahal judulnya 'House' (bukan nama kategori) -> judul dipertahankan sesuai aturan, tapi pertimbangkan '{kat_nama}'. Placeholder {kat_id} di opsi.kategori harus diganti ID kategori_ke. Iklan footer 640x352 di demo berupa foto stok 'ecommerce' di kolom 3 footer (bukan logo) -> diperlakukan slot iklan, tidak pasti. Footer demo juga menampilkan iklan_footer dari Customizer (bukan widget). Tabs_Berita_1_Widget terdaftar tapi tidak dipakai demo. Populer butuh meta 'hit' pada tulisan."
+ },
+ "velocity-berita10": {
+  "slug": "velocity-berita10",
+  "demo": "https://berita10.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\" showposts=\"4\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "Terbaru",
+     "isi": "[velocity-recent-posts style=\"list\" showposts=\"4\"]"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    }
+   ]
+  },
+  "catatan": "Hanya main-sidebar (sidebar-main.php); tema anak unregister footer-widget-1..4 dan footer hardcode tanpa widget. Demo text-6 berjudul 'Hiburan' = [velocity-recent-posts style=gallery] 4 tulisan (grid 2 kolom) — kategori tak tercetak di HTML, disimpulkan category_name=hiburan (daftarnya berbeda dari Terbaru); category_name menerima slug. text-8 'Terbaru' = gaya list 4 tulisan tanpa kategori. block-2 = blok gambar sidebar-ads.jpg 300x250 (iklan, tanpa judul). Keluaran shortcode demo cocok dengan inc/shortcodes.php (resize-thumbnail 400x280)."
+ },
+ "velocity-berita11": {
+  "slug": "velocity-berita11",
+  "demo": "https://berita11.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "core",
+     "base": "search",
+     "opsi": {
+      "title": "Pencarian"
+     }
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "336x280"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[vd-post category=\"{kat_slug}\" limit=\"5\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "Facebook",
+     "isi": "<iframe like_box Facebook halaman Velocity Developer>",
+     "lewati": true,
+     "alasan": "embed Facebook Page milik demo (Velocity Developer), bukan milik klien"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "300x600"
+    },
+    {
+     "jenis": "text",
+     "judul": "Populer",
+     "isi": "[vd-post orderby=\"hit\" limit=\"5\"]"
+    },
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[vd-post category=\"{kat_slug}\" limit=\"3\"]",
+     "kategori_ke": 2
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[vd-post category=\"{kat_slug}\" limit=\"3\"]",
+     "kategori_ke": 3
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "tentang",
+     "judul": "About Us"
+    },
+    {
+     "jenis": "core",
+     "base": "tag_cloud",
+     "opsi": {
+      "title": "Trending tag",
+      "taxonomy": "post_tag",
+      "count": 0
+     }
+    }
+   ]
+  },
+  "catatan": "Sidebar = main-sidebar dari induk (justg_render_sidebar, #right-sidebar). Footer: part-footer.php loop footer-widget-1..4, tiap area aktif = satu kolom col-md; demo: kolom1 text-3 'Tekonologi' (typo demo utk kategori teknologi), kolom2 text-4 'Politik', kolom3 text-2 About Us + tag_cloud-2 dalam satu kolom; footer-widget-4 kosong. Widget text memakai shortcode tema [vd-post] (atribut category=SLUG via tax_query field slug, limit, orderby=hit utk populer -> tampil 'views'); jumlah demo: Hukum 5, Populer 5, footer 3. text-8 demo berisi [statistik_kunjungan] mentah (tak dirender) -> ganti [velocity-statistics style=\"list\"]. media_image-2 GIF 336x280, media_image-3 300x600. Widget blok dimatikan tema (remove_theme_support widgets-block-editor) - pakai widget klasik. Search pakai core search (searchform.php tema)."
+ },
+ "velocity-berita13": {
+  "slug": "velocity-berita13",
+  "demo": "https://berita13.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "text",
+     "judul": "",
+     "isi": "[velocity-post-tabs]"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\" showposts=\"4\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "Terbaru",
+     "isi": "[velocity-recent-posts style=\"list\" showposts=\"5\"]"
+    },
+    {
+     "jenis": "text",
+     "judul": "Berita Populer",
+     "isi": "[velocity-popular-posts]"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"list\" category_name=\"{kat_slug}\" showposts=\"3\" date=\"0\"]",
+     "kategori_ke": 2
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "recent-posts",
+     "opsi": {
+      "title": "Recent Posts",
+      "number": 5,
+      "show_date": false
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "text",
+     "judul": "Kategori",
+     "isi": "[velocity-categories]"
+    }
+   ],
+   "footer-widget-4": [
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ]
+  },
+  "catatan": "Sidebar = main-sidebar (sidebar-main.php). Footer = footer-widget-1..4 induk, satu widget per kolom (class footer-widget-N di HTML demo). text-13 tanpa judul = [velocity-post-tabs] (Popular/Recent/Comment). text-6 'Video' = gallery 4 tulisan kategori video -> kategori_ke 1 (slug). text-8 Terbaru list 5. text-12 [velocity-popular-posts] (10 tulisan, tetap di kode). text-9 'Ekonomi' list 3 TANPA tanggal: atribut date harus \"0\"/kosong (string \"false\" tetap truthy di kode). recent-posts-2 core 5 tanpa tanggal. text-10 [velocity-categories] (semua kategori induk kecuali uncategorized). text-11 keluaran velocity-list-stats = [velocity-statistics style=\"list\"]. Tidak ada iklan widget di demo (iklan_footer via Customizer)."
+ },
+ "velocity-berita14": {
+  "slug": "velocity-berita14",
+  "demo": "https://berita14.velocitydeveloper.com/",
+  "areas": {
+   "secondary-sidebar": [
+    {
+     "jenis": "core",
+     "base": "nav_menu",
+     "opsi": {
+      "title": "Menus"
+     },
+     "lewati": true,
+     "alasan": "nav_menu demo 'Menu Widget' berisi halaman demo Squeeze/Fullwidth/Redirect page"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "250x622"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_14_widget",
+     "opsi": {
+      "title": "Terbaru",
+      "style": "4",
+      "urutkan": "recent",
+      "kategori": "",
+      "jumlah": "5"
+     }
+    }
+   ],
+   "main-sidebar": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_14_widget",
+     "opsi": {
+      "title": "Recent",
+      "style": "2",
+      "urutkan": "recent",
+      "kategori": "",
+      "jumlah": "5"
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_14_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_14_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "3",
+      "urutkan": "recent",
+      "kategori": "{kat_id}",
+      "jumlah": "5"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    }
+   ]
+  },
+  "catatan": "Tema anak mendefinisikan justg_widgets_init sendiri -> hanya main-sidebar (kolom kanan #right-sidebar col-md-3) dan secondary-sidebar (kolom kiri col-2 d-none d-md-block via left_sidebar() di index/archive/page/single); footer-widget-1..4 induk TIDAK terdaftar. Posts_Berita_14_Widget id_base posts_berita_14_widget, kunci instance: title, style ('1'-'5', dipakai sbg 'posts'+style; default 'style1' di kode = bug, jadi wajib isi angka), urutkan (recent|popular), kategori (term_id, tax_query field term_id), jumlah (string angka). Demo: House=posts4 (daftar judul ikon), 5, tanpa kategori (daftarnya sama dgn Recent; 'House' bukan kategori demo); Recent=posts2, 5, tanpa kategori; Hukum=posts3, 5, kategori hukum (dicek dari /category/hukum/ demo, urutan terbaru). Tabs_Berita_14_Widget id_base tabs_berita_14_widget, hanya kunci title (demo kosong). Tampilan posts2/posts3 menampilkan 'views' dari meta hit. media_image-3 banner vertikal 250x622 di secondary-sidebar (tidak pasti apakah iklan atau banner promosi; diperlakukan iklan). Judul 'Hukum' diganti {kat_nama}."
+ },
+ "velocity-berita15": {
+  "slug": "velocity-berita15",
+  "demo": "https://berita15.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x300"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "Most view article",
+      "style": "1",
+      "urutkan": "popular",
+      "jumlah": "5",
+      "cat": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "1",
+      "urutkan": "recent",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 3,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_6_widget",
+     "opsi": {
+      "title": ""
+     }
+    }
+   ],
+   "home-widget-1": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "3",
+      "cat": ""
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "home-widget-2": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 3,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "3",
+      "cat": ""
+     },
+     "kategori_ke": 4,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "home-widget-3": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 4,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "3",
+      "cat": ""
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "home-widget-4": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x300"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "7",
+      "urutkan": "recent",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "core",
+     "base": "meta",
+     "opsi": {
+      "title": "Meta"
+     },
+     "lewati": true,
+     "alasan": "widget Meta memuat tautan Log in / feed / WordPress.org, tidak pantas untuk situs klien"
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Categories",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "core",
+     "base": "tag_cloud",
+     "opsi": {
+      "title": "Tags",
+      "count": 0,
+      "taxonomy": "post_tag"
+     }
+    }
+   ],
+   "footer-widget-4": [
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ]
+  },
+  "catatan": "Widget kelas tema: id_base posts_berita_6_widget (konstruktor 'Posts_Berita_6_Widget', WP menurunkan ke huruf kecil) dan tabs_berita_6_widget. Kunci instance posts: title, style ('1'..'7', string), urutkan (recent|popular; popular = meta 'hit'), jumlah (string), cat (term_id kategori, string; '' = semua). Bila cat diisi, judul otomatis ditautkan ke arsip kategori. Tabs hanya punya title (demo kosong). Home widget (partials/home-widget.php, 4 kolom col-md-3 di bawah beranda): kategori demo Entertainment=1, House=2, Technology=3, Gallery=4 (urutan kemunculan; demo memakai tiap kategori dua kali: satu style 7 jumlah 5, satu style 7 jumlah 3). Sidebar 'Teknologi' = kategori Technology demo -> kategori_ke 3 dengan judul {kat_nama}. 'Most view article' tanpa kategori; urutan demo (2024, 2013, April 2013 di tengah) bukan urut tanggal -> urutkan=popular. Kedua iklan = media_image 300x300 (sidebar teratas & home-widget-4 teratas). Footer: 4 kolom col-md, meta di footer-widget-1 dilewati -> footer tinggal 3 kolom (installer boleh menggeser ke 1..3). Categories core tanpa count/hierarki/dropdown; tag_cloud default. Tidak pasti: apakah widget kategori home memakai urutkan recent (urutan cocok dengan terbaru, jadi diasumsikan recent)."
+ },
+ "velocity-berita16": {
+  "slug": "velocity-berita16",
+  "demo": "https://berita16.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "text",
+     "judul": "",
+     "isi": "[velocity-post-tabs]"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "Berita Populer",
+     "isi": "[velocity-popular-posts]"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts category_name=\"{kat_slug}\" showposts=\"3\" date=\"0\"]",
+     "kategori_ke": 2
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "recent-posts",
+     "opsi": {
+      "title": "Recent Posts",
+      "number": 5,
+      "show_date": false
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "text",
+     "judul": "Kategori",
+     "isi": "[velocity-categories]"
+    }
+   ],
+   "footer-widget-4": [
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ]
+  },
+  "catatan": "Tema tanpa kelas widget; semua lewat widget text + shortcode tema (inc/shortcodes.php). [velocity-post-tabs] tanpa atribut (Popular/Recent/Comment, 3 tulisan). [velocity-recent-posts] atribut: style (list|gallery|first_image), category_name (SLUG), showposts (default 4), date (default true; string 'false' tetap truthy di PHP, jadi pakai date=\"0\" untuk menyembunyikan tanggal). Demo 'Video' = gallery 4 tulisan kategori video -> kategori_ke 1; footer 'Ekonomi' = list 3 tulisan tanpa tanggal kategori ekonomi -> kategori_ke 2. [velocity-popular-posts] tanpa atribut (10 tulisan, meta hit). [velocity-categories] = daftar kategori induk kecuali uncategorized. Footer 4 kolom (div footer-widget-N di HTML demo memastikan pemetaan area). Tidak pasti: pemilihan kategori_ke (demo memakai kategori 'Video' khusus video; untuk klien diganti kategori terbanyak ke-1)."
+ },
+ "velocity-berita17": {
+  "slug": "velocity-berita17",
+  "demo": "https://berita17.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x300"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "1",
+      "urutkan": "recent",
+      "jumlah": "4",
+      "cat": ""
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_6_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "Popular",
+      "style": "4",
+      "urutkan": "popular",
+      "jumlah": "5",
+      "cat": ""
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Kategori",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "tag_cloud",
+     "opsi": {
+      "title": "Tags",
+      "count": 0,
+      "taxonomy": "post_tag"
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "tentang",
+     "judul": "About Us"
+    }
+   ]
+  },
+  "catatan": "Kelas widget sama persis dengan berita15 (posts_berita_6_widget / tabs_berita_6_widget; kunci title, style, urutkan, jumlah, cat=term_id). Sidebar demo: iklan 300x300, 'Gallery' (cat gallery, style 1, 4 tulisan) -> kategori_ke 1 judul {kat_nama}, tabs tanpa judul, 'Popular' (cat entertainment, style 4, 5 tulisan) -> kategori_ke 2, judul tetap 'Popular'. Tidak pasti: urutkan 'Popular' diasumsikan popular (judul + urutan tidak sama dengan terbaru), dan bahwa widget ini memang memakai cat (judul tertaut ke /category/entertainment/, jadi cat terisi). Footer part-footer hanya me-loop footer-widget-1..3 (footer-widget-4 tidak tampil). home-widget-1..4 didaftarkan (justgberita17_widgets_init) tetapi TIDAK dirender di index.php/partials berita17 dan demo tidak menampilkannya -> jangan diisi. 'About Us' = widget text teks tentang situs (Lorem di demo)."
+ },
+ "velocity-berita18": {
+  "slug": "velocity-berita18",
+  "demo": "https://berita18.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "text",
+     "judul": "",
+     "isi": "[velocity-post-tabs]"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "Terbaru",
+     "isi": "[velocity-recent-posts showposts=\"7\"]"
+    }
+   ]
+  },
+  "catatan": "Shortcode identik dengan berita16 (atribut category_name = slug, showposts, style, date). Footer BUKAN widget: velocity_remove_widgets meng-unregister footer-widget-1..4 dan part-footer hanya menampilkan get_berita_iklan('iklan_footer') (iklan Customizer) + copyright -> tidak ada area footer. Sidebar demo: tabs tanpa judul, 'Video' (gallery 4 tulisan kategori video) -> kategori_ke 1, 'Terbaru' list 7 tulisan dengan tanggal semua kategori."
+ },
+ "velocity-berita3": {
+  "slug": "velocity-berita3",
+  "demo": "https://berita3.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": []
+  },
+  "catatan": "Demo TIDAK memakai widget sama sekali. Sidebar kanan (id right-sidebar) seluruhnya dicetak part-sidebar.php lewat hook justg_before_main_sidebar dari Customizer: iklan_sidebar (demo 350x384, deskripsi Customizer 400x335), posts sidebar 1 (title_posts_sidebar_1='Terbaru', cat_posts_sidebar_1 = term_id atau 'disable', 5 tulisan posts4), iklan_sidebar_2 (demo 300x250), posts sidebar 2 (title_posts_sidebar_2='Terpopuler', sortby_posts_sidebar_2='view', 5 tulisan posts3), lalu tab POPULAR/COMMENTS/TAGS tetap. Semua tampil walau main-sidebar kosong (cek has_action). Footer widget induk footer-widget-1..4 di-unregister_sidebar; footer hanya hak cipta + ikon sosmed Customizer. Posts_Berita_3_Widget terdaftar (widget-tabs tidak di-include) tapi tidak dipakai demo. Jangan menambah widget ke main-sidebar karena akan tampil di bawah blok Customizer dan tidak menyamai demo."
+ },
+ "velocity-berita4": {
+  "slug": "velocity-berita4",
+  "demo": "https://berita4.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "text",
+     "judul": "Populer Posts",
+     "isi": "[vd-listpost meta_key=\"hit\" orderby=\"hit\" layout=\"1\" number=\"5\"]"
+    },
+    {
+     "jenis": "text",
+     "judul": "Latests Posts",
+     "isi": "[vd-listpost meta_key=\"\" orderby=\"date\" layout=\"2\" number=\"5\"]"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "tentang",
+     "judul": "About Us"
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "recent-posts",
+     "opsi": {
+      "title": "RECENT POSTS",
+      "number": 3,
+      "show_date": false
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "core",
+     "base": "meta",
+     "opsi": {
+      "title": "Meta"
+     },
+     "lewati": true,
+     "alasan": "Widget Meta memuat tautan Log in / wp-login.php dan WordPress.org, tidak pantas untuk situs klien"
+    }
+   ],
+   "footer-widget-4": [
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ]
+  },
+  "catatan": "Area dari induk: main-sidebar dan footer-widget-1..4 (DENGAN tanda hubung; part-footer child memanggil footer-widget-'.$x, tiap area = satu kolom col-md). Tema tidak punya widget kelas sendiri; sidebar demo = widget Text berisi shortcode tema [vd-listpost] (atribut meta_key, orderby, layout, number; layout 1 = baris bg-rainbow thumbnail 1:1 + judul putih, selain 1 = thumbnail + judul + tanggal). Populer: orderby hit = meta_value_num meta 'hit' (tulisan tanpa meta hit tidak ikut -> installer perlu mengisi meta hit). Latests: bawaan shortcode meta_key='hit' akan menyaring tulisan tanpa hit, jadi rekonstruksi memakai meta_key=\"\" (WP_Query mengabaikan meta_key kosong) + orderby date; isi asli demo tidak terlihat, urutan demo = terbaru. Pengunjung = [velocity-statistics style=\"list\"] (keluaran velocity-list-stats). Blok widget editor dimatikan (remove_theme_support widgets-block-editor) -> widget klasik."
+ },
+ "velocity-berita5": {
+  "slug": "velocity-berita5",
+  "demo": "https://berita5.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "core",
+     "base": "calendar",
+     "opsi": {
+      "title": "Kalender"
+     }
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "core",
+     "base": "recent-posts",
+     "opsi": {
+      "title": "Recent Posts",
+      "number": 3,
+      "show_date": false
+     }
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "archives",
+     "opsi": {
+      "title": "Archives",
+      "count": 0,
+      "dropdown": 0
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "text",
+     "judul": "Facebook",
+     "isi": "<iframe src=\"https://www.facebook.com/plugins/page.php?href=https%3A%2F%2Fwww.facebook.com%2F290396974343354&tabs=timeline&width=340&height=300&small_header=true&adapt_container_width=true&hide_cover=false&show_facepile=false&appId\" width=\"100%\" height=\"300\" style=\"border:none;overflow:hidden\" scrolling=\"no\" frameborder=\"0\" allowfullscreen=\"true\"></iframe>",
+     "lewati": true,
+     "alasan": "custom_html embed halaman Facebook milik demo (id 290396974343354); ganti dengan FB klien bila ada, kalau tidak lewati"
+    }
+   ]
+  },
+  "catatan": "Child mendefinisikan ulang justg_widgets_init: hanya main-sidebar + footer-widget-1..3 (DENGAN tanda hubung, footer 3 kolom). main-sidebar before_title membuka <div class='mt-4 mb-2'> yang ditutup after_widget -> setiap widget di main-sidebar WAJIB berjudul agar HTML tidak rusak. Isi sidebar lain di demo (tab, iklan_sidebar 300x250, posts sidebar 1 judul 'Hukum' posts4 5 tulisan, iklan_sidebar_2 300x250, posts sidebar 2 judul 'Ekonomi' posts3 5 tulisan) berasal dari Customizer lewat part-sidebar.php (hook justg_before_main_sidebar), bukan widget; kalender widget tampil di bawahnya. Facebook asli widget custom_html (base custom_html, kunci title/content) - dicatat sebagai text dengan lewati. Tidak ada widget kelas tema terdaftar yang dipakai demo."
+ },
+ "velocity-berita6": {
+  "slug": "velocity-berita6",
+  "demo": "https://berita6.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "3",
+      "urutkan": "recent",
+      "jumlah": "4"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "4",
+      "urutkan": "recent",
+      "jumlah": "5"
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_6_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_6_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "1",
+      "urutkan": "recent",
+      "jumlah": "4"
+     },
+     "kategori_ke": 3,
+     "kunci_kategori": "cat",
+     "format_kategori": "id"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "core",
+     "base": "recent-posts",
+     "opsi": {
+      "title": "Recent Posts",
+      "number": 5,
+      "show_date": false
+     }
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Kategori",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "core",
+     "base": "calendar",
+     "opsi": {
+      "title": "Kalender"
+     }
+    }
+   ]
+  },
+  "catatan": "Area dari induk (main-sidebar, footer-widget-1..4); footer child (inc/part-footer.php) hanya merender footer-widget-1..3, satu kolom col-md per area. id_base kelas Posts_Berita_6_Widget = 'Posts_Berita_6_Widget' di konstruktor, WP me-lowercase -> 'posts_berita_6_widget' (option widget_posts_berita_6_widget), cocok dgn ID demo. Kunci instance: title, style ('1'-'5'), urutkan (recent|popular), jumlah, cat (term_id). PERHATIAN: di sumber tema 'cat' hanya dipakai untuk tautan judul, TIDAK memfilter query (demo tampak terfilter per kategori -> versi demo mungkin beda); isi widget = tulisan terbaru semua kategori. Style: Hukum=3 (grid 2 kolom kartu), Daerah=4 (daftar panah), Pendidikan=1 (thumbnail kiri+tanggal); jumlah dihitung dari demo (4/5/4). urutkan 'recent' disimpulkan (tidak pasti 100%). Tabs widget hanya punya kunci title; demo tanpa judul. Kedua media_image = banner 300x250. Judul kategori demo (Hukum, Daerah, Pendidikan) -> kategori_ke 1-3."
+ },
+ "velocity-berita7": {
+  "slug": "velocity-berita7",
+  "demo": "https://berita7.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "text",
+     "judul": "Berita Terbaru",
+     "isi": "[velocity-recent-posts showposts=\"3\"]"
+    },
+    {
+     "jenis": "text",
+     "judul": "Berita Populer",
+     "isi": "[velocity-popular-posts showposts=\"3\"]"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\" showposts=\"4\"]",
+     "kategori_ke": 1
+    }
+   ]
+  },
+  "catatan": "Hanya main-sidebar (induk, dirender sidebar-main.php child). Footer child (inc/part-footer.php) HARDCODE hanya copyright, tanpa dynamic_sidebar -> tidak ada widget footer; mengisi footer-widget-* tidak berefek. Shortcode dari inc/shortcodes.php child: [velocity-recent-posts] atribut style (list|gallery|first_image), post_type, category_name (slug), showposts (default 4); [velocity-popular-posts] atribut showposts (default 10, urut meta 'hit'). Demo: Berita Terbaru 3 item style list (default), Berita Populer 3 item, Hiburan = style gallery 4 item kategori hiburan -> kategori_ke 1 via slug. showposts=\"3\" disimpulkan dari jumlah item demo (demo punya >3 tulisan)."
+ },
+ "velocity-berita9": {
+  "slug": "velocity-berita9",
+  "demo": "https://berita9.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "468x60"
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_9_widget",
+     "opsi": {
+      "title": "RECENT POST",
+      "style": "4",
+      "urutkan": "recent",
+      "jumlah": "5"
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_9_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "3",
+      "urutkan": "recent",
+      "jumlah": "3"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_9_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_9_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "4",
+      "urutkan": "recent",
+      "jumlah": "5"
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    }
+   ],
+   "secondary-sidebar": [
+    {
+     "jenis": "core",
+     "base": "pages",
+     "opsi": {
+      "title": "Pages",
+      "sortby": "menu_order",
+      "exclude": ""
+     }
+    },
+    {
+     "jenis": "core",
+     "base": "meta",
+     "opsi": {
+      "title": ""
+     },
+     "lewati": true,
+     "alasan": "Widget Meta berisi tautan Log in/feed/WordPress.org, tidak pantas untuk situs klien"
+    }
+   ]
+  },
+  "catatan": "Child menimpa justg_widgets_init: hanya main-sidebar dan secondary-sidebar yang terdaftar (footer-widget-1..4 induk TIDAK ada; footer hardcode). secondary-sidebar dirender left_sidebar() hanya di archive.php (kolom kiri col-2, tersembunyi di HP) - diambil dari /category/nasional/ demo (berita9-archive.html). id_base 'posts_berita_9_widget' kunci: title, style ('1'-'5'), urutkan (recent|popular; popular = comment_count), kategori (term_id), jumlah. Tabs 'tabs_berita_9_widget' hanya title (demo kosong). Demo NASIONAL (huruf besar literal, style 3, 3 item) dan Daerah (style 4, 5 item) terfilter kategori -> kategori_ke 1 dan 2; judul {kat_nama} (bila ingin meniru huruf besar, installer boleh mb_strtoupper untuk kategori_ke 1). RECENT POST: style 4, 5 item, tanpa kategori. urutkan 'recent' disimpulkan. Iklan: media_image-12 468x60 (atas) dan media_image-3 300x250 (bawah, demo bertautan ke situs). Widget Pages demo menampilkan halaman demo; untuk klien akan menampilkan halaman klien sendiri - boleh dilewati bila tidak diinginkan."
+ },
+ "velocity-beritab1": {
+  "slug": "velocity-beritab1",
+  "demo": "https://beritab1.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "widget",
+     "base": "velocity_posts_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "layout": "gallery",
+      "kategori": "",
+      "jumlah": "4",
+      "kutipan": "",
+      "orderby": "date",
+      "order": "DESC",
+      "viewers": "tidak",
+      "viewdate": "ya"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "300x600"
+    },
+    {
+     "jenis": "widget",
+     "base": "velocity_posts_widget",
+     "opsi": {
+      "title": "Berita Populer",
+      "layout": "list",
+      "kategori": "",
+      "jumlah": "10",
+      "kutipan": "",
+      "orderby": "view",
+      "order": "DESC",
+      "viewers": "tidak",
+      "viewdate": "ya"
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "velocity_posts_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "layout": "list",
+      "kategori": "",
+      "jumlah": "5",
+      "kutipan": "",
+      "orderby": "date",
+      "order": "DESC",
+      "viewers": "tidak",
+      "viewdate": "ya"
+     },
+     "kategori_ke": 2,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    },
+    {
+     "jenis": "text",
+     "judul": "",
+     "isi": "[velocity-post-tabs]"
+    }
+   ],
+   "footer-widget-1": [
+    {
+     "jenis": "logo"
+    },
+    {
+     "jenis": "tentang",
+     "judul": ""
+    }
+   ],
+   "footer-widget-2": [
+    {
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Kategori",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
+    }
+   ],
+   "footer-widget-3": [
+    {
+     "jenis": "statistik",
+     "judul": "Pengunjung"
+    }
+   ]
+  },
+  "catatan": "Susunan lama theme-paket-biasa (sidoarjopos.id, 30 Sep)."
+ },
+ "velocity-beritab2": {
+  "slug": "velocity-beritab2",
+  "demo": "https://beritab2.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "text",
+     "judul": "",
+     "isi": "[velocity-post-tabs]"
+    },
+    {
+     "jenis": "text",
+     "judul": "Popular Post",
+     "isi": "[velocity-popular-posts]"
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"gallery\" category_name=\"{kat_slug}\"]",
+     "kategori_ke": 1
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts style=\"first_image\" category_name=\"{kat_slug}\"]",
+     "kategori_ke": 2
+    },
+    {
+     "jenis": "text",
+     "judul": "{kat_nama}",
+     "isi": "[velocity-recent-posts category_name=\"{kat_slug}\"]",
+     "kategori_ke": 3
+    }
+   ]
+  },
+  "catatan": "Shortcode beritab2 BERBEDA dari berita16/18: [velocity-recent-posts] memakai get_posts dengan atribut style, post_type, category_name (SLUG), numberposts (default 4; BUKAN showposts), tanpa atribut date (tanggal selalu tampil). [velocity-post-tabs] & [velocity-popular-posts] tanpa atribut (popular 10 tulisan). Demo: iklan media_image 300x250 tanpa tautan; kategori Hiburan (gallery 4) -> kategori_ke 1, Politik (first_image 4) -> kategori_ke 2, Ekonomi (list 4) -> kategori_ke 3. Footer: part-footer me-loop footer-widget-1..4 tetapi demo tidak punya widget footer (footer = logo + sosmed + copyright) -> footer dibiarkan kosong agar menyamai demo."
+ },
+ "velocity-child-berita2": {
+  "slug": "velocity-child-berita2",
+  "demo": "https://berita2.velocitydeveloper.com/",
+  "areas": {
+   "main-sidebar": [
+    {
+     "jenis": "iklan",
+     "ukuran": "300x250"
+    },
+    {
+     "jenis": "iklan",
+     "ukuran": "320x350"
+    },
+    {
+     "jenis": "widget",
+     "base": "tabs_berita_2_widget",
+     "opsi": {
+      "title": ""
+     }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_2_widget",
+     "opsi": {
+      "title": "Latest Post",
+      "style": "7",
+      "urutkan": "recent",
+      "kategori": "",
+      "jumlah": "4"
+     }
+    }
+   ],
+   "bottom-sidebar1": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_2_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "2",
+      "urutkan": "recent",
+      "kategori": "{kat_id}",
+      "jumlah": "3"
+     },
+     "kategori_ke": 1,
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
+    }
+   ],
+   "bottom-sidebar2": [
+    {
+     "jenis": "widget",
+     "base": "posts_berita_2_widget",
+     "opsi": {
+      "title": "Populer",
+      "style": "2",
+      "urutkan": "popular",
+      "kategori": "",
+      "jumlah": "3"
+     }
+    }
+   ],
+   "bottom-sidebar3": [
+    {
+     "jenis": "iklan",
+     "ukuran": "320x350"
+    }
+   ],
+   "footer-widget1": [
+    {
+     "jenis": "tentang",
+     "judul": "Tentang Kami"
+    }
+   ],
+   "footer-widget2": [
+    {
+     "jenis": "core",
+     "base": "calendar",
+     "opsi": {
+      "title": "Kalender"
+     }
+    }
+   ],
+   "footer-widget3": [
+    {
+     "jenis": "core",
+     "base": "search",
+     "opsi": {
+      "title": "Pencarian"
+     }
+    },
+    {
+     "jenis": "core",
+     "base": "tag_cloud",
+     "opsi": {
+      "title": "Tags",
+      "count": 0,
+      "taxonomy": "post_tag"
+     }
+    }
+   ]
+  },
+  "catatan": "Area milik child: main-sidebar, bottom-sidebar1..3 (baris 3 kolom di bawah konten beranda & layout-archive-like, loop sampai 4 tapi hanya 3 terdaftar), footer-widget1..3 TANPA tanda hubung. Posts_Berita_2_Widget: kunci title/style/urutkan/kategori/jumlah; style '1'..'8' (demo: 7 = grid kartu 2 kolom, 2 = daftar thumbnail kiri); kategori = term_id (ID). Widget bottom-sidebar1 di demo berjudul 'Hiburan' = nama kategori demo -> title '{kat_nama}' + kategori_ke 1 (placeholder di opsi harus diganti installer). Tabs_Berita_2_Widget hanya punya kunci 'title' (demo kosong; tab POPULAR/COMMENTS/TAGS tetap). tag_cloud butuh tag agar tidak kosong. Iklan beranda bawah (iklan_home_bawah_1/2) dari Customizer, bukan widget."
+ }
+}
