@@ -679,9 +679,9 @@ if ($berita_depan) {
             echo "tampilan: berita_iklan_dikosongkan:$k\n";
         }
     }
-    // Khusus velocity-beritab1 (keputusan user 2026-09-30, sidoarjopos.id): banner, halaman Redaksi &
-    // Pedoman Media Siber, menu sekunder, dan widget mengikuti demo beritab1.velocitydeveloper.com.
-    // Tema berita lain disesuaikan dengan demo child theme masing-masing bila sudah diminta.
+    // Khusus velocity-beritab1 (keputusan user 2026-09-30, sidoarjopos.id): banner & widget mengikuti demo
+    // beritab1.velocitydeveloper.com; tema berita lain disesuaikan dengan demo child theme masing-masing
+    // bila sudah diminta. Halaman Redaksi & Pedoman Media Siber + menu sekunder berlaku untuk semua tema berita.
     $beritab1 = get_stylesheet() === 'velocity-beritab1';
     // Semua slot gambar panel "Berita Setting" (Banner Setting & Iklan Float) diisi banner "Ruang Iklan"
     // seukuran demo, seperti demo yang tidak menyisakan slot kosong. Slot yang diisi orang dibiarkan.
@@ -731,13 +731,6 @@ if ($berita_depan) {
             }
         }
         if ($mb) {
-            // Tema berita lain: menu lama (halaman profil) pindah ke secondary, tanpa Beranda & Berita.
-            if (!$beritab1 && isset($GLOBALS['_wp_registered_nav_menus']['secondary']) && empty($lokasi['secondary'])) {
-                foreach ($item_utama as $it) {
-                    if (in_array(strtolower(trim($it->title)), ['beranda', 'home', 'berita'], true)) { wp_delete_post($it->ID, true); }
-                }
-                $lokasi['secondary'] = $utama_id;
-            }
             $lokasi['primary'] = $mb; set_theme_mod('nav_menu_locations', $lokasi);
             $st['berita_menu'] = $mb;
             echo 'tampilan: berita_menu:' . count($kat_menu) . "_kategori\n";
@@ -745,7 +738,7 @@ if ($berita_depan) {
     } elseif (!$menu_baku && empty($st['berita_menu'])) { echo "tampilan: berita_menu_dibiarkan:disunting\n"; }
     // Halaman Redaksi & Pedoman Media Siber (demo beritab1): isi contoh bila klien belum mengirim
     // materinya; halaman yang sudah disunting orang dibiarkan.
-    foreach ($beritab1 ? (array) ($d['berita_halaman'] ?? []) : [] as $h) {
+    foreach ((array) ($d['berita_halaman'] ?? []) as $h) {
         $ada = get_posts(['post_type' => 'page', 'name' => $h['slug'], 'post_status' => 'any', 'numberposts' => 1]);
         if (!$ada) {
             $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => $h['judul'],
@@ -756,19 +749,19 @@ if ($berita_depan) {
             echo "tampilan: berita_halaman_diperbarui:{$h['slug']}\n";
         }
     }
-    // Menu sekunder (bar atas beritab1: Tentang Kami, Redaksi, Kontak, Pedoman Media Siber). Lokasinya
-    // 'secondary-menu', sedangkan langkah menu di atas hanya mengenal 'secondary', jadi bar atas
-    // sidoarjopos.id kosong. Lokasi yang diisi orang dibiarkan; menu milik installer dilengkapi.
-    $lok2 = $beritab1 && isset(get_registered_nav_menus()['secondary-menu']) ? 'secondary-menu' : '';
+    // Menu sekunder semua tema berita (demo beritab1: Tentang Kami, Redaksi, Kontak, Pedoman Media Siber).
+    // Lokasinya 'secondary-menu' di beritab1, 'secondary' di tema berita lain; dulu hanya menu lama
+    // (halaman profil tanpa Redaksi/Pedoman) yang dipindah ke 'secondary', dan bar atas sidoarjopos.id
+    // kosong. Tema tanpa lokasi sekunder (berita6/15/17) dilewati. Lokasi yang diisi orang dibiarkan.
+    $lok2 = array_values(array_intersect(['secondary-menu', 'secondary'], array_keys(get_registered_nav_menus())))[0] ?? '';
     $lokasi = get_nav_menu_locations();
-    $m2 = (int) ($lokasi[$lok2] ?? 0);
-    if ($lok2 && (!$m2 || $m2 === (int) ($st['berita_menu2'] ?? 0))) {
-        if (!$m2) {
-            $obj = wp_get_nav_menu_object('Menu Profil');
-            $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
-        }
-        $ada_id = array_map(fn($it) => (int) $it->object_id, wp_get_nav_menu_items($m2) ?: []);
-        $n = count($ada_id) + 1; $tambah = [];
+    // Hanya diisi selama lokasinya kosong: menu yang sudah terpasang (termasuk item yang sengaja dibuang
+    // orang, sidoarjopos.id 2026-09-30) tidak dilengkapi ulang.
+    if ($lok2 && empty($lokasi[$lok2])) {
+        $obj = wp_get_nav_menu_object('Menu Profil');
+        $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
+        $ada_id = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'page'));
+        $n = count(wp_get_nav_menu_items($m2) ?: []) + 1; $tambah = [];
         foreach (['tentang-kami', 'redaksi', 'galeri', 'hubungi-kami', 'pedoman-media-siber', 'kebijakan-privasi', 'privacy-policy'] as $slug) {
             $p = get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]);
             if (!$p || in_array($p[0]->ID, $ada_id, true)) { continue; }
@@ -778,9 +771,8 @@ if ($berita_depan) {
             $ada_id[] = $p[0]->ID; $tambah[] = $slug;
         }
         $lokasi[$lok2] = $m2; set_theme_mod('nav_menu_locations', $lokasi);
-        $st['berita_menu2'] = $m2;
         echo "tampilan: berita_menu_sekunder:$lok2" . ($tambah ? ':' . implode(',', $tambah) : '') . "\n";
-    } elseif ($lok2) { echo "tampilan: berita_menu_sekunder_dibiarkan:disunting\n"; }
+    } elseif ($lok2) { echo "tampilan: berita_menu_sekunder_dibiarkan:terpasang\n"; }
 }
 
 // 3. Beranda: template + pengaturan tema
@@ -1405,8 +1397,11 @@ def main():
     judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
     judul.update({f'klien-{i}': j for i, j in enumerate(klien_judul, 1)})
     iklan = []
+    if data['berita']:
+        # Halaman Redaksi & Pedoman Media Siber untuk semua tema berita (user 2026-09-30).
+        data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
     if data['berita'] and tema == 'velocity-beritab1':
-        # Portal berita velocity-beritab1: banner "Ruang Iklan" per ukuran slot + halaman Redaksi & Pedoman Media Siber.
+        # Banner "Ruang Iklan" per ukuran slot (khusus velocity-beritab1).
         for w, h in UKURAN_IKLAN:
             kunci = f'iklan-{w}x{h}'
             aset[kunci] = banner_iklan(w, h, data['nama'], (isi.get('warna') or {}).get('utama'),
@@ -1414,7 +1409,6 @@ def main():
                                        kerja / f'{kunci}.jpg')
             judul[kunci] = f"Ruang iklan {w}x{h} {data['nama']}"
             iklan.append(kunci)
-        data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
     # Hanya slot yang dirujuk pengaturan tema yang diunggah, dan potongan yang isinya sama
     # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
     # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.

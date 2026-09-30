@@ -226,8 +226,8 @@
       // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
       // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
       // blok berita per kategori (theme-paket-biasa, 2026-09-18). Sejak 2026-09-30 (sidoarjopos.id): widget,
-      // banner "Ruang Iklan" di semua slot Berita Setting, Redaksi + Pedoman Media Siber, menu sekunder — khusus velocity-beritab1.
-      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan: 4 → 3 kartu, 5 = 3+2 di tengah, 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E (Artikel Terbaru); berita: menu kategori; beritab1: menu sekunder, widget & banner iklan ala demo, Redaksi + Pedoman Media Siber',
+      // banner "Ruang Iklan" di semua slot Berita Setting khusus velocity-beritab1; Redaksi + Pedoman + menu sekunder semua tema berita.
+      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan: 4 → 3 kartu, 5 = 3+2 di tengah, 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E (Artikel Terbaru); berita: menu kategori + menu sekunder (Tentang Kami, Redaksi, Pedoman Media Siber); beritab1: widget & banner iklan ala demo',
         mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
         ketHasil: t => (/tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori'
           : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
