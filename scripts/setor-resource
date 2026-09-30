@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+"""Setor resource Local PC (CPU/RAM) + perkiraan lambat per karyawan ke CRM (menu Local PC → Resource).
+
+Permintaan user 2026-09-30: di CRM ada sub-menu Resource di dalam Local PC, berisi grafik CPU/RAM dan
+"24 jam terakhir lebih lambat berapa menit tiap karyawan yang memakai Claude karena CPU/RAM puncak".
+Programnya hanya di Local PC dan CRM (tidak lewat mini PC); pola sama dengan setor-status-ai.
+
+  setor-resource [--url URL] [--kunci BERKAS] [--cetak]
+     --cetak   tampilkan isi setoran tanpa mengirim
+
+Sumber:
+  - CPU/RAM per menit: /var/lib/velocity/metrics/system.jsonl (server-stats.service, {"t","c","m"}).
+    c = CPU% sesaat 0,1 dtk, jadi satu sampel tinggi bisa cuma sekejap.
+  - Durasi perintah: transkrip Claude (~/.claude/projects/**/*.jsonl), jarak tool_use Bash → tool_result.
+    Dibaca bertahap (posisi per berkas di CACHE), perintah latar/sleep/loop tunggu dibuang.
+  - Siapa orangnya: token.json keluaran claude-pakai (sid sesi → nama).
+
+Cara hitung "lebih lambat" (sama dengan ukur manual 29 Sep):
+  1. Tiap perintah diberi keadaan dari rata-rata sampel selama perintah berjalan (±30 dtk):
+     normal, CPU puncak (≥ AMBANG_CPU), RAM puncak (≥ AMBANG_RAM), atau keduanya.
+  2. Waktu wajar per jenis perintah (build npm, composer, wp-cli, ...) = median saat normal, 7 hari.
+  3. Faktor lambat per keadaan per jenis = median(durasi ÷ waktu wajar) perintah di keadaan itu
+     (jenis dengan < MIN_SAMPEL perintah memakai faktor gabungan keadaan itu). Faktor < 1 dianggap 1.
+  4. Tambahan waktu satu perintah = durasi × (1 − 1/faktor). Dijumlah per orang untuk 24 jam terakhir.
+"""
+import argparse
+import bisect
+import json
+import os
+import pickle
+import re
+import statistics
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+METRIK = Path('/var/lib/velocity/metrics/system.jsonl')
+PROYEK = Path(os.environ.get('CLAUDE_HOME', '/root/.claude')) / 'projects'
+TOKEN = Path('/usr/share/nginx/html/brain/token.json')
+DATA = Path('/var/lib/velocity/setor-resource')
+CACHE = DATA / 'cache.pkl'
+CATATAN = DATA / 'setor.json'
+URL_CRM = 'https://new.velocitydeveloper.net/api/api/public/localpc-resource'
+KUNCI = '/etc/velocity/secrets/project_list_api_key'
+WIB = timezone(timedelta(hours=7))
+
+AMBANG_CPU = 85.0
+AMBANG_RAM = 80.0
+MIN_SAMPEL = 8
+HARI_ACUAN = 7
+SIMPAN_HARI = 9
+
+JENIS = [('npm run build', 'build npm'), ('vite build', 'build npm'), ('npm ', 'npm lain'),
+         ('playwright', 'pemotret halaman'), ('chromium', 'pemotret halaman'), ('chrome', 'pemotret halaman'),
+         ('composer', 'composer'), ('php artisan', 'laravel artisan'), ('phpstan', 'phpstan'),
+         ('wp ', 'wp-cli'), ('installer', 'skrip installer'), ('python', 'skrip python'),
+         ('zip ', 'zip/tar'), ('tar ', 'zip/tar'), ('curl ', 'curl'), ('ssh ', 'ssh ke server'),
+         ('rsync', 'ssh ke server'), ('git ', 'git'), ('mysql', 'database'), ('grep ', 'cari berkas'),
+         ('find ', 'cari berkas')]
+TUNGGU = ('sleep ', 'while ', 'tail -f', 'watch ', 'journalctl -f')
+
+
+def jenis_perintah(cmd):
+    c = cmd.lower()
+    return next((v for k, v in JENIS if k in c), 'lain')
+
+
+def waktu(ts):
+    return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+
+
+def baca_transkrip(cache):
+    """Tambah perintah Bash selesai dari baris baru tiap transkrip ke cache['berkas'][path]['cmd']."""
+    batas = time.time() - SIMPAN_HARI * 86400
+    semua = cache.setdefault('berkas', {})
+    ada = set()
+    for f in PROYEK.glob('**/*.jsonl'):
+        try:
+            st_f = f.stat()
+        except OSError:
+            continue
+        if st_f.st_mtime < batas:
+            continue
+        p = str(f)
+        ada.add(p)
+        st = semua.setdefault(p, {'pos': 0, 'buka': {}, 'cmd': []})
+        if st_f.st_size < st['pos']:  # berkas ditulis ulang
+            st.update(pos=0, buka={}, cmd=[])
+        if st_f.st_size == st['pos']:
+            continue
+        with open(f, 'rb') as fh:
+            fh.seek(st['pos'])
+            for raw in fh:
+                if not raw.endswith(b'\n'):
+                    break
+                st['pos'] += len(raw)
+                if b'"tool_use' not in raw and b'"tool_result' not in raw:
+                    continue
+                try:
+                    d = json.loads(raw)
+                    t = waktu(d['timestamp'])
+                except (ValueError, KeyError, AttributeError):
+                    continue
+                isi = (d.get('message') or {}).get('content')
+                for c in isi if isinstance(isi, list) else []:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get('type') == 'tool_use' and c.get('name') == 'Bash':
+                        inp = c.get('input') or {}
+                        cmd = str(inp.get('command') or '')
+                        if inp.get('run_in_background') or any(x in cmd for x in TUNGGU):
+                            continue
+                        st['buka'][c.get('id')] = (t, jenis_perintah(cmd))
+                    elif c.get('type') == 'tool_result' and c.get('tool_use_id') in st['buka']:
+                        t0, j = st['buka'].pop(c['tool_use_id'])
+                        if 0 <= t - t0 < 3600:
+                            st['cmd'].append((t0, round(t - t0, 1), j))
+        st['buka'] = {k: v for k, v in st['buka'].items() if v[0] > time.time() - 3600}
+        st['cmd'] = [x for x in st['cmd'] if x[0] >= batas]
+    for p in list(semua):
+        if p not in ada:
+            del semua[p]
+
+
+def sid_berkas(p):
+    """Transkrip utama <sid>.jsonl atau subagen <sid>/subagents/x.jsonl → sid sesi."""
+    f = Path(p)
+    return f.parent.parent.name if f.parent.name == 'subagents' else f.stem
+
+
+def peta_orang():
+    try:
+        d = json.loads(TOKEN.read_text())
+    except (OSError, ValueError):
+        return {}, {}
+    peta, divisi = {}, {}
+    for o in d.get('pengguna') or []:
+        divisi[o['nama']] = o.get('divisi') or ''
+        for s in o.get('sesi') or []:
+            peta[s['sid']] = o['nama']
+    return peta, divisi
+
+
+def baca_metrik(sejak):
+    out = []
+    with open(METRIK) as fh:
+        for ln in fh:
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            if d.get('t', 0) >= sejak:
+                out.append((int(d['t']), float(d.get('c') or 0), float(d.get('m') or 0)))
+    out.sort()
+    return out
+
+
+def keadaan(sampel, waktu_s, t0, dur):
+    """Rata-rata CPU & RAM selama perintah (±30 dtk; perintah pendek = sampel terdekat)."""
+    a = bisect.bisect_left(waktu_s, t0 - 30)
+    b = bisect.bisect_right(waktu_s, t0 + dur + 30)
+    isi = sampel[a:b]
+    if not isi:
+        i = min(max(bisect.bisect_left(waktu_s, t0), 0), len(sampel) - 1)
+        if not sampel or abs(sampel[i][0] - t0) > 120:
+            return None
+        isi = [sampel[i]]
+    cpu = sum(x[1] for x in isi) / len(isi)
+    ram = max(x[2] for x in isi)
+    k = ('cpu' if cpu >= AMBANG_CPU else '') + ('ram' if ram >= AMBANG_RAM else '')
+    return {'': 'normal', 'cpu': 'cpu', 'ram': 'ram', 'cpuram': 'keduanya'}[k]
+
+
+def hitung_lambat(cache, sampel, sekarang):
+    waktu_s = [x[0] for x in sampel]
+    peta, divisi = peta_orang()
+    acuan_mulai = sekarang - HARI_ACUAN * 86400
+    baris = []  # (t0, dur, jenis, keadaan, sid)
+    for p, st in cache['berkas'].items():
+        sid = sid_berkas(p)
+        for t0, dur, j in st['cmd']:
+            if t0 < acuan_mulai:
+                continue
+            k = keadaan(sampel, waktu_s, t0, dur)
+            if k:
+                baris.append((t0, dur, j, k, sid))
+
+    normal = defaultdict(list)
+    for t0, dur, j, k, _ in baris:
+        if k == 'normal':
+            normal[j].append(dur)
+    wajar = {j: statistics.median(v) for j, v in normal.items() if len(v) >= MIN_SAMPEL}
+    wajar_semua = statistics.median([d for v in normal.values() for d in v]) if normal else None
+
+    rasio = defaultdict(list)  # (keadaan, jenis) -> [durasi / wajar]
+    for t0, dur, j, k, _ in baris:
+        w = wajar.get(j)
+        if k != 'normal' and w and w > 0.2:
+            rasio[(k, j)].append(dur / w)
+    faktor, faktor_gab = {}, {}
+    for k in ('cpu', 'ram', 'keduanya'):
+        gab = [r for (kk, _), v in rasio.items() if kk == k for r in v]
+        faktor_gab[k] = max(1.0, statistics.median(gab)) if len(gab) >= MIN_SAMPEL else 1.0
+        for (kk, j), v in rasio.items():
+            if kk == k and len(v) >= MIN_SAMPEL:
+                faktor[(k, j)] = max(1.0, statistics.median(v))
+
+    batas24 = sekarang - 86400
+    orang = {}
+    jenis_24 = defaultdict(lambda: {'n': 0, 'n_puncak': 0, 'tunggu': 0.0, 'tambah': 0.0})
+    for t0, dur, j, k, sid in baris:
+        if t0 < batas24:
+            continue
+        nama = peta.get(sid, 'Belum teridentifikasi')
+        o = orang.setdefault(nama, {'nama': nama, 'divisi': divisi.get(nama, ''), 'perintah': 0,
+                                    'tunggu_dtk': 0.0, 'perintah_puncak': 0,
+                                    'tambah_dtk': {'cpu': 0.0, 'ram': 0.0, 'keduanya': 0.0},
+                                    'sesi': set(), 'jam': defaultdict(float)})
+        o['perintah'] += 1
+        o['tunggu_dtk'] += dur
+        o['sesi'].add(sid)
+        jj = jenis_24[j]
+        jj['n'] += 1
+        jj['tunggu'] += dur
+        if k == 'normal':
+            continue
+        f = faktor.get((k, j), faktor_gab[k])
+        tambah = dur * (1 - 1 / f)
+        o['perintah_puncak'] += 1
+        o['tambah_dtk'][k] += tambah
+        o['jam'][datetime.fromtimestamp(t0, WIB).strftime('%H')] += tambah
+        jj['n_puncak'] += 1
+        jj['tambah'] += tambah
+    hasil = []
+    for o in orang.values():
+        o['sesi'] = len(o['sesi'])
+        o['tunggu_dtk'] = round(o['tunggu_dtk'])
+        o['tambah_dtk'] = {k: round(v) for k, v in o['tambah_dtk'].items()}
+        o['jam'] = {k: round(v) for k, v in sorted(o['jam'].items()) if v >= 1}
+        hasil.append(o)
+    hasil.sort(key=lambda o: -sum(o['tambah_dtk'].values()))
+    return {
+        'pengguna': hasil,
+        'jenis': [{'jenis': j, 'perintah': v['n'], 'perintah_puncak': v['n_puncak'],
+                   'tunggu_dtk': round(v['tunggu']), 'tambah_dtk': round(v['tambah']),
+                   'wajar_dtk': round(wajar[j], 1) if j in wajar else None,
+                   'faktor_cpu': round(faktor.get(('cpu', j), faktor_gab['cpu']), 2),
+                   'faktor_ram': round(faktor.get(('ram', j), faktor_gab['ram']), 2)}
+                  for j, v in sorted(jenis_24.items(), key=lambda x: -x[1]['tambah'])],
+        'faktor_gabungan': {k: round(v, 2) for k, v in faktor_gab.items()},
+        'perintah_acuan': len(baris),
+        'wajar_semua_dtk': round(wajar_semua, 1) if wajar_semua else None,
+    }
+
+
+def episode_puncak(sampel, kol, ambang, min_menit=3):
+    """Rentang menit berturut-turut di atas ambang (celah 1 sampel dimaafkan)."""
+    ep, awal, akhir, jml, puncak, celah = [], None, None, 0, 0.0, 0
+    for t, *v in sampel + [(10 ** 11, 0.0, 0.0)]:
+        x = v[kol]
+        if x >= ambang:
+            if awal is None:
+                awal, jml, puncak = t, 0, 0.0
+            akhir, jml, puncak, celah = t, jml + 1, max(puncak, x), 0
+        elif awal is not None:
+            celah += 1
+            if celah > 1 or t - akhir > 150:
+                if (akhir - awal) / 60 + 1 >= min_menit:
+                    ep.append({'mulai': awal, 'akhir': akhir, 'menit': round((akhir - awal) / 60) + 1,
+                               'puncak': round(puncak, 1)})
+                awal, celah = None, 0
+    return ep
+
+
+def ringkas_harian(sampel):
+    hari = defaultdict(list)
+    for t, c, m in sampel:
+        hari[datetime.fromtimestamp(t, WIB).strftime('%Y-%m-%d')].append((c, m))
+    return [{'tgl': h, 'cpu_rata': round(sum(x[0] for x in v) / len(v), 1),
+             'cpu_puncak_menit': sum(1 for x in v if x[0] >= AMBANG_CPU),
+             'ram_rata': round(sum(x[1] for x in v) / len(v), 1), 'ram_maks': round(max(x[1] for x in v), 1),
+             'ram_puncak_menit': sum(1 for x in v if x[1] >= AMBANG_RAM), 'sampel': len(v)}
+            for h, v in sorted(hari.items())]
+
+
+def kini():
+    mem = {}
+    for ln in open('/proc/meminfo'):
+        k, v = ln.split(':', 1)
+        mem[k] = int(v.split()[0]) * 1024
+    ps = subprocess.run(['ps', '-eo', 'rss=,pcpu=,comm='], capture_output=True, text=True).stdout
+    grup = defaultdict(lambda: [0, 0.0, 0])
+    for ln in ps.splitlines():
+        b = ln.split(None, 2)
+        if len(b) < 3:
+            continue
+        nama = b[2].strip()
+        # Claude Code berjalan dengan nama proses = versinya (mis. "2.1.284").
+        nama = 'claude' if nama.startswith('claude') or re.fullmatch(r'\d+\.\d+\.\d+', nama) else 'php' if nama.startswith('php') else \
+            'chrome' if 'chrom' in nama or nama == 'headless_shell' else nama
+        g = grup[nama]
+        g[0] += int(b[0]) * 1024
+        g[1] += float(b[1])
+        g[2] += 1
+    proses = sorted(({'nama': k, 'ram': v[0], 'cpu': round(v[1], 1), 'jumlah': v[2]} for k, v in grup.items()),
+                    key=lambda x: -x['ram'])[:12]
+    return {
+        'ram_total': mem['MemTotal'], 'ram_terpakai': mem['MemTotal'] - mem['MemAvailable'],
+        'swap_total': mem['SwapTotal'], 'swap_terpakai': mem['SwapTotal'] - mem['SwapFree'],
+        'load': [round(x, 2) for x in os.getloadavg()], 'inti': os.cpu_count() or 1,
+        'uptime': round(float(open('/proc/uptime').read().split()[0])), 'proses': proses,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--url', default=URL_CRM)
+    ap.add_argument('--kunci', default=KUNCI)
+    ap.add_argument('--cetak', action='store_true')
+    a = ap.parse_args()
+
+    DATA.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = pickle.loads(CACHE.read_bytes())
+    except (OSError, pickle.PickleError, EOFError):
+        cache = {}
+    baca_transkrip(cache)
+    tmp = CACHE.with_suffix('.tmp')
+    tmp.write_bytes(pickle.dumps(cache))
+    tmp.replace(CACHE)
+
+    sekarang = time.time()
+    sampel = baca_metrik(sekarang - (HARI_ACUAN + 1) * 86400)
+    s24 = [x for x in sampel if x[0] >= sekarang - 86400]
+    isi = {
+        'dibuat': int(sekarang),
+        'ambang': {'cpu': AMBANG_CPU, 'ram': AMBANG_RAM, 'hari_acuan': HARI_ACUAN},
+        'kini': kini(),
+        'seri': [[t, round(c), round(m)] for t, c, m in s24],
+        'harian': ringkas_harian([x for x in sampel if x[0] >= sekarang - HARI_ACUAN * 86400]),
+        'episode': {'cpu': episode_puncak(s24, 0, AMBANG_CPU), 'ram': episode_puncak(s24, 1, AMBANG_RAM)},
+        'lambat': hitung_lambat(cache, sampel, sekarang),
+    }
+    if a.cetak:
+        tampil = dict(isi, seri=f'{len(isi["seri"])} sampel')
+        print(json.dumps(tampil, ensure_ascii=False, indent=1))
+        return 0
+
+    try:
+        req = urllib.request.Request(a.url, data=json.dumps(isi).encode(), method='POST', headers={
+            'Authorization': 'Bearer ' + Path(a.kunci).read_text().strip(),
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            # WAJIB: UA bawaan Python-urllib memicu blokir IP kantor oleh LiteSpeed WAF hosting (24 Sep 2026).
+            'User-Agent': 'velocity-setor-resource/1.0 (+Local PC kantor)',
+        })
+        with urllib.request.urlopen(req, timeout=60) as r:
+            jawab = r.read(300).decode(errors='ignore')
+        CATATAN.write_text(json.dumps({'waktu': sekarang, 'jawab': jawab}))
+        print(f'setor: {len(isi["seri"])} sampel, {len(isi["lambat"]["pengguna"])} orang -> {jawab}')
+    except (OSError, urllib.error.URLError) as e:
+        rinci = e.read(300).decode(errors='ignore') if isinstance(e, urllib.error.HTTPError) else ''
+        print(f'setor gagal: {e} {rinci}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
