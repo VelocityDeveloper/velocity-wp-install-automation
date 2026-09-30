@@ -16,6 +16,7 @@ Urutan (yang lebih pasti lebih dulu):
 
 Pemakaian: cari(domain, folder, compro) -> (Path | None, 'sumber')
 """
+import json
 import re
 import shutil
 import struct
@@ -250,6 +251,106 @@ def _dari_office(berkas, tujuan_dir):
     return None
 
 
+def logo_kop_pdf(domain, pdfs, tujuan):
+    """(berkas PNG, sumber) logo dari gambar tertanam halaman 1 PDF klien (kop surat), atau None.
+
+    lbhdkm.or.id 2026-09-30: logo LBH DKM hanya ada sebagai gambar 216 px di kop DAFTAR ADVOKAT &
+    STRUKTUR ORGANISASI — pemotong compro menolaknya dan ciri piksel logo tidak mengenalinya (latar
+    lambang gelap). Kandidat dipilih Claude (bukan Garuda/lambang instansi di SK/AHU, QR, stempel,
+    tanda tangan); tanpa Claude hanya gambar yang muncul di >= 2 PDF (ciri kop surat). Keputusan
+    disimpan di KELUAR/<domain>/logo-kop.json supaya Claude tidak dipanggil ulang tiap run."""
+    import hashlib
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+    ck = _muat_compro()
+    kerja = Path(tempfile.mkdtemp(prefix='logo-kop-'))
+    kandidat, muncul = {}, {}
+    try:
+        for i, pdf in enumerate(pdfs):
+            tmp = kerja / f'p{i}'
+            tmp.mkdir()
+            try:
+                gambar = ck.ekstrak_gambar(pdf, 1, tmp)
+            except Exception:
+                continue
+            for g in gambar:
+                if g['halaman'] != 1 or g['jenis'] != 'image':
+                    continue
+                w, h = g['lebar'], g['tinggi']
+                if min(w, h) < 100 or max(w, h) > 1600 or not 0.5 <= w / h <= 2:
+                    continue
+                try:
+                    with Image.open(g['path']) as im:
+                        im = im.convert('RGB')
+                        # QR/barcode & pindaian teks: hampir hanya hitam-putih.
+                        abu = sum(1 for r, gg, b in im.resize((48, 48)).getdata() if max(r, gg, b) - min(r, gg, b) > 24)
+                        png = kerja / f'k{len(kandidat)}.png'
+                        md5 = hashlib.md5(im.tobytes()).hexdigest()
+                        if md5 not in kandidat:
+                            if abu < 48 * 48 * 0.03:
+                                continue
+                            im.save(png)
+                            kandidat[md5] = png
+                        muncul.setdefault(md5, set()).add(pdf.name)
+                except Exception:
+                    continue
+        if not kandidat:
+            return None
+        urut = sorted(kandidat, key=lambda k: -len(muncul[k]))[:8]
+        simpan = KELUAR / domain / 'logo-kop.json'
+        kunci = ','.join(sorted(urut))
+        pilih = None
+        try:
+            lama = json.loads(simpan.read_text())
+            if lama.get('kunci') == kunci:
+                pilih = lama.get('pilih') or ''
+        except (OSError, ValueError):
+            pass
+        if pilih is None:
+            try:
+                import claude_vision
+                daftar = '\n'.join(f'{claude_vision.nama_gambar(i)} (ada di: {", ".join(sorted(muncul[k]))})'
+                                   for i, k in enumerate(urut))
+                jawab = claude_vision.tanya(
+                    'Gambar berikut diambil dari halaman pertama dokumen PDF klien website ' + domain + '.\n'
+                    'Baca tiap gambar di folder kerja:\n' + daftar + '\n'
+                    'Tentukan satu gambar yang merupakan LOGO milik usaha/lembaga klien sendiri. BUKAN logo: '
+                    'lambang Garuda/instansi pemerintah/kementerian/notaris, QR code, stempel, tanda tangan, '
+                    'foto orang, pas foto. Kalau tidak ada, isi null.\n'
+                    'Jawab HANYA JSON: {"logo": "gNN.jpg" | null, "alasan": "..."}', [kandidat[k] for k in urut], timeout=240)
+            except Exception:
+                jawab = None
+            if isinstance(jawab, dict):
+                nama = jawab.get('logo')
+                pilih = next((k for i, k in enumerate(urut) if nama and nama == claude_vision.nama_gambar(i)), '')
+                try:
+                    simpan.parent.mkdir(parents=True, exist_ok=True)
+                    simpan.write_text(json.dumps({'kunci': kunci, 'pilih': pilih, 'alasan': jawab.get('alasan', '')}))
+                except OSError:
+                    pass
+            else:
+                pilih = next((k for k in urut if len(muncul[k]) >= 2), '')
+        if not pilih:
+            return None
+        # Latar putih di sudut dibuat transparan (header tema berwarna), sisi pendek dibesarkan ke 400 px.
+        with Image.open(kandidat[pilih]) as im:
+            im = im.convert('RGBA')
+            if min(im.size) < 400:
+                f = 400 / min(im.size)
+                im = im.resize((round(im.width * f), round(im.height * f)), Image.LANCZOS)
+            for xy in [(0, 0), (im.width - 1, 0), (0, im.height - 1), (im.width - 1, im.height - 1)]:
+                r, g, b, _ = im.getpixel(xy)
+                if min(r, g, b) > 230:
+                    ImageDraw.floodfill(im, xy, (255, 255, 255, 0), thresh=40)
+            im = im.crop(im.getbbox() or (0, 0, im.width, im.height))
+            im.save(tujuan)
+        return tujuan, f'kop-pdf:{",".join(sorted(muncul[pilih]))}'
+    finally:
+        shutil.rmtree(kerja, ignore_errors=True)
+
+
 def sudah_terpasang(domain):
     """True kalau installer pernah menyelesaikan situs ini. Situs yang sudah ter-deploy memakai
     aturan lama (tanpa pengecualian folder produk & tanpa langkah 6) supaya finish ulang tidak
@@ -306,6 +407,12 @@ def cari(domain, folder, compro=None):
             return hasil, f'pdf:{pdf.name}'
         if hasil:
             Path(hasil).unlink(missing_ok=True)
+
+    # 3b. logo kop surat: gambar tertanam halaman 1 PDF klien, dipastikan Claude.
+    kop = logo_kop_pdf(domain, [p for p in berkas if p.suffix.lower() == '.pdf' and not adalah_form(p)],
+                       tujuan / 'logo-kop.png')
+    if kop:
+        return kop
 
     # 4. dokumen Office
     for dok in [p for p in berkas if p.suffix.lower() in ('.docx', '.pptx')]:

@@ -205,7 +205,7 @@
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel; materi non-form dimuat utuh di Tentang Kami', mulai: /Starting AI content generation/,
         selesai: /AI content generation completed/, aktif: tanpaDry },
-      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas / kop PDF dipastikan Claude, tanpa logo = logo contoh), favicon, WhatsApp, peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
       { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
