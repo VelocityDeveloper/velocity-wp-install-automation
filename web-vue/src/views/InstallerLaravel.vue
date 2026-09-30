@@ -33,10 +33,12 @@ async function buat() {
   }
 }
 
-const SARING = [{ nilai: 'aktif', label: 'Berjalan' }, { nilai: 'selesai', label: 'Selesai' }, { nilai: 'semua', label: 'Semua' }]
-const saring = ref('aktif')
-const tampil = computed(() => proyek.value.filter((p) => saring.value === 'semua' || (saring.value === 'selesai') === (p.tahap === 'selesai')))
-const jumlah = (n) => proyek.value.filter((p) => n === 'semua' || (n === 'selesai') === (p.tahap === 'selesai')).length
+// Filter progress = tahap project saat ini; project selesai hanya tampil di "Semua".
+const SARING = [{ nilai: 'semua', label: 'Semua' }, ...TAHAP.map((t) => ({ nilai: t.kunci, label: t.label }))]
+const saring = ref('semua')
+const cocok = (p, n) => n === 'semua' || p.tahap === n
+const tampil = computed(() => proyek.value.filter((p) => cocok(p, saring.value)))
+const jumlah = (n) => proyek.value.filter((p) => cocok(p, n)).length
 const selesaiFitur = (p) => (p.fitur_status?.ok || 0)
 const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & flowchart', estimasi: 'Claude menyusun estimasi', install: 'Install berjalan', agen: 'Agen Claude bekerja' }
 </script>
@@ -113,12 +115,12 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
       <p v-else-if="galat && !data" class="pesan-status bahaya">Gagal memuat: {{ galat.message }}</p>
       <p v-else-if="!tampil.length" class="redup">Belum ada project di sini.</p>
       <div v-else class="daftar">
-        <RouterLink v-for="p in tampil" :key="p.slug" :to="`/installer/laravel/${p.slug}`" class="proyek">
+        <RouterLink v-for="p in tampil" :key="p.slug" :to="`/installer/laravel/${p.slug}`" class="proyek" :class="{ jalan: p.job }" :aria-busy="!!p.job">
           <div class="p-atas">
             <div class="nama">
               <code class="id">{{ p.slug }}</code>
               <b>{{ p.judul }}</b>
-              <span v-if="p.job" class="pil waspada">{{ JOB[p.job.jenis] || p.job.jenis }}</span>
+              <span v-if="p.job" class="pil waspada pil-jalan"><i class="putar" aria-hidden="true" />{{ JOB[p.job.jenis] || p.job.jenis }}</span>
               <span v-else-if="p.tahap === 'selesai'" class="pil baik">Selesai</span>
             </div>
             <span class="redup">{{ p.pm ? `PM ${p.pm} · ` : '' }}{{ waktuLalu(p.dibuat) }}</span>
@@ -158,7 +160,7 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .alur b { color: var(--teks); }
 .chip { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .chip li { padding: 3px 9px; border-radius: 999px; background: var(--aksen-lembut); color: var(--aksen-terang); font-size: 12px; font-weight: 600; }
-.tab { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); }
+.tab { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); }
 .tab button { border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
 .tab button.aktif { background: var(--aksen); color: #fff; }
 .tab .hitung { opacity: .7; margin-left: 2px; }
@@ -177,6 +179,26 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .stepper li.kini { border-top-color: var(--aksen-terang); color: var(--teks); font-weight: 600; }
 .stepper li.kini i { background: var(--aksen-terang); }
 .stepper small { color: var(--teks-3); font-weight: 500; }
+/* Project yang sedang diproses (ada job): kilau menyapu kartu, bar tahap aktif mengalir, titiknya berdenyut */
+.proyek.jalan { position: relative; overflow: hidden; isolation: isolate; border-color: rgba(232, 181, 74, .35); }
+.proyek.jalan::after { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(232, 181, 74, .10) 50%, transparent 70%) no-repeat;
+  background-size: 250% 100%; animation: kilau 2.8s ease-in-out infinite; }
+.pil-jalan { display: inline-flex; align-items: center; gap: 6px; }
+.pil-jalan::before { display: none; }
+.putar { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: putar .8s linear infinite; flex: none; }
+.proyek.jalan .stepper li.kini { position: relative; border-top-color: transparent; }
+.proyek.jalan .stepper li.kini::before { content: ''; position: absolute; left: 0; right: 0; top: -3px; height: 3px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--aksen-lembut) 0%, var(--aksen-terang) 40%, var(--aksen-lembut) 80%) 0 0 / 200% 100%;
+  animation: alir 1.4s linear infinite; }
+.proyek.jalan .stepper li.kini i { animation: denyut 1.6s ease-out infinite; }
+@keyframes kilau { from { background-position: 150% 0; } to { background-position: -150% 0; } }
+@keyframes putar { to { transform: rotate(360deg); } }
+@keyframes alir { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@keyframes denyut { 0% { box-shadow: 0 0 0 0 var(--aksen-terang); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .proyek.jalan::after, .putar, .proyek.jalan .stepper li.kini::before, .proyek.jalan .stepper li.kini i { animation: none; }
+}
 @media (max-width: 960px) { .dua-kolom { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 560px) { .stepper { grid-template-columns: repeat(3, minmax(0, 1fr)); } .nama-saya { width: 100%; } }
 </style>
