@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Setor jam kerja harian per karyawan (dari aktivitas sesi Claude) ke CRM (menu Local PC → Jam Kerja).
+
+Permintaan user 2026-09-30: tabel berapa jam kerja sehari tiap karyawan, jam kerja 07.00–22.30,
+ada saringan tanggal. Karyawan membuat/merevisi web lewat Claude di Local PC, jadi jejak kerjanya
+ada di transkrip sesi. Programnya hanya di Local PC dan CRM (tidak lewat mini PC).
+
+  setor-jam-kerja [--url URL] [--kunci BERKAS] [--semua] [--cetak]
+     --semua   setor seluruh riwayat (isi awal); bawaan hanya HARI_SETOR hari terakhir
+     --cetak   tampilkan isi setoran tanpa mengirim
+
+Cara hitung:
+  - Tiap baris transkrip (pesan karyawan, balasan Claude, hasil perintah) = tanda "sedang bekerja"
+    di menit itu. Menit dari semua sesi satu orang digabung, jadi sesi paralel tidak terhitung dua kali.
+  - Menit-menit yang berjarak ≤ JEDA_MENIT digabung jadi satu blok kerja (membaca hasil, mengetik
+    perintah berikutnya, mengecek web). Jeda lebih lama = istirahat / mengerjakan hal lain di luar Claude.
+  - Jam kerja = panjang blok yang jatuh di 07.00–22.30 WIB; sisanya dicatat sebagai "di luar jam".
+  - Siapa orangnya: token.json keluaran claude-pakai (sid sesi → nama). Sesi otomasi tidak dihitung.
+"""
+import argparse
+import json
+import os
+import pickle
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+PROYEK = Path(os.environ.get('CLAUDE_HOME', '/root/.claude')) / 'projects'
+TOKEN = Path('/usr/share/nginx/html/brain/token.json')
+DATA = Path('/var/lib/velocity/setor-jam-kerja')
+CACHE = DATA / 'cache.pkl'
+URL_CRM = 'https://new.velocitydeveloper.net/api/api/public/localpc-jam-kerja'
+KUNCI = '/etc/velocity/secrets/project_list_api_key'
+WIB = timezone(timedelta(hours=7))
+
+JEDA_MENIT = 15
+JAM_MULAI = 7 * 60          # 07.00
+JAM_SELESAI = 22 * 60 + 30  # 22.30
+HARI_SETOR = 3
+BUKAN_ORANG = ('Otomasi',)
+
+POLA_WAKTU = re.compile(rb'"timestamp":"([0-9T:.\-]+)Z?"')
+POLA_TG = re.compile(r'^<channel source="plugin:telegram')
+BUKAN_PESAN = ('<command-', '<local-command', 'Caveat:', '[Request interrupted', '<system-reminder', '<task-notification')
+
+
+def menit_dari(ts):
+    return int(datetime.fromisoformat(ts.decode().rstrip('Z') + '+00:00').timestamp() // 60)
+
+
+def teks_user(d):
+    c = (d.get('message') or {}).get('content')
+    if isinstance(c, str):
+        return c
+    for b in c if isinstance(c, list) else []:
+        if isinstance(b, dict) and b.get('type') == 'text':
+            return b.get('text', '')
+    return ''
+
+
+def baca_transkrip(cache):
+    """Tambah menit aktif & pesan karyawan dari baris baru tiap transkrip."""
+    semua = cache.setdefault('berkas', {})
+    for f in PROYEK.glob('**/*.jsonl'):
+        try:
+            ukuran = f.stat().st_size
+        except OSError:
+            continue
+        st = semua.setdefault(str(f), {'pos': 0, 'menit': set(), 'pesan': set()})
+        if ukuran < st['pos']:
+            st.update(pos=0, menit=set(), pesan=set())
+        if ukuran == st['pos']:
+            continue
+        with open(f, 'rb') as fh:
+            fh.seek(st['pos'])
+            for raw in fh:
+                if not raw.endswith(b'\n'):
+                    break
+                st['pos'] += len(raw)
+                m = POLA_WAKTU.search(raw)
+                if not m:
+                    continue
+                try:
+                    mnt = menit_dari(m.group(1))
+                except ValueError:
+                    continue
+                st['menit'].add(mnt)
+                # pesan yang benar-benar diketik karyawan (bukan hasil perintah / catatan sistem)
+                if b'"type":"user"' in raw and b'"tool_result"' not in raw:
+                    try:
+                        d = json.loads(raw)
+                    except ValueError:
+                        continue
+                    t = teks_user(d)
+                    if t and (POLA_TG.match(t) or not d.get('isMeta')) and not t.startswith(BUKAN_PESAN):
+                        st['pesan'].add(mnt)
+
+
+def sid_berkas(p):
+    f = Path(p)
+    return f.parent.parent.name if f.parent.name == 'subagents' else f.stem
+
+
+def peta_orang():
+    try:
+        d = json.loads(TOKEN.read_text())
+    except (OSError, ValueError):
+        return {}, {}
+    peta, divisi = {}, {}
+    for o in d.get('pengguna') or []:
+        divisi[o['nama']] = o.get('divisi') or ''
+        for s in o.get('sesi') or []:
+            peta[s['sid']] = o['nama']
+    return peta, divisi
+
+
+def tgl_menit(mnt):
+    """Menit unix → (tanggal WIB, menit ke-berapa di hari itu)."""
+    w = datetime.fromtimestamp(mnt * 60, WIB)
+    return w.strftime('%Y-%m-%d'), w.hour * 60 + w.minute
+
+
+def rekap(cache, sejak_tgl):
+    peta, divisi = peta_orang()
+    menit = defaultdict(set)
+    pesan = defaultdict(set)
+    sesi = defaultdict(lambda: defaultdict(set))  # nama -> tgl -> sid
+    for p, st in cache['berkas'].items():
+        sid = sid_berkas(p)
+        nama = peta.get(sid, 'Belum teridentifikasi')
+        if nama.startswith(BUKAN_ORANG):
+            continue
+        menit[nama] |= st['menit']
+        pesan[nama] |= st['pesan']
+        for m in st['pesan']:
+            sesi[nama][tgl_menit(m)[0]].add(sid)
+
+    hari = defaultdict(dict)  # tgl -> nama -> baris
+    for nama, ms in menit.items():
+        urut = sorted(ms)
+        blok, awal, akhir = [], None, None
+        for m in urut:
+            if awal is not None and m - akhir <= JEDA_MENIT:
+                akhir = m
+                continue
+            if awal is not None:
+                blok.append((awal, akhir + 1))
+            awal = akhir = m
+        if awal is not None:
+            blok.append((awal, akhir + 1))
+        for a, b in blok:
+            for m in range(a, b):  # dipecah per menit supaya blok yang melewati tengah malam terbagi benar
+                tgl, dm = tgl_menit(m)
+                if tgl < sejak_tgl:
+                    continue
+                r = hari[tgl].setdefault(nama, {'nama': nama, 'divisi': divisi.get(nama, ''), 'kerja': 0,
+                                                 'luar': 0, 'mulai': None, 'selesai': None, 'blok': 0,
+                                                 'pesan': 0, 'sesi': 0})
+                if JAM_MULAI <= dm < JAM_SELESAI:
+                    r['kerja'] += 1
+                    r['mulai'] = dm if r['mulai'] is None else min(r['mulai'], dm)
+                    r['selesai'] = dm + 1 if r['selesai'] is None else max(r['selesai'], dm + 1)
+                else:
+                    r['luar'] += 1
+            tgl_a = tgl_menit(a)[0]
+            if tgl_a >= sejak_tgl and nama in hari[tgl_a]:
+                hari[tgl_a][nama]['blok'] += 1
+        for m in pesan[nama]:
+            tgl = tgl_menit(m)[0]
+            if tgl >= sejak_tgl and nama in hari[tgl]:
+                hari[tgl][nama]['pesan'] += 1
+        for tgl, s in sesi[nama].items():
+            if tgl >= sejak_tgl and nama in hari[tgl]:
+                hari[tgl][nama]['sesi'] = len(s)
+    return {tgl: sorted(v.values(), key=lambda r: -r['kerja']) for tgl, v in sorted(hari.items())}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--url', default=URL_CRM)
+    ap.add_argument('--kunci', default=KUNCI)
+    ap.add_argument('--semua', action='store_true')
+    ap.add_argument('--cetak', action='store_true')
+    a = ap.parse_args()
+
+    DATA.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = pickle.loads(CACHE.read_bytes())
+    except (OSError, pickle.PickleError, EOFError):
+        cache = {}
+    baca_transkrip(cache)
+    tmp = CACHE.with_suffix('.tmp')
+    tmp.write_bytes(pickle.dumps(cache))
+    tmp.replace(CACHE)
+
+    sejak = '0000-00-00' if a.semua else (datetime.now(WIB) - timedelta(days=HARI_SETOR - 1)).strftime('%Y-%m-%d')
+    isi = {
+        'dibuat': int(time.time()),
+        'aturan': {'jeda_menit': JEDA_MENIT, 'jam_mulai': JAM_MULAI, 'jam_selesai': JAM_SELESAI},
+        'hari': rekap(cache, sejak),
+    }
+    if a.cetak:
+        print(json.dumps(isi, ensure_ascii=False, indent=1))
+        return 0
+    try:
+        req = urllib.request.Request(a.url, data=json.dumps(isi).encode(), method='POST', headers={
+            'Authorization': 'Bearer ' + Path(a.kunci).read_text().strip(),
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            # WAJIB: UA bawaan Python-urllib memicu blokir IP kantor oleh LiteSpeed WAF hosting (24 Sep 2026).
+            'User-Agent': 'velocity-setor-jam-kerja/1.0 (+Local PC kantor)',
+        })
+        with urllib.request.urlopen(req, timeout=60) as r:
+            jawab = r.read(300).decode(errors='ignore')
+        print(f'setor: {len(isi["hari"])} hari -> {jawab}')
+    except (OSError, urllib.error.URLError) as e:
+        rinci = e.read(300).decode(errors='ignore') if isinstance(e, urllib.error.HTTPError) else ''
+        print(f'setor gagal: {e} {rinci}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
