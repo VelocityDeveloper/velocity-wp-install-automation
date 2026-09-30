@@ -230,6 +230,11 @@ tampilan_klasik() {
   # artikel: artikel contoh kategori kegiatan ikut diberi foto (lbhdkm.or.id, user 2026-09-30).
   echo "[$(date -Is)] Menu dari form" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/menu-form" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # PDF materi klien tampil apa adanya: struktur organisasi & legalitas (AHU, akta hal. 1) jadi gambar,
+  # daftar advokat/pengurus jadi tabel — sesudah menu form supaya halaman tujuannya sudah ada
+  # (lbhdkm.or.id, user 2026-09-30).
+  echo "[$(date -Is)] Dokumen klien" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/dokumen-klien" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Child theme tour (velocity-tour1, dst.): beranda membaca CPT paket-tour dari plugin
   # velocity-tour-travel; langkah ini melewati tema lain sendiri.
   echo "[$(date -Is)] Paket tour" >> "$LOG"

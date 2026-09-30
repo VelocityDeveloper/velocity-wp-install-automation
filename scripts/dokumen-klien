@@ -1,0 +1,513 @@
+#!/usr/bin/env python3
+"""Dokumen PDF kiriman klien tampil di situs paket biasa sebagai gambar atau tabel.
+
+Permintaan user 2026-09-30 (lbhdkm.or.id): isi folder Materi hanya terbaca sebagai teks bahan AI,
+padahal "DAFTAR ADVOKAT DAN PARALEGAL" seharusnya jadi tabel, "STRUKTUR ORGANISASI" dan "AHU" jadi
+gambar, dan akta cukup halaman 1 sebagai gambar.
+
+  dokumen-klien <manifest> [--coba] [--paksa]
+  --coba   cetak rencana (jenis tiap PDF + halaman tujuan), tanpa AI & tanpa menyentuh situs
+  --paksa  situs yang sudah ter-deploy (hanya setelah disetujui user)
+
+Jenis dokumen (nama berkas, lalu teks halaman 1):
+- struktur  : bagan struktur organisasi → gambar halaman 1 di halaman "Struktur Organisasi";
+- daftar    : daftar nama (advokat, anggota, pengajar, ...) → tabel (kolom/baris diurai AI dari teks PDF)
+              di halaman tim yang cocok, atau halaman baru berjudul dokumen;
+- legalitas : AHU/SK/akta/NIB/izin/sertifikat → gambar di halaman "Legalitas". PDF bertek ≤3 halaman
+              dirender semua halamannya; PDF scan/panjang (akta 27 halaman) hanya halaman 1.
+Company profile, dokumen menu/konsep, dan folder syarat/KTP dilewati (data pribadi).
+NIK/No. KTP (angka 16 digit) di gambar ditutup kotak gelap; kolom NIK/KTP di tabel dibuang.
+
+Halaman yang belum ada dibuat sebagai anak halaman Tentang Kami dan masuk submenu Tentang.
+Blok dibungkus penanda <!-- velocity-dokumen:<jenis> --> sehingga run ulang mengganti, bukan menambah.
+Keluaran: baris "dokumen_klien: ...".
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from folder_klien import folder_klien  # noqa: E402
+
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+PAKET_CUSTOM = {'paketg', 'portalberitacustom', 'tokoonlinecustom'}
+# Sama dengan site-finish.FOTO_PRIBADI: berkas/folder data pribadi pemilik tidak pernah tampil.
+PRIBADI = re.compile(r'ktp|npwp|identitas|kartu\s*keluarga|\bkk\b|paspor|passport|syarat|biodata', re.I)
+# Bukan dokumen resmi: compro, konsep/revisi web, katalog, daftar harga, formulir isian, draf.
+LEWATI = re.compile(r'profil|profile|compro|konsep|isian|menu|katalog|catalog|brosur|harga|price|\bweb|website|revisi|'
+                    r'desain|design|draft|draf\b|formulir|\bform\b|pendaftaran|logo|materi|about|drawing|tanah|'
+                    r'restruktur|proceeding|fraud', re.I)
+STRUKTUR = re.compile(r'\bstruktur\b', re.I)
+STRUKTUR_ISI = re.compile(r'struktur organisasi|bagan organisasi|organisasi|pengurus|ketua|direktur|kepala|pengawas', re.I)
+DAFTAR = re.compile(r'\bdaftar\b|\blist\b', re.I)
+# Daftar ORANG (advokat, pengurus, guru) — bukan daftar produk/belanja.
+DAFTAR_ISI = re.compile(r'advokat|paralegal|anggota|pengurus|jabatan|pengajar|\bguru\b|dokter|\bstaf|karyawan|pegawai|\btim\b', re.I)
+LEGAL = re.compile(r'\bahu\b|akta|kemenkum|\bsk\b|surat keputusan|\bnib\b|siup|\bizin|legalitas|sertifikat|'
+                   r'pengesahan|\bsppl\b|\bskt\b|\btkdn\b|\biso\s*\d', re.I)
+# Dari teks halaman 1 hanya frasa yang pasti dokumen resmi (kata "izin"/"SK" saja terlalu umum).
+LEGAL_ISI = re.compile(r'keputusan menteri|pengesahan pendirian|akta pendirian|nomor induk berusaha|'
+                       r'perizinan berusaha|sertifikat standar|surat keterangan terdaftar', re.I)
+NIK = re.compile(r'^\d{16}$')
+KOLOM_NIK = re.compile(r'nik|ktp|passport|paspor|identitas', re.I)
+MAKS_HAL_TEKS = 3
+LEBAR = 1000
+DPI = 110
+TAJUK = {'struktur': 'Struktur Organisasi', 'legalitas': 'Legalitas'}
+CARI = {  # halaman tujuan yang sudah ada (judul/slug), dicek berurutan di situs
+    'struktur': r'struktur',
+    'legalitas': r'legalitas|perizinan|legal',
+    'daftar': r'tim|advokat|anggota|pengurus|pengajar|dokter|staf|paralegal',
+}
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def teks_pdf(path, hal=None, layout=False):
+    cmd = ['pdftotext'] + (['-layout'] if layout else []) + (['-f', str(hal), '-l', str(hal)] if hal else []) + [str(path), '-']
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def jumlah_hal(path):
+    try:
+        keluar = subprocess.run(['pdfinfo', str(path)], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    m = re.search(r'^Pages:\s+(\d+)', keluar, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def jenis(path):
+    nama = path.stem
+    if LEWATI.search(nama):
+        return ''
+    awal = teks_pdf(path, 1)[:1500]
+    if STRUKTUR.search(nama) and STRUKTUR_ISI.search(nama + ' ' + awal):
+        return 'struktur'
+    if DAFTAR.search(nama) and DAFTAR_ISI.search(nama + ' ' + awal[:600]) and len(awal.strip()) > 80:
+        return 'daftar'
+    if LEGAL.search(nama):
+        return 'legalitas'
+    if re.search(r'struktur organisasi|bagan organisasi', awal[:400], re.I):
+        return 'struktur'
+    if LEGAL_ISI.search(awal[:800]):
+        return 'legalitas'
+    return ''
+
+
+def kumpulkan(folder):
+    hasil = []
+    for p in sorted(folder.rglob('*.pdf')) + sorted(folder.rglob('*.PDF')):
+        rel = p.relative_to(folder)
+        if any(PRIBADI.search(bagian) for bagian in rel.parts):
+            continue
+        j = jenis(p)
+        if j:
+            hasil.append((p, j))
+    return hasil
+
+
+def judul_dokumen(path):
+    t = re.sub(r'[-_]+\d*$', '', path.stem)
+    t = re.sub(r'[_]+', ' ', t).strip()
+    return t.title() if t.isupper() or t.islower() else t
+
+
+def render(path, kerja, kunci):
+    """Gambar halaman PDF (JPEG) dengan NIK ditutup dan tepi putih dipangkas → [nama berkas]."""
+    from PIL import Image, ImageChops, ImageDraw
+    n = jumlah_hal(path)
+    bertek = len(teks_pdf(path).strip()) > 80
+    halaman = range(1, n + 1) if bertek and n <= MAKS_HAL_TEKS else range(1, 2)
+    keluar = []
+    for h in halaman:
+        dasar = kerja / f'{kunci}-{h}'
+        subprocess.run(['pdftoppm', '-r', str(DPI), '-png', '-f', str(h), '-l', str(h), '-singlefile', str(path), str(dasar)],
+                       capture_output=True, timeout=120)
+        png = dasar.with_suffix('.png')
+        if not png.is_file():
+            continue
+        im = Image.open(png).convert('RGB')
+        tertutup = 0
+        if bertek:
+            bbox = subprocess.run(['pdftotext', '-bbox', '-f', str(h), '-l', str(h), str(path), '-'],
+                                  capture_output=True, text=True, timeout=60).stdout
+            d = ImageDraw.Draw(im)
+            s = DPI / 72
+            for m in re.finditer(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]+)</word>', bbox):
+                if NIK.match(m.group(5).strip()):
+                    x0, y0, x1, y1 = (float(v) * s for v in m.groups()[:4])
+                    d.rectangle([x0 - 2, y0 - 2, x1 + 2, y1 + 2], fill=(60, 60, 60))
+                    tertutup += 1
+        # Pangkas tepi putih/kosong (akta hasil scan punya lajur putih lebar di kiri).
+        beda = ImageChops.difference(im, Image.new('RGB', im.size, (255, 255, 255))).convert('L').point(lambda v: 255 if v > 24 else 0)
+        kotak = beda.getbbox()
+        if kotak:
+            pad = 16
+            im = im.crop((max(kotak[0] - pad, 0), max(kotak[1] - pad, 0), min(kotak[2] + pad, im.width), min(kotak[3] + pad, im.height)))
+        if im.width > LEBAR:
+            im = im.resize((LEBAR, round(im.height * LEBAR / im.width)), Image.LANCZOS)
+        nama = f'{kunci}-{h}.jpg'
+        im.save(kerja / nama, quality=82, optimize=True, progressive=True)
+        png.unlink()
+        keluar.append({'berkas': nama, 'hal': h, 'nik_ditutup': tertutup})
+    return keluar
+
+
+def tabel_posisi(path):
+    """Tabel {judul, kolom, baris} dari posisi kata PDF (pdftotext -bbox), atau None.
+
+    pdftotext -layout menyusun sel bertingkat per baris teks sehingga isi kolom bercampur
+    ("23.03536 - PENGADILAN" / "DPC PERADI TINGGI"); AI yang menebak dari teks itu salah menaruh sel
+    (lbhdkm.or.id 2026-09-30). Di sini kolom = awal segmen kata yang sejajar di ≥2 baris, baris
+    tabel = baris teks yang diawali nomor urut; baris lanjutan ditempel ke sel kolomnya."""
+    bbox = subprocess.run(['pdftotext', '-bbox', '-f', '1', '-l', '1', str(path), '-'],
+                          capture_output=True, text=True, timeout=60).stdout
+    kata = [(round(float(y0)), float(x0), float(x1), html_unescape(t)) for x0, y0, x1, t in
+            re.findall(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="[\d.]+">([^<]*)</word>', bbox)]
+    if len(kata) < 12:
+        return None
+    baris_teks = {}
+    for y, x0, x1, t in kata:
+        kunci = next((k for k in baris_teks if abs(k - y) <= 3), y)
+        baris_teks.setdefault(kunci, []).append((x0, x1, t))
+    segmen = []  # (y, x0, teks)
+    for y in sorted(baris_teks):
+        kini = None
+        for x0, x1, t in sorted(baris_teks[y]):
+            if kini and x0 - kini[2] < 10:
+                kini[1] += ' ' + t
+                kini[2] = x1
+            else:
+                kini = [x0, t, x1]
+                segmen.append([y, kini])
+    segmen = [(y, k[0], k[1]) for y, k in segmen]
+    # Awal kolom: x0 segmen yang muncul di ≥2 baris berbeda (toleransi 6pt).
+    awal = []
+    for _, x0, _ in segmen:
+        grup = next((g for g in awal if abs(g[0] - x0) <= 6), None)
+        if grup:
+            grup[1] += 1
+        else:
+            awal.append([x0, 1])
+    kolom_x = sorted(g[0] for g in awal if g[1] >= 3)
+    if len(kolom_x) < 2:
+        return None
+    nomor = re.compile(r'^\d{1,3}[.)]\s*')
+    ys = sorted(baris_teks)
+    mulai = [y for y in ys if any(sy == y and abs(x0 - kolom_x[0]) <= 6 and nomor.match(t) for sy, x0, t in segmen)]
+    if len(mulai) < 2:
+        return None
+    kol = lambda x0: max(i for i, x in enumerate(kolom_x) if x <= x0 + 6) if x0 + 6 >= kolom_x[0] else 0
+    y_tajuk = max((y for y in ys if y < mulai[0] and len({kol(x0) for sy, x0, _ in segmen if sy == y}) >= 2), default=None)
+    if y_tajuk is None:
+        return None
+    judul_kol = [''] * len(kolom_x)
+    for sy, x0, t in segmen:
+        if y_tajuk - 20 <= sy <= y_tajuk:
+            judul_kol[kol(x0)] = (judul_kol[kol(x0)] + ' ' + t).strip()
+    jarak = sorted(b - a for a, b in zip(mulai, mulai[1:]))
+    batas = jarak[len(jarak) // 2] * 1.6 if jarak else 60
+    baris, kini, y_akhir = [], None, None
+    for y in ys:
+        if y <= y_tajuk:
+            continue
+        if y_akhir is not None and y - y_akhir > batas:
+            break  # kop/alamat surat di bawah tabel
+        seg = [(x0, t) for sy, x0, t in segmen if sy == y]
+        if y in mulai or kini is None:
+            kini = [''] * len(kolom_x)
+            baris.append(kini)
+        for x0, t in seg:
+            i = kol(x0)
+            kini[i] = (kini[i] + ' ' + t).strip()
+        y_akhir = y
+    # Kolom pertama berisi nomor urut: dibuang (tabel situs menulis nomornya sendiri).
+    baris = [[nomor.sub('', b[0])] + b[1:] for b in baris if any(b)]
+    judul = ' '.join(t for sy, _, t in segmen if sy < y_tajuk - 20)[:120].strip()
+    return {'judul': judul or judul_dokumen(path), 'kolom': [j or '-' for j in judul_kol],
+            'baris': [[c or '–' for c in b] for b in baris]}
+
+
+def html_unescape(t):
+    import html
+    return html.unescape(t)
+
+
+def tabel_ai(manifest, path, simpanan):
+    """Tabel dari PDF daftar; disimpan per sidik berkas (run ulang tanpa AI).
+
+    Susunan sel dari posisi kata (tabel_posisi); AI hanya merapikan kapitalisasi dan harus
+    mengembalikan bentuk yang sama. Tanpa susunan posisi, AI menyusun dari teks -layout."""
+    sidik = hashlib.sha1(path.read_bytes()).hexdigest()[:16]
+    if sidik in simpanan:
+        return simpanan[sidik]
+    mentah = tabel_posisi(path)
+    sys.argv = [sys.argv[0], str(manifest)]  # log AI → ai-<domain>.log
+    gen = muat('ai_content_generator', HERE / 'ai-content-generator.py')
+    if mentah:
+        prompt = f"""Rapikan tabel JSON berikut untuk ditampilkan di situs. Aturan:
+- Bentuk HARUS sama: jumlah kolom dan baris tetap, urutan tetap, sel tidak dipindah atau digabung.
+- Hanya perbaiki kapitalisasi: nama orang & kata biasa huruf kapital wajar (ABDULAH IHSAN, S.H., M.H. →
+  Abdulah Ihsan, S.H., M.H.; PENGADILAN TINGGI → Pengadilan Tinggi); singkatan tetap kapital (DPC PERADI, AMd, S.H.).
+- Judul kolom yang disingkat boleh dipanjangkan hanya bila jelas (KET → Keterangan). Jangan menambah data.
+
+{json.dumps(mentah, ensure_ascii=False)}
+
+Balas JSON array berisi SATU objek dengan kunci yang sama: [{{"judul": "...", "kolom": [...], "baris": [[...]]}}]"""
+    else:
+        teks = teks_pdf(path, layout=True)[:8000]
+        prompt = f"""Teks berikut hasil pdftotext -layout dari dokumen tabel "{path.stem}".
+Susun ulang menjadi tabel. Sel yang terpecah ke beberapa baris teks digabung.
+Nama ditulis kapital wajar (Abdulah Ihsan, S.H., M.H.). Sel kosong = "–". Kolom nomor urut dibuang.
+Kop/alamat surat di bawah tabel BUKAN bagian tabel. Jangan menambah data yang tidak ada di teks.
+
+{teks}
+
+Balas JSON array berisi SATU objek: [{{"judul": "judul dokumen", "kolom": ["..."], "baris": [["..."]]}}]"""
+    hasil = gen.ai_json_list('You clean up tables extracted from PDF. Output ONLY a valid JSON array.',
+                             prompt, gen.get_model('konten'), 'dokumen_tabel') or []
+    t = hasil[0] if hasil and isinstance(hasil[0], dict) else {}
+    kolom = [str(k) for k in t.get('kolom') or []]
+    baris = [[str(c) for c in b] for b in t.get('baris') or [] if isinstance(b, list)]
+    if mentah and (len(kolom) != len(mentah['kolom']) or len(baris) != len(mentah['baris'])
+                   or any(len(b) != len(kolom) for b in baris)):
+        print('dokumen_klien: rapikan_ai_berubah_bentuk:pakai_mentah')
+        t, kolom, baris = mentah, mentah['kolom'], mentah['baris']
+    if not kolom or not baris:
+        return None
+    # Kolom NIK/No. KTP tidak pernah tampil.
+    buang = {i for i, k in enumerate(kolom) if KOLOM_NIK.search(k)}
+    buang |= {i for i in range(len(kolom)) if any(i < len(b) and NIK.match(re.sub(r'\D', '', b[i]) or 'x') for b in baris)}
+    t = {'judul': str(t.get('judul') or judul_dokumen(path)),
+         'kolom': [k.capitalize() if k.isupper() and len(k) > 3 else k for i, k in enumerate(kolom) if i not in buang],
+         'baris': [[c for i, c in enumerate(b) if i not in buang] for b in baris]}
+    simpanan[sidik] = t
+    return t
+
+
+REMOTE_PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/image.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+$T = $args[0];
+$d = json_decode(file_get_contents($T . '/dokumen.json'), true);
+// Induk halaman baru & submenunya: butir teratas menu utama yang menunjuk halaman Tentang Kami, atau
+// yang berlabel tentang/profil/about (menu form bisa menamainya "Tentang DKM").
+$tentang = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);
+$tentang_id = $tentang ? $tentang[0]->ID : 0;
+$lokasi = get_nav_menu_locations(); $menu_utama = (int) ($lokasi['primary'] ?? 0);
+$tentang_item = null;
+foreach ($menu_utama ? (wp_get_nav_menu_items($menu_utama) ?: []) : [] as $it) {
+    if ((int) $it->menu_item_parent !== 0) { continue; }
+    if ($it->object === 'page' && (int) $it->object_id === (int) $tentang_id) { $tentang_item = $it; break; }
+    if (!$tentang_item && preg_match('/tentang|profil|about/i', $it->title)) { $tentang_item = $it; }
+}
+if ($tentang_item && $tentang_item->object === 'page') { $tentang_id = (int) $tentang_item->object_id; }
+$media = function ($f, $judul) use ($T) {
+    $kunci = md5_file($T . '/' . $f['berkas']);
+    $ada = get_posts(['post_type' => 'attachment', 'meta_key' => '_velocity_dokumen', 'meta_value' => $kunci, 'numberposts' => 1, 'fields' => 'ids']);
+    if ($ada) { return $ada[0]; }
+    $tmp = wp_tempnam($f['berkas']); copy($T . '/' . $f['berkas'], $tmp);
+    $id = media_handle_sideload(['name' => $f['berkas'], 'tmp_name' => $tmp], 0, $judul);
+    if (is_wp_error($id)) { @unlink($tmp); echo "dokumen_klien: media_gagal:{$f['berkas']}\n"; return 0; }
+    update_post_meta($id, '_velocity_dokumen', $kunci);
+    update_post_meta($id, '_wp_attachment_image_alt', $judul);
+    return $id;
+};
+$gambar = function ($id, $lightbox) {
+    $url = esc_url(wp_get_attachment_image_url($id, 'large')); $alt = esc_attr(get_the_title($id));
+    $lb = $lightbox ? ',"lightbox":{"enabled":true}' : '';
+    return "<!-- wp:image {\"id\":$id,\"sizeSlug\":\"large\",\"linkDestination\":\"none\"$lb} -->\n"
+         . "<figure class=\"wp-block-image size-large\"><img src=\"$url\" alt=\"$alt\" class=\"wp-image-$id\"/></figure>\n<!-- /wp:image -->\n";
+};
+// Halaman tujuan: yang sudah ada (judul/slug cocok), selain itu anak baru Tentang Kami + submenu.
+$tujuan = function ($pola, $judul) use ($tentang_id) {
+    foreach (get_posts(['post_type' => 'page', 'post_status' => 'publish', 'numberposts' => -1, 'orderby' => 'ID', 'order' => 'ASC']) as $p) {
+        if (in_array((int) $p->ID, [(int) get_option('page_on_front'), (int) get_option('page_for_posts')], true)) { continue; }
+        if (preg_match('/' . $pola . '/i', $p->post_title . ' ' . $p->post_name)) { return [$p->ID, false]; }
+    }
+    $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => $judul,
+                          'post_name' => sanitize_title($judul), 'post_parent' => $tentang_id, 'post_content' => ''], true);
+    if (is_wp_error($id)) { echo "dokumen_klien: halaman_gagal:$judul\n"; return [0, false]; }
+    echo "dokumen_klien: halaman_dibuat:" . sanitize_title($judul) . ":$id\n";
+    return [$id, true];
+};
+$submenu = function ($hal) use ($menu_utama, $tentang_item) {
+    $menu = $menu_utama; $induk = $tentang_item;
+    if (!$menu || !$induk) { echo "dokumen_klien: submenu_dilewati:tanpa_menu_tentang\n"; return; }
+    foreach (wp_get_nav_menu_items($menu) ?: [] as $it) { if ((int) $it->object_id === (int) $hal && $it->object === 'page') { return; } }
+    $baru = wp_update_nav_menu_item($menu, 0, ['menu-item-object-id' => $hal, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type',
+                                                'menu-item-parent-id' => $induk->ID, 'menu-item-status' => 'publish']);
+    if (is_wp_error($baru)) { return; }
+    // Taruh sesudah anak terakhir menu Tentang (bukan di ujung menu).
+    $urut = []; $sisip = false;
+    foreach (wp_get_nav_menu_items($menu, ['orderby' => 'menu_order']) as $it) {
+        if ((int) $it->ID === (int) $baru) { continue; }
+        if ($sisip && (int) $it->menu_item_parent !== (int) $induk->ID) { $urut[] = $baru; $sisip = false; }
+        $urut[] = $it->ID;
+        if ((int) $it->ID === (int) $induk->ID || (int) $it->menu_item_parent === (int) $induk->ID) { $sisip = true; }
+    }
+    if ($sisip) { $urut[] = $baru; }
+    foreach ($urut as $i => $id) { wp_update_post(['ID' => $id, 'menu_order' => $i + 1]); }
+    echo "dokumen_klien: submenu:$hal\n";
+};
+$pasang = function ($hal, $kunci, $blok) {
+    $p = get_post($hal); if (!$p) { return; }
+    $blok = "<!-- velocity-dokumen:$kunci -->\n$blok<!-- /velocity-dokumen:$kunci -->\n";
+    $pola = '/<!-- velocity-dokumen:' . preg_quote($kunci, '/') . ' -->.*?<!-- \/velocity-dokumen:' . preg_quote($kunci, '/') . ' -->\n?/s';
+    $isi = preg_match($pola, $p->post_content) ? preg_replace($pola, str_replace(['\\', '$'], ['\\\\', '\\$'], $blok), $p->post_content, 1)
+                                                 : $blok . $p->post_content;
+    if ($isi !== $p->post_content) { wp_update_post(['ID' => $hal, 'post_content' => $isi]); }
+    echo "dokumen_klien: terpasang:$kunci:$hal\n";
+};
+
+$per_halaman = [];
+foreach ($d['dokumen'] as $dok) {
+    [$hal, $baru] = $tujuan($dok['cari'], $dok['tajuk']);
+    if (!$hal) { continue; }
+    if ($baru || (int) get_post($hal)->post_parent === (int) $tentang_id) { $submenu($hal); }
+    $per_halaman[$hal][] = $dok;
+}
+foreach ($per_halaman as $hal => $daftar) {
+    foreach (['struktur', 'legalitas', 'daftar'] as $j) {
+        $dok_j = array_values(array_filter($daftar, function ($x) use ($j) { return $x['jenis'] === $j; }));
+        if (!$dok_j) { continue; }
+        $blok = '';
+        if ($j === 'daftar') {
+            foreach ($dok_j as $dok) {
+                $t = $dok['tabel'];
+                $h = '<figure class="wp-block-table is-style-stripes"><table><thead><tr><th>No</th>';
+                foreach ($t['kolom'] as $k) { $h .= '<th>' . esc_html($k) . '</th>'; }
+                $h .= '</tr></thead><tbody>';
+                foreach ($t['baris'] as $i => $b) {
+                    $h .= '<tr><td>' . ($i + 1) . '</td>';
+                    foreach ($t['kolom'] as $ki => $_) { $h .= '<td>' . esc_html($b[$ki] ?? '–') . '</td>'; }
+                    $h .= '</tr>';
+                }
+                $h .= '</tbody></table><figcaption class="wp-element-caption">' . esc_html($t['judul']) . '</figcaption></figure>';
+                $blok .= "<!-- wp:table {\"className\":\"is-style-stripes\"} -->\n$h\n<!-- /wp:table -->\n";
+            }
+        } else {
+            $ids = [];
+            foreach ($dok_j as $dok) {
+                foreach ($dok['gambar'] as $g) {
+                    $judul = $dok['judul'] . (count($dok['gambar']) > 1 ? ' (halaman ' . $g['hal'] . ')' : '');
+                    if ($id = $media($g, $judul)) { $ids[] = $id; }
+                }
+            }
+            if (!$ids) { continue; }
+            if (count($ids) === 1) {
+                $blok = $gambar($ids[0], true);
+            } else {
+                $blok = "<!-- wp:paragraph -->\n<p>Klik gambar untuk memperbesar.</p>\n<!-- /wp:paragraph -->\n"
+                      . "<!-- wp:gallery {\"columns\":3,\"imageCrop\":false,\"linkTo\":\"none\"} -->\n<figure class=\"wp-block-gallery has-nested-images columns-3\">\n";
+                foreach ($ids as $id) { $blok .= $gambar($id, false); }
+                $blok .= "</figure>\n<!-- /wp:gallery -->\n";
+            }
+            if (array_sum(array_map(function ($dok) { return array_sum(array_column($dok['gambar'], 'nik_ditutup')); }, $dok_j))) {
+                $blok .= "<!-- wp:paragraph -->\n<p><em>Nomor identitas (NIK) pada dokumen sengaja ditutup untuk melindungi data pribadi.</em></p>\n<!-- /wp:paragraph -->\n";
+            }
+        }
+        if ($blok) { $pasang($hal, $j, $blok); }
+    }
+}
+// Tabel lebar bergeser di dalam kotaknya di HP; kolom konten tema klasik tidak ikut melebar.
+$css = wp_get_custom_css();
+if (strpos($css, '/* velocity-dokumen */') === false) {
+    $css .= "\n/* velocity-dokumen */\n.content-area,.site-main,.page-article,.page-article__content{min-width:0;max-width:100%}\n"
+          . ".wp-block-table{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}\n"
+          . ".wp-block-table table{width:100%;border-collapse:collapse}\n.wp-block-table th,.wp-block-table td{padding:.5rem .6rem;vertical-align:top}\n"
+          . "@media(max-width:600px){.wp-block-table table{font-size:.85rem;min-width:520px}}\n"
+          . ".wp-block-gallery .wp-block-image img{border:1px solid #d9dee5;background:#fff}\n/* /velocity-dokumen */\n";
+    wp_update_custom_css_post($css);
+}
+echo "dokumen_klien: selesai\n";
+'''
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    manifest = Path(args[0])
+    tpb = muat('theme_paket_biasa', HERE / 'theme-paket-biasa')
+    cfg = tpb.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not domain:
+        print('dokumen_klien: manifest_tanpa_domain')
+        return 2
+    if re.sub(r'\s', '', cfg.get('paket', '').lower()) in PAKET_CUSTOM or cfg.get('tema_fse'):
+        print('dokumen_klien: dilewati:paket_custom_atau_fse')
+        return 0
+    try:
+        isi = json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        isi = {}
+    if isi.get('jenis') == 'berita':
+        print('dokumen_klien: dilewati:portal_berita')
+        return 0
+    # Situs yang sudah ter-deploy tidak diubah tanpa persetujuan user (feedback 2026-09-23).
+    import cari_logo
+    if cari_logo.sudah_terpasang(domain) and '--paksa' not in sys.argv and not coba:
+        print('dokumen_klien: dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+        return 0
+    folder = folder_klien(domain)
+    dokumen = kumpulkan(folder) if folder.is_dir() else []
+    if not dokumen:
+        print('dokumen_klien: dilewati:tanpa_dokumen')
+        return 0
+    print('dokumen_klien: rencana ' + ' | '.join(f'{p.name} → {j}' for p, j in dokumen))
+    if coba:
+        return 0
+    simpan = GENERATED_DIR / f'{domain}-dokumen.json'
+    try:
+        simpanan = json.loads(simpan.read_text())
+    except (OSError, ValueError):
+        simpanan = {}
+    kerja = Path(tempfile.mkdtemp(prefix=f'dokumen-klien-{domain}-'))
+    data = []
+    for i, (p, j) in enumerate(dokumen, 1):
+        judul = judul_dokumen(p)
+        dok = {'jenis': j, 'judul': judul, 'cari': CARI[j], 'tajuk': TAJUK.get(j, judul)}
+        if j == 'daftar':
+            t = tabel_ai(manifest, p, simpanan)
+            if not t:
+                print(f'dokumen_klien: tabel_gagal:{p.name}')
+                continue
+            dok['tabel'] = t
+            dok['tajuk'] = t['judul'].title() if t['judul'].isupper() else t['judul']
+        else:
+            dok['gambar'] = render(p, kerja, f'{re.sub(r"[^a-z0-9]+", "-", domain)}-{j}-{i}')
+            if not dok['gambar']:
+                print(f'dokumen_klien: render_gagal:{p.name}')
+                continue
+        data.append(dok)
+    simpan.write_text(json.dumps(simpanan, ensure_ascii=False, indent=1))
+    if not data:
+        print('dokumen_klien: selesai')
+        return 0
+    (kerja / 'dokumen.json').write_text(json.dumps({'dokumen': data}, ensure_ascii=False))
+    keluar = tpb.kirim(cfg, kerja, REMOTE_PHP, domain)
+    return 0 if keluar and 'dokumen_klien: selesai' in keluar else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

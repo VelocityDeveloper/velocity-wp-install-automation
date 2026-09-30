@@ -239,14 +239,21 @@
           if (/menu_form: menu_dibiarkan/.test(t)) return 'menu disunting, dibiarkan';
           const m = /menu_form: menu_disusun:(\d+)/.exec(t); return m ? m[1] + ' butir menu' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+      // PDF materi klien → gambar (struktur, legalitas: AHU, akta hal. 1; NIK ditutup) & tabel daftar orang
+      // (scripts/dokumen-klien, lbhdkm.or.id 2026-09-30).
+      { id: 'dokumenKlien', kol: 18, jalur: 3, nama: 'Dokumen klien', ket0: 'PDF struktur & legalitas jadi gambar (NIK ditutup), daftar advokat/pengurus jadi tabel',
+        mulai: /\] Dokumen klien$/, selesai: /dokumen_klien: (selesai|dilewati)/, gagal: /dokumen_klien: (halaman_gagal|media_gagal|render_gagal|tabel_gagal)/,
+        ketHasil: t => { if (/dokumen_klien: dilewati:(\S+)/.test(t)) return 'dilewati: ' + /dokumen_klien: dilewati:(\S+)/.exec(t)[1];
+          const n = (t.match(/dokumen_klien: terpasang:/g) || []).length; return n ? n + ' blok dokumen' : null; },
+        aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
-      { id: 'paketTour', kol: 18, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
+      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
         mulai: /\] Paket tour$/, selesai: /paket_tour: (selesai|dilewati)/, gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)/,
         ketHasil: t => { if (/paket_tour: dilewati/.test(t)) return 'dilewati (bukan tema tour)';
           const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
           return m ? (+m[1] + +m[2]) + ' paket' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
-      { id: 'fotoKlasik', kol: 19, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
+      { id: 'fotoKlasik', kol: 20, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
         mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
         ketHasil: t => {
           const bank = /foto: (\d+)\/(\d+) artikel diberi foto utama/.exec(t);
@@ -388,7 +395,7 @@
       ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung)],
       ['agenClaude', 'permintaan'],
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
-      ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'], ['menuForm', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
+      ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
       ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
