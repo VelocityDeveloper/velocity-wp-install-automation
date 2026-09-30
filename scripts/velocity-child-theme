@@ -469,7 +469,9 @@ def perbaiki_kontras(latar, minimal=KONTRAS_MINIMAL, gelap=None):
 # Dibatasi non-angka di kedua sisi: teks sampah docx ("45808907399655" di sebelah
 # logo company profile medikaklinikteknologi.com) sempat terbaca sebagai nomor WA.
 NOMOR_RE = re.compile(r'(?<![\d+])(?:\+?62|0)8[\d\s.-]{7,14}\d(?!\d)')
-EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+\.[\w.-]+')
+# Domain email berakhir huruf: titik penutup kalimat ("email: x@gmail.com.") tidak ikut —
+# lbhdkm.or.id 2026-09-29 terbit dengan mailto:...@gmail.com. dari kop surat PDF.
+EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}')
 
 
 def nomor_wa(teks):

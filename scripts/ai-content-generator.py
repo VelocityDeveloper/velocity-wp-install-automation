@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client_form import read_client_form
 from client_docs import collect_client_docs, format_for_prompt
 from content_sanitize import buang_kalimat_meragukan, clean_html
+from folder_klien import folder_klien
 
 CONTENT_RULES = """Aturan konten (wajib):
 - Gunakan HANYA fakta dari data klien di atas: nama usaha, produk/layanan, keunggulan, sejarah, visi-misi, area layanan, alamat, kontak. Jangan mengarang nomor telepon, alamat, harga, angka, penghargaan, atau klaim yang tidak ada di data. Kalau suatu info tidak ada, lewati tanpa menulis contoh palsu.
@@ -363,17 +364,26 @@ def rapikan_artikel(daftar, category):
 BIODATA_KUNCI = re.compile(r'^(alamat lengkap|nama anda|nama pemilik|whatsapp|no\.? ?wa|e-?mail|kodepos)$', re.I)
 
 
-def buang_data_pemilik(konten, client_data):
+def buang_data_pemilik(konten, client_data, materi_publik=''):
     """Buang paragraf/butir yang memuat biodata pemilik dari isi halaman & artikel.
 
     Aturan prompt melarangnya, tetapi halaman Hubungi Kami anaksegalabangsa.com
     tetap terbit dengan "Alamat Media: Desa Kedanyang RT 4 RW 1" — alamat rumah
-    pemilik dari bagian biodata FORM ISIAN. Karena itu dijaga di kode."""
+    pemilik dari bagian biodata FORM ISIAN. Karena itu dijaga di kode.
+
+    materi_publik: teks dokumen klien selain FORM ISIAN. NAMA pemilik yang juga tertulis di
+    materi (struktur organisasi, daftar tim) memang untuk ditampilkan — lbhdkm.or.id 2026-09-29
+    kehilangan Ketua di Struktur Organisasi & Tim Hukum karena namanya sama dengan biodata."""
+    publik = re.sub(r'[^a-z]+', ' ', str(materi_publik or '').lower())
     nilai = []
     for kunci, isi in (client_data or {}).items():
         if not BIODATA_KUNCI.match(str(kunci).strip()):
             continue
         teks = re.sub(r'\s+', ' ', str(isi or '')).strip().lower()
+        if re.match(r'nama', str(kunci).strip(), re.I):
+            inti = re.sub(r'[^a-z]+', ' ', teks.split(',')[0]).strip()  # tanpa gelar "S.H., M.H."
+            if len(inti) >= 6 and f' {inti} ' in f' {publik} ':
+                continue
         # "Alamat lengkap: Balikpapan" hanyalah nama kota (allikan.com 2026-09-17): menyaringnya
         # membuang 32 paragraf yang menyebut kota usaha. Alamat rumah punya angka atau >=3 kata.
         if re.match(r'alamat', str(kunci).strip(), re.I) and not re.search(r'\d', teks) and len(teks.split()) < 3:
@@ -916,10 +926,13 @@ def main():
     
     # Biodata pemilik tidak boleh terbit, apa pun yang ditulis AI.
     jumlah_buang = 0
+    if not docs['sources']:
+        docs = collect_client_docs(folder_klien(domain))
+    materi_publik = ' '.join(t for n, t in docs['sources'] if n not in docs.get('form', ()))
     for daftar in (pages, articles):
         for item in daftar if isinstance(daftar, list) else []:
             if isinstance(item, dict) and item.get('content'):
-                item['content'], n = buang_data_pemilik(item['content'], client_data)
+                item['content'], n = buang_data_pemilik(item['content'], client_data, materi_publik)
                 jumlah_buang += n
     if jumlah_buang:
         log(f'Data pribadi pemilik dibuang dari konten: {jumlah_buang} paragraf/butir')

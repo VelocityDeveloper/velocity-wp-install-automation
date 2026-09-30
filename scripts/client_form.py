@@ -429,6 +429,72 @@ def pesan_tambahan(text):
     return '\n'.join(hasil).strip()
 
 
+
+# Singkatan yang tetap kapital saat label submenu dirapikan.
+_SINGKATAN = {'lhk', 'pt', 'cv', 'ukm', 'umkm', 'faq', 'csr', 'sop', 'hr', 'it', 'ham', 'lbh', 'rt', 'rw', 'k3'}
+
+
+def _rapikan_label(teks):
+    t = re.sub(r'\s+', ' ', str(teks or '')).strip(' .;:-–')
+    t = re.split(r'\s+(?:termasuk|berisi|meliputi|yang berisi|isinya)\b', t, flags=re.I)[0].strip(' ,.;')
+    kata = []
+    for i, k in enumerate(t.split()):
+        inti = k.strip('()&,')
+        if inti.lower() in _SINGKATAN or (inti.isupper() and len(inti) <= 5 and not t.isupper()):
+            kata.append(k.upper())
+        elif i and k.lower() in ('dan', 'atau', 'di', 'ke', 'dari', 'untuk', '&'):
+            kata.append(k.lower())
+        else:
+            kata.append(k[:1].upper() + (k[1:].lower() if t.isupper() or t.islower() else k[1:]))
+    return ' '.join(kata)
+
+
+def _pecah_anak(teks):
+    """"a, b, dan c" atau "- a - b" → [(label, catatan)]."""
+    teks = str(teks or '').strip().rstrip('.')
+    if re.search(r'(^|\s)-\s', teks):
+        potong = [x for x in re.split(r'(?:^|\s)-\s+', teks) if x.strip()]
+    else:
+        potong = re.split(r'\s*,\s*(?:dan\s+)?', teks)
+    hasil = []
+    for x in potong:
+        label = _rapikan_label(x)
+        if label and len(label) <= 60:
+            hasil.append((label, x.strip()))
+    return hasil
+
+
+def susunan_menu(folder):
+    """[{judul, catatan, anak:[{judul, catatan}]}] dari SUSUNAN MENU ATAS form klien.
+
+    Dipakai scripts/menu-form (permintaan user 2026-09-30, lbhdkm.or.id: menu form bersubmenu tidak
+    diterapkan, situs tetap Beranda/Tentang Kami/Galeri/Berita/Hubungi Kami). Sumber utama
+    `menu_struktur` agen baca-form-claude; hasil baca lama tanpa kunci itu diurai dari menu_atas +
+    isi_menu ("Layanan terdiri: Pidana, Perdata", "Tentang - profil - tim")."""
+    d = hasil_claude(folder) or {}
+    if d.get('menu_struktur'):
+        return [{'judul': _rapikan_label(m.get('judul')), 'catatan': str(m.get('catatan') or ''),
+                 'anak': [{'judul': _rapikan_label(a.get('judul')), 'catatan': str(a.get('catatan') or '')}
+                          for a in m.get('anak') or [] if _rapikan_label(a.get('judul'))]}
+                for m in d['menu_struktur'] if _rapikan_label(m.get('judul'))]
+    atas = [_rapikan_label(m) for m in d.get('menu_atas') or [] if _rapikan_label(m)]
+    if not atas:
+        return []
+    menu = [{'judul': m, 'catatan': '', 'anak': []} for m in atas]
+    kunci = {re.sub(r'[^a-z0-9]', '', m['judul'].lower()): m for m in menu}
+    for baris in str(d.get('isi_menu') or '').splitlines():
+        b = baris.strip()
+        m = re.match(r'^(.{2,40}?)\s+(?:terdiri|berisi|meliputi|isinya)(?:\s+(?:dari|atas))?\s*:?\s*(.+)$', b, re.I)
+        if m and re.sub(r'[^a-z0-9]', '', m.group(1).lower()) in kunci:
+            induk = kunci[re.sub(r'[^a-z0-9]', '', m.group(1).lower())]
+            induk['anak'] = [{'judul': j, 'catatan': c} for j, c in _pecah_anak(m.group(2))]
+            continue
+        # Catatan isi: "Di menu advokasi berisi kegiatan ..." → catatan menu tsb.
+        for k, induk in kunci.items():
+            if re.search(r'\bmenu\s+' + re.escape(induk['judul']) + r'\b', b, re.I):
+                induk['catatan'] = (induk['catatan'] + ' ' + b).strip()
+    return menu
+
 if __name__ == '__main__':
     import sys
     res = read_client_form(sys.argv[1])

@@ -76,6 +76,10 @@ SKEMA = objek({
     'paket': s(),
     'menu_atas': daftar(s()),
     'isi_menu': s(),
+    'menu_struktur': daftar(objek({
+        'judul': s(), 'catatan': s('isi yang diminta klien untuk menu ini'),
+        'anak': daftar(objek({'judul': s(), 'catatan': s('isi yang diminta klien untuk submenu ini')})),
+    })),
     'desain_dipilih': s(),
     'referensi_desain': daftar(objek({'url': s(), 'catatan': s()})),
     'referensi_konten': daftar(objek({'url': s(), 'catatan': s()})),

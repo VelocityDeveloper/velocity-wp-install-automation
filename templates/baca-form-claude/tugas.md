@@ -34,6 +34,12 @@ JSON. Yang tidak diisi klien = "" atau []. Jangan mengarang, jangan melengkapi d
   menulis tidak mau data pribadi/biodata/nomornya ditampilkan.
 - `menu_atas`: susunan menu yang ditulis klien (bukan contoh); "sesuaikan"/"terlampir" → [] dan tulis
   kalimat klien di `isi_menu`. `isi_menu`: isi tiap menu yang ditulis klien.
+- `menu_struktur`: `menu_atas` beserta submenunya, urut sesuai form. Submenu dari tulisan klien seperti
+  "Layanan terdiri: Pidana, Perdata" atau "Tentang - profil - tim". `judul` = label menu/submenu pendek
+  rapi (huruf kapital tiap kata, singkatan tetap, mis. "Profil & Visi Misi", "LHK"); keterangan isi
+  ("termasuk legalitas dan struktur organisasi", "berisi kegiatan dan perkembangan") masuk `catatan`,
+  bukan judul. Menu tanpa submenu → `anak` []. Baris yang bukan menu (nomor kontak, catatan umum) tidak
+  jadi menu. `menu_atas` kosong → [].
 - `desain_dipilih`: alamat template Velocity yang dipilih klien (mis. perusahaan1.velocitydeveloper.com).
 - `referensi_desain`: website yang ingin DICONTOH DESAINNYA (bukan velocitydeveloper.com, bukan contoh
   template, bukan domain klien sendiri) + kalimat klien sebagai `catatan`. Website yang disebut sebagai

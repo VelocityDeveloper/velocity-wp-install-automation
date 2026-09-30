@@ -259,7 +259,12 @@ BUKAN_FOTO_KLIEN = re.compile(r'contoh\s*warna|contoh\s*desain|referensi|screens
 # tidak pernah diambil fotonya (KTP pemilik pernah terunggah publik, bimbelppkgardamedika.or.id).
 FOTO_DOKUMEN = Path('/var/lib/velocity/foto-dokumen')
 DOKUMEN_PRIBADI = re.compile(r'ktp|npwp|akta|legal|izin|ijin|\bnib\b|siup|sertifikat|ijazah|kartu|identitas|'
-                             r'surat|invoice|kwitansi|kuitansi|nota|bukti|transfer|form\s*isian|biodata', re.I)
+                             r'surat|invoice|kwitansi|kuitansi|nota|bukti|transfer|form\s*isian|biodata|syarat', re.I)
+# Gambar lepas: folder dokumen pribadi/persyaratan ("syarat domain" berisi foto KTP pemilik untuk
+# pendaftaran .or.id — lbhdkm.or.id 2026-09-29 terpasang jadi banner, foto layanan & galeri) atau
+# nama berkas identitas. Nama berkas tidak memakai DOKUMEN_PRIBADI penuh: foto "sertifikat"/"kartu
+# nama" bisa memang bahan galeri.
+FOTO_PRIBADI = re.compile(r'ktp|npwp|identitas|kartu\s*keluarga|\bkk\b|paspor|passport|syarat|biodata', re.I)
 FOTO_DOKUMEN_MIN_SISI = 400
 
 
@@ -326,7 +331,9 @@ def client_assets(folder):
     if not folder.is_dir():
         return None, []
     files = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in IMG_EXT
-                   and not any(BUKAN_FOTO_KLIEN.search(bagian) for bagian in p.relative_to(folder).parts))
+                   and not any(BUKAN_FOTO_KLIEN.search(bagian) for bagian in p.relative_to(folder).parts)
+                   and not any(DOKUMEN_PRIBADI.search(bagian) for bagian in p.relative_to(folder).parts[:-1])
+                   and not FOTO_PRIBADI.search(p.name))
     logos = [p for p in files if re.search(r'logo', p.name, re.I) and p.stat().st_size >= 1000]
     # Logo bernama generik yang sudah dipastikan (cari_logo langkah 6) juga bukan foto.
     tersimpan = cari_logo.logo_tersimpan(folder.name)
@@ -477,9 +484,27 @@ elif [[ ${#ids[@]} -gt 0 && -n "$gal" ]] && managed "$gal"; then
   content=$(wp post get "$gal" --field=post_content 2>/dev/null || true)
   if [[ "$content" != *velocity-gallery* ]]; then
     joined=$(IFS=,; echo "${ids[*]}")
+    # Galeri = VD Gallery velocity-addons (permintaan user 2026-09-30, lbhdkm.or.id): klien bisa
+    # menambah/mengurutkan foto di menu VD Gallery, popup & kolom mengikuti pengaturan plugin.
+    # Tanpa plugin (kelas tidak ada) tetap [gallery] bawaan WordPress.
+    vdg=$(VDG_IDS="$joined" wp eval '
+if (!class_exists("Velocity_Addons_Gallery")) { return; }
+update_option("velocity_gallery", "1");
+$ids = array_values(array_filter(array_map("absint", explode(",", getenv("VDG_IDS")))));
+$ada = get_posts(["post_type" => "vdgallery", "name" => "galeri-situs", "post_status" => "any", "numberposts" => 1]);
+$id = wp_insert_post(["ID" => $ada ? $ada[0]->ID : 0, "post_type" => "vdgallery", "post_status" => "publish",
+    "post_title" => "Galeri " . get_bloginfo("name"), "post_name" => "galeri-situs"], true);
+if (is_wp_error($id)) { return; }
+update_post_meta($id, "vdgaleri", ["media" => $ids, "gallery_use_global_options" => "1", "slideshow_use_global_options" => "1"]);
+echo $id;' 2>/dev/null || true)
+    if [[ "$vdg" =~ ^[0-9]+$ ]]; then
+      kode="[vdgallery id=\"$vdg\"]"
+    else
+      kode="[gallery ids=\"$joined\" columns=\"3\" size=\"medium\" link=\"file\"]"
+    fi
     wp post update "$gal" --post_content="$content
 <!-- velocity-gallery -->
-[gallery ids=\"$joined\" columns=\"3\" size=\"medium\" link=\"file\"]" >/dev/null && save_md5 "$gal" && echo "gallery_added:${#ids[@]}" >&2
+$kode" >/dev/null && save_md5 "$gal" && echo "gallery_added:${#ids[@]}${vdg:+:vdgallery:$vdg}" >&2
   fi
 fi
 

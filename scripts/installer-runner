@@ -226,6 +226,10 @@ cek_tema_referensi() {
 tampilan_klasik() {
   echo "[$(date -Is)] Tampilan tema klasik" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Menu utama = SUSUNAN MENU ATAS form beserta submenu (halaman/kategori baru diisi AI). Sebelum foto
+  # artikel: artikel contoh kategori kegiatan ikut diberi foto (lbhdkm.or.id, user 2026-09-30).
+  echo "[$(date -Is)] Menu dari form" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/menu-form" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Child theme tour (velocity-tour1, dst.): beranda membaca CPT paket-tour dari plugin
   # velocity-tour-travel; langkah ini melewati tema lain sendiri.
   echo "[$(date -Is)] Paket tour" >> "$LOG"

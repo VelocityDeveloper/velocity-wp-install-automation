@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Menu utama situs paket biasa mengikuti SUSUNAN MENU ATAS di FORM ISIAN, lengkap dengan submenu.
+
+Permintaan user 2026-09-30 (lbhdkm.or.id): form menulis "Tentang DKM terdiri: profil & visi misi
+... - tim hukum", "Layanan terdiri: Pidana, perdata, ...", "Advokasi ... berisi kegiatan", tetapi
+situs tetap bermenu bawaan installer (Beranda, Tentang Kami, Layanan, Galeri, Berita, Hubungi Kami).
+
+  menu-form <manifest> [--coba]
+
+Susunan dibaca client_form.susunan_menu. Tiap butir dipetakan ke:
+- halaman bawaan installer menurut perannya (beranda, tentang, layanan, galeri, berita, kontak) —
+  label menu tetap tulisan klien ("Kontak" → halaman Hubungi Kami);
+- submenu Layanan yang cocok dengan daftar layanan → jangkar /layanan/#slug; submenu profil di
+  bawah menu tentang → halaman Tentang Kami;
+- menu/submenu yang catatannya "kegiatan/berita/perkembangan" → kategori (induk = menu), masing-masing
+  diberi 1 artikel contoh informatif (bukan laporan kejadian karangan);
+- selain itu → halaman baru (anak dari halaman menu induknya), isi ditulis AI dari form + materi.
+Halaman bawaan yang tidak disebut form: Galeri masuk submenu menu tentang (atau sebelum kontak);
+Berita hanya bila form tidak punya menu kategori sendiri.
+
+Isi AI disimpan di /var/lib/velocity/ai/generated/<domain>-menu.json (run ulang tanpa biaya AI).
+Menu hanya disusun ulang bila masih buatan installer (label bawaan) atau buatan skrip ini
+(opsi velocity_menu_form = md5 susunannya); halaman yang sudah disunting orang tidak ditimpa.
+Keluaran: baris "menu_form: ...".
+"""
+import importlib.machinery
+import importlib.util
+import json
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
+
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+PAKET_CUSTOM = {'paketg', 'portalberitacustom', 'tokoonlinecustom'}
+
+PERAN = [
+    ('beranda', re.compile(r'^(beranda|home|halaman utama)$', re.I)),
+    ('kontak', re.compile(r'kontak|hubungi|contact', re.I)),
+    ('galeri', re.compile(r'galeri|gallery|dokumentasi|foto', re.I)),
+    ('berita', re.compile(r'^(berita|artikel|blog|news|kabar)', re.I)),
+    ('layanan', re.compile(r'layanan|jasa|servi[cs]', re.I)),
+    ('tentang', re.compile(r'tentang|profil|about|sekilas', re.I)),
+]
+PROFIL = re.compile(r'profil|tentang|about|sejarah|visi', re.I)
+KEGIATAN = re.compile(r'kegiatan|berita|perkembangan|artikel|agenda|kabar|informasi terbaru', re.I)
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def slug(teks):
+    return re.sub(r'-+', '-', re.sub(r'[^a-z0-9]+', '-', str(teks).lower().replace('&', ' dan '))).strip('-')[:60]
+
+
+def polos(teks):
+    return re.sub(r'[^a-z0-9]', '', str(teks).lower())
+
+
+def peran(label):
+    return next((p for p, pola in PERAN if pola.search(label)), '')
+
+
+def cocok_layanan(label, layanan):
+    """Layanan tema (isi paket-g-konten) yang dimaksud label submenu, atau None."""
+    k = polos(label)
+    for l in layanan:
+        j = polos(l.get('judul'))
+        if k and j and (k == j or k in j or j in k):
+            return l
+    return None
+
+
+def rencana(menu, layanan):
+    """Susunan menu → butir {label, jenis, ...}. jenis: peran | jangkar | halaman | kategori."""
+    hasil, halaman, kategori = [], [], []
+    for m in menu:
+        p = peran(m['judul'])
+        kegiatan = bool(KEGIATAN.search(m['catatan'])) and p not in ('beranda', 'kontak', 'layanan')
+        if kegiatan:
+            butir = {'label': m['judul'], 'jenis': 'kategori', 'slug': slug(m['judul']), 'anak': []}
+            kategori.append({'slug': butir['slug'], 'judul': m['judul'], 'induk': '', 'catatan': m['catatan']})
+        elif p and (p != 'berita' or not m['anak']):
+            butir = {'label': m['judul'], 'jenis': 'peran', 'peran': p, 'anak': []}
+        else:
+            butir = {'label': m['judul'], 'jenis': 'halaman', 'slug': slug(m['judul']), 'induk': '', 'anak': []}
+            halaman.append({'slug': butir['slug'], 'judul': m['judul'], 'induk': '', 'catatan': m['catatan'],
+                            'anak': [a['judul'] for a in m['anak']]})
+        for a in m['anak']:
+            if butir['jenis'] == 'kategori' or KEGIATAN.search(a['catatan']):
+                s = slug(f"{m['judul']} {a['judul']}")
+                butir['anak'].append({'label': a['judul'], 'jenis': 'kategori', 'slug': s, 'induk': butir.get('slug', '')})
+                kategori.append({'slug': s, 'judul': a['judul'], 'induk': m['judul'],
+                                 'catatan': f"{a['catatan']} {m['catatan']}".strip()})
+                continue
+            if butir.get('peran') == 'layanan':
+                l = cocok_layanan(a['judul'], layanan)
+                if l:
+                    butir['anak'].append({'label': a['judul'], 'jenis': 'jangkar', 'url': f"/layanan/#{l['slug']}"})
+                    continue
+            if butir.get('peran') == 'tentang' and PROFIL.search(a['judul']):
+                butir['anak'].append({'label': a['judul'], 'jenis': 'peran', 'peran': 'tentang'})
+                continue
+            induk = butir.get('slug') or ''
+            s = slug(a['judul'])
+            butir['anak'].append({'label': a['judul'], 'jenis': 'halaman', 'slug': s, 'induk': induk,
+                                  'induk_peran': butir.get('peran', '')})
+            halaman.append({'slug': s, 'judul': a['judul'], 'induk': m['judul'], 'catatan': a['catatan'], 'anak': []})
+        hasil.append(butir)
+    # Halaman bawaan yang tidak disebut form.
+    ada = {b.get('peran') for b in hasil} | {a.get('peran') for b in hasil for a in b['anak']}
+    kontak_i = next((i for i, b in enumerate(hasil) if b.get('peran') == 'kontak'), len(hasil))
+    if 'galeri' not in ada:
+        tentang = next((b for b in hasil if b.get('peran') == 'tentang'), None)
+        if tentang:
+            tentang['anak'].append({'label': 'Galeri', 'jenis': 'peran', 'peran': 'galeri'})
+        else:
+            hasil.insert(kontak_i, {'label': 'Galeri', 'jenis': 'peran', 'peran': 'galeri', 'anak': []})
+            kontak_i += 1
+    if 'berita' not in ada and not kategori:
+        hasil.insert(kontak_i, {'label': 'Berita', 'jenis': 'peran', 'peran': 'berita', 'anak': []})
+    return hasil, halaman, kategori
+
+
+def tanpa_judul_ganda(isi, judul):
+    """Judul pertama yang sama dengan judul halaman dibuang: tema sudah mencetak H1 judul halaman."""
+    m = re.match(r'\s*<h[1-3]\b[^>]*>(.*?)</h[1-3]>', isi or '', re.S | re.I)
+    return isi[m.end():].lstrip() if m and polos(re.sub(r'<[^>]+>', '', m.group(1))) == polos(judul) else isi
+
+
+def tulis_isi(manifest, cfg, domain, halaman, kategori, simpanan):
+    """Isi AI halaman baru & artikel contoh kategori; yang sudah tersimpan tidak ditulis ulang."""
+    perlu_h = [h for h in halaman if h['slug'] not in simpanan['halaman']]
+    perlu_k = [k for k in kategori if k['slug'] not in simpanan['artikel']]
+    if not perlu_h and not perlu_k:
+        return simpanan
+    sys.argv = [sys.argv[0], str(manifest)]  # log AI → ai-<domain>.log
+    gen = muat('ai_content_generator', HERE / 'ai-content-generator.py')
+    from client_docs import collect_client_docs, format_for_prompt
+    from content_sanitize import clean_html
+    data = {}
+    for folder in (manifest.parent, folder_klien(domain)):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                data.setdefault(k, v)
+    docs = collect_client_docs(folder_klien(domain))
+    info = format_for_prompt(data, docs)
+    materi_publik = ' '.join(t for n, t in docs['sources'] if n not in docs.get('form', ()))
+    model = gen.get_model('konten')
+    nama = cfg.get('site_title') or domain
+    if perlu_h:
+        daftar = '\n'.join(f"- slug \"{h['slug']}\": judul \"{h['judul']}\""
+                           + (f", submenu dari \"{h['induk']}\"" if h['induk'] else '')
+                           + (f", berisi submenu {', '.join(h['anak'])}" if h['anak'] else '')
+                           + (f". Permintaan klien: {h['catatan']}" if h['catatan'] and polos(h['catatan']) != polos(h['judul']) else '')
+                           for h in perlu_h)
+        prompt = f"""Tulis isi halaman WordPress untuk situs {nama} ({domain}).
+Data klien:
+{info}
+
+{gen.CONTENT_RULES}
+- Halaman ini dibuat karena tercantum di susunan menu form klien. Isi harus sesuai judul & permintaan klien.
+- Bila materi klien memuat bagian yang sesuai (struktur organisasi, daftar tim/advokat, legalitas, visi-misi,
+  daftar layanan), muat SELURUHNYA — semua nama, jabatan, dan butir; jangan diringkas.
+- Tanpa data khusus (mis. Donasi, Kemitraan, Relawan, Pengaduan): tulis penjelasan singkat tujuan, siapa yang
+  bisa ikut/cara menyampaikan, dan ajakan menghubungi kontak publik di data klien. Jangan mengarang nomor
+  rekening, syarat, biaya, atau jadwal.
+- Halaman berisi submenu: pengantar singkat yang menyebut submenunya.
+- HTML rapi (<h2>, <p>, <ul><li>), tanpa <h1>, 120-600 kata.
+
+Halaman:
+{daftar}
+
+Balas JSON array: [{{"slug": "...", "content": "<html>"}}] untuk setiap halaman di atas."""
+        hasil = gen.ai_json_list('You are a professional Indonesian web content writer. Output ONLY a valid JSON array.',
+                                 prompt, model, 'menu_form') or []
+        for h in hasil:
+            if isinstance(h, dict) and h.get('slug') in {x['slug'] for x in perlu_h} and h.get('content'):
+                isi, _ = gen.buang_data_pemilik(clean_html(h['content']), data, materi_publik)
+                simpanan['halaman'][h['slug']] = isi
+    for k in perlu_k:
+        topik = f"{k['induk']} — {k['judul']}".strip(' —') if k['induk'] else k['judul']
+        art = gen.generate_articles(nama, domain, info, model, 1, topik,
+                                    f"{k['catatan']}. Artikel informatif/edukatif tentang bidang ini, "
+                                    'BUKAN laporan kegiatan atau peristiwa karangan.') or []
+        bersih = []
+        for a in art:
+            if a.get('title') and a.get('content'):
+                a['content'], _ = gen.buang_data_pemilik(clean_html(a['content']), data, materi_publik)
+                bersih.append({'title': a['title'], 'content': a['content'], 'excerpt': a.get('excerpt') or ''})
+        if bersih:
+            simpanan['artikel'][k['slug']] = bersih
+    return simpanan
+
+
+REMOTE_PHP = r'''<?php
+$d = json_decode(file_get_contents($args[0] . '/menu.json'), true);
+$akar = function ($u) { return (strpos($u, '/') === 0) ? home_url($u) : $u; };
+$halaman_peran = function ($p) {
+    if ($p === 'beranda') { return (int) get_option('page_on_front'); }
+    if ($p === 'berita') { return (int) get_option('page_for_posts') ?: (int) (get_page_by_path('berita', OBJECT, 'page')->ID ?? 0); }
+    $slug = ['tentang' => 'tentang-kami', 'kontak' => 'hubungi-kami', 'galeri' => 'galeri', 'layanan' => 'layanan'][$p] ?? '';
+    $h = $slug ? get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]) : [];
+    return $h ? $h[0]->ID : 0;
+};
+// Halaman baru: dibuat sekali; isi diperbarui hanya bila belum disunting (md5 penanda sama).
+$pastikan_halaman = function ($b, $induk_id) use ($d) {
+    $isi = $d['halaman'][$b['slug']] ?? '';
+    $ada = get_posts(['post_type' => 'page', 'name' => $b['slug'], 'post_parent' => $induk_id, 'post_status' => 'any', 'numberposts' => 1]);
+    if ($ada) {
+        $p = $ada[0];
+        if ($isi !== '' && get_post_meta($p->ID, '_velocity_menu_form', true) === md5($p->post_content) && $p->post_content !== $isi) {
+            wp_update_post(['ID' => $p->ID, 'post_content' => $isi]); update_post_meta($p->ID, '_velocity_menu_form', md5($isi));
+            echo "menu_form: halaman_diperbarui:{$b['slug']}\n";
+        }
+        return $p->ID;
+    }
+    $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => $b['label'], 'post_name' => $b['slug'],
+                          'post_parent' => $induk_id, 'post_content' => $isi], true);
+    if (is_wp_error($id)) { echo "menu_form: halaman_gagal:{$b['slug']}\n"; return 0; }
+    update_post_meta($id, '_velocity_menu_form', md5($isi));
+    echo "menu_form: halaman_dibuat:{$b['slug']}:$id\n";
+    return $id;
+};
+$pastikan_kategori = function ($b, $induk_id) use ($d) {
+    $t = get_term_by('slug', $b['slug'], 'category');
+    if (!$t) {
+        $r = wp_insert_term($b['label'], 'category', ['slug' => $b['slug'], 'parent' => $induk_id]);
+        if (is_wp_error($r)) { echo "menu_form: kategori_gagal:{$b['slug']}\n"; return 0; }
+        $tid = $r['term_id']; echo "menu_form: kategori_dibuat:{$b['slug']}:$tid\n";
+    } else { $tid = $t->term_id; }
+    foreach ($d['artikel'][$b['slug']] ?? [] as $a) {
+        $sudah = get_posts(['post_type' => 'post', 'title' => $a['title'], 'post_status' => 'any', 'numberposts' => 1]);
+        if ($sudah) { continue; }
+        $pid = wp_insert_post(['post_type' => 'post', 'post_status' => 'publish', 'post_title' => $a['title'],
+                               'post_content' => $a['content'], 'post_excerpt' => $a['excerpt'], 'post_category' => [$tid]], true);
+        if (!is_wp_error($pid)) { echo "menu_form: artikel_dibuat:{$b['slug']}:$pid\n"; }
+    }
+    return $tid;
+};
+
+// Toko online biasa: menu disusun scripts/toko-biasa.
+if (get_option('velocity_menu_toko')) { echo "menu_form: dilewati:menu_toko\nmenu_form: selesai\n"; return; }
+// Menu utama: disusun ulang hanya bila buatan installer (label bawaan) atau buatan skrip ini.
+$lokasi = get_nav_menu_locations(); $menu_id = (int) ($lokasi['primary'] ?? 0);
+$items = $menu_id ? (wp_get_nav_menu_items($menu_id) ?: []) : [];
+$sidik = function ($items) { return md5(wp_json_encode(array_map(function ($it) { return [$it->title, $it->url, (int) $it->menu_item_parent > 0]; }, $items))); };
+$baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan'];
+$milik = !$items || get_option('velocity_menu_form') === $sidik($items)
+    || !array_filter($items, function ($it) use ($baku) { return !in_array(strtolower(trim($it->title)), $baku, true); });
+if (!$menu_id) {
+    $menu_id = wp_create_nav_menu('Primary Menu');
+    if (is_wp_error($menu_id)) { echo "menu_form: menu_gagal\n"; return; }
+    $lokasi['primary'] = $menu_id; set_theme_mod('nav_menu_locations', $lokasi);
+}
+// Halaman & kategori tetap disiapkan walau menu dibiarkan (isi form tetap tersedia).
+$tambah = function ($b, $induk_item, $induk_hal, $induk_kat) use (&$tambah, $menu_id, $milik, $halaman_peran, $pastikan_halaman, $pastikan_kategori, $akar) {
+    $args = ['menu-item-title' => $b['label'], 'menu-item-status' => 'publish', 'menu-item-parent-id' => $induk_item];
+    $hal = 0; $kat = 0;
+    if ($b['jenis'] === 'peran') {
+        $hal = $halaman_peran($b['peran']);
+        if (!$hal) { echo "menu_form: peran_tanpa_halaman:{$b['peran']}\n"; }
+    } elseif ($b['jenis'] === 'halaman') {
+        $hal = $pastikan_halaman($b, $induk_hal);
+    } elseif ($b['jenis'] === 'kategori') {
+        $kat = $pastikan_kategori($b, $induk_kat);
+    }
+    if ($hal) { $args += ['menu-item-object-id' => $hal, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type']; }
+    elseif ($kat) { $args += ['menu-item-object-id' => $kat, 'menu-item-object' => 'category', 'menu-item-type' => 'taxonomy']; }
+    else { $args += ['menu-item-type' => 'custom', 'menu-item-url' => $akar($b['url'] ?? '#')]; }
+    $item = $milik ? wp_update_nav_menu_item($menu_id, 0, $args) : 0;
+    if (is_wp_error($item)) { $item = 0; }
+    // Halaman anak dari menu berperan (mis. "Tim Hukum" di bawah Tentang) menginduk ke halaman peran itu.
+    foreach ($b['anak'] ?? [] as $a) { $tambah($a, (int) $item, $hal, $kat); }
+};
+if ($milik) {
+    foreach ($items as $it) { wp_delete_post($it->ID, true); }
+}
+foreach ($d['menu'] as $b) { $tambah($b, 0, 0, 0); }
+if ($milik) {
+    update_option('velocity_menu_form', $sidik(wp_get_nav_menu_items($menu_id) ?: []), false);
+    echo "menu_form: menu_disusun:" . count(wp_get_nav_menu_items($menu_id) ?: []) . "\n";
+} else {
+    echo "menu_form: menu_dibiarkan:disunting\n";
+}
+echo "menu_form: selesai\n";
+'''
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    manifest = Path(args[0])
+    tpb = muat('theme_paket_biasa', HERE / 'theme-paket-biasa')
+    cfg = tpb.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if re.sub(r'\s', '', cfg.get('paket', '').lower()) in PAKET_CUSTOM or cfg.get('tema_fse'):
+        print('menu_form: dilewati:paket_custom_atau_fse')
+        return 0
+    try:
+        isi = json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        isi = {}
+    if isi.get('jenis') == 'berita':
+        print('menu_form: dilewati:portal_berita')
+        return 0
+    menu = client_form.susunan_menu(folder_klien(domain))
+    if not menu:
+        print('menu_form: dilewati:form_tanpa_menu')
+        return 0
+    # Menu form yang hanya berisi halaman bawaan tanpa submenu tidak mengubah apa pun.
+    butir, halaman, kategori = rencana(menu, [l for l in isi.get('layanan') or [] if l.get('judul')])
+    print('menu_form: rencana ' + ' | '.join(
+        b['label'] + (' > ' + ', '.join(a['label'] for a in b['anak']) if b['anak'] else '') for b in butir))
+    simpan = GENERATED_DIR / f'{domain}-menu.json'
+    try:
+        simpanan = json.loads(simpan.read_text())
+    except (OSError, ValueError):
+        simpanan = {}
+    simpanan = {'halaman': simpanan.get('halaman') or {}, 'artikel': simpanan.get('artikel') or {}}
+    if coba:
+        print(json.dumps({'menu': butir, 'halaman': halaman, 'kategori': kategori}, ensure_ascii=False, indent=1))
+        return 0
+    simpanan = tulis_isi(manifest, cfg, domain, halaman, kategori, simpanan)
+    judul = {h['slug']: h['judul'] for h in halaman}
+    simpanan['halaman'] = {k: tanpa_judul_ganda(v, judul.get(k, '')) for k, v in simpanan['halaman'].items()}
+    simpan.write_text(json.dumps(simpanan, ensure_ascii=False, indent=1))
+    kurang = [h['slug'] for h in halaman if h['slug'] not in simpanan['halaman']]
+    if kurang:
+        print(f"menu_form: isi_ai_kosong:{','.join(kurang)}")
+    kerja = Path(tempfile.mkdtemp(prefix=f'menu-form-{domain}-'))
+    (kerja / 'menu.json').write_text(json.dumps({'menu': butir, **simpanan}, ensure_ascii=False))
+    keluar = tpb.kirim(cfg, kerja, REMOTE_PHP, domain)
+    return 0 if keluar and 'menu_form: selesai' in keluar else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

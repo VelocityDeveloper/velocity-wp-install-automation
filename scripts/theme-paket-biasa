@@ -301,6 +301,13 @@ def daftar_kontak(k, alamat=True):
     return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
 
 
+def kartu_beranda(layanan):
+    """Kartu layanan di beranda: 4 layanan → 3 kartu saja (satu kartu sisa di baris kedua tampak
+    ganjil); 5 = 3 + 2 di tengah, 6 = 3 + 3 lewat CSS. Halaman Layanan & widget tetap memuat semua
+    (permintaan user 2026-09-30, lbhdkm.or.id)."""
+    return layanan[:3] if len(layanan) == 4 else layanan
+
+
 def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
     nama = cfg.get('site_title') or domain
     layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
@@ -336,7 +343,7 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
     if layanan:
         beranda_blok = (f'<h2>{e(js.get("layanan") or "Layanan Kami")}</h2>\n<div class="vk-kartu-grid">'
                         + ''.join(f'<div class="vk-kartu"><h3>{e(l["judul"])}</h3><p>{e(pendek(l.get("teks"), 140))}</p>'
-                                  f'<p><a href="/layanan/#{e(l["slug"])}">Selengkapnya</a></p></div>' for l in layanan)
+                                  f'<p><a href="/layanan/#{e(l["slug"])}">Selengkapnya</a></p></div>' for l in kartu_beranda(layanan))
                         + '</div>')
     beranda_blok += (f'\n<p class="vk-ajakan">Hubungi {e(nama)} untuk informasi dan pemesanan: '
                      f'<a href="/hubungi-kami/">Hubungi Kami</a>'
@@ -349,7 +356,7 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
             'banner_desc': pendek(isi.get('hero_teks'), 110),
             'judul_layanan': js.get('layanan') or 'Layanan Kami',
             'services_list': [{'service_title': l['judul'], 'service_desc': pendek(l.get('teks'), 110),
-                               'service_text_link': 'Selengkapnya', 'service_link': f'/layanan/#{l["slug"]}'} for l in layanan],
+                               'service_text_link': 'Selengkapnya', 'service_link': f'/layanan/#{l["slug"]}'} for l in kartu_beranda(layanan)],
         },
         'velocity-perusahaan2': {
             'home_banner': '{{id:hero}}',
@@ -364,7 +371,7 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
             'sambutan_image': '{{id:tentang}}',
             'layanan_repeater': [{'layanan_image': '{{id:layanan-%s}}' % l['slug'], 'layanan_title': l['judul'],
                                   'layanan_content': e(pendek(l.get('teks'), 150)), 'layanan_linktext': 'Selengkapnya',
-                                  'layanan_link': f'/layanan/#{l["slug"]}'} for l in layanan],
+                                  'layanan_link': f'/layanan/#{l["slug"]}'} for l in kartu_beranda(layanan)],
             # Klien Kami tidak dikosongkan: logo klien asli atau logo contoh (user 2026-09-29).
             'title_homelogo': 'Klien Kami',
             'logo_repeater': [{'logo_image': '{{id:klien-%d}}' % i} for i in range(1, klien_n + 1)],
@@ -430,9 +437,9 @@ ul.vk-sosmed>li::before{content:none!important}
 .home-wrapper .position-relative.overflow-hidden::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.25) 60%,rgba(0,0,0,0));z-index:1}
 .home-wrapper .position-relative.overflow-hidden>.position-absolute{z-index:2}
 .velocity-home-card h4{color:var(--bs-primary)}
-/* Kartu layanan beranda velocity-pakete: 4 = sebaris, 5 = 3 atas + 2 bawah di tengah, 6 = 3+3 (user 2026-09-30) */
+/* Kartu layanan beranda velocity-pakete: 3 per baris, baris terakhir di tengah (5 = 3+2, 6 = 3+3); 4 layanan
+   cukup 3 kartu (kartu_beranda) — user 2026-09-30 */
 .home-wrapper .row:has(>div>.velocity-home-card){justify-content:center}
-@media (min-width:768px){.home-wrapper .row:has(>div:nth-of-type(4):last-of-type>.velocity-home-card)>div{flex:0 0 auto;width:25%}}
 .velocity-card-button .btn{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff}
 .velocity-card-button .btn:hover,.velocity-card-button .btn:focus{filter:brightness(1.12);color:#fff}
 @media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -972,7 +979,7 @@ def konteks_adaptor(cfg, domain, isi, kontak, galeri=0, klien=()):
         'daftar': {
             'layanan': [{'slug': l['slug'], 'judul': l['judul'], 'teks': l.get('teks') or '',
                          'teks_pendek': pendek(l.get('teks'), 110), 'rincian': ', '.join(l.get('rincian') or []),
-                         'link': f"/layanan/#{l['slug']}"} for l in isi.get('layanan') or [] if l.get('judul')],
+                         'link': f"/layanan/#{l['slug']}"} for l in kartu_beranda([l for l in isi.get('layanan') or [] if l.get('judul')])],
             'keunggulan': [{'judul': k['judul'], 'teks': k.get('teks') or ''}
                            for k in isi.get('keunggulan') or [] if k.get('judul')],
             # Galeri hanya dari foto klien sendiri (galeri-<n>.jpg), bukan foto bank.

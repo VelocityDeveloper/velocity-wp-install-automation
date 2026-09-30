@@ -221,6 +221,11 @@ def _dari_pdf(pdf, tujuan):
             hasil = ck.potong_logo(gambar, tujuan)
             if hasil:
                 return Path(hasil['berkas'])
+            # Halaman bergambar tertanam (kop surat, pindaian) bukan logo vektor: render halamannya
+            # menghasilkan seluruh halaman dokumen sebagai "logo" (lbhdkm.or.id 2026-09-29: tabel
+            # DAFTAR ADVOKAT terpasang di header). Render vektor hanya untuk PDF tanpa gambar.
+            if gambar:
+                return None
     except Exception:
         pass
     return _render_pdf_vektor(pdf, tujuan)

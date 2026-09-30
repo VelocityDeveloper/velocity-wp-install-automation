@@ -205,7 +205,7 @@
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'konten', kol: 11, jalur: 1, nama: 'Konten AI', ket0: 'halaman & artikel; materi non-form dimuat utuh di Tentang Kami', mulai: /Starting AI content generation/,
         selesai: /AI content generation completed/, aktif: tanpaDry },
-      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas dipastikan Claude), favicon, WhatsApp, peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, whitelist IP kantor, komentar dimatikan', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
       { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
@@ -226,11 +226,18 @@
       // Paket biasa: tampilan child theme klasik (scripts/theme-paket-biasa) lalu foto utama artikel.
       // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
       // blok berita per kategori (theme-paket-biasa, 2026-09-18).
-      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan 4 sebaris / 5 = 3+2 / 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E; berita: menu kategori',
+      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan: 4 → 3 kartu, 5 = 3+2 di tengah, 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E (Artikel Terbaru); berita: menu kategori',
         mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
         ketHasil: t => (/tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori'
           : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
           : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null),
+        aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+      // Menu utama = SUSUNAN MENU ATAS form + submenu (scripts/menu-form, lbhdkm.or.id 2026-09-30).
+      { id: 'menuForm', kol: 17, jalur: 3, nama: 'Menu dari form', ket0: 'menu + submenu form: halaman baru (isi AI), kategori kegiatan + 1 artikel contoh',
+        mulai: /\] Menu dari form$/, selesai: /menu_form: (selesai|dilewati)/, gagal: /menu_form: (menu_gagal|halaman_gagal)/,
+        ketHasil: t => { if (/menu_form: dilewati:(\S+)/.test(t)) return 'dilewati: ' + /menu_form: dilewati:(\S+)/.exec(t)[1];
+          if (/menu_form: menu_dibiarkan/.test(t)) return 'menu disunting, dibiarkan';
+          const m = /menu_form: menu_disusun:(\d+)/.exec(t); return m ? m[1] + ' butir menu' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
       { id: 'paketTour', kol: 18, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
@@ -381,7 +388,7 @@
       ['mirip', 'agenClaude', 'belum mirip, agen Claude', c => dan(tanpaDry(c), c.custom, c.agenClaude, c.agenLangsung === null ? null : !c.agenLangsung)],
       ['agenClaude', 'permintaan'],
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
-      ['isi', 'tampilan', 'tidak'], ['tampilan', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
+      ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'], ['menuForm', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
       ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
