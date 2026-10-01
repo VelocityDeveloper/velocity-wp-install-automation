@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import cari_logo  # noqa: E402
 from client_form import read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 def situs_url(domain: str) -> str:
     """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
@@ -577,8 +578,20 @@ else
     && echo "komentar_dimatikan" >&2
 fi
 
+# Portal Berita Biasa tanpa tombol WhatsApp mengambang (keputusan user 2026-10-01). Nomor tetap
+# diisi supaya PM tinggal menyalakannya. Hanya instalasi baru dan sekali per situs
+# (velocity_installer_wa_berita), jadi situs lama & pilihan PM sesudahnya tidak ditimpa.
+WA_FLOAT=1
+if [[ "$BERITA_BIASA" == 1 && "$SITUS_BARU" == 1 ]]; then
+  if [[ -z "$(wp option get velocity_installer_wa_berita 2>/dev/null || true)" ]]; then
+    wp option update floating_whatsapp 0 >/dev/null && wp option update velocity_installer_wa_berita "$(date -Is)" >/dev/null \
+      && echo "whatsapp_mengambang_mati:portal_berita_biasa" >&2
+  fi
+  WA_FLOAT=0
+fi
+
 if [[ -n "$WA" && -z "$(wp option get nomor_whatsapp 2>/dev/null || true)" ]]; then
-  wp option update floating_whatsapp 1 >/dev/null
+  wp option update floating_whatsapp "$WA_FLOAT" >/dev/null
   wp option update nomor_whatsapp "$WA" >/dev/null
   wp option update nomor_whatsapp_contacts "$WA_CONTACTS" --format=json >/dev/null
   wp option update whatsapp_text "$WA_LABEL" >/dev/null
@@ -1018,7 +1031,7 @@ def main():
                              capture_output=True, text=True, timeout=120)
         print('maintenance: ' + ('ditandai_tanpa_maintenance' if 'ok' in run.stdout else 'penanda_gagal'))
         return 0 if 'ok' in run.stdout else 1
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
     fields = form['fields']
     title = cfg.get('site_title') or domain
@@ -1151,6 +1164,7 @@ def main():
             f'SEO_KEYWORDS={shlex.quote(seo["keywords"])}',
             f'CSS={shlex.quote(css)}',
             f'SITUS_BARU={0 if cari_logo.sudah_terpasang(domain) else 1}',
+            f'BERITA_BIASA={1 if re.sub(r"[^a-z]", "", cfg.get("paket", "").lower()) == "paketportalberitabiasa" else 0}',
         ])
         # Hanya secret per domain yang disalin dari catatan hosting PM; file password
         # bersama lama tidak boleh dipasang lagi. Dikirim lewat stdin, tidak dicetak.
