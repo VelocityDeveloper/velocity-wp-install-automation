@@ -3,7 +3,8 @@ Anda memecah PRD aplikasi Laravel menjadi daftar fitur yang akan dikerjakan agen
 
 Stack tetap: `laravel new --vue` (Laravel 13, Inertia, Vue 3 + TypeScript, Tailwind 4, shadcn-vue/reka-ui,
 Fortify: login, registrasi, lupa sandi, verifikasi email, 2FA, halaman profil & sandi SUDAH ADA dari starter kit —
-jangan dijadikan fitur kecuali PRD meminta perubahan).
+jangan dijadikan fitur kecuali PRD meminta perubahan). Installer juga SUDAH memasang Pengaturan > Aplikasi
+(nama & deskripsi aplikasi, unggah logo & favicon, logo/favicon contoh) dan footer "Design by Velocity Developer".
 
 Aturan:
 - Fitur pertama selalu **Fondasi**: terapkan DESIGN.md ke tema (warna, font, radius) dan tata letak aplikasi,

@@ -9,7 +9,7 @@ import { tanggalWaktu } from '../../api.js'
 
 const props = defineProps({ d: { type: Object, required: true } })
 const emit = defineEmits(['ubah'])
-const LANGKAH = ['Periksa nama, port, alat', 'laravel new --vue', '.env (Asia/Jakarta, id)', 'Database + migrasi', 'Seeder akun uji',
+const LANGKAH = ['Periksa nama, port, alat', 'laravel new --vue', '.env (Asia/Jakarta, id)', 'Pengaturan aplikasi + footer', 'Database + migrasi', 'Seeder akun uji',
   'CLAUDE.md + DESIGN.md + PRD', 'User sistem, systemd, firewall', 'deploy-dev/prod.sh', 'Repo GitHub + commit', 'Daftar Project Lokal']
 
 const app = ref(props.d.app || props.d.saran_app)
@@ -23,7 +23,7 @@ const pratinjau = computed(() => {
   return [['Folder', `/home/${s}`], ['Database', s.replace(/-/g, '_')], ['User & layanan', `${s.replace(/-/g, '')} · ${s}-dev, ${s}-queue`],
     ['Repo', `${props.d.github_org}/${s} (privat)`], ['Skrip deploy', `/root/${s}/deploy-dev.sh, deploy-prod.sh`]]
 })
-const persen = computed(() => Math.round(((inst.value.status === 'ok' ? inst.value.total : Math.max(0, (inst.value.langkah || 1) - 1)) / (inst.value.total || 10)) * 100))
+const persen = computed(() => Math.round(((inst.value.status === 'ok' ? inst.value.total : Math.max(0, (inst.value.langkah || 1) - 1)) / (inst.value.total || LANGKAH.length)) * 100))
 const status = ref({ kelas: '', teks: '' })
 async function install() {
   if (!(await konfirmasi({
@@ -69,7 +69,7 @@ const alamat = computed(() => inst.value.port ? `http://${location.hostname}:${i
     <template v-if="inst.status">
       <div v-if="inst.status !== 'ok'" class="kemajuan">
         <div class="meter" role="progressbar" :aria-valuenow="persen" aria-valuemin="0" aria-valuemax="100" aria-label="Kemajuan install"><i :style="{ width: persen + '%' }" /></div>
-        <span class="redup">Langkah {{ inst.langkah || 1 }}/{{ inst.total || 10 }}: {{ LANGKAH[(inst.langkah || 1) - 1] }}</span>
+        <span class="redup">Langkah {{ inst.langkah || 1 }}/{{ inst.total || LANGKAH.length }}: {{ LANGKAH[(inst.langkah || 1) - 1] }}</span>
       </div>
       <p v-if="inst.status === 'gagal'" class="pesan-status bahaya">{{ inst.galat }}. Bagian yang sudah dibuat (folder, database, repo) tidak dihapus otomatis — bereskan dulu sebelum install ulang dengan nama yang sama.</p>
       <dl v-if="inst.status === 'ok'" class="pratinjau hasil">

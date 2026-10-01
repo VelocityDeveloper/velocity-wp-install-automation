@@ -24,6 +24,9 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    `assertInertia` untuk halaman). Tes lama harus tetap lolos.
 4. Migrasi harus berjalan di SQLite (dipakai tes) DAN MariaDB (dev/produksi) — hindari SQL khusus satu database.
 5. Antarmuka berbahasa Indonesia, gaya mengikuti DESIGN.md, rapi di desktop dan HP.
+   Pengaturan > Aplikasi (nama, deskripsi, logo, favicon; prop `site`) dan footer "Design by Velocity Developer"
+   dari installer WAJIB tetap ada dan berfungsi — saat mengganti layout/halaman depan/halaman masuk, pakai lagi
+   `AppLogo`/`AppLogoIcon`, `site.name`, dan `AppFooter`. Saat membuat peran, batasi Gate `manage-app-settings` ke admin.
 6. Sebelum selesai jalankan dan pastikan lolos:
    - `php artisan test --compact`
    - `vendor/bin/pint --dirty`

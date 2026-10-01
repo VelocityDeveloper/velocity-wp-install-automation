@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Pasang Pengaturan > Aplikasi ke aplikasi Laravel baru (langkah installer Laravel).
+
+Wajib di setiap aplikasi installer (permintaan user 1 Okt 2026): nama aplikasi, deskripsi aplikasi,
+unggah logo, unggah favicon, logo & favicon contoh, dan footer "Design by Velocity Developer".
+
+  laravel-pengaturan <folder-app>
+
+1. Salin templates/laravel/pengaturan/** (kecuali README.md) ke folder app (menimpa AppLogo, AppLogoIcon, Welcome).
+2. Tambal berkas starter kit `laravel new --vue`: rute, HandleInertiaRequests (prop `site`), provider Gate,
+   app.blade.php (favicon, judul, meta description), app.ts (judul tab), tipe, menu Pengaturan, footer layout.
+3. Buat logo & favicon contoh dari inisial APP_NAME (.env): public/images/logo-contoh.png, favicon.ico,
+   apple-touch-icon.png; favicon.svg Laravel dibuang.
+4. Rapikan dengan `vp check --fix` + Pint.
+Setiap tambalan memeriksa pola starter kit; pola tidak ditemukan -> berhenti dengan galat (starter kit berubah).
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+TEMPLATE = Path(__file__).resolve().parent.parent / 'templates/laravel/pengaturan'
+WARNA = (36, 87, 197)  # biru Velocity
+FONT = '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf'
+
+
+def gagal(pesan):
+    print(f'!! laravel-pengaturan: {pesan}', file=sys.stderr)
+    sys.exit(1)
+
+
+def tambal(app, rel, ganti):
+    """ganti: list (lama, baru). `lama` str harus ada persis sekali; tuple ('re', pola) untuk regex
+    (di `baru` grup pertama ditulis {g1}; backslash lain apa adanya)."""
+    p = app / rel
+    s = p.read_text()
+    for lama, baru in ganti:
+        if isinstance(lama, tuple):
+            s2, n = re.subn(lama[1], lambda m, b=baru: b.replace('{g1}', m.group(1)) if m.re.groups else b, s, count=1, flags=re.S)
+        else:
+            n = s.count(lama)
+            s2 = s.replace(lama, baru, 1)
+        if n != 1:
+            gagal(f'{rel}: pola tidak ditemukan tepat sekali ({n}x): {str(lama)[:70]!r}')
+        s = s2
+    p.write_text(s)
+    print(f'  tambal {rel}')
+
+
+def salin(app):
+    for src in TEMPLATE.rglob('*'):
+        if src.is_dir() or src.name == 'README.md':
+            continue
+        dst = app / src.relative_to(TEMPLATE)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        print(f'  salin {dst.relative_to(app)}')
+
+
+def nama_app(app):
+    for baris in (app / '.env').read_text().splitlines():
+        if baris.startswith('APP_NAME='):
+            return baris.split('=', 1)[1].strip().strip('"\'') or 'App'
+    return 'App'
+
+
+def inisial(nama):
+    kata = [k for k in re.split(r'[^0-9A-Za-z]+', nama) if k]
+    if len(kata) >= 2:
+        return (kata[0][0] + kata[1][0]).upper()
+    return (kata[0][:2] if kata else 'AP').upper()
+
+
+def gambar_contoh(app):
+    teks = inisial(nama_app(app))
+
+    def kotak(ukuran, radius):
+        im = Image.new('RGBA', (ukuran, ukuran), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle((0, 0, ukuran - 1, ukuran - 1), radius=radius, fill=WARNA + (255,))
+        try:
+            font = ImageFont.truetype(FONT, int(ukuran * (0.42 if len(teks) > 1 else 0.55)))
+        except OSError:
+            font = ImageFont.load_default(size=int(ukuran * 0.42))
+        d.text((ukuran / 2, ukuran / 2), teks, font=font, fill='white', anchor='mm')
+        return im
+
+    (app / 'public/images').mkdir(parents=True, exist_ok=True)
+    kotak(512, 112).save(app / 'public/images/logo-contoh.png')
+    kotak(256, 56).save(app / 'public/favicon.ico', sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
+    kotak(180, 40).convert('RGB').save(app / 'public/apple-touch-icon.png')
+    (app / 'public/favicon.svg').unlink(missing_ok=True)
+    print(f'  logo & favicon contoh: inisial {teks}')
+
+
+def tambal_starter(app):
+    tambal(app, 'routes/settings.php', [
+        ('use App\\Http\\Controllers\\Settings\\ProfileController;',
+         'use App\\Http\\Controllers\\Settings\\AppSettingController;\nuse App\\Http\\Controllers\\Settings\\ProfileController;'),
+        (('re', r"(\n    Route::inertia\('settings/appearance'[^\n]*\n\}\);\n)"),
+         "{g1}\n// Pengaturan > Aplikasi (installer Velocity): nama, deskripsi, logo, favicon. POST karena formulir membawa berkas.\n"
+         "Route::middleware(['auth', 'verified'])->group(function () {\n"
+         "    Route::get('settings/aplikasi', [AppSettingController::class, 'edit'])->name('app-settings.edit');\n"
+         "    Route::post('settings/aplikasi', [AppSettingController::class, 'update'])->name('app-settings.update');\n"
+         "});\n"),
+    ])
+    tambal(app, 'routes/web.php', [
+        ('use Illuminate\\Support\\Facades\\Route;',
+         'use App\\Http\\Controllers\\AppImageController;\nuse App\\Models\\Setting;\nuse Illuminate\\Support\\Facades\\Route;'),
+        ("Route::inertia('/', 'Welcome')->name('home');\n",
+         "Route::inertia('/', 'Welcome')->name('home');\n\n"
+         "// Logo & favicon unggahan (Pengaturan > Aplikasi); terbuka untuk tamu.\n"
+         "Route::get('gambar-aplikasi/{image}', [AppImageController::class, 'show'])\n"
+         "    ->whereIn('image', Setting::IMAGES)\n"
+         "    ->name('app-images.show');\n"),
+    ])
+    tambal(app, 'app/Http/Middleware/HandleInertiaRequests.php', [
+        ('use Illuminate\\Http\\Request;', 'use App\\Models\\Setting;\nuse Illuminate\\Http\\Request;'),
+        ("            'name' => config('app.name'),\n",
+         "            'name' => Setting::appName(),\n            'site' => Setting::shared($request->user()),\n"),
+    ])
+    tambal(app, 'bootstrap/providers.php', [
+        ('use App\\Providers\\AppServiceProvider;',
+         'use App\\Providers\\AppServiceProvider;\nuse App\\Providers\\AppSettingServiceProvider;'),
+        ('    AppServiceProvider::class,\n', '    AppServiceProvider::class,\n    AppSettingServiceProvider::class,\n'),
+    ])
+    tambal(app, 'resources/views/app.blade.php', [
+        (('re', r'        <link rel="icon" href="/favicon\.ico" sizes="any">\n.*?<link rel="apple-touch-icon" href="/apple-touch-icon\.png">\n'),
+         '        {{-- Pengaturan > Aplikasi: favicon unggahan atau contoh, deskripsi untuk mesin pencari --}}\n'
+         '        <link rel="icon" href="{{ \\App\\Models\\Setting::imageUrl(\'favicon\') }}">\n'
+         '        <link rel="apple-touch-icon" href="/apple-touch-icon.png">\n'
+         '        @if ($description = \\App\\Models\\Setting::appDescription())\n'
+         '            <meta name="description" content="{{ $description }}">\n'
+         '        @endif\n'),
+        ("<title>{{ config('app.name', 'Laravel') }}</title>", '<title>{{ \\App\\Models\\Setting::appName() }}</title>'),
+    ])
+    tambal(app, 'resources/js/app.ts', [
+        ("import { createInertiaApp } from '@inertiajs/vue3';", "import { createInertiaApp, usePage } from '@inertiajs/vue3';"),
+        ("const appName = import.meta.env.VITE_APP_NAME || 'Laravel';\n",
+         "const appName = import.meta.env.VITE_APP_NAME || 'Laravel';\n\n"
+         "/** Judul tab memakai nama aplikasi dari Pengaturan > Aplikasi (prop bersama `site`). */\n"
+         "function siteName(): string {\n    return usePage().props?.site?.name ?? appName;\n}\n"),
+        ('    title: (title) => (title ? `${title} - ${appName}` : appName),',
+         '    title: (title) => (title ? `${title} - ${siteName()}` : siteName()),'),
+    ])
+    tambal(app, 'resources/js/types/global.d.ts', [
+        ("import type { Auth } from '@/types/auth';", "import type { Auth } from '@/types/auth';\nimport type { Site } from '@/types/site';"),
+        ('            name: string;\n', '            name: string;\n            site: Site;\n'),
+    ])
+    tambal(app, 'resources/js/types/index.ts', [
+        ("export * from './navigation';\n", "export * from './navigation';\nexport * from './site';\n"),
+    ])
+    tambal(app, 'resources/js/layouts/settings/Layout.vue', [
+        ("import { Link } from '@inertiajs/vue3';", "import { Link, usePage } from '@inertiajs/vue3';"),
+        ("import { edit as editAppearance } from '@/routes/appearance';",
+         "import { edit as editAppSettings } from '@/routes/app-settings';\nimport { edit as editAppearance } from '@/routes/appearance';"),
+        ('const { isCurrentOrParentUrl } = useCurrentUrl();',
+         "// Pengaturan > Aplikasi (installer Velocity): hanya untuk yang boleh mengelola.\n"
+         "if (usePage().props.site.can_manage) {\n"
+         "    sidebarNavItems.push({ title: 'Aplikasi', href: editAppSettings() });\n"
+         "}\n\nconst { isCurrentOrParentUrl } = useCurrentUrl();"),
+    ])
+    footer_import = ("import AppContent from '@/components/AppContent.vue';",
+                     "import AppContent from '@/components/AppContent.vue';\nimport AppFooter from '@/components/AppFooter.vue';")
+    tambal(app, 'resources/js/layouts/app/AppSidebarLayout.vue', [
+        footer_import,
+        ('            <slot />\n        </AppContent>', '            <slot />\n            <AppFooter class="mt-auto" />\n        </AppContent>'),
+    ])
+    tambal(app, 'resources/js/layouts/app/AppHeaderLayout.vue', [
+        footer_import,
+        ('            <slot />\n        </AppContent>', '            <slot />\n            <AppFooter class="mt-auto" />\n        </AppContent>'),
+    ])
+    tambal(app, 'resources/js/layouts/AuthLayout.vue', [
+        ("import AuthLayout from", "import AppFooter from '@/components/AppFooter.vue';\nimport AuthLayout from"),
+        (('re', r'<template>\n    <AuthLayout (.*?)</AuthLayout>\n</template>'),
+         '<template>\n    <div class="relative">\n        <AuthLayout {g1}</AuthLayout>\n'
+         '        <AppFooter class="absolute inset-x-0 bottom-0" />\n    </div>\n</template>'),
+    ])
+
+
+def main():
+    if len(sys.argv) != 2:
+        gagal('pakai: laravel-pengaturan <folder-app>')
+    app = Path(sys.argv[1]).resolve()
+    if not (app / 'artisan').is_file():
+        gagal(f'{app} bukan aplikasi Laravel')
+    if (app / 'app/Models/Setting.php').exists():
+        gagal('app/Models/Setting.php sudah ada (pengaturan sudah terpasang?)')
+    tambal_starter(app)
+    salin(app)
+    gambar_contoh(app)
+    # Rapikan sesuai formatter proyek supaya `composer ci:check` lolos sejak commit awal
+    subprocess.run(['npx', 'vp', 'check', '--fix'], cwd=app, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['vendor/bin/pint', '--parallel'], cwd=app, check=True, stdout=subprocess.DEVNULL)
+    print('OK: Pengaturan > Aplikasi terpasang (/settings/aplikasi)')
+
+
+if __name__ == '__main__':
+    main()

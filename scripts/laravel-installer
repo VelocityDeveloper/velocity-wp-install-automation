@@ -32,7 +32,7 @@ PENGGUNA=${SLUG//-/}
 DB_NAMA=${SLUG//-/_}
 URL="http://$LAN_IP:$PORT"
 STATE=$STATE_DIR/$SLUG.json
-LANGKAH=(periksa laravel env database akun konvensi layanan deploy github daftar)
+LANGKAH=(periksa laravel env pengaturan database akun konvensi layanan deploy github daftar)
 TOTAL=${#LANGKAH[@]}
 mkdir -p "$STATE_DIR"
 
@@ -126,10 +126,17 @@ done
 # config/app.php bawaan mengunci 'UTC'; buat mengikuti .env
 sed -i "s|'timezone' => 'UTC',|'timezone' => env('APP_TIMEZONE', 'Asia/Jakarta'),|" config/app.php
 grep -q "env('APP_TIMEZONE'" config/app.php
-npm run build   # ulang: VITE_APP_NAME ikut APP_NAME
 
 # ---------------------------------------------------------------------------
-langkah 4 "Buat database MariaDB + migrasi"
+langkah 4 "Pengaturan aplikasi (nama, deskripsi, logo, favicon) + footer Velocity"
+# WAJIB di setiap aplikasi (user 1 Okt 2026): Pengaturan > Aplikasi untuk unggah logo & favicon, nama & deskripsi
+# aplikasi; logo & favicon contoh dari inisial APP_NAME; footer "Design by Velocity Developer" di semua layout.
+# Berkas di templates/laravel/pengaturan/, tambalan starter kit di scripts/laravel-pengaturan.
+"$REPO_DIR/scripts/laravel-pengaturan" "$DIR"
+npm run build   # ulang: VITE_APP_NAME ikut APP_NAME, rute Wayfinder pengaturan
+
+# ---------------------------------------------------------------------------
+langkah 5 "Buat database MariaDB + migrasi"
 "${MYSQL[@]}" <<SQL
 CREATE DATABASE \`$DB_NAMA\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER '$DB_NAMA'@'localhost' IDENTIFIED BY '$DB_SANDI';
@@ -140,7 +147,7 @@ php artisan config:clear -q
 php artisan migrate --force
 
 # ---------------------------------------------------------------------------
-langkah 5 "Seeder akun uji"
+langkah 6 "Seeder akun uji"
 # Sandi TIDAK ditulis di kode (repo naik ke GitHub): seeder membacanya dari env saat dijalankan,
 # lalu disimpan di kartu Project Lokal. Seeder aman diulang (firstOrCreate).
 ADMIN_EMAIL="admin@$SLUG.test"
@@ -171,6 +178,9 @@ class DatabaseSeeder extends Seeder
                 'email_verified_at' => now(),
             ],
         );
+
+        // Data wajib: nama & deskripsi aplikasi (Pengaturan > Aplikasi)
+        \$this->call(SettingSeeder::class);
     }
 }
 PHP
@@ -178,7 +188,7 @@ SEED_ADMIN_PASSWORD=$ADMIN_SANDI php artisan db:seed --force
 echo "Akun uji: $ADMIN_EMAIL (sandi disimpan di kartu Project Lokal)"
 
 # ---------------------------------------------------------------------------
-langkah 6 "CLAUDE.md konvensi tim"
+langkah 7 "CLAUDE.md konvensi tim"
 sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{PORT}}|$PORT|g" -e "s|{{URL}}|$URL|g" \
     -e "s|{{PENGGUNA}}|$PENGGUNA|g" -e "s|{{KLIEN}}|${KLIEN:--}|g" -e "s|{{DOMAIN}}|${DOMAIN:--}|g" \
     -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" -e "s|{{TANGGAL}}|$(date +%F)|g" \
@@ -193,7 +203,7 @@ if [ -n "$PROYEK_DIR" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-langkah 7 "User sistem, systemd, firewall"
+langkah 8 "User sistem, systemd, firewall"
 useradd --system --no-create-home --home-dir "$DIR" --shell /sbin/nologin "$PENGGUNA"
 chown root:"$PENGGUNA" .env && chmod 640 .env
 chown -R "$PENGGUNA:$PENGGUNA" storage bootstrap/cache
@@ -251,7 +261,7 @@ echo "GET $URL/login -> HTTP $KODE"
 [ "$KODE" = 200 ]
 
 # ---------------------------------------------------------------------------
-langkah 8 "Skrip deploy-dev.sh & deploy-prod.sh"
+langkah 9 "Skrip deploy-dev.sh & deploy-prod.sh"
 mkdir -p "/root/$SLUG"
 sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{URL}}|$URL|g" -e "s|{{PENGGUNA}}|$PENGGUNA|g" \
     -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" "$REPO_DIR/templates/laravel/deploy-dev.sh" > "/root/$SLUG/deploy-dev.sh"
@@ -262,7 +272,7 @@ chmod 700 "/root/$SLUG/deploy-dev.sh" "/root/$SLUG/deploy-prod.sh"; chmod 600 "/
 ls -l "/root/$SLUG"
 
 # ---------------------------------------------------------------------------
-langkah 9 "Repo GitHub $GITHUB_ORG/$SLUG (privat) + commit awal"
+langkah 10 "Repo GitHub $GITHUB_ORG/$SLUG (privat) + commit awal"
 [ -d .git ] || git init -q -b main
 # .gitignore bawaan Boost mengabaikan berkas agen; konvensi tim justru harus ikut repo
 sed -i -E '/^\/(CLAUDE\.md|AGENTS\.md|boost\.json|\.mcp\.json|\.claude)$/d' .gitignore
@@ -278,7 +288,7 @@ gh repo create "$GITHUB_ORG/$SLUG" --private --description "$JUDUL${KLIEN:+ — 
 git log --oneline -1
 
 # ---------------------------------------------------------------------------
-langkah 10 "Daftarkan ke Project Lokal"
+langkah 11 "Daftarkan ke Project Lokal"
 python3 - "$PROJECTS_FILE" "$LOGIN_FILE" <<PY
 import json, os, sys
 pf, lf = sys.argv[1:3]

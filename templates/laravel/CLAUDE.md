@@ -43,6 +43,15 @@ di pesan commit.
 - **Seeder**: data demo dipisah dari data wajib; seeder tidak boleh menimpa sandi akun yang sudah ada dan
   tidak boleh jalan di production.
 - **Rahasia**: `.env`, sandi, dan token tidak pernah masuk repo, log, atau pesan commit.
+- **Pengaturan aplikasi (wajib, dari installer — jangan dihapus)**: Pengaturan > Aplikasi (`/settings/aplikasi`,
+  `AppSettingController`, model `Setting` kunci–nilai) untuk nama aplikasi, deskripsi aplikasi, unggah logo, dan
+  unggah favicon; dibagikan ke semua halaman sebagai prop `site` (`name`, `description`, `logo_url`, `favicon_url`,
+  `can_manage`). Tanpa unggahan dipakai logo & favicon contoh (`public/images/logo-contoh.png`, `public/favicon.ico`).
+  Logo/nama aplikasi di mana pun ambil dari `site` (`AppLogo`/`AppLogoIcon`), bukan teks/ikon ditulis tangan.
+  Hak kelola = Gate `manage-app-settings` (`AppSettingServiceProvider`): sesudah peran dibuat, pastikan hanya admin.
+  Pengaturan tambahan dari PRD (mis. alamat, kontak, warna) ditambahkan ke halaman & model yang sama.
+- **Footer wajib**: `AppFooter` ("© tahun nama aplikasi · Design by Velocity Developer") tetap tampil di semua
+  layout (aplikasi, halaman masuk, halaman depan). Layout baru juga memasangnya.
 
 ## Sebelum commit
 
