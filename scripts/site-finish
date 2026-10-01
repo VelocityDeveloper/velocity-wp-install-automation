@@ -104,6 +104,14 @@ def colors_css(colors):
             '{background-color:var(--velocity-secondary);border-color:var(--velocity-secondary)}\n')
 
 
+def kontak_wa(wa, wa2=''):
+    """Isi nomor_whatsapp_contacts velocity-addons. Satu nomor: nama = label ajakan (lihat WA_LABEL).
+    Dua nomor: popup memuat dua tombol "Admin 1 (08…)" / "Admin 2 (08…)" (user 2026-10-01)."""
+    if not wa2 or wa2 == wa:
+        return [{'name': WA_LABEL, 'number': wa}]
+    return [{'name': f'Admin {i} (0{n[2:]})', 'number': n} for i, n in enumerate((wa, wa2), 1)]
+
+
 def wa_number(value):
     digits = re.sub(r'\D', '', value or '')
     if digits.startswith('0'):
@@ -1051,6 +1059,21 @@ def main():
     # Manifest `wa_publik=`: nomor dari biodata pemilik yang sudah disetujui user.
     if not wa:
         wa = wa_number(cfg.get('wa_publik', ''))
+    # Nomor kedua klien (user 2026-10-01): WA mengambang berisi 2 kontak. Diambil dari sumber yang
+    # sama dengan nomor pertama (data_klien), jadi hanya bila nomor pertamanya cocok.
+    wa2 = ''
+    if wa:
+        try:
+            import importlib.machinery
+            import importlib.util
+            loader = importlib.machinery.SourceFileLoader('velocity_child_theme', str(Path(__file__).resolve().parent / 'velocity-child-theme'))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            vct2 = importlib.util.module_from_spec(spec)
+            loader.exec_module(vct2)
+            dk2 = vct2.data_klien(domain, title)
+            wa2 = dk2.get('WA2', '') if dk2.get('WA') == wa else ''
+        except Exception:
+            wa2 = ''
     # Alamat untuk peta & footer: alamat KANTOR di company profile lebih dulu (data_klien
     # sudah memilihnya), baru alamat biodata FORM ISIAN. solusicerdasconsulting.com sempat
     # memetakan Bekasi (rumah pemilik) padahal kantornya Jakarta Selatan (2026-09-18).
@@ -1156,7 +1179,8 @@ def main():
             # perusahaan membuat tombolnya berbunyi nama web — bukan ajakan.
             # Pengunjung sudah tahu sedang membuka situs siapa.
             f'WA_LABEL={shlex.quote(WA_LABEL)}',
-            f'WA_CONTACTS={shlex.quote(json.dumps([{"name": WA_LABEL, "number": wa}]) if wa else "")}',
+            # Nomor kedua hanya untuk instalasi baru; situs ter-deploy tetap satu kontak.
+            f'WA_CONTACTS={shlex.quote(json.dumps(kontak_wa(wa, "" if cari_logo.sudah_terpasang(domain) else wa2)) if wa else "")}',
             f'WA_MESSAGE={shlex.quote(f"Halo {title}, saya ingin bertanya.")}',
             f'TAGLINE={shlex.quote(tagline)}',
             f'SEO_TITLE={shlex.quote(seo["title"])}',

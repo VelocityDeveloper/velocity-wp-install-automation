@@ -90,6 +90,24 @@ def pendek(teks, batas):
     return teks[:batas].rsplit(' ', 1)[0].rstrip(',;:') + '…'
 
 
+def alamat_pendek(alamat, area='', batas=48):
+    """Alamat ringkas untuk kolom sempit header tema (Address velocity-perusahaan1 terpotong
+    setelah ±3 baris, bintanglasjayakontruksi.com 2026-10-01): nama jalan + nomor, lalu kota.
+    Alamat lengkap tetap di footer & halaman kontak."""
+    alamat = re.sub(r'\s+', ' ', str(alamat or '')).strip(' ,.')
+    if len(alamat) <= batas:
+        return alamat
+    jalan = re.split(r',|\s(?=(?:rt|rw)(?=[\s.:/\d])|(?:kec|kel|kecamatan|kelurahan|desa|kab|kabupaten|kota|depan|samping|belakang|dekat|sebelah)\b)',
+                     alamat, maxsplit=1, flags=re.I)[0].strip(' ,.')
+    jalan = re.sub(r'^jalan\b\.?', 'Jl.', jalan, flags=re.I)
+    jalan = ' '.join(k.capitalize() if re.fullmatch(r'[a-z]+', k) else k for k in jalan.split(' '))
+    area = re.sub(r'\s+', ' ', str(area or '')).strip()
+    if area.lower() in ('', 'sekitarnya') or area.lower() in jalan.lower():
+        area = ''
+    hasil = ', '.join(x for x in (jalan, area.title() if area == area.lower() else area) if x)
+    return hasil if len(hasil) <= batas + 15 else pendek(hasil, batas + 15)
+
+
 # ---------- gambar ----------
 
 def potong(sumber, lebar, tinggi, tujuan):
@@ -381,6 +399,13 @@ def tautan_email(email):
     return f'<a href="mailto:{e(email)}">{e(user)}<wbr>@{e(dom)}</a>'
 
 
+def tombol_wa(k):
+    if not k.get('wa2'):
+        return f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{k["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>'
+    return ('<p>' + ''.join(f'<a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{n}" target="_blank" rel="noopener">Chat WhatsApp Admin {i}</a>'
+                            for i, n in enumerate((k['wa'], k['wa2']), 1)) + '</p>')
+
+
 def daftar_kontak(k, alamat=True):
     baris = []
     if alamat and k['alamat']:
@@ -391,6 +416,9 @@ def daftar_kontak(k, alamat=True):
         baris.append(f'<li><i class="bi bi-telephone" aria-hidden="true"></i> <a href="tel:{tel}">{e(k["telp"])}</a></li>')
     if k['wa']:
         baris.append(f'<li><i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{k["wa"]}" target="_blank" rel="noopener">WhatsApp {e(k["wa_tampil"])}</a></li>')
+    if k.get('wa2'):
+        # Klien mengirim 2 nomor: keduanya tampil (user 2026-10-01).
+        baris.append(f'<li><i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{k["wa2"]}" target="_blank" rel="noopener">WhatsApp {e(k["wa2_tampil"])}</a></li>')
     if k['email']:
         baris.append(f'<li><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(k["email"])}</li>')
     return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
@@ -425,7 +453,7 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
         # Tanpa kontak publik widget ini dilewati; dulu terpasang judul "Hubungi Kami" tanpa isi
         # (wisesayasatidar.com, mulawarmantv.com 2026-09-18).
         'konsultasi': ('Hubungi Kami', daftar_kontak(kontak, alamat=False)
-                       + (f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{kontak["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>' if kontak['wa'] else ''))
+                       + (tombol_wa(kontak) if kontak['wa'] else ''))
                       if daftar_kontak(kontak, alamat=False) else None,
         'layanan': (js.get('layanan') or 'Layanan Kami',
                     '<ul>' + ''.join(f'<li><a href="/layanan/#{e(l["slug"])}">{e(l["judul"])}</a></li>' for l in layanan) + '</ul>') if layanan else None,
@@ -493,6 +521,9 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
         'widget': widget,
         'mods': mods,
         'css': CSS,
+        'alamat': kontak['alamat'],
+        'alamat_pendek': alamat_pendek(kontak['alamat'], kontak.get('area')),
+        'situs_baru': not SITUS_LAMA,
     }
 
 
@@ -511,7 +542,10 @@ CSS = '''/* velocity-tampilan-klasik */
 .site-footer .vk-kontak .bi,.site-footer .vk-email .bi,.footer-widget .vk-kontak .bi,.footer-widget .vk-email .bi{color:inherit;opacity:.85}
 .vk-kontak a{min-width:0}
 ul.vk-sosmed{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0!important;margin:.75rem 0 0}
-ul.vk-sosmed>li{padding-left:0!important;margin:0}
+ul.vk-sosmed{align-items:center}
+ul.vk-sosmed>li{padding:0!important;margin:0!important;border:0!important}
+/* VD Gallery: foto mengisi kotak rasio (tanpa sisa abu-abu di bawah foto lanskap) */
+.vdgallery-galleryshow .vdgallery-item-link img.vdgallery-item-image{height:100%!important;object-fit:cover}
 ul.vk-sosmed>li::before{content:none!important}
 .vk-sosmed a{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;border-radius:50%;background:var(--bs-primary);color:#fff!important;text-decoration:none;font-size:15px}
 .vk-sosmed a:hover{opacity:.85}
@@ -816,6 +850,14 @@ if ($berita_depan) {
         update_post_meta($depan, '_wp_page_template', $file); echo "tampilan: template_beranda:$file\n";
     }
     $mods = $ganti($d['mods'][$tema]);
+    // Kolom alamat header (address/alamat) memakai alamat ringkas; alamat lengkap tetap di footer & kontak.
+    if (!empty($d['situs_baru']) && (string) ($d['alamat_pendek'] ?? '') !== '' && $d['alamat_pendek'] !== $d['alamat']) {
+        foreach ($mods as $k => $v) {
+            if (is_string($v) && preg_match('/address|alamat/i', (string) $k) && trim($v) === trim((string) $d['alamat'])) {
+                $mods[$k] = $d['alamat_pendek']; echo "tampilan: alamat_ringkas:$k\n";
+            }
+        }
+    }
     $kini = []; foreach (array_keys($mods) as $k) { $kini[$k] = get_theme_mod($k, null); }
     $bawaan = $d['bawaan'][$tema] ?? [];
     $sama = fn($x, $y) => (is_scalar($x) || $x === null) && (is_scalar($y) || $y === null) ? (string) $x === (string) $y : wp_json_encode($x) === wp_json_encode($y);
@@ -1084,6 +1126,21 @@ $tanpa = trim(preg_replace('#/\* velocity-tampilan-klasik \*/.*?/\* /velocity-ta
 $baru = trim($tanpa . "\n\n" . $d['css']);
 if ($baru !== trim($css)) { wp_update_custom_css_post($baru, ['stylesheet' => $tema]); echo "tampilan: css_ditulis\n"; }
 
+// 6c. Header Image (user 2026-10-01, bintanglasjayakontruksi.com): tema klasik Velocity menampilkan judul
+// halaman dalam di banner get_header_image(); kosong = halaman dalam tanpa banner & judul. Diisi foto
+// banner beranda sekali; kalau orang menggantinya sesudah itu, dibiarkan.
+if (!empty($d['situs_baru']) && empty($st['header_image']) && current_theme_supports('custom-header')
+    && !get_header_image() && !empty($media['hero'])) {
+    $hid = (int) $media['hero']; $hurl = (string) wp_get_attachment_url($hid); $hm = wp_get_attachment_metadata($hid) ?: [];
+    if ($hurl !== '') {
+        set_theme_mod('header_image', $hurl);
+        set_theme_mod('header_image_data', (object) ['attachment_id' => $hid, 'url' => $hurl, 'thumbnail_url' => $hurl,
+                                                     'width' => (int) ($hm['width'] ?? 0), 'height' => (int) ($hm['height'] ?? 0)]);
+        update_post_meta($hid, '_wp_attachment_is_custom_header', get_stylesheet());
+        $st['header_image'] = gmdate('c');
+        echo "tampilan: header_image:$hid\n";
+    }
+}
 // 7. Statistik pengunjung (sekali; kalau orang mematikannya sesudah itu, dibiarkan)
 if (empty($st['statistik'])) {
     if ((string) get_option('statistik_velocity', '1') !== '1') { update_option('statistik_velocity', '1'); echo "tampilan: statistik_dinyalakan\n"; }
@@ -1363,8 +1420,12 @@ def main():
     dk = vct.data_klien(domain, cfg.get('site_title', ''))
     wa = dk.get('WA', '')
     kontak = {'alamat': dk.get('ALAMAT', ''), 'telp': dk.get('TELP', ''), 'wa': wa,
-              'wa_tampil': dk.get('TELP', '') or ('0' + wa[2:] if wa else ''), 'email': dk.get('EMAIL_PUBLIK', '')}
-    if kontak['telp'] and wa and re.sub(r'\D', '', kontak['telp']).lstrip('0') == wa[2:]:
+              'wa_tampil': dk.get('TELP', '') or ('0' + wa[2:] if wa else ''), 'email': dk.get('EMAIL_PUBLIK', ''),
+              'area': dk.get('AREA', ''),
+              # Nomor kedua klien (user 2026-10-01); situs yang sudah ter-deploy tetap satu nomor.
+              'wa2': '' if SITUS_LAMA else dk.get('WA2', ''),
+              'wa2_tampil': '' if SITUS_LAMA else (dk.get('TELP2', '') or ('0' + dk['WA2'][2:] if dk.get('WA2') else ''))}
+    if kontak['telp'] and wa and re.sub(r'\D', '', kontak['telp']).lstrip('0') in (wa[2:], kontak['wa2'][2:]):
         kontak['telp'] = ''  # nomor yang sama cukup tampil sebagai WhatsApp
     print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
           f"email={'publik' if kontak['email'] else 'tidak_ada'}")
@@ -1507,6 +1568,8 @@ def main():
     rujukan = json.dumps([data['mods'].get(tema), data['bawaan'].get(tema)] if tema in data['mods']
                          else [data['mods'], data['bawaan']], ensure_ascii=False)
     dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan)) | set(iklan)
+    if data['situs_baru']:
+        dipakai.add('hero')  # Header Image tema (banner halaman dalam), lihat langkah 6c PHP
     data['aset'], per_md5 = {}, {}
     for k, p in aset.items():
         if k not in dipakai:

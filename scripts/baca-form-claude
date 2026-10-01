@@ -106,7 +106,12 @@ def teks_form(folder):
             if not b or client_form.CRED_LABEL.search(b.split(':', 1)[0]) and ':' in b:
                 continue
             # Sisa biner .doc: sebagian besar bukan huruf ASCII / tanpa kata.
-            if sum(c.isascii() and c.isprintable() for c in b) < 0.9 * len(b) or not re.search(r'[A-Za-z]{3}', b):
+            # Baris yang isinya hanya nomor telepon ("085711515456" di bawah "Kontak utk di web:",
+            # "HP: 0857… / 0819…")
+            # tetap dikirim; dulu ikut terbuang sehingga kontak web terbaca kosong
+            # (bintanglasjayakontruksi.com 2026-10-01).
+            nomor = re.fullmatch(r'(?:[A-Za-z/ ]{1,12}[:.]?)?[\s()+./-]*(?:\+?62|0)8[\d\s./-]{7,16}[\d\s()+./-]*', b)
+            if sum(c.isascii() and c.isprintable() for c in b) < 0.9 * len(b) or not (re.search(r'[A-Za-z]{3}', b) or nomor):
                 continue
             if b != sebelum:
                 baris.append(b)

@@ -489,6 +489,32 @@ def nomor_wa(teks):
     return (wa, tampil) if re.match(r'^628\d{7,11}$', wa) else ('', '')
 
 
+def nomor_wa_semua(teks):
+    """Semua nomor sah [(628…, tampil)] tanpa duplikat, urut sesuai tulisan klien."""
+    hasil = []
+    for cocok in NOMOR_RE.finditer(str(teks or '')):
+        wa, tampil = nomor_wa(cocok.group(0))
+        if wa and wa not in [w for w, _ in hasil]:
+            hasil.append((wa, tampil))
+    return hasil
+
+
+def kontak_web_teks(teks_form):
+    """Isi "Kontak utk di web" yang ditulis di baris SESUDAH labelnya (form .doc: label & isi
+    terpisah sehingga tidak masuk `fields`, bintanglasjayakontruksi.com 2026-10-01).
+    Hanya baris bernomor/beremail."""
+    m = re.search(r'kontak\s+u(?:n)?tu?k\s+di\s+web\s*:?[ \t]*(.*)', teks_form, re.I | re.S)
+    if not m:
+        return ''
+    baris = []
+    for b in m.group(1).splitlines()[:8]:
+        if NOMOR_RE.search(b) or EMAIL_RE.search(b):
+            baris.append(b.strip())
+        elif baris or b.strip():
+            break
+    return '\n'.join(baris)
+
+
 def data_compro(domain):
     """Hasil scripts/compro-klien, kalau folder klien punya company profile."""
     try:
@@ -590,7 +616,8 @@ def biodata_publik(teks_form, dokumen=''):
     for tambahan in (kota, ' '.join(x for x in (prov, kodepos) if x)):
         if tambahan and tambahan.lower() not in ' '.join(bagian).lower():
             bagian.append(tambahan)
-    return {'wa': wa, 'telp': telp, 'email': email, 'alamat': ', '.join(bagian) if alamat else ''}
+    return {'wa': wa, 'telp': telp, 'email': email, 'alamat': ', '.join(bagian) if alamat else '',
+            'teks_nomor': bio}
 
 
 def data_klien(domain, nama=''):
@@ -638,10 +665,12 @@ def data_klien(domain, nama=''):
     badan = lambda t: bool(re.match(r'\s*(pt|cv|ud|pd|perum|koperasi|yayasan|firma)[\s.]', t or '', re.I))
     if nama_form2 and badan(nama_form2) and not badan(nama):
         nama = nama_form2.strip()
-    kontak_web = field(r'kontak utk di web|kontak untuk di web')
+    kontak_web = field(r'kontak utk di web|kontak untuk di web') or kontak_web_teks(teks_form)
     wa, telp = nomor_wa(kontak_web)
+    sumber_wa = kontak_web
     if not wa:
         wa, telp = nomor_wa(dokumen)
+        sumber_wa = ''  # dokumen panjang (company profile) bisa memuat nomor lain: nomor kedua tidak diambil
     # Form paket toko online tidak punya "Kontak utk di web": HP/Telp & Email toko ada di
     # FORM 1 "DATA WEBSITE" (sebelum BIODATA PEMILIK). Dipakai hanya bila kontak web & dokumen
     # klien kosong, supaya situs toko yang sudah jadi tidak berubah kontaknya (allikan.com).
@@ -652,6 +681,7 @@ def data_klien(domain, nama=''):
                                               m_toko.group(1), re.I | re.M))
             # "+62 857 ..." (spasi sesudah kode negara) tidak dikenali NOMOR_RE.
             wa, telp = nomor_wa(re.sub(r'\+62[\s.-]+(?=8)', '+62', kontak_web))
+            sumber_wa = re.sub(r'\+62[\s.-]+(?=8)', '+62', kontak_web)
             telp = re.sub(r'^\+62(?=8)', '+62 ', telp)
 
     calon_email = [e for e in EMAIL_RE.findall(kontak_web) + EMAIL_RE.findall(dokumen)
@@ -689,12 +719,18 @@ def data_klien(domain, nama=''):
     if bio:
         if not wa and bio['wa']:
             wa, telp = bio['wa'], telp or bio['telp']
+            sumber_wa = bio['teks_nomor']
         email_publik = email_publik or bio['email']
         penerima = penerima or bio['email']
         alamat_publik = alamat_publik or bio['alamat']
+    # Nomor kedua dari sumber yang sama dengan nomor pertama (user 2026-10-01: klien mengirim
+    # 2 nomor → WA mengambang 2 kontak & kontak menampilkan 2 nomor).
+    wa2, telp2 = next(((w, t) for w, t in nomor_wa_semua(sumber_wa if wa else '') if w != wa), ('', ''))
     return {
         'NAMA': nama[:80],
         'WA': wa,
+        'WA2': wa2,
+        'TELP2': telp2[:25],
         'TELP': telp[:25],
         'EMAIL': penerima or f'admin@{domain}',
         'EMAIL_PUBLIK': email_publik,
