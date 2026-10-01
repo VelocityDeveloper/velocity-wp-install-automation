@@ -239,6 +239,10 @@ tampilan_klasik() {
   # velocity-tour-travel; langkah ini melewati tema lain sendiri.
   echo "[$(date -Is)] Paket tour" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-tour" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Child theme property2: listing (materi klien / 6 CONTOH), primary_color dari form, sidebar kanan,
+  # VD Gallery & banner terbaca (mysahabatwisata.com 2026-10-01); tema lain dilewati skripnya sendiri.
+  # Satu simpul bagan dengan Paket tour (web/installer/alur.js).
+  /usr/bin/python3 "$SCRIPTS/listing-property" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Portal berita biasa ikut (mulawarmantv.com 2026-09-18: dulu dilewati, semua artikel tampil
   # sebagai kotak placeholder). paket-g-foto memilih mode berita sendiri dari jenis isi contoh.
   echo "[$(date -Is)] Foto utama artikel" >> "$LOG"

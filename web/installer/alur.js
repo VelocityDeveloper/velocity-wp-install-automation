@@ -248,11 +248,20 @@
           const n = (t.match(/dokumen_klien: terpasang:/g) || []).length; return n ? n + ' blok dokumen' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
-      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour', ket0: 'plugin tour + CPT paket-tour',
-        mulai: /\] Paket tour$/, selesai: /paket_tour: (selesai|dilewati)/, gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)/,
-        ketHasil: t => { if (/paket_tour: dilewati/.test(t)) return 'dilewati (bukan tema tour)';
+      // Simpul yang sama memuat scripts/listing-property (tema property2: listing, warna, sidebar kanan,
+      // VD Gallery; mysahabatwisata.com 2026-10-01), berjalan tepat sesudah paket-tour.
+      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri',
+        mulai: /\] Paket tour$/, selesai: /(paket_tour|listing_property): (selesai|dilewati)/,
+        gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)|listing_property: (gagal|ai_gagal|cpt_tidak|cek_tema_gagal)/,
+        ketHasil: t => {
           const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
-          return m ? (+m[1] + +m[2]) + ' paket' : null; },
+          if (m) return (+m[1] + +m[2]) + ' paket tour';
+          const l = /listing_property: listing baru=(\d+)/.exec(t);
+          if (l) return l[1] + ' listing' + (/listing_property: listing=\d+ contoh=1/.test(t) ? ' contoh' : '')
+            + (/listing_property: vdgallery:/.test(t) ? ' + VD Gallery' : '');
+          if (/listing_property: selesai/.test(t)) return 'property2 disesuaikan';
+          if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2)';
+          return null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'fotoKlasik', kol: 20, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
         mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,

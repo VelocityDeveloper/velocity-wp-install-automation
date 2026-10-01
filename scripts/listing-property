@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+"""Listing, sidebar kanan, galeri, dan warna untuk child theme Velocity Property 2.
+
+Pemakaian: listing-property <manifest> [--coba] [--paksa]   (butuh WP_INSTALL_SSH_KEY_FILE)
+
+Permintaan user 2026-10-01 (mysahabatwisata.com, "perbaiki untuk installer berikutnya tema
+Velocity Child Property 2"). Sebelumnya hasil installer di tema ini:
+- seksi "Listing Terbaru" di beranda kosong: tidak ada langkah yang mengisi CPT property
+- warna tetap biru #1e73be: site-finish hanya menulis --velocity-primary, padahal tema membaca
+  theme mod primary_color (--bs-primary) → form "Kuning Hitam" tidak terlihat
+- banner: teks putih di atas foto tanpa lapisan gelap (lapisan bawaan hanya di HP, putih 20%)
+- Secondary Sidebar kosong (demo: daftar properti + kalender), ikon sosmed footer tidak sejajar
+- halaman Galeri tanpa galeri bila klien tidak mengirim foto
+
+Yang dikerjakan (hanya bila tema aktif velocity-property2 dan situs belum pernah selesai):
+- listing dari materi produk klien; tanpa materi → 6 listing CONTOH sesuai usaha klien
+  (meta _velocity_contoh, kalimat "Contoh …" di isi), foto klien atau Pexels
+- kategori/lokasi listing, menu ke arsip /listing/, judul seksi beranda
+- primary_color dari WARNA TEMA WEB form (bila masih bawaan), ikon kartu layanan beranda
+- Secondary Sidebar: daftar listing per kategori ([velocity-property]) + Kalender, bila kosong
+- Galeri: VD Gallery (velocity-addons) berisi foto klien/Pexels bila halaman Galeri belum
+  bergaleri (site-finish hanya membuatnya bila klien mengirim foto)
+- CSS di antara penanda /* velocity-property2 */ (banner terbaca, teks kartu kontras, ikon
+  sosmed sejajar, foto VD Gallery penuh, ikon kamar disembunyikan untuk listing non-properti)
+Isi disimpan di /var/lib/velocity/ai/generated/<domain>-listing-property.json (run ulang tanpa AI).
+"""
+import hashlib
+import io
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from folder_klien import folder_klien  # noqa: E402
+
+TEMA = 'velocity-property2'
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+BIRU_BAWAAN = ('', '#1e73be')
+
+CEK_PHP = r'''
+$g = get_page_by_path("galeri");
+$sb = get_option("sidebars_widgets");
+$lay = array();
+foreach ((array) get_theme_mod("layanan_repeater", array()) as $it) {
+    if (is_array($it) && !empty($it["layanan_title"])) { $lay[] = $it["layanan_title"]; }
+}
+echo "CEK:" . wp_json_encode(array(
+    "tema" => get_stylesheet(),
+    "listing" => (int) wp_count_posts("property")->publish,
+    "primary" => strtolower((string) get_theme_mod("primary_color", "")),
+    "layanan" => $lay,
+    "sidebar2" => !empty($sb["secondary-sidebar"]),
+    "galeri" => $g ? (int) $g->ID : 0,
+    "galeri_isi" => $g ? (int) (strpos($g->post_content, "[vdgallery") !== false || strpos($g->post_content, "[gallery") !== false) : 0,
+    "vdgallery" => (int) class_exists("Velocity_Addons_Gallery"),
+)) . "\n";
+'''
+
+REMOTE_PHP = r'''<?php
+// Dijalankan listing-property lewat wp eval-file <file> <folder>.
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+if (!$d) { echo "listing_property: data_tidak_terbaca\n"; return; }
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+require_once ABSPATH . 'wp-admin/includes/nav-menu.php';
+$admins = get_users(['role' => 'administrator', 'number' => 1, 'orderby' => 'ID']);
+wp_set_current_user($admins ? $admins[0]->ID : 1);
+kses_remove_filters();
+if (!post_type_exists('property')) { echo "listing_property: cpt_tidak_terdaftar\n"; return; }
+
+// 1. Media (dipakai ulang lewat sidik berkas)
+$media = [];
+foreach ($d['aset'] as $kunci => $a) {
+    $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_tampilan_aset', 'meta_value' => $a['sidik']]);
+    if ($ada) { $media[$kunci] = (int) $ada[0]; continue; }
+    $tmp = wp_tempnam($a['file']); copy("$dir/{$a['file']}", $tmp);
+    $id = media_handle_sideload(['name' => $a['file'], 'tmp_name' => $tmp], 0, $a['judul']);
+    if (is_wp_error($id)) { echo "listing_property: media_gagal:$kunci\n"; continue; }
+    update_post_meta($id, '_velocity_tampilan_aset', $a['sidik']);
+    update_post_meta($id, '_wp_attachment_image_alt', $a['judul']);
+    if (!empty($a['kredit'])) { wp_update_post(['ID' => $id, 'post_excerpt' => $a['kredit']]); }
+    $media[$kunci] = (int) $id;
+}
+
+// 2. Warna tema dari form: theme mod primary_color hanya bila masih bawaan.
+if ($d['warna'] !== '') {
+    $k = strtolower((string) get_theme_mod('primary_color', ''));
+    if ($k === '' || $k === '#1e73be') { set_theme_mod('primary_color', $d['warna']); echo "listing_property: warna:{$d['warna']}\n"; }
+    else { echo "listing_property: warna_dibiarkan:$k\n"; }
+}
+
+// 3. Listing
+$istilah = function ($tax, $nama) {
+    if ($nama === '') { return []; }
+    $t = term_exists($nama, $tax);
+    if (!$t) { $t = wp_insert_term($nama, $tax); }
+    return is_wp_error($t) ? [] : [(int) $t['term_id']];
+};
+$baru = $dibiarkan = 0;
+foreach ($d['listing'] as $urut => $p) {
+    $ada = get_posts(['post_type' => 'property', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_listing_kunci', 'meta_value' => $p['kunci']]);
+    if ($ada) { $dibiarkan++; continue; }
+    // Beranda menampilkan 3 terbaru: listing pertama diberi tanggal terbaru.
+    $id = wp_insert_post(['post_type' => 'property', 'post_status' => 'publish', 'post_title' => $p['judul'],
+        'post_name' => $p['slug'], 'post_content' => $p['konten'],
+        // Waktu lokal situs (bukan +7 jam tetap): tanggal di masa depan membuat post "terjadwal".
+        'post_date' => wp_date('Y-m-d H:i:s', time() - $urut * 60)], true);
+    if (is_wp_error($id)) { echo "listing_property: gagal:{$p['slug']}\n"; continue; }
+    $baru++;
+    update_post_meta($id, '_velocity_listing_kunci', $p['kunci']);
+    if ($d['contoh']) { update_post_meta($id, '_velocity_contoh', '1'); }
+    foreach ($p['meta'] as $k => $v) { if ($v !== '') { update_post_meta($id, $k, $v); } }
+    if (!empty($media[$p['foto']])) { set_post_thumbnail($id, $media[$p['foto']]); }
+    wp_set_object_terms($id, $istilah('property-category', $p['kategori']), 'property-category');
+    wp_set_object_terms($id, $istilah('property-location', $p['lokasi']), 'property-location');
+}
+echo "listing_property: listing baru=$baru dibiarkan=$dibiarkan\n";
+if ($d['judul_listing'] !== '' && in_array(get_theme_mod('judul_listing', ''), ['', 'Listing Terbaru'], true)) {
+    set_theme_mod('judul_listing', $d['judul_listing']);
+}
+
+// 4. Ikon kartu layanan beranda (bawaan tema: jempol untuk semua kartu)
+if ($d['ikon']) {
+    $lay = get_theme_mod('layanan_repeater', []);
+    $ubah = 0;
+    if (is_array($lay)) {
+        foreach ($lay as $i => $it) {
+            $t = is_array($it) ? ($it['layanan_title'] ?? '') : '';
+            if ($t !== '' && !empty($d['ikon'][$t]) && empty($it['layanan_icon'])) { $lay[$i]['layanan_icon'] = $d['ikon'][$t]; $ubah++; }
+        }
+        if ($ubah) { set_theme_mod('layanan_repeater', $lay); echo "listing_property: ikon_layanan:$ubah\n"; }
+    }
+}
+
+// 5. Menu utama: arsip listing sesudah Layanan (atau Beranda)
+$lokasi = get_nav_menu_locations(); $menu_id = (int) ($lokasi['primary'] ?? 0);
+if ($menu_id) {
+    $ada = false; $posisi = 1;
+    foreach ((array) wp_get_nav_menu_items($menu_id) as $it) {
+        if (($it->type === 'post_type_archive' && $it->object === 'property') || untrailingslashit($it->url) === untrailingslashit(home_url('/listing'))) { $ada = true; }
+        if ((int) $it->object_id === (int) get_option('page_on_front') || in_array($it->title, ['Layanan', 'Layanan Kami'], true)) { $posisi = $it->menu_order + 1; }
+    }
+    if (!$ada) {
+        wp_update_nav_menu_item($menu_id, 0, ['menu-item-title' => $d['menu'], 'menu-item-type' => 'post_type_archive',
+            'menu-item-object' => 'property', 'menu-item-status' => 'publish', 'menu-item-position' => $posisi]);
+        echo "listing_property: menu_ditambah\n";
+    }
+}
+
+// 6. Secondary Sidebar ala demo: listing per kategori + kalender (hanya bila kosong)
+$sb = get_option('sidebars_widgets', []);
+if (empty($sb['secondary-sidebar'])) {
+    $text = get_option('widget_text', ['_multiwidget' => 1]);
+    $ids = [];
+    $n = 0;
+    foreach ($d['sidebar'] as $s) {
+        $t = get_term_by('name', $s['kategori'], 'property-category');
+        if (!$t) { continue; }
+        $kunci = max(array_merge([400], array_filter(array_keys($text), 'is_int'))) + 1;
+        $text[$kunci] = ['title' => $s['judul'], 'text' => '[velocity-property kategori="' . $t->slug . '" jumlah="' . (int) $s['jumlah'] . '"]', 'filter' => true, 'visual' => true];
+        $ids[] = "text-$kunci";
+        if (++$n >= 2) { break; }
+    }
+    if (!$ids) {
+        $kunci = max(array_merge([400], array_filter(array_keys($text), 'is_int'))) + 1;
+        $text[$kunci] = ['title' => $d['judul_listing'] ?: 'Listing Terbaru', 'text' => '[velocity-property jumlah="4"]', 'filter' => true, 'visual' => true];
+        $ids[] = "text-$kunci";
+    }
+    update_option('widget_text', $text);
+    $cal = get_option('widget_calendar', ['_multiwidget' => 1]);
+    $ck = max(array_merge([400], array_filter(array_keys($cal), 'is_int'))) + 1;
+    $cal[$ck] = ['title' => 'Kalender'];
+    update_option('widget_calendar', $cal);
+    $ids[] = "calendar-$ck";
+    $sb['secondary-sidebar'] = $ids;
+    update_option('sidebars_widgets', $sb);
+    echo "listing_property: sidebar_kanan:" . count($ids) . "\n";
+}
+
+// 7. Galeri = VD Gallery bila halaman Galeri belum bergaleri
+$gal = get_page_by_path('galeri');
+$galeri_ids = array_values(array_filter(array_map(fn($k) => $media[$k] ?? 0, $d['galeri'])));
+if ($gal && $galeri_ids && class_exists('Velocity_Addons_Gallery')
+    && strpos($gal->post_content, '[vdgallery') === false && strpos($gal->post_content, '[gallery') === false) {
+    update_option('velocity_gallery', '1');
+    $ada = get_posts(['post_type' => 'vdgallery', 'name' => 'galeri-situs', 'post_status' => 'any', 'numberposts' => 1]);
+    $g = wp_insert_post(['ID' => $ada ? $ada[0]->ID : 0, 'post_type' => 'vdgallery', 'post_status' => 'publish',
+        'post_title' => 'Galeri ' . get_bloginfo('name'), 'post_name' => 'galeri-situs'], true);
+    if (!is_wp_error($g)) {
+        update_post_meta($g, 'vdgaleri', ['media' => $galeri_ids, 'gallery_use_global_options' => '0', 'slideshow_use_global_options' => '1',
+            'option' => ['size' => 'medium', 'kolom' => 3, 'kolomresponsif' => 2, 'galericaption' => 'tidak', 'aspectratio' => '4/3', 'pagination' => 1, 'paginationitem' => 12]]);
+        wp_update_post(['ID' => $gal->ID, 'post_content' => $gal->post_content . "\n<!-- velocity-gallery -->\n[vdgallery id=\"$g\"]"]);
+        echo "listing_property: vdgallery:$g:" . count($galeri_ids) . "\n";
+    }
+}
+
+// 8. CSS
+$css = (string) wp_get_custom_css();
+$css = preg_replace('#\n?/\* velocity-property2 \*/.*?/\* /velocity-property2 \*/#s', '', $css);
+wp_update_custom_css_post(rtrim($css) . "\n/* velocity-property2 */\n" . $d['css'] . "\n/* /velocity-property2 */");
+flush_rewrite_rules(false);
+echo "listing_property: selesai\n";
+'''
+
+
+def muat(nama, berkas):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def ssh_jalankan(cfg, domain, perintah_wp, masukan=None, pra=''):
+    finish = muat('site_finish', HERE / 'site-finish')
+    ssh = finish.ssh_command(cfg, os.environ['WP_INSTALL_SSH_KEY_FILE'])
+    docroot = finish.docroot(domain, cfg.get('da_user', ''))
+    user = cfg.get('da_user', '')
+    wp = f'php -d memory_limit=512M /usr/local/bin/wp {perintah_wp}'
+    jalankan = (f'set -e; {pra}cd {shlex.quote(docroot)}; '
+                f'if id {shlex.quote(user)} >/dev/null 2>&1; then runuser -u {shlex.quote(user)} -- {wp} 2>&1 | grep -v Deprecated || true; '
+                f'else {wp} --allow-root 2>&1 | grep -v Deprecated || true; fi')
+    return subprocess.run(ssh + [jalankan], input=masukan, capture_output=True, timeout=600)
+
+
+def slugify(teks):
+    return re.sub(r'[^a-z0-9]+', '-', str(teks).lower()).strip('-')[:70]
+
+
+def e(teks):
+    import html
+    return html.escape(str(teks or ''), quote=False)
+
+
+def terang(hexv):
+    """True bila warna terang (teks di atasnya harus gelap), luminansi relatif WCAG."""
+    h = hexv.lstrip('#')
+    if len(h) != 6:
+        return False
+    def kanal(c):
+        c = int(c, 16) / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (kanal(h[i:i + 2]) for i in (0, 2, 4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4
+
+
+def css_tema(warna, properti):
+    gelap = warna and terang(warna)
+    bagian = [
+        # Banner: teks putih di atas foto apa pun (lapisan bawaan tema hanya di HP, putih 20%).
+        '.banner-image{position:relative;background-position:center center!important}',
+        '.banner-image::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.78) 0%,rgba(0,0,0,.55) 50%,rgba(0,0,0,.15) 100%);z-index:1}',
+        '.banner-image>.overlay{display:none!important}',
+        '.banner-image>.container{position:relative;z-index:2}',
+        '.banner-image .title,.banner-image .subtitle,.banner-image h4{color:#fff!important;text-shadow:0 2px 10px rgba(0,0,0,.45)}',
+        '.banner-image .title{font-size:clamp(2rem,4.4vw,3.6rem)!important;line-height:1.1}',
+        '.banner-image .subtitle{font-weight:500!important;max-width:520px}',
+        '.banner-image h4{font-size:1rem}',
+        '.banner-image .btn-dark{background:var(--bs-primary)!important;border-color:var(--bs-primary)!important}',
+        '@media (max-width:767.98px){.banner-image{min-height:440px}.banner-image::before{background:rgba(0,0,0,.6)}}',
+        # Ikon sosmed footer/sidebar sejajar tanpa garis pemisah butir daftar tema.
+        '.velocity-widget ul.vk-sosmed,.footer-widget ul.vk-sosmed{align-items:center;gap:.45rem}',
+        '.velocity-widget ul.vk-sosmed>li,.footer-widget ul.vk-sosmed>li{border:0!important;padding:0!important;margin:0!important;display:flex;line-height:1}',
+        '.velocity-widget ul.vk-sosmed>li::after,.footer-widget ul.vk-sosmed>li::after{content:none!important;display:none!important}',
+        '.vk-sosmed a{width:36px!important;height:36px!important;transition:transform .2s}',
+        '.vk-sosmed a:hover{opacity:1;transform:translateY(-2px)}',
+        '.vk-sosmed a .bi{line-height:1;display:block}',
+        # VD Gallery: foto mengisi kotak rasio (tema memaku tinggi gambar).
+        '.vdgallery-galleryshow .vdgallery-item-link{position:relative}',
+        '.vdgallery-galleryshow .vdgallery-item-link .vdgallery-item-image{position:absolute;inset:0;width:100%!important;height:100%!important;object-fit:cover}',
+        '.velocity-property .fw-bold.text-dark{font-size:.85rem}',
+        '.listing-meta .fs-6{font-weight:700}',
+        '.btn-primary{background:var(--bs-primary)!important;border-color:var(--bs-primary)!important}',
+    ]
+    if gelap:
+        # Warna utama terang (kuning, oranye muda, dst.): teks kartu/tombol hitam, tautan lebih gelap.
+        bagian += [
+            '.layanan-item.text-light,.layanan-item .card-title,.layanan-item .card-text,.layanan-item .layanan-icon{color:#111!important}',
+            '.layanan-item .btn-outline-light{color:#111!important;border-color:#111!important}',
+            '.btn-primary,.banner-image .btn-dark{color:#111!important}',
+            '.btn-primary:hover{background:#111!important;border-color:#111!important;color:#fff!important}',
+            '.banner-image h4{color:var(--bs-primary)!important}',
+            '.widget a:not(.btn),#secondary a:not(.btn),.site-footer .footer-widget a:not(.btn){color:#6b4a00}',
+            '.vk-sosmed a{background:#111!important;color:' + warna + '!important}',
+            '.vk-sosmed a:hover{background:var(--bs-primary)!important;color:#111!important}',
+        ]
+    if not properti:
+        # Listing bukan rumah (paket, kendaraan, dst.): ikon kamar tidur & lantai di kartu tidak berarti.
+        bagian.append('.listing-meta>span:nth-child(1),.listing-meta>span:nth-child(2){display:none!important}')
+    return '\n'.join(bagian)
+
+
+def minta_listing(manifest, cfg, domain, layanan):
+    simpanan = GENERATED_DIR / f'{domain}-listing-property.json'
+    try:
+        data = json.loads(simpanan.read_text())
+        if data.get('listing'):
+            print('listing_property: isi_tersimpan')
+            return data
+    except (OSError, ValueError):
+        pass
+    argv = sys.argv
+    sys.argv = [argv[0], str(manifest)]
+    try:
+        gen = muat('acg_listing', HERE / 'ai-content-generator.py')
+    finally:
+        sys.argv = argv
+    from client_docs import collect_client_docs, format_for_prompt
+    folder = folder_klien(domain)
+    client_data = gen.read_client_data(folder) if folder.is_dir() else {}
+    docs = collect_client_docs(folder) if folder.is_dir() else {'sources': [], 'unreadable': [], 'skipped': []}
+    model = gen.get_model('konten')
+    if not model:
+        print('listing_property: tanpa_model_ai')
+        return None
+    sistem = ('Anda penulis konten situs usaha Indonesia. Data produk dari dokumen klien disalin SETIA (tanpa '
+              'mengarang harga/spesifikasi). Jawab HANYA satu objek JSON.')
+    permintaan = f"""Situs: {cfg.get('site_title') or domain} ({domain}). Tema situs: katalog "Listing" (aslinya untuk
+agen properti) — tiap listing punya judul, foto, kategori, lokasi, harga, dan isi.
+
+Tugas: susun 6 LISTING untuk seksi "Listing" situs ini.
+- Bila dokumen klien memuat produk/unit/paket yang ditawarkan beserta keterangannya, salin itu (contoh=false).
+- Bila TIDAK ada (mis. "materi menyusul"), buat 6 listing CONTOH yang masuk akal untuk jenis usaha klien
+  (contoh=true): travel umroh → paket umroh/haji, dealer → unit kendaraan, agen properti → rumah/ruko/tanah,
+  dst. Harga contoh wajar pasar Indonesia, nama tanpa merek pihak lain.
+Kartu layanan beranda (pilihkan ikon Bootstrap Icons yang cocok, slug tanpa "bi-"): {json.dumps(layanan, ensure_ascii=False)}
+
+Bentuk jawaban:
+{{"contoh": true,
+  "properti": false,               // true hanya bila listing berupa rumah/bangunan/tanah
+  "judul_listing": "Paket Haji & Umroh",   // judul seksi beranda, maks 30 karakter
+  "menu": "Paket",                 // label menu ke arsip listing, 1-2 kata
+  "listing": [{{
+    "judul": "Paket Umroh Reguler 12 Hari",
+    "kategori": "Umroh",           // 2-3 kategori dipakai bergantian di seluruh listing
+    "lokasi": "Makkah & Madinah",  // wilayah/kota
+    "harga": 33900000,             // angka bulat rupiah; 0 bila tak ada
+    "ringkasan": "1-2 kalimat",
+    "judul_poin": "Fasilitas",     // judul daftar poin (Fasilitas/Spesifikasi/Keunggulan)
+    "poin": ["...", "..."],        // 4-6 butir
+    "status": "",                  // properti saja: "Dijual"/"Disewakan"; selain itu ""
+    "kamar_tidur": "", "kamar_mandi": "", "luas_tanah": "", "luas_bangunan": "", "jumlah_lantai": "",  // properti saja
+    "foto": "kaaba mecca night"    // kata kunci foto stok BAHASA INGGRIS, 2-4 kata, spesifik isi listing
+  }}],
+  "galeri": ["masjid nabawi medina", "..."],   // 4 kata kunci foto stok bahasa Inggris untuk halaman Galeri usaha ini
+  "ikon": {{"<judul kartu layanan>": "airplane"}}
+}}
+JANGAN menulis nama, alamat rumah, nomor pribadi, atau data pribadi pemilik.
+
+DOKUMEN KLIEN:
+{format_for_prompt(client_data, docs)}"""
+    for _ in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model, timeout=300, max_tokens=8000)
+        try:
+            data = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1], strict=False)
+        except (TypeError, ValueError):
+            continue
+        listing = [p for p in data.get('listing') or [] if isinstance(p, dict) and str(p.get('judul') or '').strip()]
+        if listing:
+            data['listing'] = listing[:8]
+            data['model'] = model.get('id')
+            GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+            simpanan.write_text(json.dumps(data, indent=1, ensure_ascii=False))
+            return data
+    print('listing_property: ai_gagal')
+    return None
+
+
+def foto_pexels(pex, kata, tujuan, lebar, tinggi, dipakai):
+    """Foto Pexels pertama yang belum dipakai untuk kata kunci, dipotong ke ukuran tujuan."""
+    from PIL import Image, ImageOps
+    for kandidat in pex.cari(kata)[:12]:
+        if not kandidat.get('url') or kandidat['url'] in dipakai:
+            continue
+        try:
+            req = urllib.request.Request(kandidat['url'], headers={'User-Agent': 'velocity-installer/1.0 (+https://velocitydeveloper.com)'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                im = Image.open(io.BytesIO(r.read()))
+            im = ImageOps.exif_transpose(im).convert('RGB')
+            ImageOps.fit(im, (lebar, tinggi), Image.LANCZOS, centering=(0.5, 0.45)).save(tujuan, quality=78, optimize=True, progressive=True)
+        except Exception:
+            continue
+        dipakai.add(kandidat['url'])
+        kredit = f"Foto: {kandidat.get('creator') or 'Pexels'} / Pexels" if kandidat.get('creator') else 'Foto: Pexels'
+        return kandidat.get('title') or kata, kredit
+    return None
+
+
+def susun_listing(p, contoh, foto, wa, nama):
+    poin = [str(b).strip() for b in p.get('poin') or [] if str(b).strip()]
+    bagian = []
+    if p.get('ringkasan'):
+        bagian.append(f"<p>{e(p['ringkasan'])}</p>")
+    if poin:
+        bagian.append(f"<h3>{e(p.get('judul_poin') or 'Keterangan')}</h3><ul>" + ''.join(f'<li>{e(b)}</li>' for b in poin) + '</ul>')
+    if contoh:
+        bagian.append(f'<p><em>Contoh listing — harga dan keterangan akan disesuaikan dengan materi {e(nama)}.</em></p>')
+    try:
+        harga = int(re.sub(r'\D', '', str(p.get('harga') or 0)) or 0)
+    except ValueError:
+        harga = 0
+    meta = {'harga': str(harga) if harga else '', 'agen': nama, 'telepon_agen': wa}
+    for k in ('status', 'kamar_tidur', 'kamar_mandi', 'luas_tanah', 'luas_bangunan', 'jumlah_lantai'):
+        meta[k] = str(p.get(k) or '').strip()
+    judul = re.sub(r'\s+', ' ', str(p['judul'])).strip()
+    return {'kunci': slugify(judul), 'slug': slugify(judul), 'judul': judul, 'konten': '\n'.join(bagian),
+            'kategori': str(p.get('kategori') or '').strip(), 'lokasi': str(p.get('lokasi') or '').strip(),
+            'meta': meta, 'foto': foto}
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba = '--coba' in sys.argv
+    if len(args) != 1:
+        print('usage: listing-property <manifest> [--coba] [--paksa]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    tpb = muat('theme_paket_biasa', HERE / 'theme-paket-biasa')
+    cfg = tpb.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('listing_property: manifest_tidak_valid')
+        return 2
+    # Situs yang sudah ter-deploy tidak diubah aturan baru (feedback 2026-09-23).
+    if muat('cari_logo', HERE / 'cari_logo.py').sudah_terpasang(domain) and '--paksa' not in sys.argv:
+        print('listing_property: dilewati:situs_sudah_terpasang')
+        return 0
+    keadaan = {'tema': TEMA, 'listing': 0, 'primary': '', 'layanan': [], 'sidebar2': False, 'galeri': 1, 'galeri_isi': 0, 'vdgallery': 1}
+    if not coba:
+        if not Path(os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')).is_file():
+            print('listing_property: kunci SSH tidak ada')
+            return 1
+        cek = ssh_jalankan(cfg, domain, f'eval {shlex.quote(CEK_PHP)}').stdout.decode(errors='replace')
+        m = re.search(r'CEK:(\{.*\})', cek)
+        if not m:
+            print(f'listing_property: cek_tema_gagal:{cek.strip()[:200]}')
+            return 1
+        keadaan = json.loads(m.group(1))
+        if keadaan['tema'] != TEMA:
+            print(f"listing_property: dilewati:tema_{keadaan['tema']}")
+            return 0
+    print(f"listing_property: tema={TEMA} listing_ada={keadaan['listing']}")
+
+    finish = muat('site_finish', HERE / 'site-finish')
+    from client_form import read_client_form
+    folder = folder_klien(domain)
+    form = read_client_form(folder) if folder.is_dir() else {'fields': {}, 'text': ''}
+    warna = (finish.pick_colors(finish.field(form['fields'], r'warna tema')) or [''])[0]
+
+    perlu_listing = keadaan['listing'] == 0
+    data = minta_listing(manifest, cfg, domain, keadaan['layanan']) if perlu_listing or keadaan['layanan'] else None
+    if perlu_listing and not data:
+        return 1
+    data = data or {'listing': [], 'contoh': False, 'properti': True, 'galeri': [], 'ikon': {}}
+    vct = muat('velocity_child_theme', HERE / 'velocity-child-theme')
+    dk = vct.data_klien(domain, cfg.get('site_title', ''))
+    nama = cfg.get('site_title') or dk.get('NAMA') or domain
+    wa = re.sub(r'\D', '', dk.get('WA', '') or '')
+    if wa.startswith('62'):
+        wa = '0' + wa[2:]
+
+    kerja = Path(tempfile.mkdtemp(prefix=f'listing-property-{domain}-'))
+    aset, dipakai = {}, set()
+    pex = muat('paket_g_foto', HERE / 'paket-g-foto').Pexels()
+    klien = tpb.foto_klien(domain)
+    listing = []
+    if perlu_listing:
+        for n, p in enumerate(data['listing'], 1):
+            kunci = f'listing-{n}'
+            tujuan = kerja / f'{kunci}.jpg'
+            hasil = None
+            # Foto klien hanya untuk listing asli; listing CONTOH memakai foto stok sesuai isinya.
+            if not data.get('contoh') and n <= len(klien):
+                tpb.potong(klien[n - 1][0], 1000, 750, tujuan)
+                hasil = (p['judul'], '')
+            elif pex.aktif:
+                hasil = foto_pexels(pex, p.get('foto') or p['judul'], tujuan, 1000, 750, dipakai)
+            if hasil:
+                aset[kunci] = {'file': tujuan.name, 'judul': p['judul'], 'kredit': hasil[1],
+                               'sidik': f"{domain}:{kunci}:{hashlib.md5(tujuan.read_bytes()).hexdigest()}"}
+            listing.append(susun_listing(p, bool(data.get('contoh')), kunci if hasil else '', wa, nama))
+    galeri = []
+    if keadaan['galeri'] and not keadaan['galeri_isi'] and keadaan['vdgallery']:
+        if klien:
+            for n, (berkas, _, _) in enumerate(klien[:12], 1):
+                kunci = f'galeri-{n}'
+                tpb.potong(berkas, 1200, 900, kerja / f'{kunci}.jpg')
+                aset[kunci] = {'file': f'{kunci}.jpg', 'judul': f'Galeri {nama} {n}', 'kredit': '',
+                               'sidik': f"{domain}:{kunci}:{hashlib.md5((kerja / f'{kunci}.jpg').read_bytes()).hexdigest()}"}
+                galeri.append(kunci)
+        elif pex.aktif:
+            kata = [k for k in data.get('galeri') or [] if str(k).strip()] or [p.get('foto') for p in data['listing'] if p.get('foto')]
+            n = 0
+            for putaran in range(3):  # 9 foto: bergilir antarkata kunci
+                for k in kata:
+                    if n >= 9:
+                        break
+                    kunci = f'galeri-{n + 1}'
+                    hasil = foto_pexels(pex, k, kerja / f'{kunci}.jpg', 1200, 900, dipakai)
+                    if hasil:
+                        aset[kunci] = {'file': f'{kunci}.jpg', 'judul': f'Galeri {nama} {n + 1}', 'kredit': hasil[1],
+                                       'sidik': f"{domain}:{kunci}:{hashlib.md5((kerja / f'{kunci}.jpg').read_bytes()).hexdigest()}"}
+                        galeri.append(kunci)
+                        n += 1
+    kategori = []
+    for p in listing:
+        if p['kategori'] and p['kategori'] not in kategori:
+            kategori.append(p['kategori'])
+    sidebar = [{'judul': f"{data.get('menu') or 'Listing'} {k}".strip(), 'kategori': k, 'jumlah': 3} for k in kategori[:2]]
+    ikon = {str(k): re.sub(r'^bi-', '', str(v).strip().lower()) for k, v in (data.get('ikon') or {}).items()
+            if re.match(r'^[a-z0-9-]{2,40}$', re.sub(r'^bi-', '', str(v).strip().lower()))}
+    muatan = {'listing': listing, 'aset': aset, 'galeri': galeri, 'contoh': bool(data.get('contoh')),
+              'judul_listing': str(data.get('judul_listing') or '')[:40] if perlu_listing else '',
+              'menu': str(data.get('menu') or 'Listing')[:20], 'sidebar': sidebar, 'ikon': ikon,
+              'warna': warna if keadaan['primary'] in BIRU_BAWAAN else '',
+              'css': css_tema(warna, bool(data.get('properti', True)))}
+    (kerja / 'data.json').write_text(json.dumps(muatan, ensure_ascii=False))
+    print(f"listing_property: listing={len(listing)} contoh={int(muatan['contoh'])} foto={len(aset)} galeri={len(galeri)} "
+          f"warna={warna or '-'} folder={kerja}")
+    if coba:
+        return 0
+    (kerja / 'terapkan.php').write_text(REMOTE_PHP)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        for f in kerja.iterdir():
+            tar.add(f, arcname=f.name)
+    pra = 'T=$(mktemp -d /tmp/velocity-listing.XXXXXX); trap \'rm -rf "$T"\' EXIT; tar xzf - -C "$T"; chmod 755 "$T"; chmod 644 "$T"/*; '
+    hasil = ssh_jalankan(cfg, domain, 'eval-file "$T/terapkan.php" "$T"', buf.getvalue(), pra)
+    keluar = hasil.stdout.decode(errors='replace')
+    print(keluar.strip())
+    shutil.rmtree(kerja, ignore_errors=True)
+    if hasil.returncode != 0 or 'listing_property: selesai' not in keluar:
+        print(f"listing_property: gagal (kode {hasil.returncode}) {hasil.stderr.decode(errors='replace').strip()[:200]}")
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini bisa berjalan sebagai root: kembalikan pemilik wp-content.
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)
