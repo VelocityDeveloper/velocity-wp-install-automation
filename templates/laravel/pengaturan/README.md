@@ -7,3 +7,8 @@ dari inisial nama aplikasi.
 
 Isi: nama aplikasi, deskripsi aplikasi, unggah logo, unggah favicon (Pengaturan > Aplikasi, `/settings/aplikasi`),
 footer "Design by Velocity Developer" di semua layout.
+
+Model `Setting` (tabel `settings`: `key` string 64 primary, `value` text nullable) adalah satu-satunya tempat
+pengaturan aplikasi: kunci bawaan `app_name`, `app_description`, `logo_path`, `favicon_path`; pengaturan tambahan
+(alamat, kontak, sosmed, warna, sakelar fitur) ditambahkan sebagai kunci baru lewat `Setting::value`/`Setting::put`,
+bukan tabel/kolom/`.env` baru. Aturan lengkap di `templates/laravel/CLAUDE.md`.

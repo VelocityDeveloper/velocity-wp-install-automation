@@ -19,6 +19,9 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
 ## Cara kerja
 
 1. Pelajari kode yang ada dulu (struktur, komponen `resources/js/components/ui`, rute, model) — ikuti polanya.
+   Terapkan prinsip **SOLID & DRY** sesuai CLAUDE.md: controller tipis, aturan bisnis di Action/Service kecil,
+   dependency injection, Enum untuk status/tipe; logika/komponen yang dipakai ≥2 tempat dipusatkan (Action,
+   trait, komponen Vue, composable) — cari dan pakai ulang yang sudah ada sebelum membuat baru, jangan menyalin kode.
 2. Kerjakan HANYA fitur ini. Hal di luar fitur yang Anda temukan rusak: catat di laporan, jangan diperbaiki diam-diam.
 3. Tulis tes Pest untuk setiap kriteria yang bisa diuji otomatis (Feature test untuk rute/Inertia/aturan bisnis;
    `assertInertia` untuk halaman). Tes lama harus tetap lolos.
@@ -27,6 +30,9 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    Pengaturan > Aplikasi (nama, deskripsi, logo, favicon; prop `site`) dan footer "Design by Velocity Developer"
    dari installer WAJIB tetap ada dan berfungsi — saat mengganti layout/halaman depan/halaman masuk, pakai lagi
    `AppLogo`/`AppLogoIcon`, `site.name`, dan `AppFooter`. Saat membuat peran, batasi Gate `manage-app-settings` ke admin.
+   Pengaturan aplikasi baru (alamat, kontak, sosmed, warna, sakelar fitur, dll.) WAJIB jadi kunci di model `Setting`
+   (`Setting::value`/`Setting::put`, nilai awal di `SettingSeeder`, form di Pengaturan > Aplikasi) — jangan membuat
+   tabel/model/kolom pengaturan lain dan jangan menaruhnya di `.env`/`config`.
 6. Sebelum selesai jalankan dan pastikan lolos:
    - `php artisan test --compact`
    - `vendor/bin/pint --dirty`
