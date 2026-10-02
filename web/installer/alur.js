@@ -254,13 +254,14 @@
       // Portal berita biasa: beranda = tulisan terbaru (desain index.php tema), menu Home + kategori,
       // blok berita per kategori (theme-paket-biasa, 2026-09-18). Sejak 2026-09-30 (sidoarjopos.id): widget,
       // banner "Ruang Iklan" seukuran tiap slot iklan tema, Redaksi + Pedoman + menu profil untuk semua tema berita; widget ala demo untuk semua tema berita (awalnya beritab1).
-      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan: 4 → 3 kartu, 5 = 3+2 di tengah, 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E (Artikel Terbaru); berita: menu kategori + menu profil (Tentang Kami, Redaksi, Pedoman Media Siber; tanpa lokasi sekunder → menu primary), banner Ruang Iklan per slot tema; widget sidebar/footer/beranda ala demo tiap tema berita (templates/portal-berita/widget-demo.json)',
+      { id: 'tampilan', kol: 16, jalur: 2, nama: 'Tampilan tema klasik', ket0: 'beranda (kartu layanan: 4 → 3 kartu, 5 = 3+2 di tengah, 6 = 3+3), layanan, kontak, widget + sidebar kiri Paket E (Artikel Terbaru); berita: menu kategori + menu profil (Tentang Kami, Redaksi, Pedoman Media Siber; tanpa lokasi sekunder → menu primary), banner Ruang Iklan per slot tema; widget sidebar/footer/beranda ala demo tiap tema berita (templates/portal-berita/widget-demo.json); logo header dipotret HP/tablet/desktop → pelat kontras bila senada latar, dikecilkan bila melebihi latar/terlalu tinggi (maks 2 putaran)',
         mulai: /\] Tampilan tema klasik/, selesai: /tampilan: (selesai|dilewati)/, gagal: /tampilan: gagal/,
+        // Logo header (scripts/logo-header-cek + logo_header.py, user 2026-10-02 bintanglasjayakontruksi.com): CSS di penanda /* velocity-logo-header */.
         // Berkas redaksi klien (scripts/redaksi-klien, user 2026-09-30) mengisi halaman Redaksi tema berita.
         ketHasil: t => { const r = [...t.matchAll(/redaksi_klien: (baru|tetap) bagian=(\d+)/g)].pop();
           const redaksi = r ? ' · susunan redaksi klien (' + r[2] + ' bagian)' : '';
           return /tampilan: berita_beranda_tulisan_terbaru|tampilan: beranda_tema_berita/.test(t) ? 'beranda berita + menu kategori' + redaksi
-          : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi'
+          : /tampilan: beranda_diisi/.test(t) ? 'beranda terisi' + (/tampilan: logo_css_putaran/.test(t) ? ' · logo header dirapikan' : '')
           : (/tampilan: beranda_tema_belum_didukung:(\S+)/.exec(t) || [])[1] ? 'beranda: tema belum didukung' : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom && !c.landing) },
       // Landing Page Biasa: teks per seksi (AI) + foto + kontak + warna ke theme_mod velocity-landing

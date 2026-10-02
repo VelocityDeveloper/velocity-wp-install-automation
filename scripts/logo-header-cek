@@ -1,0 +1,105 @@
+#!/usr/bin/env node
+/*
+ * Potret area logo header di beberapa lebar layar, sekali dengan logo dan sekali dengan logo
+ * disembunyikan (visibility:hidden), supaya latar ASLI di belakang logo (termasuk ::before/::after
+ * tema) bisa dibandingkan dengan logonya. Analisis gambar dikerjakan theme-paket-biasa (PIL):
+ * kontras logo vs latar, logo melewati batas latar, dan tinggi logo (permintaan user 2026-10-02,
+ * bintanglasjayakontruksi.com: tulisan logo navy di latar navy, logo 700x200 keluar dari area biru).
+ *
+ * Pemakaian: logo-header-cek <url> <folder-keluaran> [nama-berkas-logo]
+ *   Cookie admin (situs maintenance) lewat env VELOCITY_UKUR_COOKIE (JSON, seperti potret-halaman).
+ * Keluaran: <folder>/logo-<lebar>-a.png (dengan logo), -b.png (tanpa logo), -c.png (logo berlatar
+ *   magenta = masker bagian logo yang tidak transparan), dan satu baris
+ *   `logo:{json}` = {lebar: {kotak:[x,y,w,h], pemilih, alami:[w,h]} | {galat}}.
+ * Kode keluar: 0 berhasil, 1 gagal, 3 playwright-core belum terpasang.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const akar = process.env.VELOCITY_BLOCKVAL || '/var/lib/velocity/tools/blockval';
+const modul = path.join(akar, 'node_modules', 'playwright-core');
+if (!fs.existsSync(modul)) {
+  console.log('logo:playwright_tidak_ada');
+  process.exit(3);
+}
+const { chromium } = require(modul);
+const [url, keluar, namaLogo = ''] = process.argv.slice(2);
+if (!url || !keluar) {
+  console.log('pemakaian: logo-header-cek <url> <folder-keluaran> [nama-berkas-logo]');
+  process.exit(1);
+}
+const chrome = process.env.VELOCITY_CHROME
+  || fs.readdirSync('/root/.cache/ms-playwright').filter((d) => d.startsWith('chromium-')).sort().reverse()
+    .map((d) => `/root/.cache/ms-playwright/${d}/chrome-linux64/chrome`).find((p) => fs.existsSync(p));
+// HP (<=768), tablet (769-1099), desktop: latar logo tema sering berbeda di tiap rentang.
+const LEBAR = [[390, true], [900, false], [1100, false], [1366, false], [1920, false]];
+const UA_HP = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36';
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+
+// Dijalankan di halaman: cari logo header & susun pemilih CSS yang unik untuknya.
+function cariLogo(nama) {
+  const tampak = (el) => { const r = el.getBoundingClientRect(); return r.width > 30 && r.height > 15 && r.top < 400; };
+  const semua = [...document.querySelectorAll('img')].filter(tampak);
+  const dasar = nama.replace(/\.[a-z0-9]+$/i, '');
+  const img = (dasar && semua.find((i) => (i.currentSrc || i.src).includes(dasar)))
+    || semua.find((i) => i.matches('.custom-logo, [class*="logo"] img, img[class*="logo"]'))
+    || semua.find((i) => i.closest('header, #wrapper-navbar, .site-header'));
+  if (!img) { return null; }
+  const bagian = [];
+  let el = img;
+  while (el && el !== document.body) {
+    if (el.id) { bagian.unshift('#' + CSS.escape(el.id)); break; }
+    let s = el.tagName.toLowerCase();
+    const kelas = [...el.classList].filter((k) => /^[a-z][\w-]*$/i.test(k)).slice(0, 3);
+    if (kelas.length) { s += '.' + kelas.map((k) => CSS.escape(k)).join('.'); }
+    const saudara = el.parentElement ? [...el.parentElement.children].filter((x) => x.tagName === el.tagName) : [];
+    if (saudara.length > 1) { s += `:nth-of-type(${saudara.indexOf(el) + 1})`; }
+    bagian.unshift(s);
+    el = el.parentElement;
+  }
+  const r = img.getBoundingClientRect();
+  img.setAttribute('data-vl-logo', '1');
+  return { kotak: [r.left, r.top + window.scrollY, r.width, r.height].map(Math.round), pemilih: bagian.join(' > '),
+           alami: [img.naturalWidth, img.naturalHeight] };
+}
+
+(async () => {
+  fs.mkdirSync(keluar, { recursive: true });
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--ignore-certificate-errors'] });
+  const hasil = {};
+  try {
+    for (const [lebar, hp] of LEBAR) {
+      const konteks = await browser.newContext({ viewport: { width: lebar, height: 900 }, userAgent: hp ? UA_HP : UA,
+                                                 isMobile: hp, hasTouch: hp, ignoreHTTPSErrors: true });
+      if (process.env.VELOCITY_UKUR_COOKIE) { await konteks.addCookies(JSON.parse(process.env.VELOCITY_UKUR_COOKIE)); }
+      const page = await konteks.newPage();
+      try {
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+        // Bilah admin (cookie admin) menggeser header 32/46 px; disembunyikan supaya sama dengan pengunjung.
+        await page.addStyleTag({ content: '#wpadminbar{display:none!important} html{margin-top:0!important}' });
+        await page.waitForTimeout(400);
+        const logo = await page.evaluate(cariLogo, namaLogo);
+        if (!logo) { hasil[lebar] = { galat: 'logo_tidak_ditemukan' }; continue; }
+        const [x, y, w, h] = logo.kotak;
+        // Sedikit ruang di kanan logo: dipakai untuk mengukur sampai mana latar logo melebar.
+        const clip = { x: Math.max(0, x - 8), y: Math.max(0, y - 8), width: Math.min(lebar - Math.max(0, x - 8), w + 16),
+                       height: h + 16 };
+        await page.screenshot({ path: `${keluar}/logo-${lebar}-a.png`, clip });
+        // Masker: piksel yang tetap magenta = bagian logo yang transparan.
+        await page.addStyleTag({ content: 'img[data-vl-logo]{background:#ff00ff!important}' });
+        await page.screenshot({ path: `${keluar}/logo-${lebar}-c.png`, clip });
+        await page.addStyleTag({ content: 'img[data-vl-logo]{visibility:hidden!important}' });
+        await page.screenshot({ path: `${keluar}/logo-${lebar}-b.png`, clip });
+        hasil[lebar] = { ...logo, clip: [clip.x, clip.y, clip.width, clip.height], hp };
+      } catch (e) {
+        hasil[lebar] = { galat: String(e.message || e).split('\n')[0].slice(0, 120) };
+      } finally {
+        await konteks.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+  console.log('logo:' + JSON.stringify(hasil));
+  process.exit(Object.values(hasil).some((v) => v.kotak) ? 0 : 1);
+})();

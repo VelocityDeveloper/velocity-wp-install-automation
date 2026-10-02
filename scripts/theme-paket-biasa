@@ -1148,6 +1148,8 @@ if (empty($st['statistik'])) {
 }
 $st['diperbarui'] = gmdate('c');
 update_option('velocity_tampilan_klasik', $st, false);
+$logo_id = (int) get_theme_mod('custom_logo');
+echo 'tampilan: logo=' . ($logo_id ? basename((string) get_attached_file($logo_id)) : '-') . ' tema=' . get_stylesheet() . "\n";
 echo "tampilan: selesai\n";
 '''
 
@@ -1319,6 +1321,68 @@ def foto_artikel(manifest, cfg, domain):
 
 
 GALERI_MAKS = 8
+
+
+LOGO_CSS_PHP = r'''<?php
+$dir = rtrim($args[0] ?? '', '/');
+$d = json_decode(file_get_contents("$dir/data.json"), true);
+$c = (string) wp_get_custom_css();
+$c = preg_replace('#\s*/\* velocity-logo-header \*/.*?/\* /velocity-logo-header \*/#s', '', $c);
+if ((string) ($d['css'] ?? '') !== '') {
+    $c = rtrim($c) . "\n/* velocity-logo-header */\n" . $d['css'] . "\n/* /velocity-logo-header */\n";
+}
+wp_update_custom_css_post($c);
+echo "tampilan: logo_css_ok\n";
+'''
+
+
+def rapikan_logo(cfg, manifest, domain, keluar_php):
+    """Logo header terbaca, tidak melewati latarnya, dan tidak memanjangkan header (user 2026-10-02):
+    potret area logo (scripts/logo-header-cek) -> CSS perbaikan di Additional CSS -> ukur ulang.
+    Dua putaran: ukuran dulu (logo yang dikecilkan sering sudah muat di latarnya), lalu kontras."""
+    lh = muat('logo_header', HERE / 'logo_header.py')
+    m = re.search(r'tampilan: logo=(\S+) tema=(\S+)', keluar_php or '')
+    if not m or m.group(1) == '-':
+        print('tampilan: logo_cek_dilewati:tanpa_logo')
+        return
+    nama_logo, tema = m.group(1), m.group(2)
+    url = muat('adaptor_tema', HERE / 'adaptor_tema.py').situs_url(domain) + '/'
+    cookie, hapus = None, None
+    try:
+        dca = muat('desain_claude_alat', HERE / 'desain-claude-alat')
+        cookie, hapus = dca.cookie_admin(dca.FA.read_manifest(manifest), domain)
+    except Exception as e:
+        print(f'tampilan: logo_cek_cookie_gagal:{type(e).__name__}')
+    folder = Path(tempfile.mkdtemp(prefix='theme-paket-biasa-logo-'))
+    SEMENTARA.append(folder)
+    try:
+        css = ''
+        for putaran in (1, 2, 3):
+            hasil, pemilih = lh.ukur(url, folder / str(putaran), nama_logo, cookie)
+            if not hasil:
+                print('tampilan: logo_cek_dilewati:tidak_terpotret')
+                return
+            soal = lh.masalah(hasil)
+            print(f"tampilan: logo_cek{putaran}: {lh.ringkas(hasil)} masalah={','.join(f'{r}:{j}' for r, j in soal) or '-'}")
+            if not soal or putaran == 3:
+                break
+            baru = lh.susun_css(tema, pemilih, hasil, css)
+            if baru == css:
+                break
+            css = baru
+            kerja = folder / f'css{putaran}'
+            kerja.mkdir()
+            (kerja / 'data.json').write_text(json.dumps({'css': css}))
+            if 'tampilan: logo_css_ok' not in (kirim(cfg, kerja, LOGO_CSS_PHP, domain) or ''):
+                print('tampilan: logo_css_gagal')
+                return
+            print(f'tampilan: logo_css_putaran{putaran}')
+    finally:
+        if hapus:
+            try:
+                hapus()
+            except Exception:
+                pass
 
 
 def konteks_adaptor(cfg, domain, isi, kontak, galeri=0, klien=()):
@@ -1607,6 +1671,11 @@ def main():
                 f.unlink()
             kirim(cfg, kerja, KEMBALIKAN_PHP, domain)
             at.simpan_adaptor(info, {**catatan_ai, 'status': 'gagal', 'alasan': alasan})
+    if not SITUS_LAMA:
+        try:
+            rapikan_logo(cfg, manifest, domain, keluar)
+        except Exception as e:  # pemeriksaan tampilan tidak boleh menggagalkan langkah ini
+            print(f'tampilan: logo_cek_gagal:{type(e).__name__}:{str(e)[:120]}')
     return 0
 
 
