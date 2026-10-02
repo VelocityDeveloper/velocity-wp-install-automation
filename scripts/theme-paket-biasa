@@ -435,6 +435,11 @@ def kartu_beranda(layanan):
     return layanan[:3] if len(layanan) == 4 and not SITUS_LAMA else layanan
 
 
+# Kartu layanan beranda maksimal per tema, apa pun jumlah layanannya (velocity-perusahaan1 mencetak
+# semua isi repeater: 5 layanan = 5 kartu; user 2026-10-02, marsealtic.com). Hanya instalasi baru.
+LAYANAN_BERANDA_MAKS = {'velocity-perusahaan1': 3}
+
+
 def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
     nama = cfg.get('site_title') or domain
     layanan = [l for l in isi.get('layanan') or [] if l.get('judul')]
@@ -1630,6 +1635,10 @@ def main():
         n_layanan = len([l for l in isi.get('layanan') or [] if l.get('judul')])
         if panduan['layanan_min'] and n_layanan < panduan['layanan_min']:
             print(f"tampilan: panduan_layanan_kurang:{n_layanan}/{panduan['layanan_min']}")
+    maks = LAYANAN_BERANDA_MAKS.get(tema)
+    if maks and not SITUS_LAMA and len(ctx['daftar']['layanan']) > maks:
+        print(f"tampilan: layanan_beranda_maks:{len(ctx['daftar']['layanan'])}->{maks}")
+        ctx['daftar']['layanan'] = ctx['daftar']['layanan'][:maks]
     paksa_ai = '--paksa-ai' in sys.argv
     if info and tema not in at.BUKAN_ANAK and (tema not in data['mods'] or paksa_ai):
         catatan_ai = adaptor_ai(manifest, at, info, (panduan or {}).get('adaptor', ''))
