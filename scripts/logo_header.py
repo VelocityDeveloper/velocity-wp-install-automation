@@ -140,8 +140,9 @@ def masalah(hasil):
     return sorted(set(keluar))
 
 
-def susun_css(tema, pemilih, hasil, css_lama=''):
-    """CSS perbaikan (tanpa penanda) dari hasil ukur; css_lama = aturan putaran sebelumnya."""
+def susun_css(tema, pemilih, hasil, css_lama='', warna_pelat=None):
+    """CSS perbaikan (tanpa penanda) dari hasil ukur; css_lama = aturan putaran sebelumnya.
+    warna_pelat: warna pelat tetap dari panduan tema (child-theme-data-setup.md: "background putih")."""
     aturan = [css_lama] if css_lama else []
     soal = masalah(hasil)
     if not soal or not pemilih:
@@ -161,7 +162,7 @@ def susun_css(tema, pemilih, hasil, css_lama=''):
                 soal.append(('desktop', 'tak_terlihat'))
     for r in sorted({r for r, j in soal if j == 'tak_terlihat'}):
         gelap = any(h['latar_gelap'] for l, h in hasil.items() if rentang(l) == r)
-        warna = '#ffffff' if gelap else '#1f2937'
+        warna = warna_pelat or ('#ffffff' if gelap else '#1f2937')
         aturan.append(f'@media {MEDIA[r]}{{{pemilih}{{background:{warna};padding:6px 12px;border-radius:8px;'
                       f'box-sizing:border-box}}}}')
     return '\n'.join(a for a in aturan if a)

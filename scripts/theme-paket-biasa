@@ -942,12 +942,35 @@ $buat_lain = function ($jenis, $opsi) use (&$lain, $opsi_lain) {
     $n = 300; while (isset($lain[$jenis][$n])) { $n++; }
     $lain[$jenis][$n] = $opsi; return "$jenis-$n";
 };
-$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$sr, &$lain, $opsi_lain, $milik) {
+// Widget dari panduan pembuat tema (child-theme-data-setup.md, Paket F — scripts/panduan_tema.py, user
+// 2026-10-02). Widget lama (wp_register_sidebar_widget, mis. vrp-widget velocity-perusahaan1) menyimpan
+// pengaturannya di option sendiri, bukan widget_<id_base>.
+$panduan_sb = (array) ($d['panduan']['sidebar'] ?? []);
+$nama_pd = []; $opsi_pd = [];
+foreach ($panduan_sb as $it) {
+    if (($it['opsi_option'] ?? '') !== '' && $it['opsi_option'] !== 'widget_' . $it['id_base']) { $nama_pd[$it['id_base']] = $it['opsi_option']; }
+}
+$muat_pd = function ($base) use (&$opsi_pd, $nama_pd) {
+    if (!isset($opsi_pd[$base])) { $o = get_option($nama_pd[$base], []); $opsi_pd[$base] = is_array($o) ? $o : []; }
+};
+$panduan_sb = array_values(array_filter($panduan_sb, function ($it) use ($nama_pd) {
+    $base = (string) ($it['id_base'] ?? '');
+    $ada = false;
+    if (isset($nama_pd[$base])) {
+        foreach (array_keys($GLOBALS['wp_registered_widgets']) as $id) { if (strpos($id, "$base-") === 0) { $ada = true; break; } }
+    } else {
+        foreach ($GLOBALS['wp_widget_factory']->widgets as $o) { if ($o->id_base === $base) { $ada = true; break; } }
+    }
+    if (!$ada) { echo "tampilan: panduan_widget_tidak_terdaftar:$base\n"; }
+    return $ada;
+}));
+$hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$sr, &$lain, $opsi_lain, $milik, &$opsi_pd, $nama_pd, $muat_pd) {
     foreach ((array) $daftar as $w) {
         if ($bawaan($w)) { unset($blok_w[(int) substr($w, 6)]); }
         elseif (in_array($w, (array) ($milik['__semua'] ?? []), true)) {
             [$jenis, $n] = [substr($w, 0, strrpos($w, '-')), (int) substr($w, strrpos($w, '-') + 1)];
             if ($jenis === 'custom_html') { unset($ch[$n]); } elseif ($jenis === 'text') { unset($tx[$n]); } elseif ($jenis === 'recent-posts') { unset($rp[$n]); } elseif ($jenis === 'search') { unset($sr[$n]); }
+            elseif (isset($nama_pd[$jenis])) { $muat_pd($jenis); unset($opsi_pd[$jenis][$n]); }
             else { $opsi_lain($jenis); unset($lain[$jenis][$n]); }
         }
     }
@@ -1036,6 +1059,21 @@ if ($demo_w) {
 }
 if ($utama && in_array($utama, $ubah, true)) {
     // Sidebar utama sudah disusun seperti demo tema berita.
+} elseif ($utama && $panduan_sb && $boleh($sb[$utama] ?? [])) {
+    // Panduan pembuat tema menang atas susunan umum (konsultasi, layanan, artikel terbaru).
+    $hapus_bawaan($sb[$utama] ?? []);
+    $baru = [];
+    foreach ($panduan_sb as $it) {
+        $base = (string) $it['id_base']; $opsi = (array) ($it['opsi'] ?? []);
+        if (isset($nama_pd[$base])) {
+            $muat_pd($base); $n = 300; while (isset($opsi_pd[$base][$n])) { $n++; }
+            $opsi_pd[$base][$n] = $opsi; $baru[] = "$base-$n";
+        } elseif ($base === 'recent-posts') { $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = $opsi; $baru[] = "recent-posts-$n"; }
+        elseif ($base === 'search') { $n = 300; while (isset($sr[$n])) { $n++; } $sr[$n] = $opsi; $baru[] = "search-$n"; }
+        else { $baru[] = $buat_lain($base, $opsi); }
+    }
+    $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
+    echo 'tampilan: widget_sidebar_panduan:' . implode(',', $baru) . "\n";
 } elseif ($utama && $acuan && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
     $baru = [];
@@ -1114,6 +1152,7 @@ foreach ($kaki as [$id, $k]) {
 foreach (['_multiwidget'] as $x) { $ch[$x] = 1; $tx[$x] = 1; $rp[$x] = 1; $sr[$x] = 1; $blok_w[$x] = 1; }
 update_option('widget_block', $blok_w); update_option('widget_custom_html', $ch); update_option('widget_text', $tx); update_option('widget_recent-posts', $rp); update_option('widget_search', $sr);
 foreach ($lain as $jenis => $o) { $o['_multiwidget'] = 1; update_option("widget_$jenis", $o); }
+foreach ($opsi_pd as $base => $o) { update_option($nama_pd[$base], $o); }
 wp_set_sidebars_widgets($sb);
 $daftar_milik = [];
 foreach ($ubah as $id) { $daftar_milik[md5(wp_json_encode(array_values($sb[$id])))] = array_values($sb[$id]); }
@@ -1336,11 +1375,21 @@ echo "tampilan: logo_css_ok\n";
 '''
 
 
-def rapikan_logo(cfg, manifest, domain, keluar_php):
+def rapikan_logo(cfg, manifest, domain, keluar_php, logo_panduan=None):
     """Logo header terbaca, tidak melewati latarnya, dan tidak memanjangkan header (user 2026-10-02):
     potret area logo (scripts/logo-header-cek) -> CSS perbaikan di Additional CSS -> ukur ulang.
-    Dua putaran: ukuran dulu (logo yang dikecilkan sering sudah muat di latarnya), lalu kontras."""
+    Dua putaran: ukuran dulu (logo yang dikecilkan sering sudah muat di latarnya), lalu kontras.
+
+    logo_panduan: {lebar, tinggi, latar_putih} dari child-theme-data-setup.md (Paket F, mis. 226x65
+    velocity-perusahaan1): ukuran render itu dipasang sejak putaran pertama dan jadi batas pemeriksaan;
+    latar_putih = pelat putih untuk logo yang tidak kontras."""
     lh = muat('logo_header', HERE / 'logo_header.py')
+    warna_pelat = None
+    if logo_panduan:
+        for r in lh.TINGGI_MAKS:
+            lh.TINGGI_MAKS[r] = min(lh.TINGGI_MAKS[r], logo_panduan['tinggi'])
+            lh.LEBAR_MAKS[r] = min(lh.LEBAR_MAKS[r], logo_panduan['lebar'])
+        warna_pelat = '#ffffff' if logo_panduan.get('latar_putih') else None
     m = re.search(r'tampilan: logo=(\S+) tema=(\S+)', keluar_php or '')
     if not m or m.group(1) == '-':
         print('tampilan: logo_cek_dilewati:tanpa_logo')
@@ -1364,9 +1413,16 @@ def rapikan_logo(cfg, manifest, domain, keluar_php):
                 return
             soal = lh.masalah(hasil)
             print(f"tampilan: logo_cek{putaran}: {lh.ringkas(hasil)} masalah={','.join(f'{r}:{j}' for r, j in soal) or '-'}")
-            if not soal or putaran == 3:
+            # Ukuran panduan berlaku walau logo lolos batas umum; !important supaya CSS_TEMA (250x80) tidak menang.
+            dasar = (f"{pemilih}{{width:auto!important;height:auto!important;max-width:min(100%,{logo_panduan['lebar']}px)!important;"
+                     f"max-height:{logo_panduan['tinggi']}px!important;object-fit:contain}}"
+                     if putaran == 1 and logo_panduan and pemilih else '')
+            if (not soal and not dasar) or putaran == 3:
                 break
-            baru = lh.susun_css(tema, pemilih, hasil, css)
+            baru = lh.susun_css(tema, pemilih, hasil, css, warna_pelat) if soal else css
+            if dasar:
+                baru = '\n'.join(x for x in (dasar, baru) if x)
+                print(f"tampilan: logo_ukuran_panduan:{logo_panduan['lebar']}x{logo_panduan['tinggi']}")
             if baru == css:
                 break
             css = baru
@@ -1418,8 +1474,53 @@ def konteks_adaptor(cfg, domain, isi, kontak, galeri=0, klien=()):
     }
 
 
-def adaptor_ai(manifest, at, info):
-    """Adaptor tersimpan untuk tema+versi ini, atau minta AI membacanya dari file tema."""
+def muat_gen(manifest):
+    """ai-content-generator.py sebagai modul (pemanggil AI + pemilih model)."""
+    argv_lama = sys.argv
+    sys.argv = [argv_lama[0], str(manifest)]
+    try:
+        return muat('acg_tema', HERE / 'ai-content-generator.py')
+    finally:
+        sys.argv = argv_lama
+
+
+def panduan_paket_f(manifest, cfg, info):
+    """Aturan dari child-theme-data-setup.md repo tema (scripts/panduan_tema.py), atau None.
+
+    Permintaan user 2026-10-02: hanya child theme Paket F dan hanya instalasi baru — situs yang
+    sudah ter-deploy tidak berubah karena panduan yang ditambahkan belakangan."""
+    if re.sub(r'\s', '', cfg.get('paket', '').lower()) != 'paketf':
+        return None
+    if SITUS_LAMA:
+        print('tampilan: panduan_tema:dilewati:situs_sudah_terpasang')
+        return None
+    import panduan_tema as pt
+    tema = info['tema']
+    teks, sha = pt.ambil(tema)
+    if not teks:
+        print(f'tampilan: panduan_tema:tidak_ada:{tema}')
+        return None
+    gen = muat_gen(manifest)
+    aturan, alasan = pt.aturan(gen, gen.get_model('tema'), tema, teks, sha, info)
+    if not aturan:
+        print(f"tampilan: panduan_tema:gagal:{tema}:{','.join(alasan)}")
+        return None
+    sb = ','.join(w['id_base'] for w in aturan['sidebar'] or []) or '-'
+    lg = f"{aturan['logo']['lebar']}x{aturan['logo']['tinggi']}" if aturan['logo'] else '-'
+    print(f"tampilan: panduan_tema:dibaca:{tema}@{sha[:7]} sidebar={sb} logo={lg} "
+          f"galeri_min={aturan['galeri_min'] or '-'} layanan_min={aturan['layanan_min'] or '-'}")
+    for a in alasan:
+        print(f'tampilan: panduan_tema_ditolak:{a}')
+    for m in aturan['manual']:
+        print(f'tampilan: panduan_tema_manual: {m}')
+    return aturan
+
+
+def adaptor_ai(manifest, at, info, panduan=''):
+    """Adaptor tersimpan untuk tema+versi ini, atau minta AI membacanya dari file tema.
+
+    panduan: petunjuk Customizer dari child-theme-data-setup.md, dipakai saat adaptor BARU dibuat;
+    adaptor yang sudah terverifikasi tidak dibuat ulang karena panduan."""
     catatan = at.muat_adaptor(info) or {}
     if catatan.get('status') in ('terverifikasi', 'belum_diperiksa') and catatan.get('adaptor'):
         print(f"tampilan: adaptor_ai_tersimpan:{catatan['status']}")
@@ -1427,18 +1528,13 @@ def adaptor_ai(manifest, at, info):
     if catatan.get('status') == 'gagal' and int(catatan.get('percobaan') or 0) >= 3:
         print(f"tampilan: adaptor_ai_menyerah:{catatan.get('alasan')}")
         return None
-    argv_lama = sys.argv
-    sys.argv = [argv_lama[0], str(manifest)]
-    try:
-        gen = muat('acg_tema', HERE / 'ai-content-generator.py')
-    finally:
-        sys.argv = argv_lama
+    gen = muat_gen(manifest)
     model = gen.get_model('tema')
     if not model:
         print('tampilan: adaptor_ai_tanpa_model')
         return None
     print(f"tampilan: adaptor_ai_membaca_tema:{info['tema']} {info.get('versi')} ({len(info['file'])} file)")
-    adaptor = at.minta_ai(gen, model, info, catatan.get('alasan', '') if catatan.get('status') == 'gagal' else '')
+    adaptor = at.minta_ai(gen, model, info, catatan.get('alasan', '') if catatan.get('status') == 'gagal' else '', panduan)
     if not adaptor:
         at.simpan_adaptor(info, {**catatan, 'status': 'gagal', 'alasan': 'ai_tidak_menghasilkan_adaptor_valid',
                                  'percobaan': int(catatan.get('percobaan') or 0) + 1})
@@ -1517,9 +1613,26 @@ def main():
         except Exception as e:
             print(f'tampilan: baca_tema_gagal:{e}')
     tema = (info or {}).get('tema', '')
+    # Panduan pembuat tema (Paket F): widget sidebar, ukuran logo, jumlah galeri, petunjuk adaptor.
+    panduan = None
+    if info and tema not in at.BUKAN_ANAK:
+        try:
+            panduan = panduan_paket_f(manifest, cfg, info)
+        except Exception as e:  # panduan tidak boleh menggagalkan langkah tampilan
+            print(f'tampilan: panduan_tema:gagal:{type(e).__name__}:{str(e)[:120]}')
+    if panduan:
+        data['panduan'] = {'sidebar': panduan['sidebar']}
+        if panduan['galeri_min'] and len(galeri) < panduan['galeri_min']:
+            # Foto klien kurang dari minimal panduan: sisanya foto contoh bebas lisensi (di bawah).
+            galeri = [f'galeri-{i}' for i in range(1, panduan['galeri_min'] + 1)]
+            ctx = konteks_adaptor(cfg, domain, isi, kontak, len(galeri), klien_judul)
+            print(f"tampilan: panduan_galeri_min:{panduan['galeri_min']} foto_klien={len(klien)}")
+        n_layanan = len([l for l in isi.get('layanan') or [] if l.get('judul')])
+        if panduan['layanan_min'] and n_layanan < panduan['layanan_min']:
+            print(f"tampilan: panduan_layanan_kurang:{n_layanan}/{panduan['layanan_min']}")
     paksa_ai = '--paksa-ai' in sys.argv
     if info and tema not in at.BUKAN_ANAK and (tema not in data['mods'] or paksa_ai):
-        catatan_ai = adaptor_ai(manifest, at, info)
+        catatan_ai = adaptor_ai(manifest, at, info, (panduan or {}).get('adaptor', ''))
         if catatan_ai:
             ad = catatan_ai['adaptor']
             data['mods'][tema] = at.isi_nilai(ad['mods'], ctx)
@@ -1544,8 +1657,11 @@ def main():
         # berupa pindaian arsip tua di situs yang punya lima foto armada sendiri.
         for i, kunci in enumerate(k for k in kunci_perlu if k not in galeri):
             sumber[kunci] = klien[i % len(klien)][0]
-        for i, kunci in enumerate(galeri):
+        for i, kunci in enumerate(galeri[:len(klien)]):
             sumber[kunci] = klien[i][0]
+    for kunci in galeri:
+        if kunci not in sumber and (simpan / f'{kunci}.jpg').is_file():
+            sumber[kunci] = simpan / f'{kunci}.jpg'
     slot = []
     if 'hero' in sumber and 'tentang' in sumber and all(k in sumber for k in kunci_perlu):
         pass
@@ -1556,6 +1672,12 @@ def main():
     slot += [(f'layanan-{l["slug"]}', l.get('foto') or l['judul'], l['judul'])
              for l in layanan if f'layanan-{l["slug"]}' not in sumber]
     slot += [(k, isi.get('hero_foto') or '', f'Foto {i}') for i, k in enumerate(pendamping, 1) if k not in sumber]
+    if panduan and panduan['galeri_min']:
+        # Galeri minimal panduan (Paket F): slot yang tidak terisi foto klien/tembolok pakai kata kunci isi contoh.
+        kata = [g for g in isi.get('galeri') or [] if isinstance(g, dict)]
+        slot += [(k, (kata[i]['foto'] if i < len(kata) and kata[i].get('foto') else isi.get('hero_foto') or ''),
+                  kata[i].get('judul') or f'Galeri {i + 1}' if i < len(kata) else f'Galeri {i + 1}')
+                 for i, k in enumerate(galeri) if k not in sumber]
     slot = [s for s in slot if s[1]]
     if klien:
         print(f'tampilan: foto_klien={len(klien)}')
@@ -1673,7 +1795,7 @@ def main():
             at.simpan_adaptor(info, {**catatan_ai, 'status': 'gagal', 'alasan': alasan})
     if not SITUS_LAMA:
         try:
-            rapikan_logo(cfg, manifest, domain, keluar)
+            rapikan_logo(cfg, manifest, domain, keluar, (panduan or {}).get('logo'))
         except Exception as e:  # pemeriksaan tampilan tidak boleh menggagalkan langkah ini
             print(f'tampilan: logo_cek_gagal:{type(e).__name__}:{str(e)[:120]}')
     return 0

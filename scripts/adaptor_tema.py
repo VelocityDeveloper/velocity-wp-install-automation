@@ -184,7 +184,8 @@ def simpan_adaptor(info, catatan):
 
 # ---------- AI ----------
 
-def minta_ai(gen, model, info, gagal_sebelumnya=''):
+def minta_ai(gen, model, info, gagal_sebelumnya='', panduan=''):
+    """panduan: petunjuk Customizer dari child-theme-data-setup.md tema (scripts/panduan_tema.py, Paket F)."""
     templates = template_tema(info)
     daftar = sorted(pengaturan_tema(info))
     penanda = '\n'.join(f'  {{{{{k}}}}}  {v}' for k, v in PENANDA.items())
@@ -239,6 +240,7 @@ ATURAN:
 - "periksa": 1-3 teks bawaan tema yang PASTI tampil di beranda kalau pengaturan tidak terisi (mis. judul banner
   contoh). Boleh [].
 {('PERCOBAAN SEBELUMNYA GAGAL: ' + gagal_sebelumnya + ' — perbaiki penyebabnya.') if gagal_sebelumnya else ''}
+{('PANDUAN PEMBUAT TEMA (ikuti selama tidak bertentangan dengan ATURAN di atas): ' + panduan) if panduan else ''}
 
 Bentuk jawaban:
 {{"template": "page-home.php", "mods": {{}}, "bawaan": {{}}, "periksa": [], "catatan": "ringkas cara beranda dirender"}}
