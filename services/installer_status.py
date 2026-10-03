@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import secrets as pysecrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -126,6 +127,25 @@ INSTALL_JENIS = {'Pembuatan', 'Pembuatan apk', 'Pembuatan apk biasa',
                  'Pembuatan apk custom', 'Pembuatan Tanpa Domain',
                  'Pembuatan Tanpa Hosting', 'Pembuatan Tanpa Domain+Hosting',
                  'Pembuatan web konsep', 'Redesign'}
+# Deskripsi tiket "Kerjakan diweb velocity dl" = situs dikerjakan dulu di staging
+# velocitydeveloper.co/<domain> (akun vdco di server Kiya), bukan di akun DirectAdmin
+# domain klien (permintaan user 2026-09-30, cybersumatra.com). Wajib kata kerja + "di":
+# "hosting di velocity" atau "migrasi ... kelayanan velocity" tetap pemasangan biasa.
+STAGING_HOST = '202.73.26.2'
+STAGING_DA_USER = 'vdco'
+STAGING_DOMAIN = 'velocitydeveloper.co'
+_STAGING_RE = re.compile(
+    r'\b\w*(?:kerja|garap|pasang|taruh|instal|upload|buat|bikin)\w*\s+(?:(?:dulu|dlu|dl)\s+)?'
+    r'di\s*(?:web(?:site)?|situs|staging|subdomain|subfolder|domain)?\s*'
+    r'(?:velocity\s*developer|velocity|vdco|vd)\b'
+    r'|velocitydeveloper\.co/|\bstaging\s+(?:di\s+)?(?:velocity|vdco|vd)\b', re.I)
+
+
+def staging_dari_deskripsi(teks):
+    """True kalau deskripsi tiket CRM meminta situs dikerjakan di staging web Velocity."""
+    return bool(_STAGING_RE.search(str(teks or '')))
+
+
 # Status CRM yang dipakai sebagai status baris di halaman.
 ST_BELUM_DIAMBIL = 'belum diambil'
 ST_DIKERJAKAN_WM = 'dikerjakan webmaster'
@@ -349,6 +369,102 @@ def server_test(payload):
         return {'ok': False, 'error': (pesan[-1] if pesan else f'exit_{r.returncode}')[:200], 'ms': ms}
     return {'ok': True, 'hostname': baris[0][:120], 'directadmin': 'DA=ya' in baris, 'ms': ms}
 
+# Kapasitas disk & pemakaian resource tiap server (GET /api/servers/resource).
+# Satu SSH per server secara paralel; CPU dari dua cuplikan /proc/stat berjarak 1 detik.
+RESOURCE_TTL = 60
+_resource_cache = {'at': 0, 'value': None}
+_resource_lock = threading.Lock()
+RESOURCE_CMD = r"""echo "H $(hostname)"; echo "N $(nproc)"; echo "L $(cut -d' ' -f1-3 /proc/loadavg)"; echo "U $(cut -d. -f1 /proc/uptime)"
+a=$(head -1 /proc/stat); sleep 1; b=$(head -1 /proc/stat); echo "C1 $a"; echo "C2 $b"
+grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo | sed 's/^/M /'
+df -PB1 -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null | awk 'NR>1{print "D",$6,$2,$3,$4}'"""
+
+
+def _parse_resource(teks):
+    out = {'disks': []}
+    mem, cpu = {}, {}
+    for baris in teks.splitlines():
+        kode, _, isi = baris.partition(' ')
+        try:
+            if kode == 'H':
+                out['hostname'] = isi.strip()[:120]
+            elif kode == 'N':
+                out['cpu_core'] = int(isi)
+            elif kode == 'L':
+                out['load'] = [float(x) for x in isi.split()[:3]]
+            elif kode == 'U':
+                out['uptime'] = int(isi)
+            elif kode in ('C1', 'C2'):
+                cpu[kode] = [int(x) for x in isi.split()[1:]]
+            elif kode == 'M':
+                k, v = isi.split(':', 1)
+                mem[k.strip()] = int(v.split()[0]) * 1024
+            elif kode == 'D':
+                mount, total, used, free = isi.rsplit(' ', 3)
+                total, used, free = int(total), int(used), int(free)
+                if total >= 5 * 1024 ** 3 or mount in ('/', '/home'):
+                    out['disks'].append({'mount': mount, 'total': total, 'used': used, 'free': free,
+                                         'persen': round(used * 100 / (used + free), 1) if used + free else 0})
+        except (ValueError, IndexError):
+            continue
+    if 'C1' in cpu and 'C2' in cpu:
+        d = [b - a for a, b in zip(cpu['C1'], cpu['C2'])]
+        total = sum(d)
+        idle = d[3] + (d[4] if len(d) > 4 else 0)
+        out['cpu'] = round((total - idle) * 100 / total, 1) if total > 0 else 0
+    if mem.get('MemTotal'):
+        t, a = mem['MemTotal'], mem.get('MemAvailable', 0)
+        out['ram'] = {'total': t, 'used': t - a, 'persen': round((t - a) * 100 / t, 1)}
+    if mem.get('SwapTotal'):
+        t, f = mem['SwapTotal'], mem.get('SwapFree', 0)
+        out['swap'] = {'total': t, 'used': t - f, 'persen': round((t - f) * 100 / t, 1)}
+    return out
+
+
+def _resource_satu(srv, key):
+    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}", RESOURCE_CMD]
+    hasil = {'host': srv['host'], 'name': srv['name']}
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25, check=False)
+    except subprocess.TimeoutExpired:
+        return {**hasil, 'ok': False, 'error': 'timeout'}
+    if r.returncode != 0 or not (r.stdout or '').strip():
+        pesan = (r.stderr or '').strip().splitlines()
+        return {**hasil, 'ok': False, 'error': (pesan[-1] if pesan else f'exit_{r.returncode}')[:200]}
+    return {**hasil, 'ok': True, **_parse_resource(r.stdout)}
+
+
+def server_resource(paksa=False):
+    with _resource_lock:
+        now = time.time()
+        if not paksa and _resource_cache['value'] and now - _resource_cache['at'] < RESOURCE_TTL:
+            return _resource_cache['value']
+        key = ssh_key_file()
+        if not key:
+            return {'error': 'kunci_ssh_installer_tidak_ada'}
+        servers = []
+        for item in load_servers():
+            if isinstance(item, dict):
+                srv, err = clean_server(item)
+                if not err:
+                    servers.append(srv)
+        hasil = [None] * len(servers)
+
+        def kerja(i):
+            hasil[i] = _resource_satu(servers[i], key)
+        utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
+        for t in utas:
+            t.start()
+        for t in utas:
+            t.join(30)
+        data = {'servers': [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
+                            for h, s in zip(hasil, servers)],
+                'diambil': int(now)}
+        _resource_cache.update(at=now, value=data)
+        return data
+
+
 _local_ip_cache = {'at': 0, 'value': []}
 LOCAL_IP_TTL = 300
 
@@ -390,6 +506,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'scripts'
 sys.path.insert(0, str(SCRIPTS_DIR))
 from client_form import read_client_form
 from hosting_notes import read_hosting_notes
+from folder_klien import folder_klien, subfolder_dari_deskripsi, PETA as SUBFOLDER_PETA
 
 # Label form yang berisi nama orang/domain, bukan nama usaha.
 _BUKAN_NAMA_SITUS = {'nama anda', 'nama domain', 'nama lengkap', 'nama pemilik'}
@@ -448,6 +565,21 @@ def default_target():
         'port': str(srv.get('port') or '22'),
         'user': str(srv.get('user') or 'root'),
     }
+
+
+def staging_target():
+    """Server staging velocitydeveloper.co (Kiya) dari daftar server."""
+    servers = load_servers()
+    for srv in servers if isinstance(servers, list) else []:
+        if isinstance(srv, dict) and str(srv.get('host') or '') == STAGING_HOST:
+            return {'host': STAGING_HOST, 'name': str(srv.get('name') or ''),
+                    'port': str(srv.get('port') or '22'), 'user': str(srv.get('user') or 'root')}
+    return {'host': STAGING_HOST, 'name': 'Kiya', 'port': '57258', 'user': 'root'}
+
+
+def diminta_staging(domain):
+    """Deskripsi tiket CRM domain ini meminta pengerjaan di staging web Velocity."""
+    return bool((crm_projects().get(domain.lower()) or {}).get('staging'))
 
 
 def validate_manifest(path: Path):
@@ -593,7 +725,17 @@ def _fetch_crm_projects_now():
                 # terisi supaya baris kosong tidak menimpanya, dan untuk deadline
                 # ambil yang paling dekat karena itu yang paling mendesak.
                 cur = found.setdefault(name, {'paket': '', 'deadline': '', 'jenis': [],
-                                              'crm_status': '', 'webmaster': ''})
+                                              'crm_status': '', 'webmaster': '', 'subfolder': '',
+                                              'staging': False})
+                if 'apk' not in jenis.lower() and staging_dari_deskripsi(item.get('deskripsi')):
+                    cur['staging'] = True
+                # Deskripsi tiket "sub folder <nama>" = bahan klien ada di subfolder itu
+                # (lihat scripts/folder_klien.py). Urutan id naik: tiket terbaru menang.
+                # Tiket apk dilewati: subfolder "apk <domain>" berisi form aplikasi Android,
+                # bukan bahan website.
+                sub = '' if 'apk' in jenis.lower() else subfolder_dari_deskripsi(item.get('deskripsi'))
+                if sub:
+                    cur['subfolder'] = sub
                 # Autopilot perlu jenisnya: Redesign berarti situsnya sudah hidup.
                 if jenis not in cur['jenis']:
                     cur['jenis'].append(jenis)
@@ -623,12 +765,36 @@ def _fetch_crm_projects_now():
     return found
 
 
+def _simpan_subfolder_crm(fresh):
+    """Catat petunjuk subfolder dari CRM ke peta yang dibaca folder_klien() semua skrip.
+    Domain yang sudah keluar antrean dipertahankan: skrip finish/audit sesudah install
+    tetap harus membaca subfolder yang sama."""
+    try:
+        peta = json.loads(SUBFOLDER_PETA.read_text())
+        if not isinstance(peta, dict):
+            peta = {}
+    except (OSError, ValueError):
+        peta = {}
+    baru = dict(peta)
+    for domain, info in fresh.items():
+        if info.get('subfolder'):
+            baru[domain] = info['subfolder']
+        else:
+            baru.pop(domain, None)
+    if baru != peta:
+        tmp = SUBFOLDER_PETA.with_suffix('.tmp')
+        tmp.write_text(json.dumps(baru, ensure_ascii=False, indent=1, sort_keys=True))
+        tmp.replace(SUBFOLDER_PETA)
+
+
 def _refresh_crm_projects_bg():
     error = ''
     try:
         fresh = _fetch_crm_projects_now()
         if fresh or not _crm_cache_projects['value']:
             _crm_cache_projects['value'] = fresh
+        if fresh:
+            _simpan_subfolder_crm(fresh)
     except Exception as e:  # keep serving the last-known set on API hiccup
         # Jangan gagal dalam diam: tanpa jejak ini, satu kegagalan sesaat bikin
         # halaman cuma menampilkan segelintir domain tanpa alasan yang terlacak.
@@ -881,6 +1047,8 @@ def domain_row(domain, manifest):
         row['log'] = log.read_text(errors='replace').splitlines()[-200:]
     except OSError:
         row['log'] = []
+    row['lama'] = lama_pengerjaan(domain)
+    row['token'] = token_domain(domain)
     agen = agen_desain(domain)
     if agen:
         skor = agen.get('skor_kini') or {}
@@ -888,6 +1056,116 @@ def domain_row(domain, manifest):
                     'message': 'skor ' + ' '.join(f'{k}={v}' for k, v in skor.items())
                     + (' | belum mirip: ' + ','.join(agen.get('belum_mirip') or []) if agen.get('belum_mirip') else '')})
     return row
+
+
+# Lama pengerjaan installer: dari "RUNNING: VALIDATING" (awal run) sampai laporan Telegram
+# terkirim. Baris telegram berstempel waktu sejak 2026-09-26; log lama memakai stempel baris
+# terakhir sebelum baris telegram (SUCCESS/CHECK/FAILED, selisihnya beberapa detik).
+POLA_STEMPEL = re.compile(r'^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d)\] (.*)')
+_cache_lama = {}
+
+
+def _detik_iso(teks):
+    from datetime import datetime
+    return datetime.fromisoformat(teks).timestamp()
+
+
+def lama_pengerjaan(domain):
+    """{'terakhir': run terakhir yang laporannya terkirim, 'berjalan_sejak': awal run yang belum
+    mengirim laporan} dari log domain. Di-cache per (mtime, ukuran) karena API dibaca tiap 4 detik."""
+    log = STATE / f'{domain}.log'
+    try:
+        st = log.stat()
+    except OSError:
+        return {}
+    kunci = (st.st_mtime_ns, st.st_size)
+    lama = _cache_lama.get(domain)
+    if lama and lama[0] == kunci:
+        return lama[1]
+    runs, kini, stempel = [], None, None
+    for baris in log.read_text(errors='replace').splitlines():
+        m = POLA_STEMPEL.match(baris)
+        isi = m.group(2) if m else baris
+        if m:
+            stempel = m.group(1)
+        if isi == 'RUNNING: VALIDATING' and m:
+            kini = {'mulai': stempel, 'mode': None, 'hasil': None, 'selesai': None}
+            runs.append(kini)
+            continue
+        if not kini:
+            continue
+        if isi.startswith('Mode run: '):
+            kini['mode'] = isi[10:].split(' |')[0].strip()
+        elif re.match(r'^(SUCCESS|CHECK|FAILED): ', isi):
+            kini['hasil'] = isi
+        elif isi.startswith('telegram: terkirim') and not kini['selesai']:
+            kini['selesai'] = stempel
+    hasil = {}
+    for r in reversed(runs):
+        if r['selesai']:
+            try:
+                mulai, selesai = _detik_iso(r['mulai']), _detik_iso(r['selesai'])
+            except ValueError:
+                continue
+            hasil['terakhir'] = {'mulai': mulai, 'selesai': selesai, 'detik': round(selesai - mulai),
+                                 'mode': r['mode'], 'hasil': r['hasil']}
+            break
+    if runs and not runs[-1]['selesai'] and not runs[-1]['hasil']:
+        try:
+            hasil['berjalan_sejak'] = _detik_iso(runs[-1]['mulai'])
+        except ValueError:
+            pass
+    _cache_lama[domain] = (kunci, hasil)
+    return hasil
+
+
+# Total token AI per domain untuk kolom Lama /installer/wordpress (permintaan user 2026-09-28):
+# Claude (sumber=claude: agen desain, baca form, dsb.) dipisah dari model lain (endpoint /ai/).
+_cache_token = {}
+
+
+def token_domain(domain):
+    """{'claude': {...}, 'lain': {...}, 'total', 'run_terakhir': {...}} dari usage.jsonl, atau {}."""
+    try:
+        st = AI_USAGE.stat()
+    except OSError:
+        return {}
+    kunci = (st.st_mtime_ns, st.st_size)
+    if _cache_token.get('kunci') != kunci:
+        per = {}
+        for s in AI_USAGE.read_text(errors='replace').splitlines():
+            try:
+                b = json.loads(s)
+            except ValueError:
+                continue
+            if not isinstance(b, dict) or not b.get('domain'):
+                continue
+            d = per.setdefault(b['domain'], {'claude': {'token': 0, 'panggilan': 0, 'model': set(), 'biaya_usd': 0.0},
+                                             'lain': {'token': 0, 'panggilan': 0, 'model': set()},
+                                             'runs': {}})
+            sisi = d['claude' if b.get('sumber') == 'claude' else 'lain']
+            n = int(b.get('total_tokens') or 0)
+            sisi['token'] += n
+            sisi['panggilan'] += int(b.get('permintaan') or 1)
+            sisi['model'].add(b.get('model') or b.get('model_id') or '-')
+            if 'biaya_usd' in sisi:
+                sisi['biaya_usd'] += float(b.get('biaya_usd') or 0)
+            r = d['runs'].setdefault(b.get('run') or '-', {'run': b.get('run') or '-', 'mode': b.get('mode') or '',
+                                                            'claude': 0, 'lain': 0, 'ts': ''})
+            r['claude' if b.get('sumber') == 'claude' else 'lain'] += n
+            r['ts'] = max(r['ts'], str(b.get('ts') or ''))
+        hasil = {}
+        for dom, d in per.items():
+            for k in ('claude', 'lain'):
+                d[k]['model'] = sorted(d[k]['model'])
+            d['claude']['biaya_usd'] = round(d['claude']['biaya_usd'], 4)
+            runs = d.pop('runs')
+            d['total'] = d['claude']['token'] + d['lain']['token']
+            d['run_terakhir'] = max(runs.values(), key=lambda r: r['ts']) if runs else None
+            hasil[dom] = d
+        _cache_token.clear()
+        _cache_token.update(kunci=kunci, data=hasil)
+    return _cache_token['data'].get(domain, {})
 
 
 def run_terakhir():
@@ -963,8 +1241,11 @@ def _sync_hosting_notes(domain: str, manifest: Path, allow_regenerate: bool = Tr
     except OSError:
         return changes
     cfg = {l.split('=', 1)[0].strip(): l.split('=', 1)[1].strip() for l in lines if '=' in l}
+    # Manifest staging (docroot=) selalu memakai akun vdco: username akun klien di
+    # catatan bukan alasan membuatnya ulang.
     if (allow_regenerate and user and re.match(r'^[a-z][a-z0-9]{0,15}$', user)
-            and user != cfg.get('da_user') and domain not in installed_domains()):
+            and user != cfg.get('da_user') and not cfg.get('docroot')
+            and domain not in installed_domains()):
         manifest.unlink()
         result, err = generate_manifest(domain)
         if result is None:
@@ -988,6 +1269,26 @@ def _sync_hosting_notes(domain: str, manifest: Path, allow_regenerate: bool = Tr
     return changes
 
 
+def _sync_staging(domain: str, manifest: Path):
+    """Deskripsi CRM bisa ditulis sesudah manifest dibuat (cybersumatra.com: manifest
+    mengarah ke akun DA klien yang belum ada). Selama situs belum terpasang, manifest
+    tanpa docroot= dibuat ulang ke staging. Arah sebaliknya tidak otomatis."""
+    if domain in installed_domains() or not diminta_staging(domain):
+        return []
+    try:
+        text = manifest.read_text()
+    except OSError:
+        return []
+    if re.search(r'^docroot=', text, re.M):
+        return []
+    manifest.unlink()
+    result, err = generate_manifest(domain)
+    if result is None:
+        _write_manifest_lines(manifest, text.splitlines())
+        return [f'staging_gagal_dibuat:{err}']
+    return ['manifest_dialihkan_ke_staging']
+
+
 def generate_manifest(domain: str):
     """Auto-generate manifest + secrets for domain from existing data."""
     if not DOMAIN_RE.match(domain) or '/' in domain or '..' in domain:
@@ -995,7 +1296,7 @@ def generate_manifest(domain: str):
     # source folder: /home/project/<domain> or On Progress sync from Drive
     src = ROOT / domain
     if not src.is_dir():
-        src = ON_PROGRESS / domain
+        src = folder_klien(domain)
         if not src.is_dir():
             return None, 'no_folder'
     folder = ROOT / domain
@@ -1022,7 +1323,7 @@ def generate_manifest(domain: str):
     # Catatan hosting dari tim ada di folder Drive sebagai <domain>.txt dan memuat
     # username DirectAdmin asli, yang tidak selalu sama dengan 8 huruf pertama
     # domain (surya-media-berita.com -> suryame1).
-    for nf in [ON_PROGRESS / domain / f'{domain}.txt',
+    for nf in [folder_klien(domain) / f'{domain}.txt',
                src / 'notes-credentials.txt', src / 'notes.txt',
                folder / 'notes-credentials.txt', folder / 'notes.txt',
                src / 'FORM ISIAN WEBSITE - paket g.doc']:
@@ -1042,7 +1343,12 @@ def generate_manifest(domain: str):
         da_user = re.sub(r'[^a-z0-9]', '', labels.lower())[:8] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
-    srv = default_target()
+    # Staging (deskripsi CRM "Kerjakan diweb velocity dl"): akun vdco di Kiya,
+    # situs di velocitydeveloper.co/<domain>. Akun DA klien tidak dipakai.
+    staging = diminta_staging(domain)
+    if staging:
+        da_user = STAGING_DA_USER
+    srv = staging_target() if staging else default_target()
     target = srv['host']
     port = srv['port']
     if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
@@ -1077,6 +1383,10 @@ def generate_manifest(domain: str):
                 suffix = suffix[-6:]
         if not suffix:
             suffix = labels_clean[:6]
+    if staging:
+        # Semua situs staging berbagi akun vdco: awal nama domain lebih mudah dikenali
+        # dan jarang bertabrakan dibanding 6 huruf terakhir (vdco_cybersum_wp).
+        suffix = labels_clean
     if len(suffix) > 8:
         suffix = suffix[:8]
     # batasi panjang agar db_name <= 32 char
@@ -1097,7 +1407,7 @@ def generate_manifest(domain: str):
         # WP admin = DA user; password-nya ditambahkan _sync_hosting_notes dari
         # catatan hosting PM (bukan file password bersama seperti dulu).
         f'admin_email={admin_email or ("admin@" + domain)}\n'
-        f'site_title={_site_title_from_form((ON_PROGRESS / domain, src, folder), labels.replace("-", " ").title())}\n'
+        f'site_title={_site_title_from_form((folder_klien(domain), src, folder), labels.replace("-", " ").title())}\n'
     )
     # Tanpa baris ini installer melewati pemasangan tema/plugin dan hasilnya
     # WordPress polos dengan tema bawaan.
@@ -1114,6 +1424,9 @@ def generate_manifest(domain: str):
     # sudah terpasang tidak punya baris ini sehingga tampilannya tidak ikut berubah
     # (permintaan user 2026-09-16: aturan kontras baru hanya untuk build berikutnya).
     content += 'velocity_palet_versi=2\n'
+    if staging:
+        content += (f'docroot=/home/{STAGING_DA_USER}/domains/{STAGING_DOMAIN}/public_html/{domain}\n'
+                    f'site_url=https://{STAGING_DOMAIN}/{domain}\n')
     # Paket website dari CRM untuk laporan Telegram: situs yang sudah terpasang
     # tidak lagi muncul di antrean, jadi paketnya dicatat di manifest.
     paket = str((crm_projects().get(domain.lower()) or {}).get('paket') or '')
@@ -1126,6 +1439,17 @@ def generate_manifest(domain: str):
     _ensure_secrets(domain)
     _sync_hosting_notes(domain, manifest, allow_regenerate=False)
     return {'generated': True, 'manifest': str(manifest)}, None
+
+
+def _runner_hidup(domain: str):
+    """Runner domain ini masih jalan walau tidak tercatat di _running (layanan di-restart
+    sesudah run dimulai; runner kini hidup di scope systemd sendiri)."""
+    try:
+        r = subprocess.run(['pgrep', '-f', f'installer-runner {re.escape(domain)}$'],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
 
 
 def start_run(domain: str, mode: str):
@@ -1146,17 +1470,20 @@ def start_run(domain: str, mode: str):
     # apply di sini berarti memasang WordPress menimpa server host sendiri.
     if domain.lower() in bukan_project():
         return None, 'bukan_project'
-    if mode not in ('dry-run', 'apply', 'finish', 'maintenance', 'child-theme', 'audit'):
+    if mode not in ('dry-run', 'apply', 'finish', 'maintenance', 'child-theme', 'audit', 'redesign'):
         return None, 'invalid_mode'
-    if mode in ('finish', 'maintenance', 'child-theme', 'audit') and not ssh_key_file():
+    if mode in ('finish', 'maintenance', 'child-theme', 'audit', 'redesign') and not ssh_key_file():
         return None, 'ssh_key_missing'
     manifest = ROOT / domain / f'{domain}.txt'
     if not manifest.is_file():
         return None, 'manifest_not_found'
     proc = _running.get(domain)
-    if proc is not None and proc.poll() is None:
+    if (proc is not None and proc.poll() is None) or _runner_hidup(domain):
         return None, 'already_running'
-    # Catatan hosting PM bisa ditulis atau diubah setelah manifest dibuat.
+    # Deskripsi CRM & catatan hosting PM bisa ditulis atau diubah setelah manifest dibuat.
+    if mode in ('dry-run', 'apply'):
+        for change in _sync_staging(domain, manifest):
+            print(json.dumps({'event': 'staging_sync', 'domain': domain, 'change': change}), flush=True)
     for change in _sync_hosting_notes(domain, manifest):
         print(json.dumps({'event': 'hosting_notes_sync', 'domain': domain, 'change': change}), flush=True)
     ok, detail = validate_manifest(manifest)
@@ -1179,9 +1506,16 @@ def start_run(domain: str, mode: str):
             if not Path(f).is_file():
                 return None, 'secret_file_missing:' + Path(f).name
     logf = open(STATE / f'{domain}.log', 'a')
+    # Runner dijalankan di scope systemd sendiri: dengan KillMode=control-group, restart
+    # layanan ini (sering dilakukan sesi lain) dulu ikut membunuh run yang sedang jalan
+    # (cybersumatra.com 2026-09-30, dua kali di tahap desain FSE). PID & env tetap sama.
+    perintah = [str(RUNNER), domain]
+    if shutil.which('systemd-run'):
+        unit = f'installer-run-{re.sub(r"[^A-Za-z0-9.-]", "-", domain)}-{int(time.time())}'
+        perintah = ['systemd-run', '--scope', '--quiet', '--collect', f'--unit={unit}'] + perintah
     try:
         p = subprocess.Popen(
-            [str(RUNNER), domain],
+            perintah,
             stdout=logf, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, env=env,
             start_new_session=True,
@@ -1204,6 +1538,7 @@ import laravel_proyek  # noqa: E402
 # ID model boleh memuat garis miring (permintaan user 2026-09-16): penyedia seperti
 # OpenRouter/Together memakai nama berbentuk "vendor/model", mis. `meta-llama/llama-3-70b`.
 # Ruas tidak boleh kosong dan `..` ditolak — id ikut masuk ke URL /api/ai/models/<id>/delete.
+CLAUDE_MODEL_ALIAS = ('opus', 'sonnet', 'haiku')
 AI_MODEL_ID_RE = re.compile(r'^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$')
 
 
@@ -1233,19 +1568,29 @@ def add_ai_model(model_data):
     model_id = str(model_data.get('id') or '')
     if not AI_MODEL_ID_RE.match(model_id) or '..' in model_id:
         return None, 'invalid_id'
-    endpoint = str(model_data.get('endpoint') or '').strip().rstrip('/')
-    if not re.match(r'^https?://\S+$', endpoint):
-        return None, 'endpoint_required'
     data = load_ai_models()
     models = data.get('models', [])
     lama = next((m for m in models if m.get('id') == model_id), None)
-    api_key = str(model_data.get('api_key') or '').strip() or (lama or {}).get('api_key', '')
-    if not api_key:
-        return None, 'api_key_required'
-    baru = dict(lama or {})
-    baru.update({'id': model_id, 'name': model_id, 'endpoint': endpoint, 'api_key': api_key,
-                 'model': str(model_data.get('model') or '').strip() or model_id,
-                 'is_default': bool((lama or {}).get('is_default'))})
+    if model_data.get('provider') == 'claude_code':
+        # Agen Claude Code: tanpa endpoint & API key, dipanggil lewat CLI `claude -p`
+        # (scripts/ai-content-generator.py claude_call). Model = alias CLI.
+        nama = str(model_data.get('model') or '').strip() or 'opus'
+        if nama not in CLAUDE_MODEL_ALIAS:
+            return None, 'model_claude_tidak_dikenal'
+        baru = {k: v for k, v in (lama or {}).items() if k not in ('endpoint', 'api_key')}
+        baru.update({'id': model_id, 'name': model_id, 'provider': 'claude_code', 'model': nama,
+                     'is_default': bool((lama or {}).get('is_default'))})
+    else:
+        endpoint = str(model_data.get('endpoint') or '').strip().rstrip('/')
+        if not re.match(r'^https?://\S+$', endpoint):
+            return None, 'endpoint_required'
+        api_key = str(model_data.get('api_key') or '').strip() or (lama or {}).get('api_key', '')
+        if not api_key:
+            return None, 'api_key_required'
+        baru = {k: v for k, v in (lama or {}).items() if k != 'provider'}
+        baru.update({'id': model_id, 'name': model_id, 'endpoint': endpoint, 'api_key': api_key,
+                     'model': str(model_data.get('model') or '').strip() or model_id,
+                     'is_default': bool((lama or {}).get('is_default'))})
     if lama:
         models[models.index(lama)] = baru
     else:
@@ -1329,6 +1674,28 @@ def set_ai_pemakaian(peran, model_id):
     return pemakaian, None
 
 
+def test_claude_model(model):
+    """Uji model agen Claude Code dengan satu pesan pendek lewat CLI."""
+    claude = next((c for c in ('/root/.local/bin/claude', '/usr/local/bin/claude') if Path(c).is_file()), 'claude')
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    kunci = SECRETS / 'anthropic_api_key'
+    if kunci.is_file() and kunci.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = kunci.read_text().strip()
+    try:
+        r = subprocess.run([claude, '-p', '--model', model.get('model') or 'opus', '--output-format', 'json',
+                            '--no-session-persistence', '--tools', ''],
+                           input='Balas hanya dengan kata: OK', capture_output=True, text=True,
+                           timeout=90, env=env, cwd='/tmp', check=False)
+        hasil = json.loads(r.stdout or '{}')
+    except subprocess.TimeoutExpired:
+        return None, 'test_failed:timeout'
+    except (OSError, ValueError) as e:
+        return None, f'test_failed:{type(e).__name__}'
+    if hasil.get('is_error') or not hasil.get('result'):
+        return None, 'test_failed:' + str(hasil.get('result') or r.stderr or 'kosong')[:300]
+    return {'response': f"{hasil['result']} · {', '.join(hasil.get('modelUsage') or {})}"}, None
+
+
 def test_ai_model(model_id):
     """Test AI model by making a simple API call."""
     data = load_ai_models()
@@ -1339,7 +1706,9 @@ def test_ai_model(model_id):
             break
     if not model:
         return None, 'model_not_found'
-    
+    if model.get('provider') == 'claude_code':
+        return test_claude_model(model)
+
     api_key = model.get('api_key', '')
     if not api_key:
         return None, 'api_key_missing'
@@ -1598,16 +1967,27 @@ def save_packages(pkgs):
 
 
 def velocity_api_list(jenis):
-    """Daftar tema/plugin dari API Velocity. Header signature = md5 tanggal WIB."""
+    """Daftar tema/plugin dari API Velocity. Header signature = md5 tanggal WIB.
+    API berpaginasi (bawaan 15/halaman; tema 71 per 2026-10-03) -> ikuti meta.last_page,
+    kalau tidak hanya halaman 1 yang terbaca."""
     tanggal = time.strftime('%d%m%Y', time.gmtime(time.time() + 7 * 3600))
-    req = urllib.request.Request(f'{VELOCITY_API}/{jenis}', headers={
-        'User-Agent': 'velocity-installer/1.0', 'Accept': 'application/json',
-        'signature': hashlib.md5(tanggal.encode()).hexdigest()})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.load(resp).get('data')
-    if not isinstance(data, list):
-        raise ValueError('data_api_tidak_valid')
-    return [x for x in data if isinstance(x, dict) and x.get('slug')]
+    headers = {'User-Agent': 'velocity-installer/1.0', 'Accept': 'application/json',
+               'signature': hashlib.md5(tanggal.encode()).hexdigest()}
+    hasil, halaman, terakhir = [], 1, 1
+    while halaman <= min(terakhir, 50):
+        req = urllib.request.Request(f'{VELOCITY_API}/{jenis}?per_page=100&page={halaman}', headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.load(resp)
+        data = body.get('data')
+        if not isinstance(data, list):
+            raise ValueError('data_api_tidak_valid')
+        hasil += [x for x in data if isinstance(x, dict) and x.get('slug')]
+        try:
+            terakhir = int((body.get('meta') or {}).get('last_page') or 1)
+        except (TypeError, ValueError):
+            terakhir = 1
+        halaman += 1
+    return hasil
 
 
 def _versi_tuple(v):
@@ -1764,9 +2144,59 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(servers_view())
             return
+        if path == '/api/servers/resource':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_resource('segar' in parse_qs(parsed.query)))
+            return
         if path == '/api/laravel' or path.startswith('/api/laravel/'):
             if not _is_local_net(ip):
                 self._send_json({'error': 'forbidden'}, 403)
+                return
+            m = re.fullmatch(r'/api/laravel/p/(project-\d{3,})/contoh/(.+)', path)
+            if m:
+                # Contoh tampilan (mockup HTML) untuk iframe pratinjau di halaman project
+                berkas = laravel_proyek.path_contoh(m.group(1), m.group(2))
+                if not berkas:
+                    self._send_json({'error': 'tidak_ada'}, 404)
+                    return
+                data = berkas.read_bytes()
+                jenis = mimetypes.guess_type(berkas.name)[0] or 'application/octet-stream'
+                self.send_response(200)
+                self.send_header('Content-Type', jenis + ('; charset=utf-8' if jenis == 'text/html' else ''))
+                self.send_header('Content-Security-Policy',
+                                 "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                                 "font-src https://fonts.gstatic.com data:; script-src 'unsafe-inline' https://cdn.jsdelivr.net")
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            m = re.fullmatch(r'/api/laravel/p/(project-\d{3,})/(dokumen|rangkuman\.docx)', path)
+            if m:
+                # Unduh / buka dokumen klien yang diunggah di tahap Brief, atau Word Rangkuman Website Konsep
+                if m.group(2) == 'dokumen':
+                    berkas = laravel_proyek.path_dok(m.group(1), (parse_qs(parsed.query).get('nama') or [''])[0])
+                    nama = berkas.name if berkas else ''
+                else:
+                    berkas, nama = laravel_proyek.path_rangkuman(m.group(1)) or (None, '')
+                if not berkas:
+                    self._send_json({'error': 'tidak_ada'}, 404)
+                    return
+                data = berkas.read_bytes()
+                jenis = mimetypes.guess_type(berkas.name)[0] or 'application/octet-stream'
+                tampil = 'inline' if jenis.startswith('image/') or jenis == 'application/pdf' else 'attachment'
+                self.send_response(200)
+                self.send_header('Content-Type', jenis)
+                self.send_header('Content-Disposition', f"{tampil}; filename*=UTF-8''{urllib.parse.quote(nama)}")
+                self.send_header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'")
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
             kode, obj = laravel_proyek.handle('GET', path, parsed.query, None)
             self._send_json(obj, kode)
@@ -1878,6 +2308,27 @@ class Handler(BaseHTTPRequestHandler):
             origin = urlparse(self.headers.get('Origin') or '').netloc
             if not _is_local_net(ip) or (origin and origin != (self.headers.get('Host') or '')):
                 self._send_json({'error': 'forbidden'}, 403)
+                return
+            m = re.fullmatch(r'/api/laravel/p/(project-\d{3,})/unggah', path)
+            if m:
+                # Dokumen klien: badan = isi berkas mentah, nama & pengunggah di query string
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                except ValueError:
+                    length = -1
+                if length < 0 or length > laravel_proyek.DOK_MAKS:
+                    self._send_json({'error': 'payload_too_large'}, 413)
+                    return
+                if not (laravel_proyek.folder(m.group(1)) / 'proyek.json').is_file():
+                    self._send_json({'error': 'tidak_ada'}, 404)
+                    return
+                try:
+                    obj = laravel_proyek.unggah_dok(m.group(1), (q.get('nama') or [''])[0], (q.get('oleh') or [''])[0],
+                                                    self.rfile.read(length))
+                    self._send_json(obj)
+                except ValueError as e:
+                    self._send_json({'error': str(e)}, laravel_proyek.KODE_GALAT.get(str(e), 400))
                 return
             try:
                 length = int(self.headers.get('Content-Length') or 0)

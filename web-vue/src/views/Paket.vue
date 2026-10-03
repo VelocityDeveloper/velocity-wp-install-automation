@@ -1,6 +1,6 @@
 <script setup>
 // Package Manager: tema & plugin dari API Velocity (api.velocitydeveloper.co), zip tersinkron ke installer.
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import { ukuranBerkas, tanggalWaktu } from '../api.js'
 
@@ -37,6 +37,18 @@ const saring = (daftar) => {
 }
 const tema = computed(() => saring(data.value?.themes || []))
 const plugin = computed(() => saring(data.value?.plugins || []))
+
+// API tema berisi puluhan item (71 per 2026-10-03) -> tabel dipaginasi di sisi klien.
+const UKURAN_HALAMAN = 20
+const halaman = reactive({ tema: 1, plugin: 1 })
+const jumlahHalaman = (daftar) => Math.max(1, Math.ceil(daftar.length / UKURAN_HALAMAN))
+const potong = (daftar, h) => daftar.slice((h - 1) * UKURAN_HALAMAN, h * UKURAN_HALAMAN)
+const rentang = (daftar, h, satuan) => daftar.length ? `${(h - 1) * UKURAN_HALAMAN + 1}–${Math.min(h * UKURAN_HALAMAN, daftar.length)} dari ${daftar.length} ${satuan}` : `0 ${satuan}`
+const temaHalaman = computed(() => potong(tema.value, halaman.tema))
+const pluginHalaman = computed(() => potong(plugin.value, halaman.plugin))
+watch(cari, () => { halaman.tema = 1; halaman.plugin = 1 })
+watch(() => jumlahHalaman(tema.value), (n) => { if (halaman.tema > n) halaman.tema = n })
+watch(() => jumlahHalaman(plugin.value), (n) => { if (halaman.plugin > n) halaman.plugin = n })
 </script>
 
 <template>
@@ -86,7 +98,7 @@ const plugin = computed(() => saring(data.value?.plugins || []))
         <table class="tabel">
           <thead><tr><th>Nama</th><th>Versi</th><th class="sembunyi-hp">Jenis</th><th class="sembunyi-hp">Paket</th><th class="sembunyi-hp">Sumber</th></tr></thead>
           <tbody>
-            <tr v-for="t in tema" :key="t.id || t.slug">
+            <tr v-for="t in temaHalaman" :key="t.id || t.slug">
               <td><b>{{ t.name || t.slug }}</b> <span v-if="PAKAI.includes(t.slug)" class="lencana biru" title="Dipasang oleh installer">INSTALLER</span><span class="kecil">{{ t.slug }}</span></td>
               <td>{{ t.version || '-' }}</td>
               <td class="sembunyi-hp">{{ jenisTema(t.type) }}</td>
@@ -97,6 +109,13 @@ const plugin = computed(() => saring(data.value?.plugins || []))
           </tbody>
         </table>
       </div>
+      <div v-if="data && tema.length > UKURAN_HALAMAN" class="paginasi">
+        <span class="redup">{{ rentang(tema, halaman.tema, 'tema') }}</span>
+        <span>
+          <button type="button" class="tombol garis kecil" :disabled="halaman.tema <= 1" @click="halaman.tema--">Sebelumnya</button>
+          <button type="button" class="tombol garis kecil" :disabled="halaman.tema >= jumlahHalaman(tema)" @click="halaman.tema++">Berikutnya</button>
+        </span>
+      </div>
     </section>
 
     <section class="kartu" aria-labelledby="judul-plugin">
@@ -106,7 +125,7 @@ const plugin = computed(() => saring(data.value?.plugins || []))
         <table class="tabel">
           <thead><tr><th>Nama</th><th>Versi</th><th class="sembunyi-hp">Butuh</th><th class="sembunyi-hp">Sumber</th></tr></thead>
           <tbody>
-            <tr v-for="p in plugin" :key="p.id || p.slug">
+            <tr v-for="p in pluginHalaman" :key="p.id || p.slug">
               <td><b>{{ p.name || p.slug }}</b> <span v-if="PAKAI.includes(p.slug)" class="lencana biru" title="Dipasang oleh installer">INSTALLER</span><span class="kecil">{{ p.slug }}</span></td>
               <td>{{ p.version || '-' }}</td>
               <td class="sembunyi-hp">{{ p.requires_php ? `PHP ${p.requires_php}` : '-' }}{{ p.requires ? ` · WP ${p.requires}` : '' }}</td>
@@ -116,6 +135,13 @@ const plugin = computed(() => saring(data.value?.plugins || []))
           </tbody>
         </table>
       </div>
+      <div v-if="data && plugin.length > UKURAN_HALAMAN" class="paginasi">
+        <span class="redup">{{ rentang(plugin, halaman.plugin, 'plugin') }}</span>
+        <span>
+          <button type="button" class="tombol garis kecil" :disabled="halaman.plugin <= 1" @click="halaman.plugin--">Sebelumnya</button>
+          <button type="button" class="tombol garis kecil" :disabled="halaman.plugin >= jumlahHalaman(plugin)" @click="halaman.plugin++">Berikutnya</button>
+        </span>
+      </div>
     </section>
   </div>
 </template>
@@ -123,4 +149,6 @@ const plugin = computed(() => saring(data.value?.plugins || []))
 <style scoped>
 .halaman { display: grid; gap: 18px; }
 .cari input { max-width: 420px; }
+.paginasi { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.paginasi span:last-child { display: flex; gap: 8px; }
 </style>
