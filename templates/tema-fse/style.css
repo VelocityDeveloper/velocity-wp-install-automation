@@ -3131,6 +3131,15 @@ body .vf-nav .is-menu-open .wp-block-navigation-item.has-child.vf-sub-buka > .wp
   padding-inline: var(--wp--style--root--padding-right, 1.25rem);
 }
 
+/* ---------- tombol menu di bawah 782px untuk semua gaya (iklimjayaroster.com, 2026-10-03) ----------
+   Core baru melipat menu di bawah 600px; di 600-781px (HP mendatar, tablet kecil) menu 7-8 item
+   tampil sebaris dan berdesakan dengan logo sampai keluar tepi layar. */
+@media (min-width: 600px) and (max-width: 781px) {
+  .vf-header .vf-nav .wp-block-navigation__responsive-container-open:not(.always-shown) { display: flex !important; }
+  .vf-header .vf-nav .wp-block-navigation__responsive-container:not(.hidden-by-default):not(.is-menu-open) { display: none !important; }
+  .vf-header .vf-nav .wp-block-navigation__responsive-container.is-menu-open { display: flex !important; }
+}
+
 /* ---------- header toko responsif (user 2026-09-17) ----------
    Menu lengkap + keranjang + profil butuh ±780px: di bawah 782px selalu pakai tombol menu
    (bawaan core baru di bawah 600px, sehingga di 600-781px menu, keranjang & profil terpotong). */

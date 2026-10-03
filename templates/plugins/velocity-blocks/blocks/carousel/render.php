@@ -22,6 +22,9 @@ $attr  = array(
 	'aria-label'           => $label ? $label : 'Geser untuk melihat lainnya',
 );
 echo '<div ' . get_block_wrapper_attributes( $attr ) . '>'; // phpcs:ignore
+// Foto latar slide (vb/section) dimuat langsung: slide di luar layar ber-lazy-load tampil
+// kosong sesaat saat digeser, dan slider biasanya hero di atas lipatan (iklimjayaroster.com, 2026-10-03).
+$content = preg_replace( '/(<img class="vb-section__media"[^>]*?) loading="lazy"/', '$1 loading="eager"', $content );
 echo '<div class="vb-carousel__track" tabindex="0">' . $content . '</div>'; // phpcs:ignore
 if ( $jml > 1 && ( ! empty( $a['showArrows'] ) || ! empty( $a['showDots'] ) ) ) {
 	echo '<div class="vb-carousel__nav">';
