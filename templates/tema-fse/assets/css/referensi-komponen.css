@@ -307,6 +307,16 @@ body.vf-ref.vf-ref-header-transparan.home .vf-header.has-background {
 body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) :is(.vf-header a:where(:not(.wp-element-button)), .vf-header .vf-nav .wp-block-navigation-item__content, .vf-header .vf-nama-situs a, .vf-header .wp-block-site-title a, .vf-header .wp-block-navigation__responsive-container-open) {
 	color: #fff !important;
 }
+/* Dropdown submenu di layar lebar selalu berlatar putih (style.css) — kecualikan dari aturan
+   link putih di atas, kalau tidak teksnya putih di atas putih. Panah menu induk ikut warna
+   teks menu (warungmakanibutedy88khaskarawang.com, 2026-10-03). */
+body.vf-ref.vf-ref-header-transparan.home .vf-header .vf-nav .wp-block-navigation__responsive-container:not(.is-menu-open) .wp-block-navigation__submenu-container .wp-block-navigation-item__content {
+	color: var(--wp--preset--color--ink, #1b1b1f) !important;
+}
+body.vf-ref.vf-ref-header-transparan.home .vf-header .vf-nav .wp-block-navigation__responsive-container:not(.is-menu-open) .wp-block-navigation__submenu-container .wp-block-navigation-item__content:hover {
+	color: var(--wp--preset--color--primary) !important;
+}
+body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) .vf-header .vf-nav .wp-block-navigation__responsive-container:not(.is-menu-open) .wp-block-navigation-submenu__toggle { color: #fff; }
 /* Ikon menu HP mengikuti warna teks header (tanpa ini garisnya gelap di atas hero). */
 body.vf-ref.vf-ref-header-transparan.home:not(.vf-header-digulir) .vf-header .wp-block-navigation__responsive-container-open svg { fill: #fff !important; }
 body.vf-ref.vf-ref-header-transparan.home.vf-header-digulir .vf-header .wp-block-navigation__responsive-container-open svg { fill: var(--wp--preset--color--ink, #1b1b1f) !important; }

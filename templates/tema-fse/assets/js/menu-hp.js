@@ -1,5 +1,5 @@
 /**
- * Menu HP gaya klinik: submenu di overlay tertutup dulu, dibuka lewat tombol panah.
+ * Menu HP (semua gaya): submenu di overlay tertutup dulu, dibuka lewat tombol panah.
  * Handler bawaan core/navigation dilewati (capture) supaya tidak ikut membuka/menutup.
  */
 (function () {

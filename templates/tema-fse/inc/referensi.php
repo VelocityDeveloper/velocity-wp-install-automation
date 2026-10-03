@@ -175,11 +175,7 @@ foreach (array('home', 'category', 'tag', 'date', 'author') as $vf_jenis_arsip) 
 }
 
 add_action('wp_enqueue_scripts', function () {
-    // Menu HP akordeon (submenu kategori produk) — skrip yang sama dengan gaya klinik.
-    if (velocity_fse_token('header_keranjang') && velocity_fse_situs('gaya') !== 'klinik') {
-        wp_enqueue_script('velocity-fse-menu-hp', get_theme_file_uri('assets/js/menu-hp.js'), array(), VELOCITY_FSE_VERSI,
-            array('in_footer' => true, 'strategy' => 'defer'));
-    }
+    // Menu HP akordeon (assets/js/menu-hp.js) dimuat functions.php untuk semua gaya.
     if (velocity_fse_desain()) {
         wp_enqueue_script('velocity-fse-slider', get_theme_file_uri('assets/js/slider.js'), array(), VELOCITY_FSE_VERSI,
             array('in_footer' => true, 'strategy' => 'defer'));

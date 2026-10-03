@@ -40,10 +40,9 @@ add_action('after_setup_theme', function () {
 
 add_action('wp_enqueue_scripts', function () {
     wp_enqueue_style('velocity-fse', get_stylesheet_uri(), array(), VELOCITY_FSE_VERSI);
-    if (velocity_fse_situs('gaya') === 'klinik') {
-        wp_enqueue_script('velocity-fse-menu-hp', get_theme_file_uri('assets/js/menu-hp.js'), array(), VELOCITY_FSE_VERSI,
-            array('in_footer' => true, 'strategy' => 'defer'));
-    }
+    // Menu HP: submenu di overlay tertutup dulu, dibuka lewat tombol panah — semua gaya (2026-10-03).
+    wp_enqueue_script('velocity-fse-menu-hp', get_theme_file_uri('assets/js/menu-hp.js'), array(), VELOCITY_FSE_VERSI,
+        array('in_footer' => true, 'strategy' => 'defer'));
     // Font mengikuti referensi desain klien (scripts/fse-apply mengisi font_teks/font_judul
     // dengan slug fontFamilies di theme.json).
     $css = '';

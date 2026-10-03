@@ -2634,31 +2634,35 @@ body.vf-gaya-klinik .vf-header .wp-block-site-logo img { width: auto !important;
 body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: calc(var(--wp--preset--spacing--40) + 58px) !important; }
 
 /* Menu HP (overlay) rata kiri — navigasi header ber-justify kanan, dan WP memakai setelan itu
-   juga untuk overlay (permintaan user 2026-09-16). Submenu menjorok dari kiri. */
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content,
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__container,
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item,
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
+   juga untuk overlay (permintaan user 2026-09-16). Submenu menjorok dari kiri.
+   Sejak 2026-10-03 berlaku untuk SEMUA gaya, bukan hanya klinik & toko referensi
+   (warungmakanibutedy88khaskarawang.com: menu HP paket G masih rata tengah, submenu selalu terbuka). */
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content,
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__container,
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item,
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
   align-items: flex-start !important;
   text-align: left !important;
 }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content { width: 100%; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__responsive-container-content { width: 100%; }
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation__submenu-container {
   padding-left: 1.1rem !important;
   padding-right: 0 !important;
 }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { justify-content: flex-start; }
+body .vf-nav .wp-block-navigation__responsive-container.is-menu-open .wp-block-navigation-item__content { justify-content: flex-start; }
 
-/* Menu HP gaya klinik & toko referensi (vf-header-keranjang, 2026-09-17): submenu tertutup, dibuka lewat tombol panah (assets/js/menu-hp.js). */
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation__container > .wp-block-navigation-item { width: 100%; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child {
+/* Menu HP: submenu tertutup, dibuka lewat tombol panah tanpa bingkai (assets/js/menu-hp.js);
+   link selebar baris supaya mudah diketuk (awalnya gaya klinik & toko referensi 2026-09-17, semua gaya 2026-10-03). */
+body .vf-nav .is-menu-open .wp-block-navigation-item > .wp-block-navigation-item__content { display: block; width: 100%; box-sizing: border-box; }
+body .vf-nav .is-menu-open :is(.wp-block-navigation__container, .wp-block-navigation__submenu-container) > .wp-block-navigation-item { width: 100%; }
+body .vf-nav .is-menu-open .wp-block-navigation-item.has-child {
   display: flex !important;
   flex-direction: row !important;
   flex-wrap: wrap;
   align-items: center !important;
 }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-item__content { flex: 1 1 auto; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-submenu__toggle {
+body .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-item__content { flex: 1 1 0; width: auto; min-width: 0; }
+body .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation-submenu__toggle {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
@@ -2666,20 +2670,23 @@ body:has(.floating-button) .vf-footer:has(.vf-footer__legal) { padding-bottom: c
   height: 44px;
   margin: -12px -10px -12px auto;
   padding: 0;
-  border: 0;
-  background: transparent;
+  border: 0 !important;
+  background: transparent !important;
   color: inherit;
   cursor: pointer;
 }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-submenu__toggle svg { width: 14px; height: 14px; stroke: currentColor; transform: none !important; transition: transform .2s ease; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .vf-sub-buka > .wp-block-navigation-submenu__toggle svg { transform: rotate(180deg) !important; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open :is(.wp-block-navigation__responsive-close, .wp-block-navigation__responsive-dialog, .wp-block-navigation__responsive-container-content, .wp-block-navigation__container) { width: 100% !important; max-width: none; }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation__submenu-container {
+body .vf-nav .is-menu-open .wp-block-navigation-submenu__toggle svg { width: 14px; height: 14px; stroke: currentColor; transform: none !important; transition: transform .2s ease; }
+body .vf-nav .is-menu-open .vf-sub-buka > .wp-block-navigation-submenu__toggle svg { transform: rotate(180deg) !important; }
+body .vf-nav .is-menu-open :is(.wp-block-navigation__responsive-close, .wp-block-navigation__responsive-dialog, .wp-block-navigation__responsive-container-content, .wp-block-navigation__container) { width: 100% !important; max-width: none; }
+body .vf-nav .is-menu-open .wp-block-navigation-item.has-child > .wp-block-navigation__submenu-container {
   display: none !important;
   flex-basis: 100%;
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
   margin-top: .8rem;
 }
-:is(body.vf-gaya-klinik, body.vf-header-keranjang) .vf-nav .is-menu-open .wp-block-navigation-item.has-child.vf-sub-buka > .wp-block-navigation__submenu-container { display: flex !important; }
+body .vf-nav .is-menu-open .wp-block-navigation-item.has-child.vf-sub-buka > .wp-block-navigation__submenu-container { display: flex !important; }
 
 /* ---------- referensi: token rencana VERSI 3 (yukpergimancing.com, 2026-09-17) ----------
    Topbar gelap + kolom cari, menu berwarna, keranjang VD Store di header, slider hero,
