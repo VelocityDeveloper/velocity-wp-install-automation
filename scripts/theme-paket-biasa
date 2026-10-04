@@ -53,6 +53,9 @@ GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
 TEMBOLOK = Path('/var/lib/velocity/tampilan')
 ON_PROGRESS = Path('/home/On Progress')
 PAKET_CUSTOM = ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
+# Tema yang berandanya diisi langkah sendiri (bukan adaptor AI): velocity-marketplace-child =
+# template "Marketplace: Home Page" + theme_mod vmc_*, diisi scripts/marketplace-biasa (2026-10-04).
+BERANDA_LANGKAH_SENDIRI = {'velocity-marketplace-child': 'marketplace-biasa'}
 SOSMED = (('facebook', 'https://www.facebook.com/', 'Facebook'), ('instagram', 'https://www.instagram.com/', 'Instagram'),
           ('twitter-x', 'https://x.com/', 'X'), ('youtube', 'https://www.youtube.com/', 'YouTube'),
           ('tiktok', 'https://www.tiktok.com/', 'TikTok'))
@@ -1640,7 +1643,9 @@ def main():
         print(f"tampilan: layanan_beranda_maks:{len(ctx['daftar']['layanan'])}->{maks}")
         ctx['daftar']['layanan'] = ctx['daftar']['layanan'][:maks]
     paksa_ai = '--paksa-ai' in sys.argv
-    if info and tema not in at.BUKAN_ANAK and (tema not in data['mods'] or paksa_ai):
+    if tema in BERANDA_LANGKAH_SENDIRI:
+        print(f'tampilan: adaptor_dilewati:beranda_oleh_{BERANDA_LANGKAH_SENDIRI[tema]}')
+    elif info and tema not in at.BUKAN_ANAK and (tema not in data['mods'] or paksa_ai):
         catatan_ai = adaptor_ai(manifest, at, info, (panduan or {}).get('adaptor', ''))
         if catatan_ai:
             ad = catatan_ai['adaptor']

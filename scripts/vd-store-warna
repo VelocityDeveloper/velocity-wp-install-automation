@@ -14,6 +14,8 @@ Warna utama situs, urutan pertama yang ada:
   2. CSS warna installer dari "WARNA TEMA WEB" di form (--velocity-primary, site-finish)
   3. child theme toko: --velocitytoko-color-main (Customizer "Warna Utama" velocity-tokoN)
   4. tema induk velocity: --bs-primary (Theme Colors > Primary)
+  5. theme_mod primary_color tema induk velocity
+Paket Marketplace Biasa ikut sejak 2026-10-04 (scripts/paket_toko.py).
 Tidak ketemu = pengaturan VD Store dibiarkan (log warna:tidak_ditemukan).
 """
 import importlib.machinery
@@ -52,6 +54,8 @@ if (!$warna) {
         if ($w = $var($head, $nama)) { $warna = $w; $sumber = $s; break; }
     }
 }
+// Tema induk velocity tidak selalu mencetak --bs-primary lewat wp_head di WP-CLI (ghaffara.com 2026-10-04).
+if (!$warna && ($w = $hex(get_theme_mod("primary_color", "")))) { $warna = $w; $sumber = "theme_mod_primary_color"; }
 if (!$warna) { echo "warna:tidak_ditemukan\n"; return; }
 $rgb = array_map("hexdec", str_split(strlen($warna) === 4 ? preg_replace("/(.)/", "$1$1", substr($warna, 1)) : substr($warna, 1), 2));
 $hover = "#" . implode("", array_map(function ($c) { return sprintf("%02x", (int) round($c * 0.85)); }, $rgb));
@@ -87,7 +91,8 @@ def main():
         print('usage: vd-store-warna [--paksa] <manifest>')
         return 2
     cfg = manifest(args[0])
-    if 'tokoonline' not in re.sub(r'\s+', '', cfg.get('paket', '').lower()):
+    from paket_toko import marketplace_biasa
+    if 'tokoonline' not in re.sub(r'\s+', '', cfg.get('paket', '').lower()) and not marketplace_biasa(cfg.get('paket')):
         print('vd_store_warna: dilewati:paket_bukan_toko_online')
         return 0
     domain = cfg.get('domain', '').lower()

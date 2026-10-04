@@ -21,7 +21,7 @@ Alur di installer-runner (hanya paket toko online BIASA, bukan Toko Online Custo
   bernama jelas = satu produk (harga dari nama berkas, mis. "Daster (95k).jpg"), gambar bernama
   generik ("WhatsApp Image ...", "IMG-...") & dokumen daftar produk dikenali Claude
   (scripts/claude_vision.py): dikelompokkan per produk, dinamai, harga hanya bila tertulis.
-  Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (judul "Contoh – ",
+  Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (Marketplace Biasa: 8) (judul "Contoh – ",
   meta _velocity_contoh=1) berfoto Pexels. Produk contoh dihapus begitu produk asli masuk.
   Produk yang sudah diimpor (meta _velocity_produk_kunci) tidak digandakan pada run ulang.
   Video di folder produk TIDAK diunggah; jumlahnya dicatat (toko: video_dilewati:N) & dilaporkan Telegram.
@@ -61,6 +61,8 @@ BATAS_BYTE = 100 * 1024
 MAKS_PRODUK = 60
 MAKS_GAMBAR_AI = 30
 JUMLAH_CONTOH = 5
+# Paket Marketplace Biasa: 8 produk contoh — beranda velocity-marketplace-child (aturan user 2026-10-04).
+JUMLAH_CONTOH_MARKETPLACE = 8
 UA = {'User-Agent': 'velocity-installer/1.0'}
 # True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
 DIUBAH = False
@@ -80,9 +82,11 @@ def log(pesan):
     print(f'toko: {pesan}', flush=True)
 
 
-def toko_biasa(paket):
+def toko_biasa(paket, mode=''):
     p = re.sub(r'\s+', '', (paket or '').lower())
-    return 'tokoonline' in p and 'custom' not in p
+    # Paket Marketplace Biasa (2026-10-04): produk contoh ikut, menu toko tidak — menunya menu biasa
+    # + "Produk" dari scripts/marketplace-biasa.
+    return ('tokoonline' in p and 'custom' not in p) or (mode == '--produk' and p == 'paketmarketplacebiasa')
 
 
 # ---------- menu ----------
@@ -317,12 +321,19 @@ def daftar_produk(domain):
 
 # ---------- produk contoh ----------
 
+def jumlah_contoh(cfg):
+    return JUMLAH_CONTOH_MARKETPLACE if re.sub(r'\s+', '', cfg.get('paket', '').lower()) == 'paketmarketplacebiasa' else JUMLAH_CONTOH
+
+
 def produk_contoh(domain, cfg):
-    """5 produk contoh sesuai bidang usaha (Claude), foto dari Pexels."""
+    """5 produk contoh (Marketplace Biasa: 8) sesuai bidang usaha (Claude), foto dari Pexels."""
+    jumlah = jumlah_contoh(cfg)
     simpan = KERJA / domain / 'contoh.json'
     try:
-        return json.loads(simpan.read_text())
-    except (OSError, ValueError):
+        lama = json.loads(simpan.read_text())
+        if len(lama) >= jumlah:
+            return lama[:jumlah]
+    except (OSError, ValueError, TypeError):
         pass
     form = read_client_form(ON_PROGRESS / domain)
     fields = {k: v for k, v in (form.get('fields') or {}).items()
@@ -333,7 +344,7 @@ def produk_contoh(domain, cfg):
         tema = {}
     layanan = ', '.join(str(x.get('judul') or x) if isinstance(x, dict) else str(x) for x in (tema.get('layanan') or []))[:600]
     prompt = (
-        f'Buat {JUMLAH_CONTOH} produk CONTOH untuk toko online "{cfg.get("site_title") or domain}".\n'
+        f'Buat {jumlah} produk CONTOH untuk toko online "{cfg.get("site_title") or domain}".\n'
         f'Data form klien:\n' + '\n'.join(f'- {k}: {v}' for k, v in fields.items())[:2500] + '\n'
         + (f'Layanan/bidang: {layanan}\n' if layanan else '')
         + 'Produk harus jenis barang yang wajar dijual toko ini, harga perkiraan pasar Indonesia (angka bulat).\n'
@@ -342,8 +353,8 @@ def produk_contoh(domain, cfg):
     jawab = claude_vision.tanya(prompt, [], timeout=300, log=log)
     if not isinstance(jawab, list) or not jawab:
         jawab = [{'nama': f'Produk {i}', 'kategori': 'Produk', 'harga': 0, 'deskripsi': 'Produk contoh.',
-                  'kata_kunci_foto': 'product package'} for i in range(1, JUMLAH_CONTOH + 1)]
-    jawab = [x for x in jawab if isinstance(x, dict)][:JUMLAH_CONTOH]
+                  'kata_kunci_foto': 'product package'} for i in range(1, jumlah + 1)]
+    jawab = [x for x in jawab if isinstance(x, dict)][:jumlah]
     foto = muat('paket_g_foto', 'paket-g-foto').Pexels()
     kerja = KERJA / domain / 'contoh'
     kerja.mkdir(parents=True, exist_ok=True)
@@ -505,7 +516,7 @@ def main():
         return 2
     cfg = finish.read_manifest(args[0])
     domain = cfg.get('domain', '').lower()
-    if not toko_biasa(cfg.get('paket', '')):
+    if not toko_biasa(cfg.get('paket', ''), mode):
         log(f'dilewati:bukan_toko_online_biasa:{cfg.get("paket", "")}')
         return 0
     # Situs yang sudah ter-deploy tidak diubah tanpa persetujuan (keputusan user 2026-09-23):

@@ -186,6 +186,17 @@
       // (templates/velocity-landing), induk velocity + velocity-addons; situs yang sudah deploy tetap tema lamanya.
       { id: 'childLanding', kol: 8, jalur: 5, nama: 'Child theme Landing', ket0: 'velocity-landing (templates installer), isi via Customizer', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.landing) },
+      // Paket Marketplace Biasa (permintaan user 2026-10-04, contoh ghaffara.com): referensi mp1 =
+      // velocity-marketplace-child (REF_SLUG velocity-child-theme), lalu VD Store + VD Marketplace
+      // (scripts/marketplace-biasa --plugin), produk & beranda marketplace menyusul. Situs lama dilewati.
+      { id: 'childMarket', kol: 8, jalur: 6, nama: 'Child theme marketplace', ket0: 'Marketplace Biasa: mp1 → velocity-marketplace-child (API tema)', mulai: CHILD_THEME,
+        selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.market) },
+      { id: 'vdstoreMarket', kol: 9, jalur: 6, nama: 'VD Store + VD Marketplace', ket0: 'VD Store (pengaturan, VD Ongkir, halaman toko) + plugin VD Marketplace',
+        mulai: /\] VD Store$/, selesai: /marketplace: (plugin_aktif|plugin_gagal|dilewati)|vd_store: dilewati/, gagal: /vd_store: gagal|marketplace: plugin_gagal/,
+        ketHasil: t => { if (/marketplace: dilewati:situs_sudah_terpasang|vd_store: dilewati/.test(t)) return 'dilewati: situs lama';
+          const m = /marketplace: plugin_aktif:(\S+)/.exec(t);
+          return m ? (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t) ? 'VD Store siap' : 'VD Store terpasang') + ', VD Marketplace ' + m[1] : null; },
+        aktif: c => dan(tanpaDry(c), c.market) },
       // VD Store (keputusan user 2026-09-17): Toko Online Custom memasang & mengatur VD Store DULU,
       // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
       // Dua simpul berpenanda log sama, dibedakan cabang paketnya. Simpul toko custom di baris -1
@@ -207,12 +218,13 @@
         ketHasil: t => { const m = /menu: tersusun:(\d+)/.exec(t); return m ? m[1] + ' item menu'
           : /menu: dibiarkan/.test(t) ? 'dibiarkan: sudah disunting' : /toko: dilewati:situs_sudah_terpasang/.test(t) ? 'dilewati: situs lama' : null; },
         aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
-      { id: 'produkToko', kol: 13, jalur: 4, nama: 'Produk toko', ket0: 'folder produk → store_product (gambar < 100 KB), atau 5 contoh',
+      { id: 'produkToko', kol: 13, jalur: 4, nama: 'Produk toko', ket0: 'folder produk → store_product (gambar < 100 KB), atau 5 contoh (marketplace 8)',
         mulai: /\] Toko biasa: produk/, selesai: /produk: (dibuat|contoh_sudah_ada|contoh_dilewati|dilewati)|toko: dilewati/,
         ketHasil: t => { const s = /toko: produk: sumber=(folder|contoh) jumlah=(\d+)/.exec(t);
           if (/toko: dilewati:situs_sudah_terpasang/.test(t)) return 'dilewati: situs lama';
+          if (!s && /toko: dilewati:bukan_toko_online_biasa/.test(t)) return 'dilewati: instalasi lama';
           return s ? (s[1] === 'folder' ? s[2] + ' produk dari folder klien' : s[2] + ' produk contoh') : null; },
-        aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
+        aktif: c => dan(tanpaDry(c), c.tokoBiasa || c.market) },
       // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
       // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
       { id: 'isiKlasik', kol: 10, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
@@ -288,8 +300,9 @@
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
       // Simpul yang sama memuat scripts/listing-property (tema property2: listing, warna, sidebar kanan,
-      // VD Gallery; mysahabatwisata.com 2026-10-01), berjalan tepat sesudah paket-tour.
-      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri',
+      // VD Gallery; mysahabatwisata.com 2026-10-01), berjalan tepat sesudah paket-tour, lalu
+      // scripts/marketplace-biasa --beranda (velocity-marketplace-child, 2026-10-04).
+      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing / marketplace', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri · marketplace: slider ≥2 & blok kiri (banner), kategori, menu Produk',
         mulai: /\] Paket tour$/, selesai: /(paket_tour|listing_property): (selesai|dilewati)/,
         gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)|listing_property: (gagal|ai_gagal|cpt_tidak|cek_tema_gagal)/,
         ketHasil: t => {
@@ -299,7 +312,9 @@
           if (l) return l[1] + ' listing' + (/listing_property: listing=\d+ contoh=1/.test(t) ? ' contoh' : '')
             + (/listing_property: vdgallery:/.test(t) ? ' + VD Gallery' : '');
           if (/listing_property: selesai/.test(t)) return 'property2 disesuaikan';
-          if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2)';
+          const mp = /marketplace: selesai:(\S+)/.exec(t);
+          if (mp) return 'beranda marketplace: ' + mp[1].replace(/,/g, ', ').replace(/_/g, ' ');
+          if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2/marketplace)';
           return null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'fotoKlasik', kol: 20, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse, sisa: foto klien/sampul',
@@ -461,6 +476,7 @@
       ['paket', 'vdstoreCustom', 'Toko Online Custom'], ['vdstoreCustom', 'referensi'],
       ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
       ['paket', 'childToko', 'Toko Online Biasa'], ['paket', 'childLain', 'lainnya'], ['paket', 'childLanding', 'Landing Page Biasa'],
+      ['paket', 'childMarket', 'Marketplace Biasa'], ['childMarket', 'vdstoreMarket'], ['vdstoreMarket', 'isiKlasik'],
       ['referensi', 'fse'], ['fse', 'cekTema'],
       // Belum sesuai referensi: kembali ke langkah tema sebelum konten AI ditulis.
       ['cekTema', 'fse', 'belum, ulangi tema'],
@@ -470,8 +486,8 @@
       ['vdstore', 'menuToko'], ['menuToko', 'isiKlasik'],
       ['isiKlasik', 'konten'],
       ['konten', 'finishing'],
-      ['finishing', 'baru', '', c => dan(tanpaDry(c), c.tokoBiasa === null ? null : !c.tokoBiasa)],
-      ['finishing', 'produkToko', 'toko biasa', c => dan(tanpaDry(c), c.tokoBiasa)], ['produkToko', 'baru'],
+      ['finishing', 'baru', '', c => dan(tanpaDry(c), c.tokoBiasa === null || c.market === null ? null : !(c.tokoBiasa || c.market))],
+      ['finishing', 'produkToko', 'toko biasa / marketplace', c => dan(tanpaDry(c), c.tokoBiasa || c.market)], ['produkToko', 'baru'],
       ['baru', 'bersih', 'ya'], ['bersih', 'isi'], ['baru', 'isi', 'tidak', c => dan(tanpaDry(c), c.installBaru === null ? null : !c.installBaru)],
       ['isi', 'fotoSlot', 'ya'],
       ['fotoSlot', 'dealerUnit', 'dealer mobil', c => dan(tanpaDry(c), c.custom, c.dealer)],
@@ -539,7 +555,10 @@
       }
       const lewatFinishing = /cleanup_done|Paket custom: foto per slot|qa_result:|\] (SUCCESS|FAILED): /.test(teks);
       const custom = paket ? ['paketg', 'paketportalberitacustom', 'pakettokoonlinecustom'].includes(paket) : null;
-      const toko = paket ? paket.includes('tokoonline') : null;
+      const tokoOnline = paket ? paket.includes('tokoonline') : null;
+      // Paket Marketplace Biasa (2026-10-04): VD Store + VD Marketplace + produk, menu biasa (bukan menu toko).
+      const market = paket ? paket === 'paketmarketplacebiasa' : null;
+      const toko = paket ? tokoOnline || market : null;
       return {
         mode,
         custom,
@@ -551,8 +570,9 @@
         toko,
         // Toko Online Custom: VD Store dulu, lalu referensi desain & tema FSE. Toko online biasa:
         // child theme dari referensi form, lalu VD Store, lalu konten AI (tanpa FSE).
-        tokoCustom: paket ? custom && toko : null,
-        tokoBiasa: paket ? toko && !custom : null,
+        tokoCustom: paket ? custom && tokoOnline : null,
+        tokoBiasa: paket ? tokoOnline && !custom : null,
+        market,
         installBaru: /\] Bersihkan tema & plugin bawaan/.test(teks) ? true : lewatFinishing ? false : null,
         maintLewat: /maintenance_dilewati/.test(teks) ? true : /\] Maintenance mode/.test(teks) ? false : null,
         // Situs dealer mobil (manifest gaya_beranda=dealer): unit CPT mobil + foto seksinya

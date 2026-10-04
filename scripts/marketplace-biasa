@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+"""Paket Marketplace Biasa: VD Marketplace + beranda velocity-marketplace-child (permintaan user 2026-10-04).
+
+Pemakaian: marketplace-biasa --plugin <manifest>    pasang & aktifkan plugin VD Marketplace
+           marketplace-biasa --beranda <manifest>   isi beranda tema velocity-marketplace-child
+           --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
+
+Alur paket ini di installer-runner (contoh pengerjaan manual: ghaffara.com 2026-10-04):
+  child theme dari referensi form (mp1 -> velocity-marketplace-child, REF_SLUG velocity-child-theme)
+  -> VD Store + pengaturan + halaman toko (vd-store, vd-store-settings) -> --plugin
+  -> isi contoh & konten AI -> site-finish -> produk (toko-biasa --produk: folder produk / 8 contoh)
+  -> tampilan klasik (theme-paket-biasa melewati adaptor AI tema ini) -> --beranda
+  -> warna VD Store (vd-store-warna)
+
+--plugin: zip VD Marketplace dari API plugin Velocity (slug vd-marketplace), ditembolok di
+  /var/lib/velocity/packages/vd-marketplace-<versi>.zip. Plugin yang sudah ada tidak ditimpa.
+  VD Marketplace butuh VD Store aktif, jadi dijalankan sesudah vd-store.
+
+--beranda (hanya bila tema aktif velocity-marketplace-child; tema lain dilewati):
+  - halaman depan = template "Marketplace: Home Page" (page-home.php)
+  - Slider (aturan user 2026-10-04: minimal 2): 2-3 banner 1200x400 seperti demo mp1 — foto hero/layanan/
+    foto situs (tembolok langkah tampilan) + gradasi gelap + judul, subjudul & tombol; slide 1-2 ke arsip
+    produk, slide 3 ke Hubungi Kami. Foto kurang dari 2 = banner polos. Diisi bila slide < 2.
+  - Promo & Terlaris > Gambar Blok Kiri (aturan user 2026-10-04): banner 670x280 dari foto produk contoh
+    (cadangan: foto situs lain) "Katalog <kategori>" -> arsip produk. Produk tanpa meta `hit` diberi hit=0
+    supaya "Banyak Dilihat" tampil di samping blok kiri (seperti demo), bukan blok kiri selebar halaman.
+    Semua banner JPEG < 100 KB, ditembolok di /var/lib/velocity/tampilan/<domain>/mp-*.jpg, media diimpor
+    sekali (meta _velocity_mp_banner = md5 berkas).
+  - Kategori Chips: kategori produk berisi (maks 6) + ikon Bootstrap dari nama kategori;
+    kategori produk kosong tanpa anak dihapus (kategori form yang tidak dipakai produk contoh)
+  - judul Produk Terbaru = "Produk <kategori produk di form>", Tentang Kami = paragraf awal halaman Tentang Kami
+  - menu utama: "Produk" (arsip store_product) sesudah Beranda
+  - CSS tambahan: batas tinggi logo .vmc-brand img (logo memakai img-fluid induk, batas .custom-logo tema tidak kena)
+  Pengaturan Customizer yang sudah terisi tidak ditimpa; run ulang idempoten.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from client_form import read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
+from paket_toko import marketplace_biasa  # noqa: E402
+
+SLUG = 'vd-marketplace'
+TEMA = 'velocity-marketplace-child'
+TEMBOLOK = Path('/var/lib/velocity/tampilan')
+PRODUK_KERJA = Path('/var/lib/velocity/toko-produk')
+FONT = HERE.parent / 'templates' / 'fonts'
+# Ukuran gambar demo mp1.velocitydeveloper.com: slide s1/s2/s3 1200x400, blok kiri ads 670x280.
+SLIDE = (1200, 400)
+PROMO = (670, 280)
+BATAS_BYTE = 100 * 1024
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+finish = muat('site_finish', 'site-finish')
+
+
+def log(pesan):
+    print(f'marketplace: {pesan}', flush=True)
+
+
+def jalankan(cfg, skrip, masukan=None, waktu=600):
+    global DIUBAH
+    DIUBAH = True
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    kepala = ('set -u\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\n'
+              'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+              '[[ -n "$WP_BIN" ]] || { echo "wp-cli_missing"; exit 10; }\n'
+              f'DOCROOT={shlex.quote(finish.docroot(cfg["domain"].lower(), cfg.get("da_user", "")))}\n'
+              'wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }\n')
+    run = subprocess.run(ssh + ['bash', '-s'], input=kepala + skrip, capture_output=True, text=True, timeout=waktu)
+    keluaran = run.stdout + '\n' + run.stderr
+    for baris in keluaran.splitlines():
+        if baris.strip() and not baris.startswith('Warning:'):
+            log(baris.strip()[:200])
+    return run.returncode, keluaran
+
+
+# ---------- plugin ----------
+
+def plugin(cfg):
+    vd = muat('vd_store_pkg', 'vd-store')
+    vd.SLUG = SLUG  # ambil_paket/zip_valid membaca SLUG modul: API + tembolok yang sama
+    zip_path, versi = vd.ambil_paket()
+    if not zip_path:
+        log('plugin_gagal:paket_tidak_tersedia')
+        return 1
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    remote = f'/tmp/pkg-{SLUG}.zip'
+    with open(zip_path, 'rb') as f:
+        up = subprocess.run(ssh + [f'cat > {shlex.quote(remote)} && chmod 644 {shlex.quote(remote)}'],
+                            stdin=f, capture_output=True, text=True, timeout=180)
+    if up.returncode != 0:
+        log(f'plugin_gagal:kirim:{up.stderr.strip()[-160:]}')
+        return 1
+    skrip = f'''
+ZIP={shlex.quote(remote)}
+if ! wp plugin is-active vd-store >/dev/null 2>&1; then rm -f "$ZIP"; echo "plugin_gagal:vd_store_tidak_aktif"; exit 12; fi
+if [[ -d "$DOCROOT/wp-content/plugins/{SLUG}" ]]; then
+  echo "plugin_dipertahankan:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else
+  wp plugin install "$ZIP" 2>&1 | grep -v '^Warning:' | tail -1
+fi
+rm -f "$ZIP"
+wp plugin is-active {SLUG} >/dev/null 2>&1 || wp plugin activate {SLUG} 2>&1 | grep -v '^Warning:' | tail -1
+if wp plugin is-active {SLUG} >/dev/null 2>&1; then echo "plugin_aktif:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else echo "plugin_gagal:tidak_aktif"; exit 12; fi
+'''
+    _, keluaran = jalankan(cfg, skrip)
+    # Kode keluar bisa 0 walau WP-CLI gagal diam-diam: yang dipercaya penanda aktif.
+    return 0 if re.search(r'^plugin_aktif:', keluaran, re.M) else 1
+
+
+# ---------- beranda ----------
+
+BERANDA_PHP = r'''<?php
+$data = json_decode(getenv('MP_DATA') ?: '{}', true) ?: [];
+$tema = get_stylesheet();
+if ($tema !== 'velocity-marketplace-child') { echo "dilewati:tema_$tema\n"; return; }
+if (!post_type_exists('store_product')) { echo "dilewati:vd_store_tidak_aktif\n"; return; }
+$isi = []; $kosong = function ($k) { $v = get_theme_mod($k, null); return $v === null || $v === '' || $v === '[]'; };
+
+// 1. Halaman depan = template marketplace.
+$depan = (int) get_option('page_on_front');
+if (get_option('show_on_front') === 'page' && $depan) {
+    $tpl = (string) get_post_meta($depan, '_wp_page_template', true);
+    if ($tpl === '' || $tpl === 'default') { update_post_meta($depan, '_wp_page_template', 'page-home.php'); $isi[] = 'template'; }
+    elseif ($tpl !== 'page-home.php') { echo "template_dibiarkan:$tpl\n"; }
+} else { echo "halaman_depan_bukan_halaman\n"; }
+
+$katalog = get_post_type_archive_link('store_product') ?: home_url('/');
+
+// 2. Banner buatan installer (MP_DIR): slider minimal 2 + Gambar Blok Kiri (aturan user 2026-10-04).
+$dir = (string) getenv('MP_DIR');
+$impor = function ($b) use ($dir) {
+    $f = $dir . '/' . basename((string) ($b['berkas'] ?? ''));
+    if (!$dir || !is_file($f)) { return 0; }
+    $md5 = md5_file($f);
+    $ada = get_posts(['post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                      'meta_key' => '_velocity_mp_banner', 'meta_value' => $md5]);
+    if ($ada) { return (int) $ada[0]; }
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/media.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+    $tmp = wp_tempnam(basename($f));
+    copy($f, $tmp);
+    $id = media_handle_sideload(['name' => basename($f), 'tmp_name' => $tmp], 0, (string) ($b['judul'] ?? ''));
+    if (is_wp_error($id)) { @unlink($tmp); echo 'banner_gagal:' . basename($f) . ':' . $id->get_error_message() . "\n"; return 0; }
+    update_post_meta($id, '_velocity_mp_banner', $md5);
+    update_post_meta($id, '_wp_attachment_image_alt', (string) ($b['judul'] ?? ''));
+    return (int) $id;
+};
+$kontak = get_posts(['post_type' => 'page', 'name' => 'hubungi-kami', 'post_status' => 'publish', 'numberposts' => 1, 'fields' => 'ids']);
+$tujuan = ['katalog' => $katalog, 'kontak' => $kontak ? get_permalink($kontak[0]) : $katalog];
+$slide_kini = json_decode((string) get_theme_mod('vmc_slide_rows', '[]'), true);
+$slide_kini = is_array($slide_kini) ? array_values(array_filter($slide_kini, fn($r) => !empty($r['image_id']))) : [];
+if (count($slide_kini) < 2) {
+    $baris = [];
+    foreach ((array) ($data['slides'] ?? []) as $b) {
+        if ($id = $impor($b)) { $baris[] = ['image_id' => $id, 'url' => $tujuan[$b['tujuan'] ?? 'katalog'] ?? $katalog]; }
+    }
+    if (count($baris) >= 2) { set_theme_mod('vmc_slide_rows', wp_json_encode($baris)); $isi[] = 'slider:' . count($baris); }
+    else {
+        // Banner tidak terkirim: jalan lama, hero langkah tampilan sebagai satu-satunya slide.
+        $h = get_theme_mod('header_image_data');
+        $hero = (int) (is_object($h) ? ($h->attachment_id ?? 0) : (is_array($h) ? ($h['attachment_id'] ?? 0) : 0));
+        if ($hero && !$slide_kini) { set_theme_mod('vmc_slide_rows', wp_json_encode([['image_id' => $hero, 'url' => $katalog]])); $isi[] = 'slider:1'; }
+        echo 'slider_kurang_dari_2:' . max(count($baris), count($slide_kini), $hero ? 1 : 0) . "\n";
+    }
+}
+if ($kosong('vmc_promo_card_image') && !empty($data['promo']) && ($id = $impor($data['promo']))) {
+    set_theme_mod('vmc_promo_card_image', $id);
+    if ($kosong('vmc_promo_card_url')) { set_theme_mod('vmc_promo_card_url', $tujuan[$data['promo']['tujuan'] ?? 'katalog'] ?? $katalog); }
+    $isi[] = 'blok_kiri';
+}
+// "Banyak Dilihat" (page-home.php) hanya memuat produk ber-meta hit: produk baru diberi 0.
+$tanpa_hit = get_posts(['post_type' => 'store_product', 'post_status' => 'publish', 'numberposts' => -1, 'fields' => 'ids',
+                        'meta_query' => [['key' => 'hit', 'compare' => 'NOT EXISTS']]]);
+foreach ($tanpa_hit as $p) { add_post_meta($p, 'hit', 0, true); }
+if ($tanpa_hit) { $isi[] = 'hit:' . count($tanpa_hit); }
+
+// 3. Kategori: kosong tanpa anak dihapus, yang berisi jadi chips berikon.
+$dihapus = 0;
+foreach (get_terms(['taxonomy' => 'store_product_cat', 'hide_empty' => false]) as $t) {
+    if ((int) $t->count === 0 && !get_term_children($t->term_id, 'store_product_cat')) { wp_delete_term($t->term_id, 'store_product_cat'); $dihapus++; }
+}
+if ($dihapus) { echo "kategori_kosong_dihapus:$dihapus\n"; }
+if ($kosong('vmc_category_rows')) {
+    $ikon = [
+        'kesehatan|medis|klinik|apotek|obat' => 'heart-pulse', 'rumah sakit|hospital' => 'hospital', 'perban|plester|masker' => 'bandaid',
+        'rumah tangga|rumah|perabot|furnitur' => 'house-heart', 'elektronik|gadget|komputer|laptop' => 'laptop', 'hp|ponsel|handphone' => 'phone',
+        'fashion|pakaian|baju|busana|hijab' => 'bag-heart', 'sepatu|sandal' => 'bag', 'makan|kuliner|kue|snack|minum|kopi' => 'cup-hot',
+        'otomotif|mobil|motor|sparepart' => 'car-front', 'buku|alat tulis|atk' => 'book', 'kecantikan|kosmetik|skincare' => 'stars',
+        'bayi|anak|mainan' => 'balloon-heart', 'olahraga|fitness' => 'bicycle', 'pertanian|tanaman|bibit|pupuk' => 'flower1',
+        'bangunan|material|besi|semen' => 'bricks', 'pesan|order|layanan|jasa' => 'bag-check',
+    ];
+    $chips = [];
+    foreach (get_terms(['taxonomy' => 'store_product_cat', 'hide_empty' => true, 'orderby' => 'count', 'order' => 'DESC', 'number' => 6]) as $t) {
+        $pilih = 'tag';
+        foreach ($ikon as $pola => $i) { if (preg_match('/' . $pola . '/i', $t->name)) { $pilih = $i; break; } }
+        $chips[] = ['term_id' => $t->term_id, 'icon' => $pilih];
+    }
+    if ($chips) { set_theme_mod('vmc_category_rows', wp_json_encode($chips)); $isi[] = 'kategori:' . count($chips); }
+}
+
+// 4. Judul produk & Tentang Kami.
+if ($kosong('vmc_latest_title') && !empty($data['judul_produk'])) { set_theme_mod('vmc_latest_title', $data['judul_produk']); $isi[] = 'judul_produk'; }
+if ($kosong('vmc_about_content')) {
+    $tentang = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);
+    $teks = [];
+    if ($tentang && preg_match_all('#<p[^>]*>(.*?)</p>#s', $tentang[0]->post_content, $m)) {
+        foreach ($m[1] as $p) {
+            $p = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($p)));
+            if (mb_strlen($p) < 60) { continue; }
+            $teks[] = $p;
+            if (mb_strlen(implode(' ', $teks)) > 350 || count($teks) >= 2) { break; }
+        }
+    }
+    if ($teks) {
+        set_theme_mod('vmc_about_title', 'Tentang ' . get_bloginfo('name'));
+        set_theme_mod('vmc_about_content', implode("\n\n", $teks));
+        $isi[] = 'tentang';
+    } else { echo "tentang_kosong\n"; }
+}
+
+// 5. Menu utama: "Produk" sesudah Beranda.
+$lokasi = get_nav_menu_locations();
+$menu = (int) ($lokasi['primary'] ?? 0);
+if ($menu) {
+    $item = wp_get_nav_menu_items($menu) ?: [];
+    $ada = false;
+    foreach ($item as $i) { if (untrailingslashit($i->url) === untrailingslashit($katalog)) { $ada = true; } }
+    if (!$ada) {
+        foreach ($item as $i) { if ((int) $i->menu_order >= 2) { wp_update_post(['ID' => $i->ID, 'menu_order' => $i->menu_order + 1]); } }
+        wp_update_nav_menu_item($menu, 0, ['menu-item-title' => 'Produk', 'menu-item-url' => $katalog, 'menu-item-type' => 'custom',
+                                           'menu-item-status' => 'publish', 'menu-item-position' => 2]);
+        $isi[] = 'menu_produk';
+    }
+} else { echo "menu_utama_tidak_ada\n"; }
+
+// 6. Logo header: batas tinggi (logo memakai img-fluid tema induk).
+$css = wp_get_custom_css();
+if (strpos($css, '.vmc-brand img') === false) {
+    $css = rtrim($css) . "\n/* Logo header velocity-marketplace-child (installer marketplace-biasa) */\n"
+         . ".vmc-brand img{max-height:90px;width:auto}\n@media (max-width:991.98px){.vmc-brand img{max-height:70px}}\n";
+    $r = wp_update_custom_css_post($css);
+    if (!is_wp_error($r)) { $isi[] = 'css_logo'; }
+}
+echo 'selesai:' . ($isi ? implode(',', $isi) : 'tidak_ada_perubahan') . "\n";
+'''
+
+
+def kategori_form(domain):
+    """Isian "Kategori Produk" di form (bukan titik-titik), mis. "Alat kesehatan"; '' bila kosong."""
+    try:
+        teks = read_client_form(folder_klien(domain))['text']
+    except Exception:
+        return ''
+    m = re.search(r'kategori\s+produk\s*:\s*([^\n]+)', teks, re.I)
+    nilai = re.sub(r'\s+', ' ', m.group(1)).strip(' .:-') if m else ''
+    if not nilai or re.fullmatch(r'[.\s…_-]*', nilai) or len(nilai) > 40:
+        return ''
+    return nilai
+
+
+def judul_kapital(teks):
+    return ' '.join(w if w.isupper() else w.capitalize() for w in teks.split())
+
+
+def judul_produk(domain):
+    """'Produk <Kategori Produk di form>' bila klien mengisinya."""
+    kategori = kategori_form(domain)
+    return 'Produk ' + judul_kapital(kategori) if kategori else ''
+
+
+# ---------- banner slider & blok kiri ----------
+
+def huruf(nama, besar):
+    from PIL import ImageFont
+    for f in (FONT / f'{nama}.ttf', Path('/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf')):
+        try:
+            return ImageFont.truetype(str(f), besar)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def foto_sumber(domain):
+    """(foto situs untuk slide, foto produk untuk blok kiri) — hanya foto yang terbaca & cukup lebar."""
+    from PIL import Image
+
+    def layak(f):
+        try:
+            with Image.open(f) as im:
+                return im.width >= 500 and im.height >= 300
+        except Exception:
+            return False
+    def sidik(f):
+        with Image.open(f) as im:
+            g = list(im.convert('L').resize((9, 8)).getdata())
+        return [g[r * 9 + c] > g[r * 9 + c + 1] for r in range(8) for c in range(8)]
+
+    def unik(daftar):
+        # Foto layanan sering potongan foto yang sama: yang mirip (dhash beda < 12 dari 64) dilewati.
+        hasil, sidik_ada = [], []
+        for f in daftar:
+            h = sidik(f)
+            if all(sum(x != y for x, y in zip(h, lain)) >= 12 for lain in sidik_ada):
+                hasil.append(f)
+                sidik_ada.append(h)
+        return hasil
+    simpan = TEMBOLOK / domain
+    situs = [simpan / 'hero.jpg', *sorted(simpan.glob('layanan-*.jpg')), *[simpan / f'foto{i}.jpg' for i in (1, 2, 3)],
+             simpan / 'tentang.jpg']
+    # Foto produk (toko-biasa --produk): folder produk klien (produk.json), atau produk contoh Pexels.
+    produk = []
+    try:
+        produk = [Path(p['gambar'][0]) for p in json.loads((PRODUK_KERJA / domain / 'produk.json').read_text())['produk']
+                  if isinstance(p, dict) and p.get('gambar')]
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    produk += sorted((PRODUK_KERJA / domain / 'contoh').glob('contoh-*.jpg'))
+    return unik([f for f in situs if f.is_file() and layak(f)]), unik([f for f in produk if f.is_file() and layak(f)])
+
+
+def kiri_ke_kanan(ukuran):
+    """Topeng L: 0 di tepi kiri -> 255 di tepi kanan."""
+    from PIL import Image
+    return Image.linear_gradient('L').rotate(90).resize(ukuran)
+
+
+def potong(sumber, ukuran):
+    """Foto dipotong menutup ukuran (object-fit: cover); tanpa foto = gradasi biru gelap polos."""
+    from PIL import Image, ImageOps
+    if not sumber:
+        gelap, terang = Image.new('RGB', ukuran, (24, 33, 56)), Image.new('RGB', ukuran, (52, 72, 110))
+        return Image.composite(terang, gelap, kiri_ke_kanan(ukuran))
+    with Image.open(sumber) as im:
+        return ImageOps.fit(ImageOps.exif_transpose(im).convert('RGB'), ukuran, Image.LANCZOS, centering=(0.5, 0.45))
+
+
+def bungkus(teks, font, lebar, d):
+    kata, baris, kini = teks.split(), [], ''
+    for k in kata:
+        uji = (kini + ' ' + k).strip()
+        if d.textlength(uji, font=font) <= lebar or not kini:
+            kini = uji
+        else:
+            baris.append(kini)
+            kini = k
+    return baris + ([kini] if kini else [])
+
+
+def buat_banner(sumber, ukuran, judul, sub, tombol, tujuan):
+    """Banner gaya demo mp1: foto + gradasi gelap dari kiri + judul, subjudul & tombol putih."""
+    from PIL import Image, ImageDraw, ImageOps
+    w, h = ukuran
+    im = potong(sumber, ukuran)
+    gelap = Image.new('RGB', ukuran, (12, 18, 30))
+    # Gelap 80% di separuh kiri (tempat teks, tetap terbaca di foto terang), memudar habis di 90% lebar.
+    topeng = kiri_ke_kanan(ukuran).point(lambda v: int(204 * min(1.0, max(0.0, (0.9 - v / 255) / 0.4))))
+    im = Image.composite(gelap, im, topeng)
+    d = ImageDraw.Draw(im)
+    skala = h / 400
+    tepi, lebar = int(64 * skala * (w / h) / 3), int(w * 0.55)
+    for besar in (52, 46, 40, 34):
+        fj = huruf('poppins-bold', int(besar * skala))
+        baris = bungkus(judul, fj, lebar, d)
+        if len(baris) <= 2:
+            break
+    fs, ft = huruf('poppins-semibold', int(22 * skala)), huruf('poppins-semibold', int(19 * skala))
+    tj = int(fj.size * 1.18)
+    tinggi = len(baris) * tj + int(14 * skala) + int(fs.size * 1.4) + int(22 * skala) + int(46 * skala)
+    y = (h - tinggi) // 2
+    for b in baris:
+        d.text((tepi, y), b, font=fj, fill='white')
+        y += tj
+    y += int(14 * skala)
+    sub = bungkus(sub, fs, lebar, d)[0]
+    d.text((tepi, y), sub, font=fs, fill=(230, 236, 245))
+    y += int(fs.size * 1.4) + int(22 * skala)
+    tw = d.textlength(tombol, font=ft)
+    pw, ph = int(tw + 44 * skala), int(46 * skala)
+    d.rounded_rectangle((tepi, y, tepi + pw, y + ph), radius=ph // 2, fill='white')
+    d.text((tepi + pw / 2, y + ph / 2), tombol, font=ft, fill=(17, 24, 39), anchor='mm')
+    simpan_jpeg(im, tujuan)
+
+
+def simpan_jpeg(im, tujuan, batas=BATAS_BYTE):
+    for mutu in (84, 78, 72, 66, 60, 54, 48):
+        im.save(tujuan, 'JPEG', quality=mutu, optimize=True, progressive=True)
+        if tujuan.stat().st_size < batas:
+            return
+    im.resize((int(im.width * 0.85), int(im.height * 0.85))).save(tujuan, 'JPEG', quality=60, optimize=True)
+
+
+def siapkan_banner(cfg, stage):
+    """Berkas banner di stage + datanya untuk PHP: {'slides': [...], 'promo': {...}}."""
+    domain = cfg['domain'].lower()
+    kategori = kategori_form(domain)
+    kecil = kategori.lower() if kategori else 'produk pilihan'
+    besar = judul_kapital(kategori) if kategori else 'Produk'
+    nama = cfg.get('site_title') or domain
+    situs, produk = foto_sumber(domain)
+    slide = [(f'Belanja {kecil} jadi lebih mudah', nama, 'Belanja Sekarang', 'katalog'),
+             (f'{besar} pilihan untuk Anda', 'Lihat katalog lengkap dan pesan secara online', 'Lihat Katalog', 'katalog'),
+             ('Butuh bantuan memilih produk?', 'Hubungi kami untuk konsultasi kebutuhan Anda', 'Hubungi Kami', 'kontak')]
+    # Foto slide: hero langkah tampilan (lebar), lalu foto produk (relevan & beragam; foto layanan di
+    # tembolok sering berulang/persegi kecil), lalu foto situs lain. Blok kiri = foto produk berikutnya.
+    hero = [f for f in situs if f.name == 'hero.jpg']
+    urutan = hero + produk + [f for f in situs if f.name != 'hero.jpg']
+    # Minimal 2 slide; slide ke-3 hanya bila ada foto ketiga. Foto kurang = banner polos.
+    slide = slide[:max(2, min(3, len(urutan)))]
+    foto_slide = urutan[:len(slide)]
+    promo_foto = next((f for f in produk + urutan if f not in foto_slide), (urutan or [None])[0])
+    simpan = TEMBOLOK / domain
+    simpan.mkdir(parents=True, exist_ok=True)
+    data = {'slides': [], 'promo': {}}
+    for i, (judul, sub, tombol, tujuan) in enumerate(slide, 1):
+        berkas = f'mp-slide-{i}.jpg'
+        buat_banner(foto_slide[i - 1] if i <= len(foto_slide) else None, SLIDE, judul, sub, tombol, simpan / berkas)
+        data['slides'].append({'berkas': berkas, 'judul': judul, 'tujuan': tujuan})
+    buat_banner(promo_foto, PROMO, f'Katalog {besar}', 'Temukan produk yang Anda butuhkan', 'Lihat Produk', simpan / 'mp-promo.jpg')
+    data['promo'] = {'berkas': 'mp-promo.jpg', 'judul': f'Katalog {besar}', 'tujuan': 'katalog'}
+    for b in data['slides'] + [data['promo']]:
+        (Path(stage) / b['berkas']).write_bytes((simpan / b['berkas']).read_bytes())
+    log(f"banner: slide={len(data['slides'])} foto_situs={len(situs)} foto_produk={len(produk)} "
+        f"ukuran_kb={','.join(str((simpan / b['berkas']).stat().st_size // 1024) for b in data['slides'] + [data['promo']])}")
+    return data
+
+
+def beranda(cfg):
+    import shutil
+    import tempfile
+    domain = cfg['domain'].lower()
+    stage = Path(tempfile.mkdtemp(prefix='marketplace-banner-'))
+    try:
+        try:
+            data = siapkan_banner(cfg, stage)
+        except Exception as e:  # banner gagal tidak boleh menahan pengisian beranda lainnya
+            log(f'banner_gagal:{type(e).__name__}:{str(e)[:120]}')
+            data = {}
+        data['judul_produk'] = judul_produk(domain)
+        (stage / 'skrip.php').write_text(BERANDA_PHP)
+        global DIUBAH
+        DIUBAH = True
+        ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+        remote = f'/tmp/velocity-marketplace-{domain}'
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+        up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote)} && mkdir -p {shlex.quote(remote)} && tar -xzf - -C {shlex.quote(remote)}'],
+                            stdin=tar.stdout, capture_output=True, text=True, timeout=300)
+        tar.wait()
+        if up.returncode != 0:
+            log(f'gagal_kirim:{up.stderr.strip()[:200]}')
+            return 1
+        skrip = (f'MP_DIR={shlex.quote(remote)} MP_DATA={shlex.quote(json.dumps(data, ensure_ascii=False))} '
+                 f'wp eval-file {shlex.quote(remote + "/skrip.php")} --user=1 2>&1 | grep -v "^Warning:" || true\n'
+                 f'rm -rf {shlex.quote(remote)}\nwp cache flush >/dev/null 2>&1 || true\n')
+        _, keluaran = jalankan(cfg, skrip)
+        return 0 if re.search(r'^(selesai|dilewati):', keluaran, re.M) else 1
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    mode = '--plugin' if '--plugin' in sys.argv else '--beranda' if '--beranda' in sys.argv else ''
+    if not mode or len(args) != 1:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    if not marketplace_biasa(cfg.get('paket', '')):
+        log(f'dilewati:bukan_marketplace_biasa:{cfg.get("paket", "")}')
+        return 0
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain) or not re.match(r'^[a-z][a-z0-9]*$', cfg.get('da_user', '')):
+        log('manifest_tidak_valid')
+        return 2
+    # Situs yang sudah ter-deploy tidak diubah tanpa persetujuan (aturan user 2026-09-23).
+    if '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    return plugin(cfg) if mode == '--plugin' else beranda(cfg)
+
+
+if __name__ == '__main__':
+    kode = 1
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

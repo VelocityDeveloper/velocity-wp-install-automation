@@ -55,8 +55,8 @@ def main():
         print('usage: vd-store-settings <manifest>')
         return 2
     cfg = manifest(sys.argv[1])
-    paket = re.sub(r'\s+', '', cfg.get('paket', '').lower())
-    if 'tokoonline' not in paket:
+    from paket_toko import pakai_vd_store
+    if not pakai_vd_store(cfg.get('paket', ''), cfg.get('domain', '').lower()):
         print('vd_store_settings: dilewati:paket_bukan_toko_online')
         return 0
     domain = cfg.get('domain', '').lower()

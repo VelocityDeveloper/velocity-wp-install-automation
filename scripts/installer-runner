@@ -121,6 +121,10 @@ pasang_vd_store() {
   /usr/bin/python3 "$SCRIPTS/vd-store" "$MANIFEST" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] VD Store settings (sesudah plugin/API)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/vd-store-settings" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Paket Marketplace Biasa (permintaan user 2026-10-04): VD Marketplace di atas VD Store. Paket lain &
+  # situs yang sudah ter-deploy dilewati skripnya sendiri.
+  echo "[$(date -Is)] VD Marketplace" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/marketplace-biasa" --plugin "$MANIFEST" >> "$LOG" 2>&1 || true
 }
 portal_berita() {
   grep -q '"jenis": *"berita"' "/var/lib/velocity/ai/generated/$DOMAIN-tema.json" 2>/dev/null
@@ -243,6 +247,9 @@ tampilan_klasik() {
   # VD Gallery & banner terbaca (mysahabatwisata.com 2026-10-01); tema lain dilewati skripnya sendiri.
   # Satu simpul bagan dengan Paket tour (web/installer/alur.js).
   /usr/bin/python3 "$SCRIPTS/listing-property" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Paket Marketplace Biasa (2026-10-04): beranda velocity-marketplace-child (template, slider, kategori,
+  # Tentang Kami, menu Produk, batas logo) — sesudah produk & menu form. Satu simpul bagan dengan Paket tour.
+  /usr/bin/python3 "$SCRIPTS/marketplace-biasa" --beranda "$MANIFEST" >> "$LOG" 2>&1 || true
   # Portal berita biasa ikut (mulawarmantv.com 2026-09-18: dulu dilewati, semua artikel tampil
   # sebagai kotak placeholder). paket-g-foto memilih mode berita sendiri dari jenis isi contoh.
   echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
@@ -448,6 +455,8 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   #   Paket G / Portal Berita Custom -> referensi desain & tema FSE (paket_g_tema)
   #   Toko Online Custom             -> VD Store (plugin + setting) -> referensi desain & tema FSE
   #   Toko Online biasa              -> child theme (saat install) -> VD Store -> konten AI, tanpa FSE
+  #   Marketplace Biasa (2026-10-04) -> child theme (mp1 = velocity-marketplace-child) -> VD Store +
+  #                                     VD Marketplace -> konten AI -> produk -> beranda marketplace
   # vd-store & vd-store-settings melewati sendiri paket yang bukan toko online, jadi di Paket G,
   # Portal Berita Custom & paket biasa non-toko pemanggilannya hanya mencetak "dilewati".
   pasang_vd_store
@@ -472,7 +481,7 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
   echo "[$(date -Is)] Finishing: aset & pengaturan dari data klien" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-finish" "$MANIFEST" >> "$LOG" 2>&1 || true
-  # Toko Online biasa: produk dari folder produk klien (per produk, gambar < 100 KB) ke
+  # Toko Online biasa & Marketplace Biasa: produk dari folder produk klien (per produk, gambar < 100 KB) ke
   # store_product, atau 5 produk contoh bila foldernya tidak ada. Sesudah site-finish supaya
   # logo sudah dipilih (foto logo tidak ikut jadi produk).
   echo "[$(date -Is)] Toko biasa: produk" >> "$LOG"

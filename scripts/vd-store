@@ -6,6 +6,7 @@ Toko Online biasa) wajib memakai VD Store sejak instalasi WordPress.
 
   vd-store <manifest>
 
+Paket Marketplace Biasa baru ikut sejak 2026-10-04 (scripts/paket_toko.py).
 Paket lain dilewati. Paket zip diambil dari API plugin Velocity
 (api.velocitydeveloper.co/api/v1/plugins, slug vd-store) dan disimpan di
 /var/lib/velocity/packages/vd-store-<versi>.zip; kalau API tidak terjangkau,
@@ -40,8 +41,11 @@ def read_manifest(path):
     return cfg
 
 
-def paket_toko_online(paket):
-    return 'tokoonline' in re.sub(r'\s+', '', (paket or '').lower())
+def paket_toko_online(paket, domain=''):
+    # Toko online + Paket Marketplace Biasa baru (scripts/paket_toko.py).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from paket_toko import pakai_vd_store
+    return pakai_vd_store(paket, domain)
 
 
 def zip_valid(path):
@@ -126,7 +130,7 @@ def main():
     cfg = read_manifest(sys.argv[1])
     domain = cfg.get('domain', '').lower()
     da_user = cfg.get('da_user', '')
-    if not paket_toko_online(cfg.get('paket')):
+    if not paket_toko_online(cfg.get('paket'), domain):
         print(f'vd_store: dilewati:paket_bukan_toko_online:{cfg.get("paket", "")}')
         return 0
     if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain) or not re.match(r'^[a-z][a-z0-9]*$', da_user):

@@ -82,6 +82,10 @@ SCAFFOLD_VERSION = '1.1.1'
 # bukan referensi desain di form (keputusan user 2026-09-16). Slug diambil apa
 # adanya dari API tema Velocity, jadi versi barunya ikut tanpa mengubah kode.
 PAKET_SLUG = {'pakete': 'velocity-pakete'}
+# Demo yang subdomainnya tidak sama dengan nama tema, jadi tidak tertangkap theme_keys():
+# mp1.velocitydeveloper.com = velocity-marketplace-child (Theme URI di style.css-nya; permintaan
+# user 2026-10-04, ghaffara.com sempat jatuh ke tema induk). Hanya instalasi baru.
+REF_SLUG = {'mp1': 'velocity-marketplace-child'}
 # Kerangka desain Paket G: berkas tema lengkap dengan placeholder {{KUNCI}}.
 TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
 PREFIX_RE = re.compile(r'^[a-z][a-z0-9]{1,11}$')
@@ -1171,7 +1175,12 @@ def main():
                 out['error'] = 'referensi_tanpa_child_theme'
             return emit()
     else:
-        match = next((t for t in children if norm(out['ref']) in theme_keys(t)), None)
+        alias = REF_SLUG.get(out['ref'], '')
+        if alias and sudah_terpasang(domain):
+            out['error'] = f'{alias}_dilewati:sudah_terpasang'
+            alias = ''
+        match = (next((t for t in children if t['slug'] == alias), None) if alias
+                 else next((t for t in children if norm(out['ref']) in theme_keys(t)), None))
     if not match:
         # Belum terdaftar di API tema tapi repo rilisnya ada di GitHub VelocityDeveloper.
         calon = slug_diminta or ('velocity-' + norm(out['ref']) if out.get('ref') else '')
