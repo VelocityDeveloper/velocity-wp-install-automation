@@ -66,7 +66,8 @@ PENANDA = {
 }
 PENANDA_ITEM = {
     'layanan': {'l.judul': 'judul layanan', 'l.teks': 'penjelasan layanan', 'l.teks_pendek': 'penjelasan <= 110 karakter',
-                'l.rincian': 'rincian layanan dipisah koma', 'l.link': 'tautan ke bagian layanan itu'},
+                'l.rincian': 'rincian layanan dipisah koma', 'l.link': 'tautan ke bagian layanan itu',
+                'l.ikon': 'nama Bootstrap Icons sesuai layanan (mis. bar-chart-line-fill) untuk field ikon'},
     'keunggulan': {'k.judul': 'judul keunggulan', 'k.teks': 'penjelasan keunggulan'},
     'galeri': {'g.judul': 'keterangan foto'},
     'klien': {'c.judul': 'nama klien/mitra (teks alt logo)'},

@@ -442,6 +442,62 @@ def kartu_beranda(layanan):
 # semua isi repeater: 5 layanan = 5 kartu; user 2026-10-02, marsealtic.com). Hanya instalasi baru.
 LAYANAN_BERANDA_MAKS = {'velocity-perusahaan1': 3}
 
+# Ikon kartu layanan menurut kata di judul/teks layanan (user 2026-10-05, marsealtic.com: semua kartu
+# perusahaan1 berikon koper). Nama = Bootstrap Icons 1.11.3; urutan menentukan, yang pertama cocok menang.
+IKON_LAYANAN = (
+    (r'riset|penelitian|metodologi|survei|survey|kajian|studi', 'journal-bookmark-fill'),
+    (r'analisi|analitik|analytic|data|statistik|laporan|grafik', 'bar-chart-line-fill'),
+    (r'wisata|tour|travel|perjalanan|objek|destinasi|lokasi', 'geo-alt-fill'),
+    (r'hotel|penginapan|villa|resort|homestay|kamar', 'building-fill'),
+    (r'kuliner|makan|restoran|resto|catering|katering|kafe|cafe|kopi|minum', 'cup-hot-fill'),
+    (r'promosi|pemasaran|marketing|iklan|branding|kampanye|digital', 'megaphone-fill'),
+    (r'konsultasi|konsultan|pendampingan|advis|coaching|mentor', 'chat-dots-fill'),
+    (r'hukum|advokat|pengacara|legal|notaris|perizinan|izin', 'bank2'),
+    (r'pelatihan|training|kursus|kelas|pendidikan|sekolah|les|bimbel|edukasi', 'mortarboard-fill'),
+    (r'kesehatan|klinik|medis|dokter|perawat|apotek|terapi|gigi', 'heart-pulse-fill'),
+    (r'kecantikan|salon|spa|kosmetik|rias|make ?up|skincare', 'stars'),
+    (r'bangun|konstruksi|kontraktor|renovasi|arsitek|interior|sipil', 'bricks'),
+    (r'mobil|rental|sewa kendaraan|otomotif|bengkel|motor', 'car-front-fill'),
+    (r'kirim|ekspedisi|logistik|kurir|cargo|kargo|pengiriman|angkut', 'truck'),
+    (r'web|website|aplikasi|software|it\b|teknologi|sistem|jaringan|komputer', 'laptop'),
+    (r'desain|design|grafis|kreatif|foto|video|percetakan|cetak|sablon', 'palette-fill'),
+    (r'keuangan|akuntan|pajak|pembukuan|audit|investasi|asuransi|finansial', 'cash-coin'),
+    (r'properti|rumah|tanah|apartemen|perumahan', 'house-door-fill'),
+    (r'listrik|elektrik|instalasi|teknisi|servis|service|perbaikan|maintenance', 'tools'),
+    (r'kebersihan|cleaning|laundry|cuci', 'droplet-fill'),
+    (r'keamanan|security|satpam|cctv|pengamanan', 'shield-lock-fill'),
+    (r'acara|event|wedding|pernikahan|organizer|dekorasi', 'calendar-event-fill'),
+    (r'pertanian|tani|perkebunan|peternakan|perikanan|pupuk|bibit', 'tree-fill'),
+    (r'produk|toko|jual|distribusi|supplier|grosir|barang', 'box-seam-fill'),
+)
+IKON_BAWAAN = 'briefcase-fill'
+
+
+def ikon_layanan(layanan):
+    """Nama Bootstrap Icons untuk satu layanan: judul diperiksa dulu, lalu teksnya."""
+    for teks in (layanan.get('judul') or '', layanan.get('teks') or ''):
+        for pola, ikon in IKON_LAYANAN:
+            if re.search(pola, teks, re.I):
+                return ikon
+    return IKON_BAWAAN
+
+
+def ikon_per_layanan(mods, layanan):
+    """Repeater layanan yang ikonnya sama untuk semua butir (adaptor perusahaan1 menulis
+    "velocity_icon": "briefcase-fill" tetap) diisi ikon menurut layanan masing-masing."""
+    for nilai in mods.values():
+        if not (isinstance(nilai, list) and nilai and len(nilai) == len(layanan)
+                and all(isinstance(x, dict) for x in nilai)):
+            continue
+        if not any(x.get(k) == l['judul'] for x, l in zip(nilai, layanan) for k in x):
+            continue
+        for kunci in {k for x in nilai for k in x if re.search(r'icon|ikon', k, re.I)}:
+            isi = [x.get(kunci) for x in nilai]
+            if len(set(isi)) == 1 and isinstance(isi[0], str) and re.fullmatch(r'(bi[- ])*[a-z0-9-]+', isi[0]):
+                awalan = re.match(r'(bi[- ])*', isi[0]).group(0)
+                for x, l in zip(nilai, layanan):
+                    x[kunci] = awalan + l['ikon']
+
 
 def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
     nama = cfg.get('site_title') or domain
@@ -1471,6 +1527,7 @@ def konteks_adaptor(cfg, domain, isi, kontak, galeri=0, klien=()):
         'daftar': {
             'layanan': [{'slug': l['slug'], 'judul': l['judul'], 'teks': l.get('teks') or '',
                          'teks_pendek': pendek(l.get('teks'), 110), 'rincian': ', '.join(l.get('rincian') or []),
+                         'ikon': ikon_layanan(l),
                          'link': f"/layanan/#{l['slug']}"} for l in kartu_beranda([l for l in isi.get('layanan') or [] if l.get('judul')])],
             'keunggulan': [{'judul': k['judul'], 'teks': k.get('teks') or ''}
                            for k in isi.get('keunggulan') or [] if k.get('judul')],
@@ -1650,6 +1707,8 @@ def main():
         if catatan_ai:
             ad = catatan_ai['adaptor']
             data['mods'][tema] = at.isi_nilai(ad['mods'], ctx)
+            if not SITUS_LAMA:
+                ikon_per_layanan(data['mods'][tema], ctx['daftar']['layanan'])
             data['bawaan'][tema] = ad.get('bawaan') or {}
             data['template'][tema] = ad.get('template') or ''
             data['cadangan'] = True
