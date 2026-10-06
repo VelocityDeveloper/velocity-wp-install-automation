@@ -763,24 +763,48 @@ def unduh(url, tujuan):
     tujuan.write_bytes(data)
 
 
+def kecilkan_jpeg(berkas, lebar=1200, maks=100 * 1024):
+    """Foto artikel <= 100 KB, sisi lebar 1200 px (user 2026-10-02 media maks 100 KB; Pexels 1880 px
+    200-325 KB di cybernasional24.com 2026-10-06). Ukuran turunan WordPress ikut kecil."""
+    import io
+    from PIL import Image
+    im = Image.open(berkas).convert('RGB')
+    if im.width > lebar:
+        im = im.resize((lebar, round(im.height * lebar / im.width)), Image.LANCZOS)
+    for q in range(82, 38, -4):
+        b = io.BytesIO()
+        im.save(b, 'JPEG', quality=q, optimize=True, progressive=True)
+        if b.tell() <= maks:
+            break
+    Path(berkas).write_bytes(b.getvalue())
+
+
 CADANGAN_RUBRIK = {
     'ekonomi': 'market trade money', 'bisnis': 'market trade money', 'kriminal': 'police car night',
     'hukum': 'courthouse law justice', 'pendidikan': 'school classroom books', 'teknologi': 'computer technology circuit',
     'hiburan': 'concert stage lights', 'olahraga': 'football stadium', 'kesehatan': 'hospital medicine',
     'politik': 'parliament building', 'wisata': 'tropical beach travel', 'daerah': 'city street aerial',
+    # cybernasional24.com 2026-10-06: artikel Sosial tanpa cadangan jatuh ke sampul "Ilustrasi Artikel".
+    'sosial': 'community park neighborhood', 'nasional': 'jakarta city skyline', 'internasional': 'world map globe',
+    'lingkungan': 'green forest river', 'budaya': 'traditional batik culture', 'peristiwa': 'city street traffic',
+    'otomotif': 'car road highway', 'gaya hidup': 'coffee lifestyle table', 'opini': 'newspaper coffee desk',
 }
 
 
-def pilih_foto_berita_ai(ai, judul, calon):
+def pilih_foto_berita_ai(ai, judul, calon, longgar=False):
     """AI memilih foto ilustrasi. -> foto, False (tidak ada yang layak), atau None (AI gagal).
 
     Saringan judul/tag tidak cukup: "ABOUT TESFAYE TSTAPP CANADA" (potret orang) dan
-    gambar kutipan "Labor automation..." lolos sebagai foto artikel."""
+    gambar kutipan "Labor automation..." lolos sebagai foto artikel.
+    longgar: putaran kedua bila putaran ketat tak menemukan apa pun (topik pendidikan/kesehatan
+    mental hampir selalu ada orangnya) — orang boleh tampak asal bukan potret wajah close-up."""
     modul, model = ai
     daftar = [{'i': i, 'judul': str(r.get('title') or '')[:90],
                'tag': [str(t.get('name') or '') for t in (r.get('tags') or [])][:8]} for i, r in enumerate(calon)]
+    orang = ('Orang boleh tampak (dari belakang, dari jauh, tangan, kelompok/suasana) asal BUKAN potret wajah '
+             'close-up' if longgar else 'BUKAN potret atau wajah orang')
     teks = ('Pilih satu foto ilustrasi untuk artikel portal berita berjudul "' + judul + '". Syarat: benda, tempat, '
-            'atau suasana yang sesuai topik. BUKAN potret atau wajah orang, BUKAN foto arsip lama/hitam-putih, BUKAN '
+            'atau suasana yang sesuai topik. ' + orang + ', BUKAN foto arsip lama/hitam-putih, BUKAN '
             'tempat ibadah atau pameran/fashion kecuali topiknya memang itu, BUKAN gambar berisi kutipan/poster/banyak '
             'teks, BUKAN foto tokoh atau peristiwa tertentu. Jawab JSON {"i": <indeks>} atau {"i": -1} bila tidak '
             'ada yang layak.\n\n' + json.dumps(daftar, ensure_ascii=False))
@@ -863,14 +887,15 @@ def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
         # "clinic interior, healthcare technology, ..." dicari per frasa: seluruh daftar sebagai
         # satu kueri (semua kata wajib ada) hampir selalu kosong di bank foto.
         frasa = [f.strip() for f in kunci.get(a['id'], '').split(',') if f.strip()][:4]
-        for q in frasa + [cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])]:
-            if not q:
-                continue
+        antrean = [q for q in frasa + [cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])] if q]
+        # Putaran longgar (orang boleh tampak) bila putaran ketat kosong: dulu artikel itu jatuh ke
+        # sampul "Ilustrasi Artikel" (user 2026-10-06, cybernasional24.com: "jangan cuma Ilustrasi Artikel").
+        for longgar, q in [(False, q) for q in antrean] + [(True, q) for q in antrean if ai]:
             saring = lambda daftar: [r for r in daftar if layak(r, 1000, sudah, q)
                                      and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
             # Pexels dulu; bank foto CC0 hanya bila Pexels tidak memberi kandidat layak.
             calon = saring(px.cari(q)) or saring(ov.cari(q))
-            pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8]) if ai and calon else None
+            pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8], longgar) if ai and calon else None
             if pilihan is False:
                 continue  # AI menilai tidak ada yang layak: coba kata kunci berikutnya
             if pilihan is None:
@@ -898,10 +923,10 @@ def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
     with tempfile.TemporaryDirectory() as tmp:
         siap = []
         for a, pilihan, q in rencana:
-            ekstensi = Path(urllib.parse.urlparse(pilihan['url']).path).suffix.lower()
-            nama = f"berita-{a['id']}{ekstensi if ekstensi in ('.jpg', '.jpeg', '.png', '.webp') else '.jpg'}"
+            nama = f"berita-{a['id']}.jpg"  # selalu JPEG terkompres (kecilkan_jpeg)
             try:
                 unduh(pilihan['url'], Path(tmp) / nama)
+                kecilkan_jpeg(Path(tmp) / nama)
                 siap.append((a, pilihan, q, nama))
             except Exception as e:
                 print(f"foto: {a['id']} gagal diunduh ({type(e).__name__})")

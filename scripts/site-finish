@@ -186,6 +186,22 @@ def seo_dasar(domain, title, tagline):
         if k and k.lower() not in (x.lower() for x in kata):
             kata.append(k)
     keywords = ', '.join(kata[:8]) if len(kata) > 1 else ''
+    if tema.get('jenis') == 'berita':
+        # Portal berita (user 2026-10-06, cybernasional24.com "isi seo"): judul = nama domain saja dan
+        # keywords kosong (tanpa layanan/produk). Judul + deskripsi + keywords dari rubrik berita.
+        nama = re.sub(r'\s+', ' ', str(tema.get('nama_tampil') or judul)).strip() or judul
+        rubrik = [re.sub(r'\s+', ' ', str(r.get('judul') or '')).strip() for r in (tema.get('rubrik') or [])
+                  if isinstance(r, dict) and r.get('judul')]
+        title = f'{nama} - Berita {rubrik[0]} Terkini' if rubrik else f'{nama} - Portal Berita Terkini'
+        if rubrik:
+            daftar = ', '.join(x.lower() for x in rubrik[:-1]) + (' dan ' if len(rubrik) > 1 else '') + rubrik[-1].lower()
+            desc = f'{nama} menyajikan berita {daftar} terkini secara akurat, berimbang, dan terpercaya.'
+        kata = []
+        dasar = domain.split('.')[0].lower()
+        for k in [dasar, domain.lower(), 'berita terkini'] + [f'berita {r.lower()}' for r in rubrik] + ['portal berita']:
+            if k not in kata:
+                kata.append(k)
+        return {'title': title, 'desc': potong_kalimat(desc, 160), 'keywords': ', '.join(kata[:14])}
     return {'title': judul, 'desc': potong_kalimat(desc, 160), 'keywords': keywords}
 
 

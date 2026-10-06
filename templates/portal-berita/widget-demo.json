@@ -1,5 +1,5 @@
 {
- "_keterangan": "Widget tema berita klasik seperti demo <tema>.velocitydeveloper.com, dipasang scripts/theme-paket-biasa untuk situs berita baru (beranda = tulisan terbaru). areas: id area widget -> item berurutan. jenis: iklan (banner Ruang Iklan seukuran), logo, tentang, statistik, text (judul/isi), widget/core (base = id_base, opsi = instance). kategori_ke N = kategori klien ke-N terbanyak artikelnya; {kat_id} {kat_slug} {kat_nama} diganti kategori itu; item dilewati bila kategorinya tidak ada. lewati: true = ada di demo tetapi tidak dipasang (Meta/Log in, embed Facebook demo, menu demo). Dibaca dari demo 2026-09-30.",
+ "_keterangan": "Widget tema berita klasik seperti demo <tema>.velocitydeveloper.com, dipasang scripts/theme-paket-biasa untuk situs berita baru (beranda = tulisan terbaru). areas: id area widget -> item berurutan. jenis: iklan (banner Ruang Iklan seukuran), logo, tentang, statistik, text (judul/isi), widget/core (base = id_base, opsi = instance). kategori_ke N = kategori klien ke-N terbanyak artikelnya, \"domain\" = kategori yang namanya ada di nama domain (cybernasional24.com -> Nasional), tanpa kecocokan kategori ke-1; {kat_id} {kat_slug} {kat_nama} diganti kategori itu; item dilewati bila kategorinya tidak ada. lewati: true = ada di demo tetapi tidak dipasang (Meta/Log in, embed Facebook demo, menu demo). Dibaca dari demo 2026-09-30.",
  "velocity-berita-8": {
   "slug": "velocity-berita-8",
   "demo": "https://berita8.velocitydeveloper.com/",
@@ -1048,7 +1048,7 @@
      "jenis": "widget",
      "base": "velocity_posts_widget",
      "opsi": {
-      "title": "{kat_nama}",
+      "title": "Terbaru",
       "layout": "gallery",
       "kategori": "",
       "jumlah": "4",
@@ -1057,10 +1057,7 @@
       "order": "DESC",
       "viewers": "tidak",
       "viewdate": "ya"
-     },
-     "kategori_ke": 1,
-     "kunci_kategori": "kategori",
-     "format_kategori": "id"
+     }
     },
     {
      "jenis": "iklan",
@@ -1077,7 +1074,7 @@
       "kutipan": "",
       "orderby": "view",
       "order": "DESC",
-      "viewers": "tidak",
+      "viewers": "ya",
       "viewdate": "ya"
      }
     },
@@ -1095,7 +1092,7 @@
       "viewers": "tidak",
       "viewdate": "ya"
      },
-     "kategori_ke": 2,
+     "kategori_ke": "domain",
      "kunci_kategori": "kategori",
      "format_kategori": "id"
     },
@@ -1133,7 +1130,7 @@
     }
    ]
   },
-  "catatan": "Susunan lama theme-paket-biasa (sidoarjopos.id, 30 Sep)."
+  "catatan": "Susunan lama theme-paket-biasa (sidoarjopos.id, 30 Sep). Revisi user 2026-10-06 (cybernasional24.com): Terbaru (gallery, semua kategori, 4), Berita Populer (list, 10, populer, views ya), kategori sesuai domain (list, 5)."
  },
  "velocity-beritab2": {
   "slug": "velocity-beritab2",

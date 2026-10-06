@@ -831,6 +831,10 @@ if ($berita_depan) {
         if ($mb) {
             $lokasi['primary'] = $mb; set_theme_mod('nav_menu_locations', $lokasi);
             $st['berita_menu'] = $mb;
+            // Menu baku installer yang digantikan tidak dipakai lokasi mana pun: dibuang supaya daftar menu bersih.
+            if ($utama_id && $utama_id !== $mb && !in_array($utama_id, array_map('intval', $lokasi), true)) {
+                wp_delete_nav_menu($utama_id); echo "tampilan: berita_menu_lama_dihapus:$utama_id\n";
+            }
             echo 'tampilan: berita_menu:' . count($kat_menu) . "_kategori\n";
         }
     } elseif (!$menu_baku && empty($st['berita_menu'])) { echo "tampilan: berita_menu_dibiarkan:disunting\n"; }
@@ -860,13 +864,21 @@ if ($berita_depan) {
         $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
         $ada_id = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'page'));
         $n = count(wp_get_nav_menu_items($m2) ?: []) + 1; $tambah = [];
-        foreach (['tentang-kami', 'redaksi', 'galeri', 'hubungi-kami', 'pedoman-media-siber', 'kebijakan-privasi', 'privacy-policy'] as $slug) {
+        // Tentang Kami, Redaksi, Pedoman Media Siber + 4 kategori pokok (terbanyak artikel = urutan form klien);
+        // dulu Galeri, Hubungi Kami, Kebijakan Privasi (user 2026-10-06, cybernasional24.com).
+        foreach (['tentang-kami', 'redaksi', 'pedoman-media-siber'] as $slug) {
             $p = get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]);
             if (!$p || in_array($p[0]->ID, $ada_id, true)) { continue; }
-            if ($slug === 'privacy-policy' && get_posts(['post_type' => 'page', 'name' => 'kebijakan-privasi', 'post_status' => 'publish', 'numberposts' => 1])) { continue; }
             wp_update_nav_menu_item($m2, 0, ['menu-item-object-id' => $p[0]->ID, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type',
                 'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
             $ada_id[] = $p[0]->ID; $tambah[] = $slug;
+        }
+        $ada_kat = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'category'));
+        foreach (array_slice($kategori, 0, 4) as $k) {
+            if (in_array((int) $k->term_id, $ada_kat, true)) { continue; }
+            wp_update_nav_menu_item($m2, 0, ['menu-item-title' => $k->name, 'menu-item-object-id' => $k->term_id, 'menu-item-object' => 'category',
+                'menu-item-type' => 'taxonomy', 'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
+            $tambah[] = $k->slug;
         }
         $lokasi[$lok2] = $m2; set_theme_mod('nav_menu_locations', $lokasi);
         echo "tampilan: berita_menu_sekunder:$lok2" . ($tambah ? ':' . implode(',', $tambah) : '') . "\n";
@@ -1079,7 +1091,16 @@ if ($demo_w) {
     $demo_item = function ($it) use ($kat_w, $logo, $base_ada, $W, $iklan_w, $teks_w, $buat_html, $buat_lain, &$rp, &$sr) {
         // Widget berkategori (kategori ke-N) dilewati bila klien punya kategori lebih sedikit.
         $k = null;
-        if (!empty($it['kategori_ke']) && !($k = $kat_w[(int) $it['kategori_ke'] - 1] ?? null)) { return null; }
+        if (($it['kategori_ke'] ?? '') === 'domain') {
+            // Kategori yang namanya ada di nama domain (cybernasional24.com -> Nasional, user 2026-10-06);
+            // nama terpanjang menang, tanpa kecocokan kategori ke-1.
+            $dom = preg_replace('/[^a-z0-9]/', '', strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST)));
+            foreach ($kat_w as $c) {
+                $s = preg_replace('/[^a-z0-9]/', '', strtolower($c->slug));
+                if ($s !== '' && strpos($dom, $s) !== false && (!$k || strlen($s) > strlen($k->slug))) { $k = $c; }
+            }
+            if (!($k = $k ?: ($kat_w[0] ?? null))) { return null; }
+        } elseif (!empty($it['kategori_ke']) && !($k = $kat_w[(int) $it['kategori_ke'] - 1] ?? null)) { return null; }
         $isi = fn($s) => is_string($s) && $k ? strtr($s, ['{kat_id}' => $k->term_id, '{kat_slug}' => $k->slug, '{kat_nama}' => $k->name]) : $s;
         $opsi = array_map($isi, (array) ($it['opsi'] ?? []));
         switch ($it['jenis'] ?? '') {
@@ -1232,7 +1253,8 @@ if ($baru !== trim($css)) { wp_update_custom_css_post($baru, ['stylesheet' => $t
 // 6c. Header Image (user 2026-10-01, bintanglasjayakontruksi.com): tema klasik Velocity menampilkan judul
 // halaman dalam di banner get_header_image(); kosong = halaman dalam tanpa banner & judul. Diisi foto
 // banner beranda sekali; kalau orang menggantinya sesudah itu, dibiarkan.
-if (!empty($d['situs_baru']) && empty($st['header_image']) && current_theme_supports('custom-header')
+// Portal berita tidak diisi (user 2026-10-06, cybernasional24.com: "Current header tidak usah di isi").
+if (!empty($d['situs_baru']) && empty($d['berita']) && empty($st['header_image']) && current_theme_supports('custom-header')
     && !get_header_image() && !empty($media['hero'])) {
     $hid = (int) $media['hero']; $hurl = (string) wp_get_attachment_url($hid); $hm = wp_get_attachment_metadata($hid) ?: [];
     if ($hurl !== '') {
@@ -1824,10 +1846,19 @@ def main():
     # diunggah sekali: wisesayasatidar.com (Paket E, 2026-09-18) mendapat 16 lampiran dari
     # 7 foto klien, padahal velocity-pakete hanya memakai hero, tentang, dan gambar layanan.
     # Tema yang tidak terbaca: semua adaptor dipindai, karena server memilih mods dari tema aktifnya.
+    if data['berita'] and data.get('berita_iklan'):
+        # Slot iklan diisi banner "Ruang Iklan": rujukan adaptor ke foto (beritab1 banner_home1/2 =
+        # hero/foto1) dibuang, kalau tidak foto itu diunggah tanpa pernah tampil (cybernasional24.com
+        # 2026-10-06, "Foto <domain>" yatim di Media).
+        for m in [data['mods'], data['bawaan']]:
+            for isi_mods in ([m.get(tema)] if tema in m else list(m.values())):
+                if isinstance(isi_mods, dict):
+                    for k in data['berita_iklan']:
+                        isi_mods.pop(k, None)
     rujukan = json.dumps([data['mods'].get(tema), data['bawaan'].get(tema)] if tema in data['mods']
                          else [data['mods'], data['bawaan']], ensure_ascii=False)
     dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan)) | set(iklan)
-    if data['situs_baru']:
+    if data['situs_baru'] and not data['berita']:
         dipakai.add('hero')  # Header Image tema (banner halaman dalam), lihat langkah 6c PHP
     data['aset'], per_md5 = {}, {}
     for k, p in aset.items():
