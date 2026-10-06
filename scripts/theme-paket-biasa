@@ -1254,8 +1254,18 @@ if ($baru !== trim($css)) { wp_update_custom_css_post($baru, ['stylesheet' => $t
 // halaman dalam di banner get_header_image(); kosong = halaman dalam tanpa banner & judul. Diisi foto
 // banner beranda sekali; kalau orang menggantinya sesudah itu, dibiarkan.
 // Portal berita tidak diisi (user 2026-10-06, cybernasional24.com: "Current header tidak usah di isi").
-if (!empty($d['situs_baru']) && empty($d['berita']) && empty($st['header_image']) && current_theme_supports('custom-header')
-    && !get_header_image() && !empty($media['hero'])) {
+// Tema anak yang membuang seksi Customizer header_image juga tidak diisi (user 2026-10-06, oklaundryexpress.com):
+// perusahaan2/property2 memakainya sebagai gambar di atas menu (tidak ada di demo) dan tak bisa dihapus dari wp-admin.
+$header_disembunyikan = false;
+foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(get_stylesheet_directory(), FilesystemIterator::SKIP_DOTS)) as $berkas) {
+    if ($berkas->getExtension() === 'php'
+        && preg_match('#remove_section\(\s*[\'"]header_image[\'"]#', (string) file_get_contents($berkas->getPathname()))) {
+        $header_disembunyikan = true; break;
+    }
+}
+if ($header_disembunyikan && !empty($d['situs_baru']) && empty($st['header_image'])) echo "tampilan: header_image:dilewati:seksi_disembunyikan_tema\n";
+if (!empty($d['situs_baru']) && empty($d['berita']) && empty($st['header_image']) && !$header_disembunyikan
+    && current_theme_supports('custom-header') && !get_header_image() && !empty($media['hero'])) {
     $hid = (int) $media['hero']; $hurl = (string) wp_get_attachment_url($hid); $hm = wp_get_attachment_metadata($hid) ?: [];
     if ($hurl !== '') {
         set_theme_mod('header_image', $hurl);
