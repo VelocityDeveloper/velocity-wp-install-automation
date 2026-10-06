@@ -1326,6 +1326,17 @@ try {
     }
 } catch (Throwable $t) { echo 'slot_iklan_gagal: ' . $t->getMessage() . "\n"; }
 echo 'slot_iklan: ' . wp_json_encode($slot) . "\n";
+// Warna utama tema aktif (primary_color Velocity: velocitytheme_option = theme_mod atau bawaan tema),
+// lalu kontrol warna Customizer bernama primary/utama/tema (tema berita Kirki) beserta bawaannya.
+$warna = sanitize_hex_color((string) (function_exists('velocitytheme_option') ? velocitytheme_option('primary_color', '') : get_theme_mod('primary_color', '')));
+if (!$warna && isset($wpc)) {
+    foreach ($wpc->controls() as $c) {
+        if (!is_object($c->setting) || !preg_match('/colou?r/i', (string) $c->type . ' ' . get_class($c))
+            || !preg_match('/primary|utama|color_?theme|theme_?colou?r|warna_?tema/i', $c->setting->id)) { continue; }
+        if ($warna = sanitize_hex_color((string) get_theme_mod($c->setting->id, $c->setting->default))) { break; }
+    }
+}
+echo 'warna_tema: ' . ($warna ?: '-') . "\n";
 '''
 
 
@@ -1367,16 +1378,19 @@ echo 'foto_artikel: ' . $isi . '/' . count($kosong) . " diisi\n";
 
 
 def slot_iklan(cfg, domain):
-    """{setting: {'ukuran': 'WxH', 'simpan': 'url'|'id'}} slot gambar iklan tema aktif, dibaca dari
-    Customizer situs (ukuran dari keterangan kontrol tema, mis. "Iklan Header 728x90")."""
+    """({setting: {'ukuran': 'WxH', 'simpan': 'url'|'id'}}, warna_tema) slot gambar iklan tema aktif, dibaca
+    dari Customizer situs (ukuran dari keterangan kontrol tema, mis. "Iklan Header 728x90"), dan warna
+    utama tema (#rrggbb atau '')."""
     kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-slot-{domain}-'))
     SEMENTARA.append(kerja)
     keluar = kirim(cfg, kerja, SLOT_IKLAN_PHP, domain) or ''
     m = re.search(r'^slot_iklan: (\{.*\}|\[\])\s*$', keluar, re.M)
+    w = re.search(r'^warna_tema: (#[0-9a-fA-F]{6})\s*$', keluar, re.M)
     try:
-        return (json.loads(m.group(1)) or {}) if m else {}
+        slot = (json.loads(m.group(1)) or {}) if m else {}
     except ValueError:
-        return {}
+        slot = {}
+    return slot, (w.group(1) if w else '')
 
 
 def kirim(cfg, kerja, php, domain):
@@ -1827,7 +1841,11 @@ def main():
         data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
     if data['berita'] and not coba:
         # Banner "Ruang Iklan" untuk setiap ukuran slot iklan tema berita aktif.
-        data['berita_iklan'] = slot_iklan(cfg, domain)
+        data['berita_iklan'], warna_tema = slot_iklan(cfg, domain)
+        # Banner Ruang Iklan berwarna utama tema situs (user 2026-10-06, cybernasional24.com); dulu warna
+        # form klien saja, kosong -> navy bawaan yang tidak sama dengan tema.
+        warna_banner = warna_tema or (isi.get('warna') or {}).get('utama')
+        print(f"tampilan: warna_banner={warna_banner or 'bawaan'}:{'tema' if warna_tema else 'form' if warna_banner else '-'}")
         ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}
         data['widget_demo'] = widget_demo(tema)
         ukuran |= {i['ukuran'] for daftar in data['widget_demo'].values() for i in daftar if i.get('jenis') == 'iklan'}
@@ -1836,7 +1854,7 @@ def main():
         for u in sorted(ukuran):
             w, h = (int(x) for x in u.split('x'))
             kunci = f'iklan-{u}'
-            aset[kunci] = banner_iklan(w, h, data['nama'], (isi.get('warna') or {}).get('utama'),
+            aset[kunci] = banner_iklan(w, h, data['nama'], warna_banner,
                                        kontak['email'] or (f"WA {kontak['wa_tampil']}" if kontak['wa_tampil'] else ''),
                                        kerja / f'{kunci}.jpg')
             judul[kunci] = f"Ruang iklan {u} {data['nama']}"
