@@ -36,12 +36,13 @@ const labelBuka = (p) => p.url ? p.url : `${location.hostname}:${p.port}`
 const totalMemori = (p) => p.layanan.reduce((n, l) => n + (l.memori || 0), 0)
 const sejak = (p) => Math.min(...p.layanan.map((l) => l.sejak || Infinity))
 
-// Akun uji: disimpan di /etc/velocity/secrets/local-projects-login.json (bukan repo), sunting lewat dialog.
-const alamatLogin = (p) => {
-  const dasar = alamatBuka(p)
-  const path = p.login?.path || ''
-  return path ? dasar.replace(/\/$/, '') + path : dasar
-}
+// Akun uji (+ akun produksi bila project punya alamat produksi): disimpan di
+// /etc/velocity/secrets/local-projects-login.json (bukan repo), sunting lewat dialog.
+const gabungUrl = (dasar, path) => path ? dasar.replace(/\/$/, '') + path : dasar
+const daftarLogin = (p) => [
+  { kunci: 'uji', judul: 'Login uji', alamat: gabungUrl(alamatBuka(p), p.login?.path || ''), akun: p.login?.akun || [], kosong: 'Belum ada akun uji tersimpan.' },
+  ...(p.produksi ? [{ kunci: 'prod', judul: 'Login produksi', alamat: gabungUrl(p.produksi, p.login?.produksi?.path || ''), akun: p.login?.produksi?.akun || [], kosong: 'Belum ada akun produksi tersimpan.' }] : []),
+]
 const tersalin = ref('')
 async function salin(teks, kunci) {
   try {
@@ -67,17 +68,28 @@ const PESAN = {
   path_harus_diawali_garis_miring: 'Path login harus diawali "/", mis. /login.',
   akun_terlalu_banyak: 'Maksimal 20 akun per project.',
 }
-const edit = reactive({ buka: false, id: '', nama: '', path: '', akun: [], galat: '', proses: false })
+const bagianEdit = (judul, alamat, login) => ({
+  judul, alamat, path: login?.path || '',
+  akun: (login?.akun?.length ? login.akun : [{ peran: 'Admin', user: '', sandi: '' }]).map((a) => ({ ...a })),
+})
+const edit = reactive({ buka: false, id: '', nama: '', bagian: [], galat: '', proses: false })
 function bukaEdit(p) {
   Object.assign(edit, {
-    buka: true, id: p.id, nama: p.nama, path: p.login?.path || '', galat: '', proses: false,
-    akun: (p.login?.akun?.length ? p.login.akun : [{ peran: 'Admin', user: '', sandi: '' }]).map((a) => ({ ...a })),
+    buka: true, id: p.id, nama: p.nama, galat: '', proses: false,
+    bagian: [
+      bagianEdit('Akun uji', 'alamat dev project', p.login),
+      ...(p.produksi ? [bagianEdit('Akun produksi', p.produksi.replace(/^https?:\/\//, ''), p.login?.produksi)] : []),
+    ],
   })
 }
 async function simpanEdit() {
   edit.proses = true
   try {
-    const r = await kirim('/api/projects/login', { id: edit.id, path: edit.path, akun: edit.akun })
+    const [uji, prod] = edit.bagian
+    const r = await kirim('/api/projects/login', {
+      id: edit.id, path: uji.path, akun: uji.akun,
+      ...(prod ? { produksi: { path: prod.path, akun: prod.akun } } : {}),
+    })
     const p = projects.value.find((x) => x.id === edit.id)
     if (p) p.login = r.login
     edit.buka = false
@@ -149,30 +161,30 @@ async function simpanEdit() {
             </dd></div>
           </dl>
 
-          <div class="login">
+          <div v-for="(b, bi) in daftarLogin(p)" :key="b.kunci" class="login">
             <div class="login-kepala">
-              <span class="login-judul"><Ikon nama="kunci" :ukuran="15" /> Login uji</span>
-              <a v-if="p.login?.akun?.length" :href="alamatLogin(p)" target="_blank" rel="noopener" class="tautan-login">{{ alamatLogin(p).replace(/^https?:\/\//, '') }} <Ikon nama="luar" :ukuran="13" /></a>
-              <button type="button" class="tombol garis kecil" @click="bukaEdit(p)">{{ p.login?.akun?.length ? 'Edit' : 'Isi login' }}</button>
+              <span class="login-judul"><Ikon nama="kunci" :ukuran="15" /> {{ b.judul }}</span>
+              <a v-if="b.akun.length" :href="b.alamat" target="_blank" rel="noopener" class="tautan-login">{{ b.alamat.replace(/^https?:\/\//, '') }} <Ikon nama="luar" :ukuran="13" /></a>
+              <button v-if="bi === 0" type="button" class="tombol garis kecil" @click="bukaEdit(p)">{{ p.login?.akun?.length || p.login?.produksi?.akun?.length ? 'Edit' : 'Isi login' }}</button>
             </div>
-            <table v-if="p.login?.akun?.length" class="akun">
+            <table v-if="b.akun.length" class="akun">
               <tbody>
-                <tr v-for="(a, i) in p.login.akun" :key="i">
+                <tr v-for="(a, i) in b.akun" :key="i">
                   <th scope="row">{{ a.peran || '-' }}</th>
                   <td>
-                    <button type="button" class="salin" :title="`Salin ${a.user}`" @click="salin(a.user, `${p.id}-${i}-u`)">
-                      <code>{{ a.user }}</code><Ikon :nama="tersalin === `${p.id}-${i}-u` ? 'centang' : 'salin'" :ukuran="14" />
+                    <button type="button" class="salin" :title="`Salin ${a.user}`" @click="salin(a.user, `${p.id}-${b.kunci}-${i}-u`)">
+                      <code>{{ a.user }}</code><Ikon :nama="tersalin === `${p.id}-${b.kunci}-${i}-u` ? 'centang' : 'salin'" :ukuran="14" />
                     </button>
                   </td>
                   <td>
-                    <button type="button" class="salin" title="Salin kata sandi" @click="salin(a.sandi, `${p.id}-${i}-s`)">
-                      <code>{{ a.sandi }}</code><Ikon :nama="tersalin === `${p.id}-${i}-s` ? 'centang' : 'salin'" :ukuran="14" />
+                    <button type="button" class="salin" title="Salin kata sandi" @click="salin(a.sandi, `${p.id}-${b.kunci}-${i}-s`)">
+                      <code>{{ a.sandi }}</code><Ikon :nama="tersalin === `${p.id}-${b.kunci}-${i}-s` ? 'centang' : 'salin'" :ukuran="14" />
                     </button>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <p v-else class="redup kosong">Belum ada akun uji tersimpan.</p>
+            <p v-else class="redup kosong">{{ b.kosong }}</p>
           </div>
 
           <ul class="layanan" aria-label="Layanan systemd">
@@ -186,18 +198,21 @@ async function simpanEdit() {
       <p class="redup kaki">Tambah atau ubah daftar lewat <code>config/local-projects.json</code> di repo installer; tidak perlu restart.</p>
     </section>
 
-    <Dialog :buka="edit.buka" :judul="`Login uji: ${edit.nama}`" lebar="640px" @tutup="edit.buka = false">
+    <Dialog :buka="edit.buka" :judul="`Login: ${edit.nama}`" lebar="640px" @tutup="edit.buka = false">
       <form class="form-login" @submit.prevent="simpanEdit">
-        <label class="isian"><span>Path halaman login</span><input v-model="edit.path" maxlength="200" placeholder="/login"><small>Ditambahkan ke alamat project. Kosongkan bila login di halaman depan.</small></label>
-        <div class="baris-akun kepala-akun" aria-hidden="true"><span>Peran</span><span>Username / email</span><span>Kata sandi</span><span /></div>
-        <div v-for="(a, i) in edit.akun" :key="i" class="baris-akun">
-          <input v-model="a.peran" maxlength="200" placeholder="Admin" :aria-label="`Peran akun ${i + 1}`">
-          <input v-model="a.user" maxlength="200" placeholder="admin@contoh.test" :aria-label="`Username akun ${i + 1}`">
-          <input v-model="a.sandi" maxlength="200" placeholder="kata sandi" :aria-label="`Kata sandi akun ${i + 1}`">
-          <button type="button" class="tombol bahaya kecil" :aria-label="`Hapus akun ${i + 1}`" @click="edit.akun.splice(i, 1)"><Ikon nama="tutup" :ukuran="14" /></button>
-        </div>
-        <div><button type="button" class="tombol garis kecil" :disabled="edit.akun.length >= 20" @click="edit.akun.push({ peran: '', user: '', sandi: '' })">+ Tambah akun</button></div>
-        <p class="redup">Disimpan di server (/etc/velocity/secrets), bukan di repo. Hanya untuk akun uji/dev, jangan akun produksi.</p>
+        <fieldset v-for="(b, bi) in edit.bagian" :key="bi" class="bagian-login">
+          <legend>{{ b.judul }} <span class="redup">· {{ b.alamat }}</span></legend>
+          <label class="isian"><span>Path halaman login</span><input v-model="b.path" maxlength="200" placeholder="/login"><small>Ditambahkan ke {{ b.alamat }}. Kosongkan bila login di halaman depan.</small></label>
+          <div class="baris-akun kepala-akun" aria-hidden="true"><span>Peran</span><span>Username / email</span><span>Kata sandi</span><span /></div>
+          <div v-for="(a, i) in b.akun" :key="i" class="baris-akun">
+            <input v-model="a.peran" maxlength="200" placeholder="Admin" :aria-label="`${b.judul}: peran akun ${i + 1}`">
+            <input v-model="a.user" maxlength="200" placeholder="admin@contoh.test" :aria-label="`${b.judul}: username akun ${i + 1}`">
+            <input v-model="a.sandi" maxlength="200" placeholder="kata sandi" :aria-label="`${b.judul}: kata sandi akun ${i + 1}`">
+            <button type="button" class="tombol bahaya kecil" :aria-label="`${b.judul}: hapus akun ${i + 1}`" @click="b.akun.splice(i, 1)"><Ikon nama="tutup" :ukuran="14" /></button>
+          </div>
+          <div><button type="button" class="tombol garis kecil" :disabled="b.akun.length >= 20" @click="b.akun.push({ peran: '', user: '', sandi: '' })">+ Tambah akun</button></div>
+        </fieldset>
+        <p class="redup">Disimpan di server (/etc/velocity/secrets), bukan di repo; hanya terbaca dari jaringan kantor / Tailscale.</p>
         <p v-if="edit.galat" class="pesan-status bahaya" role="alert">{{ edit.galat }}</p>
         <div class="aksi-dialog">
           <button type="button" class="tombol garis" @click="edit.buka = false">Batal</button>
@@ -252,6 +267,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .salin:hover { color: var(--aksen-terang); }
 .kosong { margin: 0; }
 .form-login { display: grid; gap: 12px; }
+.bagian-login { display: grid; gap: 10px; margin: 0; min-width: 0; border: 1px solid var(--garis); border-radius: 10px; padding: 10px 12px 12px; }
+.bagian-login legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
 .baris-akun { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .kepala-akun { font-size: 12px; font-weight: 600; color: var(--teks-3); }
 .kaki { margin: 14px 0 0; }

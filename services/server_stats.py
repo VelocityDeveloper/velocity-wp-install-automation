@@ -363,6 +363,23 @@ def projects_login():
         return {}
 
 
+def _bagian_login(bagian):
+    """(path, akun) yang sudah dibersihkan; bila tidak valid: (kode_galat, None)."""
+    path = str(bagian.get('path', '') or '').strip()[:200]
+    if path and not path.startswith('/'):
+        return 'path_harus_diawali_garis_miring', None
+    akun = []
+    for a in bagian.get('akun') or []:
+        if not isinstance(a, dict):
+            return 'akun_tidak_valid', None
+        baris = {k: str(a.get(k, '') or '').strip()[:200] for k in ('peran', 'user', 'sandi')}
+        if baris['user'] or baris['sandi']:
+            akun.append(baris)
+    if len(akun) > 20:
+        return 'akun_terlalu_banyak', None
+    return path, akun
+
+
 def simpan_login(body):
     pid = str(body.get('id', ''))
     try:
@@ -372,20 +389,19 @@ def simpan_login(body):
         ids = set()
     if pid not in ids:
         return 'project_tidak_dikenal'
-    path = str(body.get('path', '') or '').strip()[:200]
-    if path and not path.startswith('/'):
-        return 'path_harus_diawali_garis_miring'
-    akun = []
-    for a in body.get('akun') or []:
-        if not isinstance(a, dict):
-            return 'akun_tidak_valid'
-        baris = {k: str(a.get(k, '') or '').strip()[:200] for k in ('peran', 'user', 'sandi')}
-        if baris['user'] or baris['sandi']:
-            akun.append(baris)
-    if len(akun) > 20:
-        return 'akun_terlalu_banyak'
+    path, akun = _bagian_login(body)
+    if akun is None:
+        return path
+    entri = {'path': path, 'akun': akun}
+    # Akun produksi (opsional): login di alamat "produksi" project, tampil terpisah dari akun uji.
+    if isinstance(body.get('produksi'), dict):
+        path_prod, akun_prod = _bagian_login(body['produksi'])
+        if akun_prod is None:
+            return path_prod
+        if akun_prod:
+            entri['produksi'] = {'path': path_prod, 'akun': akun_prod}
     semua = projects_login()
-    semua[pid] = {'path': path, 'akun': akun}
+    semua[pid] = entri
     sementara = PROJECTS_LOGIN_FILE + '.tmp'
     with open(os.open(sementara, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
         json.dump(semua, f, ensure_ascii=False, indent=2)
