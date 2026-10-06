@@ -172,15 +172,15 @@
           if (/fse_cek: (gagal|tidak bisa)/.test(t)) return 'tidak bisa diperiksa';
           return 'menunggu';
         } },
-      { id: 'childF', kol: 8, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
+      { id: 'childF', kol: 8, jalur: 1, nama: 'Child theme Paket F', ket0: 'referensi form dibaca agen (demo / web luar) lewat API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.f) },
-      { id: 'childToko', kol: 8, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form (demo / web luar) lewat API tema', mulai: CHILD_THEME,
+      { id: 'childToko', kol: 8, jalur: 4, nama: 'Child theme toko', ket0: 'Toko Online Biasa: referensi form dibaca agen (demo / web luar) lewat API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.tokoBiasa) },
       // Paket E: temanya ditentukan paketnya sendiri (velocity-pakete), bukan referensi di form,
       // dan sudah aktif sebelum konten AI ditulis (keputusan user 2026-09-16).
       { id: 'childE', kol: 8, jalur: 2, nama: 'Child theme Paket E', ket0: 'velocity-pakete dari API tema', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.e) },
-      { id: 'childLain', kol: 8, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi (demo / web luar) ada di API', mulai: CHILD_THEME,
+      { id: 'childLain', kol: 8, jalur: 3, nama: 'Tema velocity', ket0: 'child theme bila referensi dari agen baca form (demo / web luar) ada di API', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.custom === null ? null : !(c.custom || c.f || c.e || c.toko || c.landing)) },
       // Landing Page Biasa (keputusan user 2026-09-30): child theme velocity-landing dari repo installer
       // (templates/velocity-landing), induk velocity + velocity-addons; situs yang sudah deploy tetap tema lamanya.

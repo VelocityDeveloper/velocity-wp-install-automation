@@ -154,6 +154,31 @@ def design_ref_web(text):
     return ''
 
 
+def ref_dari_agen(data):
+    """(subdomain demo, URL web luar) pilihan klien menurut agen baca form, atau ('', '').
+
+    Agen (scripts/baca-form-claude) memahami kalimat bebas yang lolos dari pola
+    design_ref/design_ref_web, mis. "Pilihan Desain : Kita pilih seperti desain
+    salmakreasindo.com" (aliyahbamboo.com 2026-10-06: kata "pilih" di nilainya membuat
+    pola melewatinya -> no_ref, situs berhenti di tema induk). Keputusan user
+    2026-10-06: referensi desain dibaca agen; pola hanya cadangan bila agen tidak
+    menemukan apa pun atau form dibaca pola (BACA_FORM_CLAUDE=0 / agen gagal)."""
+    if not isinstance(data, dict):
+        return '', ''
+    m = SUB.search(str(data.get('desain_dipilih') or ''))
+    if m and m.group(1).lower() != 'www':
+        return m.group(1).lower(), ''
+    for r in data.get('referensi_desain') or []:
+        url = str((r or {}).get('url') or '').strip() if isinstance(r, dict) else ''
+        m = SUB.search(url)
+        if m and m.group(1).lower() != 'www':
+            return m.group(1).lower(), ''
+        w = WEB_RE.search(url)
+        if w and '@' not in url:
+            return '', 'https://' + w.group(1).lower() + (w.group(2) or '/')
+    return '', ''
+
+
 def sudah_terpasang(domain):
     """True kalau installer pernah menyelesaikan situs ini (log berisi SUCCESS: COMPLETE).
 
@@ -1128,10 +1153,16 @@ def main():
         out['ref'] = re.sub(r'[^a-z0-9]+', '-', paket.strip().lower()).strip('-')
     ref_web = ''
     if not paket_slug and not override:
-        teks_form = read_client_form(ON_PROGRESS / domain)['text']
-        out['ref'] = design_ref(teks_form)
+        form = read_client_form(ON_PROGRESS / domain)
+        teks_form = form['text']
+        # Hanya instalasi baru: situs ter-deploy tetap memakai hasil pola seperti dulu. Paket
+        # custom (G dst.) juga tidak: demo yang disebut di form-nya acuan desain untuk scaffold
+        # (e-library.stiesak.ac.id: "g10.velocitydeveloper.com"), bukan child theme API.
+        agen_sub, agen_web = (('', '') if custom_paket or sudah_terpasang(domain)
+                              else ref_dari_agen(form.get('data')))
+        out['ref'] = agen_sub or design_ref(teks_form)
         if not out['ref'] and not custom_paket:
-            ref_web = design_ref_web(teks_form)
+            ref_web = agen_web or design_ref_web(teks_form)
             if ref_web and sudah_terpasang(domain):
                 # Situs lama tetap seperti sebelum aturan ini ada (no_ref).
                 out['error'] = 'referensi_web_dilewati:sudah_terpasang'
