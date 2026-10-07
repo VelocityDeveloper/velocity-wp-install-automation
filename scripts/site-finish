@@ -47,7 +47,7 @@ MAX_PHOTOS = 12
 WA_LABEL = 'Hubungi Kami'
 MIN_BYTES, MAX_BYTES = 20_000, 8_000_000
 # Tabel nama warna & pemilihnya di warna_form (dipakai juga paket-g-konten, listing-property).
-from warna_form import COLORS, pick_colors, warna_klien, warna_utama  # noqa: E402,F401
+from warna_form import COLORS, pick_colors, warna_klien, warna_logo, warna_utama  # noqa: E402,F401
 
 
 def read_manifest(path):
@@ -653,6 +653,9 @@ if (get_stylesheet() === "velocity-fse") { echo "warna_tema_skip:palet_tema_fse"
 $k = strtolower((string) get_theme_mod("primary_color", ""));
 if ($k === "" || $k === "#1e73be") { set_theme_mod("primary_color", $w); echo "warna_tema_set:" . get_theme_mod("primary_color"); }
 else { echo "warna_tema_kept:" . $k; }
+// Link ikut warna tema selama masih navy bawaan induk (#002B5B) — solomerchandiseapparel.com 2026-10-07.
+$l = strtolower((string) get_theme_mod("link_color", ""));
+if ($l === "" || $l === "#002b5b") { set_theme_mod("link_color", $w); echo " link_color_set"; }
 if (class_exists("Kirki") && isset(Kirki::$all_fields["color_theme"])) {
     $c = (string) get_theme_mod("color_theme", "");
     if ($c === "") { set_theme_mod("color_theme", $w); echo " color_theme_set:" . get_theme_mod("color_theme"); }
@@ -1126,6 +1129,11 @@ def main():
         # Berkas logo tidak ikut jadi foto galeri/hero (apotekmedikaindofarma.com 2026-09-23:
         # logo JPEG bernama "WhatsApp Image ..." terpasang sebagai foto galeri & banner).
         photos = [p for p in photos if p.resolve() != logo.resolve()]
+        # Form tanpa warna tema: warna utama diambil dari logo asli klien (user 2026-10-07,
+        # solomerchandiseapparel.com logo hitam-emas tetapi situs biru bawaan). Paket sama dengan warna form.
+        if not warna_tema and (jenis_paket == 'paketf' or jenis_paket.endswith('biasa')):
+            warna_tema = warna_logo(logo)
+            print(f'finish: warna_tema_dari_logo={warna_tema or "gagal"}')
     else:
         print('finish: logo klien tidak ditemukan di kiriman klien')
     # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa

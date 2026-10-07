@@ -556,6 +556,7 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
             + f'\n<p class="vk-ajakan">Butuh informasi lebih lanjut? <a href="/hubungi-kami/">Hubungi {e(nama)}</a>.</p>')
     blok_kontak = (f'<div class="vk-kartu vk-kontak-utama">\n<h2>Informasi Kontak</h2>\n{daftar_kontak(kontak)}\n{ikon_sosial()}\n</div>')
     tentang = pendek(isi.get('profil') or isi.get('hero_teks'), 170)
+    kontak_kaki = {**kontak, 'email': ''} if SITUS_LAMA else kontak
     widget = {
         # Tanpa kontak publik widget ini dilewati; dulu terpasang judul "Hubungi Kami" tanpa isi
         # (wisesayasatidar.com, mulawarmantv.com 2026-09-18).
@@ -564,11 +565,13 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
                       if daftar_kontak(kontak, alamat=False) else None,
         'layanan': (js.get('layanan') or 'Layanan Kami',
                     '<ul>' + ''.join(f'<li><a href="/layanan/#{e(l["slug"])}">{e(l["judul"])}</a></li>' for l in layanan) + '</ul>') if layanan else None,
+        # Instalasi baru: email masuk widget Kontak bersama alamat/WA, widget tentang cukup teks + ikon
+        # sosmed (user 2026-10-07, solomerchandiseapparel.com). Situs lama tetap susunan lama.
         'footer_tentang': (nama, f'<p>{e(tentang)}</p>'
                            + (f'<p class="vk-email"><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(kontak["email"])}</p>'
-                              if kontak['email'] else '')
+                              if kontak['email'] and SITUS_LAMA else '')
                            + ikon_sosial()),
-        'footer_kontak': ('Kontak', daftar_kontak({**kontak, 'email': ''})) if daftar_kontak({**kontak, 'email': ''}) else None,
+        'footer_kontak': ('Kontak', daftar_kontak(kontak_kaki)) if daftar_kontak(kontak_kaki) else None,
         'footer_statistik': ('Statistik Pengunjung', '[velocity-statistics style="list"]'),
     }
     widget = {k: v for k, v in widget.items() if v}
@@ -631,6 +634,10 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
         'alamat': kontak['alamat'],
         'alamat_pendek': alamat_pendek(kontak['alamat'], kontak.get('area')),
         'situs_baru': not SITUS_LAMA,
+        # Kolom kontak Customizer tema aktif (notel/email/telepon/WA/alamat) — langkah 6d.
+        'kontak_customizer': {'telp': kontak['telp'] or kontak['wa_tampil'], 'wa': kontak['wa'],
+                              'email': kontak['email'],
+                              'alamat': alamat_pendek(kontak['alamat'], kontak.get('area')) or kontak['alamat']},
     }
 
 
@@ -682,6 +689,12 @@ ul.vk-sosmed>li::before{content:none!important}
 .home-wrapper .row:has(>div>.velocity-home-card){justify-content:center}
 .velocity-card-button .btn{background:var(--bs-primary);border-color:var(--bs-primary);color:#fff}
 .velocity-card-button .btn:hover,.velocity-card-button .btn:focus{filter:brightness(1.12);color:#fff}
+/* .btn-primary Bootstrap tetap biru bawaan walau primary_color diganti (tombol cari sidebar); tombol kartu
+   layanan velocity-perusahaan2 hijau #0AC733 di atas kartu warna tema → putih (solomerchandiseapparel 2026-10-07) */
+.btn-primary{--bs-btn-bg:var(--bs-primary);--bs-btn-border-color:var(--bs-primary);--bs-btn-hover-bg:var(--bs-primary);--bs-btn-hover-border-color:var(--bs-primary);--bs-btn-active-bg:var(--bs-primary);--bs-btn-active-border-color:var(--bs-primary)}
+.btn-primary:hover,.btn-primary:focus{filter:brightness(1.12)}
+.card-layanan .btn-hubungi{background:#fff!important;border-color:#fff!important;color:var(--bs-primary)!important;font-weight:600}
+.card-layanan .btn-hubungi:hover{filter:brightness(.94)}
 @media (max-width:767.98px){.gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:767.98px){.navigation-brand-logo img,.custom-logo-link img{max-height:64px}}
 @media (max-width:575.98px){.home-wrapper .position-relative.overflow-hidden>.position-absolute .col-md-7{max-width:78%}.velocity-home-title{font-size:17px;line-height:23px;margin-bottom:.25rem!important}.velocity-home-desc{display:none}}
@@ -1367,6 +1380,46 @@ if (!empty($d['situs_baru']) && empty($d['berita']) && empty($st['header_image']
         $st['header_image'] = gmdate('c');
         echo "tampilan: header_image:$hid\n";
     }
+}
+// 6d. Kolom kontak di Customizer tema aktif (velocity-perusahaan2 notel/email di bar atas header, dst.)
+// diisi dari data klien bila belum pernah disimpan (user 2026-10-07, solomerchandiseapparel.com: bar
+// kontak header kosong). Kolom dikenali dari id setting Customizer + Kirki; hanya instalasi baru.
+if (!empty($d['situs_baru']) && empty($st['kontak_customizer'])) {
+    $kc = (array) ($d['kontak_customizer'] ?? []);
+    // Id setting dibaca dari sumber PHP tema anak + induk: customize_register di CLI gagal karena kelas
+    // kontrol kustom tema (VelocityChild_Customize_Editor_Control) hanya dimuat di Customizer.
+    $id_set = [];
+    foreach (array_unique([get_stylesheet_directory(), get_template_directory()]) as $dir) {
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+        foreach ($it as $f) {
+            if ($f->getExtension() !== 'php' || strpos($f->getPathname(), '/vendor/') !== false) { continue; }
+            $src = (string) file_get_contents($f->getPathname());
+            if (strpos($src, 'add_setting') === false && strpos($src, "'settings'") === false && strpos($src, '"settings"') === false) { continue; }
+            preg_match_all('/add_setting\(\s*[\'"]([A-Za-z0-9_\-]+)[\'"]|[\'"]settings[\'"]\s*=>\s*[\'"]([A-Za-z0-9_\-]+)[\'"]/', $src, $m, PREG_SET_ORDER);
+            foreach ($m as $x) { $id_set[$x[1] !== '' ? $x[1] : $x[2]] = ''; }
+        }
+    }
+    if (class_exists('Kirki') && !empty(Kirki::$all_fields)) {
+        foreach (Kirki::$all_fields as $id => $f) {
+            if (($f['option_type'] ?? 'theme_mod') === 'theme_mod') { $id_set[$id] = (string) ($f['type'] ?? ''); }
+        }
+    }
+    $isi_kc = [];
+    foreach ($id_set as $id => $jenis) {
+        $k = strtolower((string) $id);
+        if (strpos($k, '[') !== false || preg_match('/link|url|icon|ikon|label|title|judul|color|warna|show|enable|tampil|aktif|posisi|position|size|image|gambar|font|desc/', $k)
+            || in_array($jenis, ['checkbox', 'toggle', 'switch', 'color', 'image', 'cropped_image', 'select', 'radio', 'repeater'], true)) { continue; }
+        $nilai = '';
+        if (preg_match('/e-?mail/', $k)) { $nilai = $kc['email'] ?? ''; }
+        elseif (preg_match('/whats_?app|(^|_)wa($|_)|no_?wa/', $k)) { $nilai = $kc['wa'] ?? ''; }
+        elseif (preg_match('/notel|no_?telp?($|_)|telp|telepon|phone|(^|_)hp($|_)|no_?hp|handphone/', $k)) { $nilai = $kc['telp'] ?? ''; }
+        elseif (preg_match('/address|alamat/', $k)) { $nilai = $kc['alamat'] ?? ''; }
+        $tersimpan = ((array) get_theme_mods())[$id] ?? '';
+        if ((string) $nilai === '' || !is_scalar($tersimpan) || trim((string) $tersimpan) !== '') { continue; }
+        set_theme_mod($id, $nilai); $isi_kc[] = $id;
+    }
+    $st['kontak_customizer'] = gmdate('c');
+    echo 'tampilan: kontak_customizer:' . ($isi_kc ? implode(',', $isi_kc) : 'tidak_ada_kolom') . "\n";
 }
 // 7. Statistik pengunjung (sekali; kalau orang mematikannya sesudah itu, dibiarkan)
 if (empty($st['statistik'])) {
