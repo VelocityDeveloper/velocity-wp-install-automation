@@ -252,6 +252,44 @@ def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
     return tujuan
 
 
+BERITA8_SOSMED = {'facebook': ('facebook.com', 'https://www.facebook.com/'), 'twitter': ('x.com', 'https://x.com/'),
+                  'instagram': ('instagram.com', 'https://www.instagram.com/'), 'youtube': ('youtube.com', 'https://www.youtube.com/')}
+
+
+def berita8_customizer(domain, isi):
+    """Isian Customizer velocity-berita-8 (user 2026-10-07, faktualekonomi.com): warna utama klien (form,
+    lalu company profile; kosong = bawaan tema) dan tautan sosmed tema (Facebook/Twitter/Instagram/YouTube)
+    dari form; platform tanpa data klien memakai tautan bawaan platformnya."""
+    try:
+        compro = json.loads((Path('/var/lib/velocity/compro') / domain / 'compro.json').read_text()).get('warna') or {}
+    except (OSError, ValueError):
+        compro = {}
+    warna = next((w for w in ((isi.get('warna') or {}).get('utama'), compro.get('utama'))
+                  if re.fullmatch(r'#[0-9a-fA-F]{6}', w or '')), '')
+    try:
+        dari_form = json.loads((Path('/var/lib/velocity/form-claude') / f'{domain}.json').read_text())
+        dari_form = ((dari_form.get('data') or {}).get('kontak_web') or {}).get('sosmed') or []
+    except (OSError, ValueError, AttributeError):
+        dari_form = []
+    sosmed = {}
+    for kunci, (ranah, bawaan) in BERITA8_SOSMED.items():
+        url = ''
+        for s in dari_form:
+            jenis, nilai = str((s or {}).get('jenis', '')).lower(), str((s or {}).get('url', '')).strip()
+            if not nilai or not (kunci in jenis or (kunci == 'twitter' and re.search(r'\bx\b', jenis))):
+                continue
+            if re.match(r'https?://', nilai):
+                url = nilai
+            elif ranah in nilai or (kunci == 'twitter' and 'twitter.com' in nilai):
+                url = 'https://' + nilai.lstrip('/')
+            elif re.fullmatch(r'@?[\w.]+', nilai):  # nama akun saja, mis. "@omatourbatam"
+                url = bawaan + ('@' if kunci == 'youtube' else '') + nilai.lstrip('@')
+            if url:
+                break
+        sosmed[kunci] = url or bawaan
+    return {'warna': warna, 'sosmed': sosmed}
+
+
 def halaman_berita(nama, email):
     """Halaman Redaksi & Pedoman Media Siber seperti demo beritab1, dipakai bila klien belum
     mengirim materinya. Judul bagian <p><strong> (pola halaman situs berita buatan webmaster)."""
@@ -802,6 +840,39 @@ if ($berita_depan) {
         $st['berita_iklan'][$k] = $nilai; $isi_iklan[] = "$k={$slot['ukuran']}";
     }
     if ($isi_iklan) { echo 'tampilan: berita_iklan:' . implode(',', $isi_iklan) . "\n"; }
+    // velocity-berita-8 (user 2026-10-07, faktualekonomi.com): Customizer Berita diisi semua — Warna,
+    // tautan Iklan, Sosial Media, Home. Blok Home memakai kirki-react-select berpilihan "disable", jadi
+    // tidak tertangkap pencari blok kategori di atas dan dulu tetap "Recent Posts" tanpa kategori.
+    // Sekali per situs (penanda berita8) dan hanya pengaturan yang belum diisi orang.
+    if (get_stylesheet() === 'velocity-berita-8' && !empty($d['berita8']) && empty($st['berita8'])) {
+        $b8 = [];
+        if ($d['berita8']['warna'] !== '' && get_theme_mod('color_theme', '') === '') {
+            set_theme_mod('color_theme', $d['berita8']['warna']); $b8[] = 'warna=' . $d['berita8']['warna'];
+        }
+        foreach ((array) $d['berita8']['sosmed'] as $k => $u) {
+            if (get_theme_mod("link_sosmed_$k", '') === '') { set_theme_mod("link_sosmed_$k", $u); $b8[] = "sosmed_$k"; }
+        }
+        $ke_kontak = home_url('/hubungi-kami/'); $n_link = 0;
+        foreach ((array) get_theme_mods() as $k => $v) {
+            if (preg_match('/^image_iklan_(.+)$/', (string) $k, $m) && $v && get_theme_mod("link_iklan_{$m[1]}", '') === '') {
+                set_theme_mod("link_iklan_{$m[1]}", $ke_kontak); $n_link++;
+            }
+        }
+        if ($n_link) { $b8[] = "link_iklan=$n_link"; }
+        // Carousel = kategori ke-1, Posts Home 1–5 = kategori berikutnya (berputar bila kurang), judul = nama kategori.
+        if ($kategori && get_theme_mod('cat_carousel_home', '') === '') {
+            set_theme_mod('cat_carousel_home', (string) $kategori[0]->term_id); $b8[] = 'carousel=' . $kategori[0]->slug;
+        }
+        for ($i = 1; $i <= 5 && $kategori; $i++) {
+            if (get_theme_mod("cat_posts_home_$i", '') !== '') { continue; }
+            $k = $kategori[$i % count($kategori)];
+            set_theme_mod("cat_posts_home_$i", (string) $k->term_id);
+            if (get_theme_mod("title_posts_home_$i", '') === '') { set_theme_mod("title_posts_home_$i", html_entity_decode($k->name)); }
+            $b8[] = "home_$i=" . $k->slug;
+        }
+        $st['berita8'] = gmdate('c');
+        echo 'tampilan: berita8_customizer:' . (implode(',', $b8) ?: '-') . "\n";
+    }
     // Artikel tanpa meta 'hit' tidak ikut query "Populer" (meta_key hit) widget & tab tema: diberi 0,
     // velocity-addons menaikkannya tiap kunjungan. Semua tema berita memakai meta yang sama.
     $tanpa_hit = get_posts(['post_type' => 'post', 'post_status' => 'publish', 'numberposts' => -1, 'fields' => 'ids',
@@ -864,7 +935,7 @@ if ($berita_depan) {
         $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
         $ada_id = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'page'));
         $n = count(wp_get_nav_menu_items($m2) ?: []) + 1; $tambah = [];
-        // Tentang Kami, Redaksi, Pedoman Media Siber + 4 kategori pokok (terbanyak artikel = urutan form klien);
+        // Tentang Kami, Redaksi, Pedoman Media Siber + 4 kategori pokok khusus beritab1 (terbanyak artikel = urutan form klien);
         // dulu Galeri, Hubungi Kami, Kebijakan Privasi (user 2026-10-06, cybernasional24.com).
         foreach (['tentang-kami', 'redaksi', 'pedoman-media-siber'] as $slug) {
             $p = get_posts(['post_type' => 'page', 'name' => $slug, 'post_status' => 'publish', 'numberposts' => 1]);
@@ -874,7 +945,9 @@ if ($berita_depan) {
             $ada_id[] = $p[0]->ID; $tambah[] = $slug;
         }
         $ada_kat = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'category'));
-        foreach (array_slice($kategori, 0, 4) as $k) {
+        // 4 kategori di menu sekunder hanya untuk beritab1; tema berita lain cukup 3 halaman profil
+        // (user 2026-10-07, faktualekonomi.com).
+        foreach (get_stylesheet() === 'velocity-beritab1' ? array_slice($kategori, 0, 4) : [] as $k) {
             if (in_array((int) $k->term_id, $ada_kat, true)) { continue; }
             wp_update_nav_menu_item($m2, 0, ['menu-item-title' => $k->name, 'menu-item-object-id' => $k->term_id, 'menu-item-object' => 'category',
                 'menu-item-type' => 'taxonomy', 'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
@@ -1339,6 +1412,9 @@ echo 'slot_iklan: ' . wp_json_encode($slot) . "\n";
 // Warna utama tema aktif (primary_color Velocity: velocitytheme_option = theme_mod atau bawaan tema),
 // lalu kontrol warna Customizer bernama primary/utama/tema (tema berita Kirki) beserta bawaannya.
 $warna = sanitize_hex_color((string) (function_exists('velocitytheme_option') ? velocitytheme_option('primary_color', '') : get_theme_mod('primary_color', '')));
+// velocity-berita-8 mewarnai situs lewat Kirki color_theme (bawaan #740106); primary_color induk tidak
+// tampil, dulu banner faktualekonomi.com jadi biru #1e73be di tema merah (2026-10-07).
+if (get_stylesheet() === 'velocity-berita-8') { $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '#740106')); }
 if (!$warna && isset($wpc)) {
     foreach ($wpc->controls() as $c) {
         if (!is_object($c->setting) || !preg_match('/colou?r/i', (string) $c->type . ' ' . get_class($c))
@@ -1855,6 +1931,12 @@ def main():
         # Banner Ruang Iklan berwarna utama tema situs (user 2026-10-06, cybernasional24.com); dulu warna
         # form klien saja, kosong -> navy bawaan yang tidak sama dengan tema.
         warna_banner = warna_tema or (isi.get('warna') or {}).get('utama')
+        if tema == 'velocity-berita-8' and not SITUS_LAMA:
+            # color_theme diisi warna klien di langkah PHP 2b, jadi banner langsung memakai warna itu.
+            data['berita8'] = berita8_customizer(domain, isi)
+            warna_banner = data['berita8']['warna'] or warna_banner
+            print(f"tampilan: berita8 warna={data['berita8']['warna'] or 'bawaan_tema'} "
+                  f"sosmed={','.join(k for k, v in data['berita8']['sosmed'].items() if v != BERITA8_SOSMED[k][1]) or 'bawaan'}")
         print(f"tampilan: warna_banner={warna_banner or 'bawaan'}:{'tema' if warna_tema else 'form' if warna_banner else '-'}")
         ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}
         data['widget_demo'] = widget_demo(tema)

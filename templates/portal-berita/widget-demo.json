@@ -35,10 +35,15 @@
       "urutkan": "recent",
       "jumlah": "5"
      }
+    },
+    {
+     "jenis": "text",
+     "judul": "Statistik Pengunjung",
+     "isi": "[velocity-statistics]"
     }
    ]
   },
-  "catatan": "Widget kelas tema bernama *_berita_3 (warisan berita3): id_base 'posts_berita_3_widget' dan 'tabs_berita_3_widget'. Kunci posts: title, style ('1'-'5' -> module_vdposts 'posts'+style), urutkan (recent|popular via meta 'hit'), jumlah; TIDAK ada kunci kategori. Tabs: hanya title (demo kosong). Populer: style 2, 6 item, views menurun -> popular. Latest News: style 3 (thumbnail+excerpt), 5 item, urut tanggal -> recent. media_image-2 = s-ads.jpg 320x350 -> iklan. Footer child (inc/part-footer.php) hardcode copyright + ikon sosmed, tanpa widget; footer-widget-* induk tidak dirender. inc/part-sidebar.php kosong (0 byte)."
+  "catatan": "Widget kelas tema bernama *_berita_3 (warisan berita3): id_base 'posts_berita_3_widget' dan 'tabs_berita_3_widget'. Kunci posts: title, style ('1'-'5' -> module_vdposts 'posts'+style), urutkan (recent|popular via meta 'hit'), jumlah; TIDAK ada kunci kategori. Tabs: hanya title (demo kosong). Populer: style 2, 6 item, views menurun -> popular. Latest News: style 3 (thumbnail+excerpt), 5 item, urut tanggal -> recent. media_image-2 = s-ads.jpg 320x350 -> iklan. Footer child (inc/part-footer.php) hardcode copyright + ikon sosmed, tanpa widget; footer-widget-* induk tidak dirender. inc/part-sidebar.php kosong (0 byte). Ditambah widget teks Statistik Pengunjung [velocity-statistics] di akhir main-sidebar (user 2026-10-07, faktualekonomi.com)."
  },
  "velocity-berita1": {
   "slug": "velocity-berita1",
