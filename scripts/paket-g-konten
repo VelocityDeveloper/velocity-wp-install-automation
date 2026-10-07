@@ -169,11 +169,12 @@ def rapikan(data):
     return hasil
 
 
-TEKS_TEMPLATE_WARNA = re.compile(r'^\s*(misal|contoh|mis\.)|yang saya inginkan|dibedakan dari', re.I)
+sys.path.insert(0, str(HERE))
+from warna_form import TEKS_TEMPLATE_WARNA, pick_colors, warna_utama  # noqa: E402
 
 
-def warna_dipilih_klien(domain):
-    """True kalau isian "WARNA TEMA WEB" berisi pilihan klien sungguhan.
+def isian_warna(domain):
+    """Isian "WARNA TEMA WEB" form klien; kosong kalau tidak diisi atau masih kalimat contoh.
 
     Form template memuat contoh "Misal: warna dasar tema web yang saya inginkan
     biru dan hijau." — klien yang tidak mengisi membiarkan kalimat itu, dan AI
@@ -184,10 +185,15 @@ def warna_dipilih_klien(domain):
     try:
         fields = read_client_form(Path('/home/On Progress') / domain).get('fields') or {}
     except Exception:
-        return False
+        return ''
     nilai = next((str(v) for k, v in fields.items() if re.search(r'warna tema', k, re.I)), '')
     nilai = re.sub(r'[.\s]+$', '', nilai).strip()
-    return bool(nilai) and not TEKS_TEMPLATE_WARNA.search(nilai)
+    return '' if TEKS_TEMPLATE_WARNA.search(nilai) else nilai
+
+
+def warna_dipilih_klien(domain):
+    """True kalau isian "WARNA TEMA WEB" berisi pilihan klien sungguhan."""
+    return bool(isian_warna(domain))
 
 
 def normal(teks):
@@ -550,8 +556,16 @@ Kembalikan JSON persis:
                 rubrik.append({'slug': slug_dari(r['judul']), 'judul': teks(r['judul'], 40),
                                'teks': teks(r.get('teks'), 160)})
     utama, aksen = warna_sampel(domain)
-    if not utama and warna_dipilih_klien(domain):
-        gen.log('Warna klien tertulis tanpa kode hex yang terbaca; memakai warna bawaan')
+    if not utama:
+        # Nama warna di form ("hitam, emas, biru") -> hex, sama dengan site-finish
+        # (suarapurwakarta.com 2026-10-07: dulu langsung warna bawaan).
+        nama_warna = pick_colors(isian_warna(domain), batas=3)
+        if nama_warna:
+            utama = warna_utama(nama_warna)
+            aksen = next((w for w in nama_warna if w != utama), '')
+            gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
+        elif warna_dipilih_klien(domain):
+            gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
     nama = tampil or nama_form
     return {
         'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),

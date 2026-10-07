@@ -1415,6 +1415,11 @@ $warna = sanitize_hex_color((string) (function_exists('velocitytheme_option') ? 
 // velocity-berita-8 mewarnai situs lewat Kirki color_theme (bawaan #740106); primary_color induk tidak
 // tampil, dulu banner faktualekonomi.com jadi biru #1e73be di tema merah (2026-10-07).
 if (get_stylesheet() === 'velocity-berita-8') { $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '#740106')); }
+// Begitu pula 16 tema anak lain ber-Kirki color_theme (berita16 bawaan #44AB68): suarapurwakarta.com
+// 2026-10-07 banner biru #1e73be di tema hijau. Mod kosong = bawaan field Kirki.
+elseif (class_exists('Kirki') && isset(Kirki::$all_fields['color_theme'])) {
+    $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '')) ?: sanitize_hex_color((string) (Kirki::$all_fields['color_theme']['default'] ?? '')) ?: $warna;
+}
 if (!$warna && isset($wpc)) {
     foreach ($wpc->controls() as $c) {
         if (!is_object($c->setting) || !preg_match('/colou?r/i', (string) $c->type . ' ' . get_class($c))

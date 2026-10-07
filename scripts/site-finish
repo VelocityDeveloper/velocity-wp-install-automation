@@ -46,18 +46,8 @@ MAX_PHOTOS = 12
 # Tulisan tombol WhatsApp mengambang: ajakan, bukan nama situs.
 WA_LABEL = 'Hubungi Kami'
 MIN_BYTES, MAX_BYTES = 20_000, 8_000_000
-# Frasa panjang didahulukan supaya "biru dongker" tidak terbaca "biru".
-COLORS = [
-    ('biru dongker', '#1f2a44'), ('dongker', '#1f2a44'), ('navy', '#1f2a44'),
-    ('biru muda', '#4fa3e0'), ('biru langit', '#4fa3e0'), ('tosca', '#1abc9c'),
-    ('merah marun', '#800000'), ('maroon', '#800000'), ('marun', '#800000'),
-    ('merah muda', '#e91e63'), ('pink', '#d81b60'), ('magenta', '#c2185b'),
-    ('biru', '#1e5aa8'), ('hijau', '#2e7d32'), ('merah', '#c62828'),
-    ('orange', '#ef6c00'), ('oranye', '#ef6c00'), ('jingga', '#ef6c00'),
-    ('kuning', '#f9a825'), ('gold', '#c9a227'), ('emas', '#c9a227'),
-    ('ungu', '#6a1b9a'), ('coklat', '#6d4c41'), ('cokelat', '#6d4c41'),
-    ('hitam', '#111111'), ('abu', '#607d8b'),
-]
+# Tabel nama warna & pemilihnya di warna_form (dipakai juga paket-g-konten, listing-property).
+from warna_form import COLORS, pick_colors, warna_klien, warna_utama  # noqa: E402,F401
 
 
 def read_manifest(path):
@@ -71,23 +61,6 @@ def read_manifest(path):
 
 def field(fields, pattern):
     return next((v.strip() for k, v in fields.items() if re.search(pattern, k, re.I)), '')
-
-
-def pick_colors(text):
-    low = str(text or '').lower()
-    found = []
-    for word, hexv in COLORS:
-        for m in re.finditer(r'(?<![a-z])' + re.escape(word) + r'(?![a-z])', low):
-            found.append((m.start(), -(m.end() - m.start()), m.end(), hexv))
-    found.sort()
-    picked, last_end = [], -1
-    for start, _, end, hexv in found:
-        if start < last_end:
-            continue
-        last_end = end
-        if hexv not in picked:
-            picked.append(hexv)
-    return picked[:2]
 
 
 def colors_css(colors):
@@ -668,6 +641,26 @@ if [[ -n "$TAGLINE" ]]; then
   fi
 fi
 
+# Warna tema dari form, hanya instalasi baru dan selama masih bawaan (pilihan webmaster tidak ditimpa):
+# - primary_color induk Velocity (--bs-primary), bawaan #1e73be/kosong;
+# - Kirki color_theme (--color-theme) di 17 tema anak (berita5/6/8/10/11/14-18, cake, herbal1, hukum1,
+#   mobil2, pulsa1/2, tour2): warna yang benar-benar tampil di tema itu, bawaan = mod kosong.
+#   suarapurwakarta.com (berita16) 2026-10-07: tetap hijau demo #44AB68 padahal form "hitam, emas, biru".
+if [[ -n "$WARNA_TEMA" && "$SITUS_BARU" == 1 ]]; then
+  VWARNA="$WARNA_TEMA" wp eval '
+$w = getenv("VWARNA");
+if (get_stylesheet() === "velocity-fse") { echo "warna_tema_skip:palet_tema_fse"; return; }
+$k = strtolower((string) get_theme_mod("primary_color", ""));
+if ($k === "" || $k === "#1e73be") { set_theme_mod("primary_color", $w); echo "warna_tema_set:" . get_theme_mod("primary_color"); }
+else { echo "warna_tema_kept:" . $k; }
+if (class_exists("Kirki") && isset(Kirki::$all_fields["color_theme"])) {
+    $c = (string) get_theme_mod("color_theme", "");
+    if ($c === "") { set_theme_mod("color_theme", $w); echo " color_theme_set:" . get_theme_mod("color_theme"); }
+    else { echo " color_theme_kept:" . $c; }
+}' >&2 || true
+  echo >&2
+fi
+
 if [[ -n "$CSS" ]]; then
   VCSS="$CSS" wp eval '$c = wp_get_custom_css(); if (get_stylesheet() === "velocity-fse") { echo "colors_skip:palet_tema_fse"; } elseif ($c === "" || strpos($c, "velocity-installer-colors") !== false) { $r = wp_update_custom_css_post(getenv("VCSS")); echo is_wp_error($r) ? "colors_failed" : "colors_set"; } else { echo "colors_kept"; }' >&2 || true
   echo >&2
@@ -1114,7 +1107,14 @@ def main():
     # Form dibaca agen Claude: slogan dari hasilnya (field 'Slogan'); tanpa itu tebakan dari teks.
     tagline = ((field(fields, r'^slogan$') if form.get('sumber') == 'claude' else '') or slogan(form['text'])
                or compro.get('slogan') or ai_tagline(domain))
-    css = colors_css(pick_colors(field(fields, r'warna tema')))
+    css = colors_css(warna_klien(field(fields, r'warna tema')))
+    # Warna tema Velocity = theme mod primary_color (--bs-primary); CSS di atas tidak mengubahnya,
+    # dulu suarapurwakarta.com (form "hitam, emas, biru") tetap biru bawaan #1e73be (2026-10-07).
+    # Paket E memakai warna demo (pintukataindonesia.com, "warna jangan diganti"); paket G/custom
+    # mengikuti referensi desain -> hanya Paket F & paket "Biasa".
+    jenis_paket = re.sub(r'[^a-z]', '', cfg.get('paket', '').lower())
+    warna_tema = (warna_utama(warna_klien(field(fields, r'warna tema'), batas=3))
+                  if jenis_paket == 'paketf' or jenis_paket.endswith('biasa') else '')
     seo = seo_dasar(domain, title, tagline)
     _, photos = client_assets(folder)
     # Logo dicari di SEMUA kiriman klien (keputusan user 2026-09-16): berkas bernama
@@ -1131,7 +1131,7 @@ def main():
     # Klien sering menulis "logo menyusul". Supaya situs tidak tampil tanpa
     # identitas sama sekali, dibuatkan logo contoh dari nama + warna tema —
     # penanda sementara yang gampang diganti PM/desainer, bukan logo final.
-    logo_contoh = None if logo else buat_logo_contoh(domain, title, pick_colors(field(fields, r'warna tema')))
+    logo_contoh = None if logo else buat_logo_contoh(domain, title, warna_klien(field(fields, r'warna tema')))
     if logo_contoh:
         logo = logo_contoh.get('logo')
     size = image_size(logo) if logo else None
@@ -1203,6 +1203,7 @@ def main():
             f'SEO_DESC={shlex.quote(seo["desc"])}',
             f'SEO_KEYWORDS={shlex.quote(seo["keywords"])}',
             f'CSS={shlex.quote(css)}',
+            f'WARNA_TEMA={shlex.quote(warna_tema)}',
             f'SITUS_BARU={0 if cari_logo.sudah_terpasang(domain) else 1}',
             f'BERITA_BIASA={1 if re.sub(r"[^a-z]", "", cfg.get("paket", "").lower()) == "paketportalberitabiasa" else 0}',
         ])
