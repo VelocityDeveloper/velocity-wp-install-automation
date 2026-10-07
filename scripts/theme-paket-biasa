@@ -253,11 +253,16 @@ def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
 
 
 BERITA8_SOSMED = {'facebook': ('facebook.com', 'https://www.facebook.com/'), 'twitter': ('x.com', 'https://x.com/'),
-                  'instagram': ('instagram.com', 'https://www.instagram.com/'), 'youtube': ('youtube.com', 'https://www.youtube.com/')}
+                  'instagram': ('instagram.com', 'https://www.instagram.com/'), 'youtube': ('youtube.com', 'https://www.youtube.com/'),
+                  'tiktok': ('tiktok.com', 'https://www.tiktok.com/'), 'linkedin': ('linkedin.com', 'https://www.linkedin.com/')}
+# Blok beranda yang dibiarkan "Semua Kategori" (nilai kosong) — user 2026-10-07, suarapurwakarta.com:
+# berita16 Home "Berita 3" (galeri) = semua kategori, Berita 1–4 & Berita Bawah 1–3 lainnya per kategori.
+BLOK_SEMUA_KATEGORI = {'velocity-berita16': ['cat_berita3']}
 
 
 def berita8_customizer(domain, isi):
-    """Isian Customizer velocity-berita-8 (user 2026-10-07, faktualekonomi.com): warna utama klien (form,
+    """Isian Customizer tema berita velocity-berita* (berita-8: faktualekonomi.com, semua tema berita:
+    suarapurwakarta.com berita16, user 2026-10-07): warna utama klien (form,
     lalu company profile; kosong = bawaan tema) dan tautan sosmed tema (Facebook/Twitter/Instagram/YouTube)
     dari form; platform tanpa data klien memakai tautan bawaan platformnya."""
     try:
@@ -804,10 +809,13 @@ if ($berita_depan) {
         $id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
         foreach ($wpc->controls() as $c) {
             $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['']);
-            if ($c->type === 'select' && count($pilih) > 1 && !array_diff($pilih, $id_kat) && $c->setting) { $blok_kat[] = $c->setting->id; }
+            // berita16 dkk. memakai kirki-react-select (dulu tak tertangkap: suarapurwakarta.com 2026-10-07).
+            if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && count($pilih) > 1
+                && !array_diff($pilih, $id_kat) && is_object($c->setting)) { $blok_kat[] = $c->setting->id; }
         }
     } catch (Throwable $t) { echo 'tampilan: berita_customizer_gagal:' . $t->getMessage() . "\n"; }
     $isi_kat = []; $i = 0;
+    $blok_kat = array_values(array_diff($blok_kat, (array) ($d['berita_blok_semua'] ?? [])));
     foreach ($blok_kat as $k) {
         $kini = (string) get_theme_mod($k, '');
         if ($kini !== '' && $kini !== (string) ($st['berita_kat'][$k] ?? '')) { continue; }  // dipilih orang
@@ -844,12 +852,23 @@ if ($berita_depan) {
     // tautan Iklan, Sosial Media, Home. Blok Home memakai kirki-react-select berpilihan "disable", jadi
     // tidak tertangkap pencari blok kategori di atas dan dulu tetap "Recent Posts" tanpa kategori.
     // Sekali per situs (penanda berita8) dan hanya pengaturan yang belum diisi orang.
-    if (get_stylesheet() === 'velocity-berita-8' && !empty($d['berita8']) && empty($st['berita8'])) {
+    // Sejak suarapurwakarta.com (berita16, 2026-10-07) Warna, Sosial Media, dan tautan Iklan diisi untuk
+    // semua tema berita; Carousel/Posts Home di bawah tetap khusus berita-8.
+    if (!empty($d['berita8']) && empty($st['berita8'])) {
         $b8 = [];
-        if ($d['berita8']['warna'] !== '' && get_theme_mod('color_theme', '') === '') {
+        $kirki_warna = class_exists('Kirki') && isset(Kirki::$all_fields['color_theme']);
+        if ($d['berita8']['warna'] !== '' && ($kirki_warna || get_stylesheet() === 'velocity-berita-8')
+            && get_theme_mod('color_theme', '') === '') {
             set_theme_mod('color_theme', $d['berita8']['warna']); $b8[] = 'warna=' . $d['berita8']['warna'];
         }
-        foreach ((array) $d['berita8']['sosmed'] as $k => $u) {
+        // Semua kontrol link_sosmed_* tema; platform tanpa data klien = tautan bawaan platformnya.
+        $sosmed = [];
+        foreach (isset($wpc) ? $wpc->controls() : [] as $c) {
+            if (is_object($c->setting) && preg_match('/^link_sosmed_([a-z0-9]+)$/', $c->setting->id, $m)) { $sosmed[] = $m[1]; }
+        }
+        if (get_stylesheet() === 'velocity-berita-8') { $sosmed = array_unique(array_merge($sosmed, array_keys((array) $d['berita8']['sosmed']))); }
+        foreach ($sosmed as $k) {
+            $u = $d['berita8']['sosmed'][$k] ?? "https://www.$k.com/";
             if (get_theme_mod("link_sosmed_$k", '') === '') { set_theme_mod("link_sosmed_$k", $u); $b8[] = "sosmed_$k"; }
         }
         $ke_kontak = home_url('/hubungi-kami/'); $n_link = 0;
@@ -860,10 +879,10 @@ if ($berita_depan) {
         }
         if ($n_link) { $b8[] = "link_iklan=$n_link"; }
         // Carousel = kategori ke-1, Posts Home 1–5 = kategori berikutnya (berputar bila kurang), judul = nama kategori.
-        if ($kategori && get_theme_mod('cat_carousel_home', '') === '') {
+        if (get_stylesheet() === 'velocity-berita-8' && $kategori && get_theme_mod('cat_carousel_home', '') === '') {
             set_theme_mod('cat_carousel_home', (string) $kategori[0]->term_id); $b8[] = 'carousel=' . $kategori[0]->slug;
         }
-        for ($i = 1; $i <= 5 && $kategori; $i++) {
+        for ($i = 1; $i <= 5 && $kategori && get_stylesheet() === 'velocity-berita-8'; $i++) {
             if (get_theme_mod("cat_posts_home_$i", '') !== '') { continue; }
             $k = $kategori[$i % count($kategori)];
             set_theme_mod("cat_posts_home_$i", (string) $k->term_id);
@@ -1420,6 +1439,10 @@ if (get_stylesheet() === 'velocity-berita-8') { $warna = sanitize_hex_color((str
 elseif (class_exists('Kirki') && isset(Kirki::$all_fields['color_theme'])) {
     $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '')) ?: sanitize_hex_color((string) (Kirki::$all_fields['color_theme']['default'] ?? '')) ?: $warna;
 }
+// Kirki color_theme: "kosong" = masih bawaan (langkah 2b boleh mengisinya), "isi" = sudah dipilih.
+if (class_exists('Kirki') && isset(Kirki::$all_fields['color_theme'])) {
+    echo 'color_theme_kirki: ' . (get_theme_mod('color_theme', '') === '' ? 'kosong' : 'isi') . "\n";
+}
 if (!$warna && isset($wpc)) {
     foreach ($wpc->controls() as $c) {
         if (!is_object($c->setting) || !preg_match('/colou?r/i', (string) $c->type . ' ' . get_class($c))
@@ -1469,7 +1492,7 @@ echo 'foto_artikel: ' . $isi . '/' . count($kosong) . " diisi\n";
 
 
 def slot_iklan(cfg, domain):
-    """({setting: {'ukuran': 'WxH', 'simpan': 'url'|'id'}}, warna_tema) slot gambar iklan tema aktif, dibaca
+    """({setting: {'ukuran': 'WxH', 'simpan': 'url'|'id'}}, warna_tema, color_theme_kirki) slot gambar iklan tema aktif, dibaca
     dari Customizer situs (ukuran dari keterangan kontrol tema, mis. "Iklan Header 728x90"), dan warna
     utama tema (#rrggbb atau '')."""
     kerja = Path(tempfile.mkdtemp(prefix=f'theme-paket-biasa-slot-{domain}-'))
@@ -1477,11 +1500,12 @@ def slot_iklan(cfg, domain):
     keluar = kirim(cfg, kerja, SLOT_IKLAN_PHP, domain) or ''
     m = re.search(r'^slot_iklan: (\{.*\}|\[\])\s*$', keluar, re.M)
     w = re.search(r'^warna_tema: (#[0-9a-fA-F]{6})\s*$', keluar, re.M)
+    k = re.search(r'^color_theme_kirki: (\w+)\s*$', keluar, re.M)
     try:
         slot = (json.loads(m.group(1)) or {}) if m else {}
     except ValueError:
         slot = {}
-    return slot, (w.group(1) if w else '')
+    return slot, (w.group(1) if w else ''), (k.group(1) if k else '')
 
 
 def kirim(cfg, kerja, php, domain):
@@ -1932,15 +1956,18 @@ def main():
         data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
     if data['berita'] and not coba:
         # Banner "Ruang Iklan" untuk setiap ukuran slot iklan tema berita aktif.
-        data['berita_iklan'], warna_tema = slot_iklan(cfg, domain)
+        data['berita_iklan'], warna_tema, warna_kirki = slot_iklan(cfg, domain)
+        data['berita_blok_semua'] = BLOK_SEMUA_KATEGORI.get(tema, [])
         # Banner Ruang Iklan berwarna utama tema situs (user 2026-10-06, cybernasional24.com); dulu warna
         # form klien saja, kosong -> navy bawaan yang tidak sama dengan tema.
         warna_banner = warna_tema or (isi.get('warna') or {}).get('utama')
-        if tema == 'velocity-berita-8' and not SITUS_LAMA:
-            # color_theme diisi warna klien di langkah PHP 2b, jadi banner langsung memakai warna itu.
+        if tema.startswith('velocity-berita') and not SITUS_LAMA:
+            # Customizer tema berita (Warna, tautan Iklan, Sosial Media, blok Home) diisi di langkah PHP 2b.
+            # color_theme (bila tema memakainya & masih kosong) diisi warna klien, jadi banner memakai warna itu.
             data['berita8'] = berita8_customizer(domain, isi)
-            warna_banner = data['berita8']['warna'] or warna_banner
-            print(f"tampilan: berita8 warna={data['berita8']['warna'] or 'bawaan_tema'} "
+            if data['berita8']['warna'] and (warna_kirki == 'kosong' or tema == 'velocity-berita-8'):
+                warna_banner = data['berita8']['warna']
+            print(f"tampilan: berita_customizer warna={data['berita8']['warna'] or 'bawaan_tema'} "
                   f"sosmed={','.join(k for k, v in data['berita8']['sosmed'].items() if v != BERITA8_SOSMED[k][1]) or 'bawaan'}")
         print(f"tampilan: warna_banner={warna_banner or 'bawaan'}:{'tema' if warna_tema else 'form' if warna_banner else '-'}")
         ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}

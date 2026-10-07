@@ -890,9 +890,10 @@ def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
         antrean = [q for q in frasa + [cadangan, ' '.join((isi.get('foto_umum') or [''])[:1])] if q]
         # Putaran longgar (orang boleh tampak) bila putaran ketat kosong: dulu artikel itu jatuh ke
         # sampul "Ilustrasi Artikel" (user 2026-10-06, cybernasional24.com: "jangan cuma Ilustrasi Artikel").
+        ai_gagal = False
         for longgar, q in [(False, q) for q in antrean] + [(True, q) for q in antrean if ai]:
-            saring = lambda daftar: [r for r in daftar if layak(r, 1000, sudah, q)
-                                     and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
+            saring = lambda daftar, q=q: [r for r in daftar if layak(r, 1000, sudah, q)
+                                          and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
             # Pexels dulu; bank foto CC0 hanya bila Pexels tidak memberi kandidat layak.
             calon = saring(px.cari(q)) or saring(ov.cari(q))
             pilihan = pilih_foto_berita_ai(ai, a['judul'], calon[:8], longgar) if ai and calon else None
@@ -902,11 +903,22 @@ def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
                 if ai:
                     # Penilaian AI gagal: kandidat bank foto tidak dipasang tanpa dinilai
                     # (pelajaran centralimpex.com 2026-09-17). Artikel tetap tanpa foto.
+                    ai_gagal = True
                     break
                 pilihan = next((r for r in calon if relevan(r, q)), calon[0] if calon else None)
             if pilihan:
                 dipakai = q
                 break
+        if not pilihan and not ai_gagal:
+            # Semua calon ditolak penilai: foto contoh suasana umum rubrik/berita (kata kunci kurasi,
+            # bukan topik spesifik) tetap lebih baik daripada sampul "Ilustrasi Artikel"
+            # (user 2026-10-07, suarapurwakarta.com "Aksara Sunda di Ruang Publik": "cari contoh gambar").
+            for q in dict.fromkeys(x for x in (cadangan, 'newspaper coffee desk', 'open book library') if x):
+                calon = [r for r in (px.cari(q) or ov.cari(q)) if layak(r, 1000, sudah, q)
+                         and r.get('foreign_landing_url') not in terpakai and r.get('url') not in terpakai]
+                if calon:
+                    pilihan, dipakai = calon[0], q
+                    break
         if pilihan:
             sudah.add(pilihan['url'])
             terpakai.add(pilihan.get('foreign_landing_url') or pilihan['url'])
