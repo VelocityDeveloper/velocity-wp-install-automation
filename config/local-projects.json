@@ -8,7 +8,11 @@
       "stack": "Laravel · PHP 8.4",
       "port": 8010,
       "folder": "/home/barokah",
-      "layanan": ["barokah-dev", "barokah-queue", "barokah-scheduler"],
+      "layanan": [
+        "barokah-dev",
+        "barokah-queue",
+        "barokah-scheduler"
+      ],
       "produksi": "https://nextbeli.com",
       "catatan": "Produksi di server Farnaz (akun nextbeli). Deploy: /root/nextbeli/deploy-*.sh"
     },
@@ -19,8 +23,24 @@
       "stack": "Laravel 12 · Inertia/Vue",
       "port": 8020,
       "folder": "/home/sia-vd",
-      "layanan": ["sia-vd-dev", "sia-vd-queue"],
+      "layanan": [
+        "sia-vd-dev",
+        "sia-vd-queue"
+      ],
       "catatan": "Sistem informasi akademik. Update: /root/sia-vd/deploy-dev.sh"
+    },
+    {
+      "id": "sia-vd-yapika",
+      "nama": "SIA VD Yapika",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8021,
+      "folder": "/home/sia-vd-yapika",
+      "layanan": [
+        "sia-vd-yapika-dev",
+        "sia-vd-yapika-queue"
+      ],
+      "catatan": "Varian SIA VD untuk Yapika."
     },
     {
       "id": "daftar-borneo",
@@ -29,9 +49,40 @@
       "stack": "Laravel 13 · Inertia/Vue",
       "port": 8040,
       "folder": "/home/daftar-borneo-dev",
-      "layanan": ["daftar-borneo-dev", "daftar-borneo-queue", "daftar-borneo-schedule"],
+      "layanan": [
+        "daftar-borneo-dev",
+        "daftar-borneo-queue",
+        "daftar-borneo-schedule"
+      ],
       "produksi": "https://daftar-borneo.id",
       "catatan": "CRM #62544 (Paket G). Pendaftaran WiFi per kabupaten."
+    },
+    {
+      "id": "ecourse-velocity",
+      "nama": "Ecourse Velocity",
+      "jenis": "internal",
+      "stack": "Laravel 13 · Inertia/Vue",
+      "port": 8060,
+      "folder": "/home/ecourse-velocity",
+      "layanan": [
+        "ecourse-velocity-dev",
+        "ecourse-velocity-queue"
+      ],
+      "catatan": "Platform e-course (repo VelocityDeveloper/ecourse-velocity). DB MariaDB ecourse_velocity. Layanan systemd ecourse-velocity-dev (web :8060) + ecourse-velocity-queue, user ecoursevd."
+    },
+    {
+      "id": "api-vd-co",
+      "nama": "ApiCo (api.velocitydeveloper.co)",
+      "jenis": "internal",
+      "stack": "Laravel 13 · Inertia/Vue",
+      "port": 8050,
+      "folder": "/home/api-vd-co",
+      "layanan": [
+        "api-vd-co-dev",
+        "api-vd-co-queue"
+      ],
+      "produksi": "https://api.velocitydeveloper.co",
+      "catatan": "API tema/plugin/lisensi + admin Media & Dummy Products (repo Velocity-Developer/api-vd-co). DB MariaDB api_vd_co. Rilis: naikkan version di composer.json lalu push main (workflow Auto Release)."
     },
     {
       "id": "demo-toko",
@@ -40,7 +91,9 @@
       "stack": "WordPress · php -S",
       "port": 8030,
       "folder": "/var/lib/velocity/tema-toko/demo-toko",
-      "layanan": ["demo-toko"],
+      "layanan": [
+        "demo-toko"
+      ],
       "catatan": "Demo konversi tema toko Velocity ke VD Store."
     },
     {
@@ -51,8 +104,107 @@
       "port": 8005,
       "url": "/newvdnet/",
       "folder": "/home/project_vd",
-      "layanan": ["vdnet-production"],
-      "catatan": "Deploy produksi lewat /root/vdnet/deploy.sh."
+      "layanan": [
+        "vdnet-production"
+      ],
+      "catatan": "Deploy produksi lewat /root/vdnet/deploy.sh.",
+      "selalu_nyala": true
+    },
+    {
+      "id": "elearning-vd",
+      "nama": "Elearning",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8090,
+      "folder": "/home/elearning-vd",
+      "layanan": [
+        "elearning-vd-dev",
+        "elearning-vd-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-09-28. Update: /root/elearning-vd/deploy-dev.sh"
+    },
+    {
+      "id": "expedisi-vd",
+      "nama": "Velocity Cargo (expedisi-vd)",
+      "jenis": "klien",
+      "stack": "Laravel · Blade publik + Inertia/Vue admin",
+      "port": 8100,
+      "folder": "/home/expedisi-vd",
+      "layanan": [
+        "expedisi-vd-dev",
+        "expedisi-vd-queue"
+      ],
+      "catatan": "LIVE 6 Okt 2026 menggantikan WP lama (WP lama kini di /wp/). Produksi: server Wajar akun DA expedisi, app di domains/expedisi.velocitydeveloper.com/laravel, DB expedisi_app; rilis /root/expedisi-vd-prod/deploy-prod.sh, batal ke WP: rollback-wp.sh, akun produksi /root/expedisi-vd-prod/akun.txt. Dev: repo velocitycustomer/expedisi-vd, DB MariaDB expedisi_vd, user sistem expedisivd. Page builder @myissue + medialibrary; resi, tarif, cabang/kurir, jemput. Update dev: /root/expedisi-vd/deploy-dev.sh",
+      "produksi": "https://expedisi.velocitydeveloper.com"
+    },
+    {
+      "id": "fastcek",
+      "nama": "Website Konsep Jasa Cek Plagiasi Turnitin (fastcek.id)",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8070,
+      "folder": "/home/fastcek",
+      "layanan": [
+        "fastcek-dev",
+        "fastcek-queue",
+        "fastcek-schedule"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-01. Update: /root/fastcek/deploy-dev.sh",
+      "produksi": "https://fastcek.id"
+    },
+    {
+      "id": "ai-agent-all-in-one",
+      "nama": "Ai Agent All-In-One",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8080,
+      "folder": "/home/ai-agent-all-in-one",
+      "layanan": [
+        "ai-agent-all-in-one-dev",
+        "ai-agent-all-in-one-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-01. Update: /root/ai-agent-all-in-one/deploy-dev.sh"
+    },
+    {
+      "id": "web-peminjaman-dan-pengembalian",
+      "nama": "web peminjaman dan pengembalian barang",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8110,
+      "folder": "/home/web-peminjaman-dan-pengembalian",
+      "layanan": [
+        "web-peminjaman-dan-pengembalian-dev",
+        "web-peminjaman-dan-pengembalian-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-04. Update: /root/web-peminjaman-dan-pengembalian/deploy-dev.sh"
+    },
+    {
+      "id": "web-cetak-sertif-iso-klien-yg-de",
+      "nama": "web cetak sertif iso klien yg deal",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8120,
+      "folder": "/home/web-cetak-sertif-iso-klien-yg-de",
+      "layanan": [
+        "web-cetak-sertif-iso-klien-yg-de-dev",
+        "web-cetak-sertif-iso-klien-yg-de-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-05. Update: /root/web-cetak-sertif-iso-klien-yg-de/deploy-dev.sh"
+    },
+    {
+      "id": "hotel-booking",
+      "nama": "Demo Hotel Booking",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8140,
+      "folder": "/home/hotel-booking",
+      "layanan": [
+        "hotel-booking-dev",
+        "hotel-booking-queue",
+        "hotel-booking-scheduler"
+      ],
+      "catatan": "Demo booking hotel (ala WP Hotel Booking) untuk g6.velocitydeveloper.com. Dibuat 2026-10-06. Update: /root/hotel-booking/deploy-dev.sh",
+      "produksi": "https://g6.velocitydeveloper.com"
     }
   ]
 }

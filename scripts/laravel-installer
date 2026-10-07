@@ -148,10 +148,10 @@ php artisan migrate --force
 
 # ---------------------------------------------------------------------------
 langkah 6 "Seeder akun uji"
-# Sandi TIDAK ditulis di kode (repo naik ke GitHub): seeder membacanya dari env saat dijalankan,
-# lalu disimpan di kartu Project Lokal. Seeder aman diulang (firstOrCreate).
-ADMIN_EMAIL="admin@$SLUG.test"
-ADMIN_SANDI=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)
+# Akun contoh lokal/dev dibuat seragam supaya mudah: <peran>@example.com sandi `password` (juga di kartu
+# Project Lokal). Di production sandi dari SEED_ADMIN_PASSWORD atau acak. Seeder aman diulang (firstOrCreate).
+ADMIN_EMAIL="admin@example.com"
+ADMIN_SANDI=password
 cat > database/seeders/DatabaseSeeder.php <<PHP
 <?php
 
@@ -164,8 +164,8 @@ use Illuminate\\Support\\Str;
 class DatabaseSeeder extends Seeder
 {
     /**
-     * Akun uji untuk dev. Sandi diambil dari SEED_ADMIN_PASSWORD saat seeding;
-     * bila kosong dibuat acak (sandi dev tersimpan di kartu Project Lokal dashboard kantor).
+     * Akun contoh lokal/dev: <peran>@example.com dengan sandi 'password'.
+     * Di production sandi diambil dari SEED_ADMIN_PASSWORD, bila kosong dibuat acak.
      */
     public function run(): void
     {
@@ -174,18 +174,24 @@ class DatabaseSeeder extends Seeder
             ['email' => '$ADMIN_EMAIL'],
             [
                 'name' => 'Admin',
-                'password' => env('SEED_ADMIN_PASSWORD') ?: Str::password(16),
+                'password' => app()->isProduction() ? (env('SEED_ADMIN_PASSWORD') ?: Str::password(16)) : 'password',
                 'email_verified_at' => now(),
             ],
         );
 
         // Data wajib: nama & deskripsi aplikasi (Pengaturan > Aplikasi)
         \$this->call(SettingSeeder::class);
+
+        // Data contoh: setiap model punya <Model>Seeder, dipanggil di sini berurutan sesuai relasi.
+        if (! app()->isProduction()) {
+            \$this->call([
+            ]);
+        }
     }
 }
 PHP
-SEED_ADMIN_PASSWORD=$ADMIN_SANDI php artisan db:seed --force
-echo "Akun uji: $ADMIN_EMAIL (sandi disimpan di kartu Project Lokal)"
+php artisan db:seed --force
+echo "Akun uji: $ADMIN_EMAIL / $ADMIN_SANDI"
 
 # ---------------------------------------------------------------------------
 langkah 7 "CLAUDE.md konvensi tim"
@@ -226,6 +232,9 @@ WorkingDirectory=$DIR
 Environment=PHP_CLI_SERVER_WORKERS=4
 Environment=PHP_INI_SCAN_DIR=$SCAN_DIR:/etc/$SLUG/php.d
 ExecStart=/usr/bin/php artisan serve --host=0.0.0.0 --port=$PORT --no-reload
+# Pengaman RAM: PC pernah hang karena memori habis saat banyak proyek dev jalan 24 jam.
+MemoryHigh=384M
+MemoryMax=512M
 Restart=always
 RestartSec=3
 
@@ -242,6 +251,8 @@ User=$PENGGUNA
 Group=$PENGGUNA
 WorkingDirectory=$DIR
 ExecStart=/usr/bin/php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+MemoryHigh=256M
+MemoryMax=384M
 Restart=always
 RestartSec=3
 

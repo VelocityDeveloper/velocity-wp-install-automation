@@ -1,0 +1,9 @@
+[Unit]
+Description=Cek server dev Laravel tiap jam; yang diam 24 jam dimatikan
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Hentikan sesi Claude yang menganggur >= 6 jam (pengaman RAM PC lokal)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/claude-sesi-diam --batas-jam 6 --jam-hentikan 3

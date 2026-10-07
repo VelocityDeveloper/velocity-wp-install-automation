@@ -1,0 +1,9 @@
+[Unit]
+Description=Catat aktivitas sesi Claude tiap jam; jam 03:00 hentikan yang menganggur
+
+[Timer]
+OnCalendar=hourly
+Persistent=false
+
+[Install]
+WantedBy=timers.target

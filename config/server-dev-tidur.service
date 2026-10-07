@@ -1,0 +1,7 @@
+[Unit]
+Description=Matikan server dev Laravel yang tidak ada aktivitas 24 jam (pengaman RAM PC lokal)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/server_dev.py --tidurkan
