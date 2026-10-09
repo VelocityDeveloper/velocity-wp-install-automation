@@ -810,9 +810,12 @@ if ($d['halaman_layanan'] !== '') {
 // Home + kategori, halaman profil di menu secondary, blok berita diisi kategori, banner iklan kosong.
 $sd = get_stylesheet_directory();
 $berita_depan = !empty($d['berita']) && !is_file("$sd/front-page.php") && (is_file("$sd/index.php") || is_file("$sd/home.php"));
-if ($berita_depan) {
+// berita4 & berita11 berberanda page-home.php (tanpa index.php/home.php): beranda statis dibiarkan, tetapi
+// Customizer (blok kategori, iklan, sosmed) dan meta hit tetap diisi — info-luarbiasa.com 2026-10-09
+// slot banner05–07 & sosmed kosong karena seluruh blok ini dulu dilewati.
+if (!empty($d['berita'])) {
     $pof = (int) get_option('page_on_front');
-    if (get_option('show_on_front') !== 'posts' || $pof) {
+    if ($berita_depan && (get_option('show_on_front') !== 'posts' || $pof)) {
         if (!$pof || $milik_installer($pof)) {
             update_option('show_on_front', 'posts'); update_option('page_on_front', 0); update_option('page_for_posts', 0);
             echo "tampilan: berita_beranda_tulisan_terbaru\n";
@@ -920,6 +923,8 @@ if ($berita_depan) {
                             'meta_query' => [['key' => 'hit', 'compare' => 'NOT EXISTS']]]);
     foreach ($tanpa_hit as $pid) { add_post_meta($pid, 'hit', 0, true); }
     if ($tanpa_hit) { echo 'tampilan: berita_hit_awal:' . count($tanpa_hit) . "\n"; }
+}
+if ($berita_depan) {
     // Menu: hanya menu buatan installer (halaman baku) yang disusun ulang.
     $baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan', 'redaksi',
              'pedoman media siber', 'privacy policy', 'kebijakan privasi'];
@@ -1229,7 +1234,20 @@ if ($demo_w) {
                 if (empty($W['footer_tentang'])) { return null; }
                 // Judul kosong (logo di atasnya): tanpa logo, nama situs yang jadi judul.
                 $judul = $it['judul'] ?? $W['footer_tentang'][0];
-                return $buat_html($judul === '' && !$logo ? $W['footer_tentang'][0] : $judul, $W['footer_tentang'][1]);
+                $judul = $judul === '' && !$logo ? $W['footer_tentang'][0] : $judul;
+                // "lengkap": isi halaman Tentang Kami utuh, tanpa ikon sosmed (berita4, info-luarbiasa.com 2026-10-09);
+                // halaman belum ada/kosong = teks ringkas tanpa ikon sosmed.
+                if (!empty($it['lengkap'])) {
+                    $tk = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);
+                    // Judul seksi dibuang, tiap paragraf tetap paragraf sendiri.
+                    $teks = $tk ? strip_shortcodes(excerpt_remove_blocks($tk[0]->post_content)) : '';
+                    $teks = preg_replace(['#<h[1-6][^>]*>.*?</h[1-6]>#is', '#</(p|div|li|section)>|<br\s*/?>#i'], ['', "\n\n"], $teks);
+                    $par = array_filter(array_map(fn($x) => trim(preg_replace('/\s+/', ' ', $x)), explode("\n\n", wp_strip_all_tags($teks))));
+                    $html = $par ? '<p>' . implode('</p><p>', array_map('esc_html', $par)) . '</p>'
+                                 : preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $W['footer_tentang'][1]);
+                    return $buat_html($judul, $html);
+                }
+                return $buat_html($judul, $W['footer_tentang'][1]);
             case 'statistik': return $teks_w($it['judul'] ?? 'Pengunjung', '[velocity-statistics style="list"]', true);
             case 'text': return $teks_w($isi($it['judul'] ?? ''), $isi($it['isi'] ?? ''));
             case 'widget':

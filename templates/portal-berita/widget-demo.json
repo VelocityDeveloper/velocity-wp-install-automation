@@ -759,7 +759,8 @@
    "footer-widget-1": [
     {
      "jenis": "tentang",
-     "judul": "About Us"
+     "judul": "Tentang Kami",
+     "lengkap": true
     }
    ],
    "footer-widget-2": [
@@ -767,8 +768,8 @@
      "jenis": "core",
      "base": "recent-posts",
      "opsi": {
-      "title": "RECENT POSTS",
-      "number": 3,
+      "title": "Recent Posts",
+      "number": 5,
       "show_date": false
      }
     }
@@ -776,12 +777,13 @@
    "footer-widget-3": [
     {
      "jenis": "core",
-     "base": "meta",
+     "base": "categories",
      "opsi": {
-      "title": "Meta"
-     },
-     "lewati": true,
-     "alasan": "Widget Meta memuat tautan Log in / wp-login.php dan WordPress.org, tidak pantas untuk situs klien"
+      "title": "Categories",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
     }
    ],
    "footer-widget-4": [
@@ -791,7 +793,7 @@
     }
    ]
   },
-  "catatan": "Area dari induk: main-sidebar dan footer-widget-1..4 (DENGAN tanda hubung; part-footer child memanggil footer-widget-'.$x, tiap area = satu kolom col-md). Tema tidak punya widget kelas sendiri; sidebar demo = widget Text berisi shortcode tema [vd-listpost] (atribut meta_key, orderby, layout, number; layout 1 = baris bg-rainbow thumbnail 1:1 + judul putih, selain 1 = thumbnail + judul + tanggal). Populer: orderby hit = meta_value_num meta 'hit' (tulisan tanpa meta hit tidak ikut -> installer perlu mengisi meta hit). Latests: bawaan shortcode meta_key='hit' akan menyaring tulisan tanpa hit, jadi rekonstruksi memakai meta_key=\"\" (WP_Query mengabaikan meta_key kosong) + orderby date; isi asli demo tidak terlihat, urutan demo = terbaru. Pengunjung = [velocity-statistics style=\"list\"] (keluaran velocity-list-stats). Blok widget editor dimatikan (remove_theme_support widgets-block-editor) -> widget klasik."
+  "catatan": "Area dari induk: main-sidebar dan footer-widget-1..4 (DENGAN tanda hubung; part-footer child memanggil footer-widget-'.$x, tiap area = satu kolom col-md). Tema tidak punya widget kelas sendiri; sidebar demo = widget Text berisi shortcode tema [vd-listpost] (atribut meta_key, orderby, layout, number; layout 1 = baris bg-rainbow thumbnail 1:1 + judul putih, selain 1 = thumbnail + judul + tanggal). Populer: orderby hit = meta_value_num meta 'hit' (tulisan tanpa meta hit tidak ikut -> installer perlu mengisi meta hit). Latests: bawaan shortcode meta_key='hit' akan menyaring tulisan tanpa hit, jadi rekonstruksi memakai meta_key=\"\" (WP_Query mengabaikan meta_key kosong) + orderby date; isi asli demo tidak terlihat, urutan demo = terbaru. Pengunjung = [velocity-statistics style=\"list\"] (keluaran velocity-list-stats). Blok widget editor dimatikan (remove_theme_support widgets-block-editor) -> widget klasik. Footer (user 2026-10-09, info-luarbiasa.com): kolom 1 = isi halaman Tentang Kami utuh tanpa ikon sosmed, 2 = Recent Posts, 3 = Categories (pengganti Meta demo), 4 = Pengunjung."
  },
  "velocity-berita5": {
   "slug": "velocity-berita5",
