@@ -1,0 +1,9 @@
+[Unit]
+Description=Velocity Update: penilaian Claude tiap Senin pagi
+
+[Timer]
+OnCalendar=Mon *-*-* 07:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

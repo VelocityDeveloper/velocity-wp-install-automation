@@ -19,7 +19,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
+# Lewat pembungkus claude-akun: pindah otomatis ke langganan Claude 2 bila Claude 1 kena/mendekati limit.
+CLAUDE = str(Path(__file__).resolve().parent / 'claude-akun')
 KUNCI_API = Path('/etc/velocity/secrets/anthropic_api_key')
 MODEL = os.environ.get('VELOCITY_VISION_MODEL', 'sonnet')
 

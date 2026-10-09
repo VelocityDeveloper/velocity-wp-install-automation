@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""Isi landing page velocity-landing (Paket Landing Page Biasa) dari data klien.
+
+Pemakaian: landing-konten <manifest> [--segar] [--coba] [--paksa]
+
+Keputusan user 2026-09-30: paket Landing Page Biasa memakai child theme velocity-landing
+(templates/velocity-landing, induk velocity, plugin velocity-addons). Seluruh isi beranda tema
+itu adalah pengaturan Customizer (theme_mod vlp_*), jadi langkah ini:
+- menyusun teks landing per seksi dengan AI dari FORM ISIAN + dokumen klien + isi contoh
+  <domain>-tema.json (paket-g-konten) -> /var/lib/velocity/ai/generated/<domain>-landing.json;
+  aturan kejujuran paket-g-konten berlaku (tanpa angka/harga/testimoni karangan). Paket harga
+  hanya tampil kalau harganya tertulis di data klien, selain itu seksinya disembunyikan;
+- memilih foto: foto klien bergilir, lalu foto bank bebas lisensi (paket-g-foto), lalu banner
+  polos -> /var/lib/velocity/tampilan/<domain>/landing-*.jpg (dipakai ulang saat run ulang);
+- menulis theme_mod lewat satu koneksi SSH: kontak (WA, alamat, telepon, email publik dari
+  data_klien), warna pilihan klien, logo situs (custom_logo site-finish) sebagai logo footer.
+
+Tidak menimpa kerja orang: theme_mod hanya ditulis kalau belum pernah diisi, atau isinya masih
+persis tulisan langkah ini (sidik md5 di opsi velocity_landing_otomatis). Situs yang sudah
+ter-deploy dilewati kecuali --paksa. --segar membuat ulang teks AI; --coba menyiapkan data &
+gambar tanpa SSH (folder kerja dicetak).
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+from PIL import Image, ImageOps
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from folder_klien import folder_klien  # noqa: E402
+
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+TEMBOLOK = Path('/var/lib/velocity/tampilan')
+TEMA = 'velocity-landing'
+PAKET = 'paketlandingpagebiasa'
+SEMENTARA = []
+
+# Ikon Font Awesome 6 (gratis) yang boleh dipilih AI untuk kartu keunggulan.
+IKON = ('fa-solid fa-circle-check', 'fa-solid fa-star', 'fa-solid fa-award', 'fa-solid fa-shield-halved',
+        'fa-solid fa-thumbs-up', 'fa-solid fa-clock', 'fa-solid fa-truck-fast', 'fa-solid fa-hand-holding-heart',
+        'fa-solid fa-users', 'fa-solid fa-user-tie', 'fa-solid fa-headset', 'fa-solid fa-comments',
+        'fa-solid fa-money-bill-1', 'fa-solid fa-tags', 'fa-solid fa-list-check', 'fa-solid fa-gears',
+        'fa-solid fa-screwdriver-wrench', 'fa-solid fa-leaf', 'fa-solid fa-seedling', 'fa-solid fa-heart-pulse',
+        'fa-solid fa-graduation-cap', 'fa-solid fa-book-open', 'fa-solid fa-house', 'fa-solid fa-building',
+        'fa-solid fa-map-location-dot', 'fa-solid fa-utensils', 'fa-solid fa-hand-sparkles', 'fa-solid fa-lightbulb',
+        'fa-solid fa-chart-line', 'fa-solid fa-lock', 'fa-solid fa-file-signature', 'fa-solid fa-camera',
+        'fa-solid fa-palette', 'fa-solid fa-car', 'fa-solid fa-plane', 'fa-solid fa-box-open',
+        'fa-solid fa-medal', 'fa-solid fa-scale-balanced', 'fa-solid fa-stethoscope', 'fa-solid fa-wifi',
+        'fa-brands fa-whatsapp')
+
+SLOT_KOTAK = ('hero', 'masalah', 'solusi', 'pentingnya', 'mengapa-1', 'mengapa-2')
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(berkas))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def norm(teks):
+    return re.sub(r'[^a-z0-9]', '', str(teks or '').lower())
+
+
+def satu(nilai, batas):
+    """Teks satu baris tanpa label "CONTOH:" (paket-g-konten.teks)."""
+    return PGK.teks(nilai, batas)
+
+
+def paragraf(nilai, batas):
+    """Teks beberapa paragraf (dipisah baris kosong), tiap paragraf dirapikan."""
+    bagian = [satu(p, batas) for p in re.split(r'\n\s*\n|\\n\\n', str(nilai or ''))]
+    return '\n\n'.join(p for p in bagian if p)
+
+
+def daftar(nilai, batas, maks):
+    return [satu(x, batas) for x in (nilai or []) if satu(x, batas)][:maks]
+
+
+# ---------- teks AI ----------
+
+def angka_di(teks):
+    return {re.sub(r'\D', '', a) for a in re.findall(r'\d[\d.,]*\d|\d', teks or '') if len(re.sub(r'\D', '', a)) >= 3}
+
+
+def rapikan(data, sumber, cadangan):
+    """Bentuk & batas panjang sesuai skema tema. Harga yang tidak tertulis di data klien dibuang."""
+    g = lambda k: data.get(k) or {}
+    hasil = {
+        'hero': {'judul': satu(g('hero').get('judul'), 110), 'teks': paragraf(g('hero').get('teks'), 520),
+                 'tombol': satu(g('hero').get('tombol'), 28) or 'Hubungi Kami', 'foto': satu(g('hero').get('foto'), 60)},
+        'masalah': {'judul': satu(g('masalah').get('judul'), 90), 'butir': daftar(g('masalah').get('butir'), 140, 5),
+                    'foto': satu(g('masalah').get('foto'), 60)},
+        'solusi': {'judul': satu(g('solusi').get('judul'), 110), 'teks': paragraf(g('solusi').get('teks'), 700),
+                   'foto': satu(g('solusi').get('foto'), 60)},
+        'pentingnya': {'judul': satu(g('pentingnya').get('judul'), 110), 'teks': paragraf(g('pentingnya').get('teks'), 700),
+                       'foto': satu(g('pentingnya').get('foto'), 60)},
+        'layanan': {'judul': satu(g('layanan').get('judul'), 130), 'teks': paragraf(g('layanan').get('teks'), 700),
+                    'foto': satu(g('layanan').get('foto'), 60)},
+        'keunggulan': {'judul': satu(g('keunggulan').get('judul'), 90), 'kartu': []},
+        'mengapa': {'judul': satu(g('mengapa').get('judul'), 80), 'butir': daftar(g('mengapa').get('butir'), 70, 6),
+                    'foto1': satu(g('mengapa').get('foto1'), 60), 'foto2': satu(g('mengapa').get('foto2'), 60)},
+        'paket': {'judul': satu(g('paket').get('judul'), 90), 'deskripsi': satu(g('paket').get('deskripsi'), 260), 'daftar': []},
+        'jenis': {'judul': satu(g('jenis').get('judul'), 90), 'deskripsi': satu(g('jenis').get('deskripsi'), 260), 'items': []},
+        'kepercayaan': {'judul': satu(g('kepercayaan').get('judul'), 90), 'teks': paragraf(g('kepercayaan').get('teks'), 700)},
+        'faq': {'judul': satu(g('faq').get('judul'), 90), 'deskripsi': satu(g('faq').get('deskripsi'), 260), 'items': []},
+        'footer': {'tentang_judul': satu(g('footer').get('tentang_judul'), 60), 'tentang_teks': satu(g('footer').get('tentang_teks'), 320)},
+        'wa_pesan': satu(data.get('wa_pesan'), 160),
+    }
+    for k in (g('keunggulan').get('kartu') or [])[:9]:
+        judul = satu((k or {}).get('judul'), 60)
+        if judul:
+            ikon = satu(k.get('ikon'), 40)
+            hasil['keunggulan']['kartu'].append({'ikon': ikon if ikon in IKON else 'fa-solid fa-circle-check',
+                                                 'judul': judul, 'teks': satu(k.get('teks'), 200)})
+    angka_sumber = angka_di(sumber)
+    for p in (g('paket').get('daftar') or [])[:3]:
+        nama, harga = satu((p or {}).get('nama'), 40), satu((p or {}).get('harga'), 60)
+        # Batas kejujuran: harga harus tertulis di data klien (angka yang sama), bukan karangan AI.
+        if not nama or not harga or not angka_di(harga) or not angka_di(harga) <= angka_sumber:
+            continue
+        hasil['paket']['daftar'].append({'nama': nama, 'label': satu(p.get('label'), 40), 'harga': harga,
+                                         'fitur': daftar(p.get('fitur'), 80, 10)})
+    for j in (g('jenis').get('items') or [])[:12]:
+        judul = satu((j or {}).get('judul'), 70)
+        if judul:
+            hasil['jenis']['items'].append({'judul': judul, 'teks': satu(j.get('teks'), 220), 'foto': satu(j.get('foto'), 60)})
+    for f in (g('faq').get('items') or [])[:10]:
+        tanya = satu((f or {}).get('tanya'), 140)
+        if tanya:
+            hasil['faq']['items'].append({'tanya': tanya, 'jawab': satu(f.get('jawab'), 400)})
+    kurang = [k for k, ok in (('hero', hasil['hero']['judul'] and hasil['hero']['teks']),
+                              ('masalah', len(hasil['masalah']['butir']) >= 2),
+                              ('keunggulan', len(hasil['keunggulan']['kartu']) >= 3),
+                              ('jenis', hasil['jenis']['items']),
+                              ('faq', len(hasil['faq']['items']) >= 3)) if not ok]
+    if kurang:
+        raise ValueError(f'bagian kosong: {kurang}')
+    if not hasil['footer']['tentang_teks']:
+        hasil['footer']['tentang_teks'] = satu(cadangan.get('hero_teks'), 320)
+    return hasil
+
+
+def buat_teks(manifest, cfg, domain, tema):
+    gen = PGK.muat_generator(manifest)
+    client_data = {}
+    for folder in (Path(manifest).parent, folder_klien(domain)):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    docs = gen.collect_client_docs(folder_klien(domain))
+    info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
+    model = gen.get_model('isi_contoh')
+    if not model:
+        raise RuntimeError('model AI belum diatur')
+    ringkas = {k: tema.get(k) for k in ('hero_judul', 'hero_teks', 'layanan', 'produk', 'keunggulan', 'alur', 'slogan', 'profil')
+               if tema.get(k)}
+    sistem = ("You are a senior Indonesian conversion copywriter for one-page landing pages. Output ONLY one valid "
+              "JSON object, no markdown fences, no extra text. All visible text in Indonesian.")
+    permintaan = f"""Tulis isi landing page satu halaman (gaya iklan: masalah -> solusi -> layanan -> alasan -> ajakan WhatsApp) dari data klien berikut.
+- Nama situs: {cfg.get('site_title') or domain}
+- Domain: {domain}
+- Data klien:
+{info}
+
+Isi contoh situs yang sudah disusun sebelumnya (pakai layanan/produk yang sama supaya konsisten):
+{json.dumps(ringkas, ensure_ascii=False)[:6000]}
+
+{PGK.ATURAN}
+- Nada meyakinkan tapi jujur; sapa pengunjung dengan "Anda". Judul seksi boleh berupa pertanyaan.
+- "masalah.butir": keresahan calon pelanggan di bidang ini, berupa kalimat tanya.
+- "paket.daftar": HANYA kalau data klien menyebut paket/harga (salin nama, harga, dan isinya apa adanya). Tanpa harga di data klien: [].
+- "jenis.items": layanan/produk klien (semua yang tertulis, 3-9 butir; tanpa rincian dari klien: 6).
+- "keunggulan.kartu": 6 butir; "ikon" dipilih dari daftar ini saja: {', '.join(IKON)}.
+- "faq.items": 8-10 pertanyaan yang wajar ditanyakan calon pelanggan bidang ini; jawaban tidak menjanjikan angka/harga yang tidak ada di data.
+- "wa_pesan": kalimat pembuka chat WhatsApp dari pengunjung ke usaha ini (mis. "Halo, saya ingin bertanya tentang ...").
+- Kata kunci "foto"/"foto1"/"foto2": 2-4 kata BAHASA INGGRIS berupa benda/tempat yang terlihat di foto dan cocok dengan bidang usaha (hindari orang, logo, teks, merek).
+- "teks" yang panjang: 2 paragraf dipisah "\\n\\n" (hero: 1 paragraf).
+
+Kembalikan JSON dengan bentuk persis:
+{{"hero":{{"judul":"","teks":"","tombol":"","foto":""}},
+"masalah":{{"judul":"","butir":["","",""],"foto":""}},
+"solusi":{{"judul":"","teks":"","foto":""}},
+"pentingnya":{{"judul":"","teks":"","foto":""}},
+"layanan":{{"judul":"","teks":"","foto":""}},
+"keunggulan":{{"judul":"","kartu":[{{"ikon":"","judul":"","teks":""}}]}},
+"mengapa":{{"judul":"","butir":["","","","",""],"foto1":"","foto2":""}},
+"paket":{{"judul":"","deskripsi":"","daftar":[{{"nama":"","label":"","harga":"","fitur":[""]}}]}},
+"jenis":{{"judul":"","deskripsi":"","items":[{{"judul":"","teks":"","foto":""}}]}},
+"kepercayaan":{{"judul":"","teks":""}},
+"faq":{{"judul":"","deskripsi":"","items":[{{"tanya":"","jawab":""}}]}},
+"footer":{{"tentang_judul":"","tentang_teks":""}},
+"wa_pesan":""}}"""
+    for percobaan in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model,
+                            timeout=int(os.environ.get('VELOCITY_AI_TIMEOUT_ISI', '420')),
+                            max_tokens=int(os.environ.get('VELOCITY_AI_MAXTOK_ISI', '12000')))
+        if not jawab:
+            gen.log(f'Isi landing percobaan {percobaan + 1}: jawaban AI kosong')
+            continue
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            return rapikan(json.loads(jawab[awal:akhir + 1]), info, tema)
+        except (ValueError, json.JSONDecodeError) as e:
+            gen.log(f'Isi landing percobaan {percobaan + 1} ditolak: {e}')
+    raise RuntimeError('AI tidak menghasilkan isi landing yang lengkap')
+
+
+# ---------- warna ----------
+
+def hex_rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def rgb_hex(rgb):
+    return '#' + ''.join(f'{max(0, min(255, int(round(c)))):02x}' for c in rgb)
+
+
+def campur(a, b, t):
+    return rgb_hex(tuple(x + (y - x) * t for x, y in zip(hex_rgb(a), hex_rgb(b))))
+
+
+def terang(h):
+    r, g, b = (c / 255 for c in hex_rgb(h))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def warna_klien(cfg, tema):
+    """Warna utama/aksen pilihan klien (form/compro), disesuaikan agar teks putih tetap terbaca."""
+    hexok = lambda v: v if re.match(r'^#[0-9a-fA-F]{6}$', v or '') else ''
+    utama = hexok(cfg.get('velocity_warna_utama')) or hexok((tema.get('warna') or {}).get('utama'))
+    aksen = hexok(cfg.get('velocity_warna_aksen')) or hexok((tema.get('warna') or {}).get('aksen'))
+    if not utama:
+        return {}
+    while terang(utama) > 0.32:  # kartu berteks putih: warna utama harus cukup gelap
+        utama = campur(utama, '#000000', 0.15)
+    aksen = aksen or campur(utama, '#ffffff', 0.35)
+    return {'warna_utama': utama.lower(), 'warna_aksen': aksen.lower(), 'warna_sorot': campur(utama, aksen, 0.4)}
+
+
+# ---------- gambar ----------
+
+def potong(sumber, lebar, tinggi, tujuan):
+    im = ImageOps.exif_transpose(Image.open(sumber)).convert('RGB')
+    im = ImageOps.fit(im, (lebar, tinggi), Image.LANCZOS, centering=(0.5, 0.45))
+    for mutu in (82, 74, 66):
+        im.save(tujuan, quality=mutu, optimize=True, progressive=True)
+        if tujuan.stat().st_size <= 160_000:
+            break
+    return tujuan
+
+
+def foto_bank(manifest, konteks, slot):
+    """Foto bank untuk slot kosong: Pexels dulu, Openverse/Commons cadangan (paket-g-foto
+    BankFotoSlot, keputusan user 2026-09-18), dinilai AI. {kunci: berkas lokal}."""
+    if not slot:
+        return {}
+    try:
+        pgf = muat('paket_g_foto', HERE / 'paket-g-foto')
+        pilihan = pgf.pilih_foto(slot, konteks, pgf.BankFotoSlot(), pgf.muat_ai(manifest))
+    except Exception as e:
+        print(f'landing: foto_bank_gagal:{type(e).__name__}')
+        return {}
+    folder = Path(tempfile.mkdtemp(prefix='landing-konten-foto-'))
+    SEMENTARA.append(folder)
+    hasil = {}
+    for kunci, (r, _) in pilihan.items():
+        berkas = folder / f'{kunci}.img'
+        try:
+            pgf.unduh(r['url'], berkas)
+            hasil[kunci] = berkas
+            print(f"landing: foto_bank:{kunci}:{r.get('sumber') or 'openverse'}: {pgf.judul_foto(r)[:60]}")
+        except Exception as e:
+            print(f'landing: foto_bank_gagal_unduh:{kunci}:{type(e).__name__}')
+    return hasil
+
+
+def siapkan_gambar(manifest, domain, nama, isi, tema, warna, kerja, coba):
+    # Judul slot = judul seksinya: dibaca penilai AI foto dan dipakai sebagai judul/alt lampiran.
+    slot = [('hero', isi['hero']['foto'], isi['hero']['judul']), ('masalah', isi['masalah']['foto'], isi['masalah']['judul']),
+            ('solusi', isi['solusi']['foto'], isi['solusi']['judul']),
+            ('pentingnya', isi['pentingnya']['foto'], isi['pentingnya']['judul']),
+            ('layanan', isi['layanan']['foto'], isi['layanan']['judul']),
+            ('mengapa-1', isi['mengapa']['foto1'], isi['mengapa']['judul']),
+            ('mengapa-2', isi['mengapa']['foto2'], isi['mengapa']['judul'])]
+    slot += [(f'jenis-{i}', j['foto'] or j['judul'], j['judul']) for i, j in enumerate(isi['jenis']['items'], 1)]
+    ukuran = {k: (1400, 788) if k == 'layanan' else (1000, 1000) for k, _, _ in slot}
+    simpan = TEMBOLOK / domain
+    sumber = {k: simpan / f'landing-{k}.jpg' for k, _, _ in slot if (simpan / f'landing-{k}.jpg').is_file()}
+    if len(sumber) < len(slot):
+        klien = TPB.foto_klien(domain)
+        kosong = [s for s in slot if s[0] not in sumber]
+        if klien:
+            print(f'landing: foto_klien={len(klien)}')
+            for i, s in enumerate(kosong):
+                sumber[s[0]] = klien[i % len(klien)][0]
+        else:
+            # Konteks bisnis untuk penilai foto (hero_judul, foto_umum) dari isi contoh paket-g-konten.
+            konteks = {**tema, 'hero_judul': tema.get('hero_judul') or isi['hero']['judul'], 'foto_umum': tema.get('foto_umum') or []}
+            bank = foto_bank(manifest, konteks, [s for s in kosong if s[1]])
+            sumber.update(bank)
+    aset = {}
+    for kunci, _, judul in slot:
+        tujuan = kerja / f'landing-{kunci}.jpg'
+        w, h = ukuran[kunci]
+        try:
+            if kunci in sumber:
+                if Path(sumber[kunci]).parent == simpan:
+                    shutil.copyfile(sumber[kunci], tujuan)
+                else:
+                    potong(sumber[kunci], w, h, tujuan)
+            else:
+                TPB.banner_polos(nama, warna.get('warna_utama') or '#4b125e', tujuan, w, h)
+                print(f'landing: banner_polos:{kunci}')
+        except Exception as e:
+            print(f'landing: gambar_gagal:{kunci}:{type(e).__name__}')
+            continue
+        aset[kunci] = tujuan
+    if not coba:
+        simpan.mkdir(parents=True, exist_ok=True)
+        for kunci, berkas in aset.items():
+            if berkas.parent != simpan:
+                shutil.copyfile(berkas, simpan / berkas.name)
+    judul = {k: f'{nama} - {j}' for k, _, j in slot}
+    return {k: {'file': p.name, 'judul': judul[k], 'sidik': f'{domain}:landing:{k}:{hashlib.md5(p.read_bytes()).hexdigest()}'}
+            for k, p in aset.items()}
+
+
+# ---------- theme_mod ----------
+
+def susun_mods(cfg, isi, kontak, warna, aset):
+    url = lambda k: f'{{{{url:{k}}}}}' if k in aset else ''
+    m = {
+        'vlp_umum_wa_nomor': kontak['wa'], 'vlp_umum_wa_pesan': isi['wa_pesan'],
+        'vlp_hero_judul': isi['hero']['judul'], 'vlp_hero_teks': isi['hero']['teks'],
+        'vlp_hero_tombol_label': isi['hero']['tombol'], 'vlp_hero_gambar': url('hero'),
+        'vlp_masalah_judul': isi['masalah']['judul'], 'vlp_masalah_butir': '\n'.join(isi['masalah']['butir']),
+        'vlp_masalah_gambar': url('masalah'),
+        'vlp_solusi_judul': isi['solusi']['judul'], 'vlp_solusi_teks': isi['solusi']['teks'], 'vlp_solusi_gambar': url('solusi'),
+        'vlp_pentingnya_judul': isi['pentingnya']['judul'], 'vlp_pentingnya_teks': isi['pentingnya']['teks'],
+        'vlp_pentingnya_gambar': url('pentingnya'),
+        'vlp_layanan_judul': isi['layanan']['judul'], 'vlp_layanan_teks': isi['layanan']['teks'], 'vlp_layanan_gambar': url('layanan'),
+        'vlp_keunggulan_judul': isi['keunggulan']['judul'],
+        'vlp_mengapa_judul': isi['mengapa']['judul'], 'vlp_mengapa_butir': '\n'.join(isi['mengapa']['butir']),
+        'vlp_mengapa_gambar1': url('mengapa-1'), 'vlp_mengapa_gambar2': url('mengapa-2'),
+        'vlp_jenis_judul': isi['jenis']['judul'], 'vlp_jenis_deskripsi': isi['jenis']['deskripsi'],
+        'vlp_jenis_items': json.dumps([{'gambar': url(f'jenis-{i}'), 'judul': j['judul'], 'teks': j['teks']}
+                                       for i, j in enumerate(isi['jenis']['items'], 1)], ensure_ascii=False),
+        'vlp_kepercayaan_judul': isi['kepercayaan']['judul'], 'vlp_kepercayaan_teks': isi['kepercayaan']['teks'],
+        'vlp_faq_judul': isi['faq']['judul'], 'vlp_faq_deskripsi': isi['faq']['deskripsi'],
+        'vlp_footer_logo': '{{logo_situs}}', 'vlp_footer_alamat': kontak['alamat'],
+        'vlp_footer_telepon': kontak['telp'], 'vlp_footer_email': kontak['email'],
+        'vlp_footer_tentang_judul': isi['footer']['tentang_judul'] or f"Tentang {cfg.get('site_title') or ''}".strip(),
+        'vlp_footer_tentang_teks': isi['footer']['tentang_teks'],
+    }
+    for n in range(1, 10):
+        k = isi['keunggulan']['kartu'][n - 1] if n <= len(isi['keunggulan']['kartu']) else {'ikon': '', 'judul': '', 'teks': ''}
+        m.update({f'vlp_keunggulan_item{n}_ikon': k['ikon'], f'vlp_keunggulan_item{n}_judul': k['judul'],
+                  f'vlp_keunggulan_item{n}_teks': k['teks']})
+    paket = isi['paket']['daftar']
+    m['vlp_paket_tampil'] = bool(paket)
+    if paket:
+        m.update({'vlp_paket_judul': isi['paket']['judul'], 'vlp_paket_deskripsi': isi['paket']['deskripsi']})
+    for n in range(1, 4):
+        p = paket[n - 1] if n <= len(paket) else {'nama': '', 'label': '', 'harga': '', 'fitur': []}
+        m.update({f'vlp_paket_item{n}_nama': p['nama'], f'vlp_paket_item{n}_label': p['label'],
+                  f'vlp_paket_item{n}_harga': p['harga'], f'vlp_paket_item{n}_tombol_label': 'Pilih Paket' if p['nama'] else '',
+                  f'vlp_paket_item{n}_tombol_link': '', f'vlp_paket_item{n}_fitur': '\n'.join(p['fitur'])})
+    for n in range(1, 11):
+        f = isi['faq']['items'][n - 1] if n <= len(isi['faq']['items']) else {'tanya': '', 'jawab': ''}
+        m.update({f'vlp_faq_item{n}_tanya': f['tanya'], f'vlp_faq_item{n}_jawab': f['jawab']})
+    m.update({f'vlp_umum_{k}': v for k, v in warna.items()})
+    if not kontak['wa']:
+        del m['vlp_umum_wa_nomor']  # nomor contoh tema tetap; dilaporkan sebagai wa_kosong
+    return m
+
+
+REMOTE_PHP = r"""<?php
+// Dijalankan landing-konten lewat wp eval-file <file> <folder>.
+$T = $args[0];
+if (get_stylesheet() !== 'velocity-landing') { echo "landing: dilewati:tema_aktif_" . get_stylesheet() . "\n"; return; }
+$d = json_decode(file_get_contents("$T/data.json"), true);
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+$url = array(); $baru = 0;
+foreach ($d['aset'] as $kunci => $a) {
+    $ada = get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1, 'fields' => 'ids',
+                           'meta_key' => '_velocity_landing_sidik', 'meta_value' => $a['sidik']));
+    if ($ada) { $url[$kunci] = wp_get_attachment_url($ada[0]); continue; }
+    $tmp = wp_tempnam($a['file']); copy("$T/" . $a['file'], $tmp);
+    $id = media_handle_sideload(array('name' => $a['file'], 'tmp_name' => $tmp), 0, $a['judul']);
+    if (is_wp_error($id)) { @unlink($tmp); echo "landing: media_gagal:$kunci:" . $id->get_error_message() . "\n"; continue; }
+    update_post_meta($id, '_velocity_landing_sidik', $a['sidik']);
+    update_post_meta($id, '_wp_attachment_image_alt', $a['judul']);
+    $url[$kunci] = wp_get_attachment_url($id); $baru++;
+}
+$logo = get_theme_mod('custom_logo');
+$logo_url = $logo ? (string) wp_get_attachment_image_url($logo, 'full') : '';
+$catatan = get_option('velocity_landing_otomatis', array());
+if (!is_array($catatan)) { $catatan = array(); }
+$tulis = 0; $lewat = array();
+foreach ($d['mods'] as $k => $v) {
+    if (is_string($v)) {
+        $v = str_replace('{{logo_situs}}', $logo_url, $v);
+        $v = preg_replace_callback('/\{\{url:([a-z0-9-]+)\}\}/', function ($m) use ($url) { return isset($url[$m[1]]) ? $url[$m[1]] : ''; }, $v);
+    }
+    $sekarang = get_theme_mod($k, null);
+    $sidik = md5(wp_json_encode($v));
+    // Belum pernah diisi, atau masih persis tulisan langkah ini: boleh ditulis. Isian orang tidak ditimpa.
+    if ($sekarang === null || (isset($catatan[$k]) && $catatan[$k] === md5(wp_json_encode($sekarang)))) {
+        set_theme_mod($k, $v);
+        $catatan[$k] = $sidik;
+        $tulis++;
+    } else {
+        $lewat[] = $k;
+    }
+}
+update_option('velocity_landing_otomatis', $catatan, false);
+echo "landing: media_baru=$baru mods_ditulis=$tulis mods_disunting=" . count($lewat) . "\n";
+if ($lewat) { echo "landing: dibiarkan:" . implode(',', array_slice($lewat, 0, 12)) . "\n"; }
+echo "landing: selesai\n";
+"""
+
+
+def main():
+    global PGK, TPB
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    coba, segar, paksa = '--coba' in sys.argv, '--segar' in sys.argv, '--paksa' in sys.argv
+    if len(args) != 1:
+        print('usage: landing-konten <manifest> [--segar] [--coba] [--paksa]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    cfg = read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('landing: manifest_tidak_valid')
+        return 2
+    if norm(cfg.get('paket')) != PAKET and cfg.get('velocity_child_theme', '') != TEMA:
+        print('landing: dilewati:bukan_landing_page_biasa')
+        return 0
+    if cfg.get('tema_fse'):
+        print('landing: dilewati:tema_fse')
+        return 0
+    vct = muat('velocity_child_theme', HERE / 'velocity-child-theme')
+    if vct.sudah_terpasang(domain) and not paksa:
+        print('landing: dilewati:sudah_terpasang')
+        return 0
+    PGK = muat('paket_g_konten', HERE / 'paket-g-konten')
+    TPB = muat('theme_paket_biasa', HERE / 'theme-paket-biasa')
+    TPB.SEMENTARA = SEMENTARA
+
+    tema_json = GENERATED_DIR / f'{domain}-tema.json'
+    try:
+        tema = json.loads(tema_json.read_text()) if tema_json.is_file() else {}
+    except ValueError:
+        tema = {}
+    simpanan = GENERATED_DIR / f'{domain}-landing.json'
+    if segar or not simpanan.is_file():
+        try:
+            isi = buat_teks(manifest, cfg, domain, tema)
+        except Exception as e:
+            print(f'landing: gagal_membuat_teks ({e})')
+            return 1
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
+        print(f"landing: teks_dibuat jenis={len(isi['jenis']['items'])} faq={len(isi['faq']['items'])} "
+              f"paket={len(isi['paket']['daftar'])}")
+    else:
+        isi = json.loads(simpanan.read_text())
+        print('landing: memakai_teks_tersimpan')
+
+    dk = vct.data_klien(domain, cfg.get('site_title', ''))
+    wa = dk.get('WA', '')
+    telp = dk.get('TELP', '')
+    if telp and wa and re.sub(r'\D', '', telp).lstrip('0') == wa[2:]:
+        telp = ''  # nomor yang sama cukup tampil sebagai WhatsApp
+    kontak = {'wa': wa, 'telp': telp, 'alamat': dk.get('ALAMAT', ''), 'email': dk.get('EMAIL_PUBLIK', '')}
+    print(f"landing: kontak wa={'ya' if wa else 'KOSONG'} alamat={'ya' if kontak['alamat'] else '-'} "
+          f"email={'ya' if kontak['email'] else '-'}")
+    warna = warna_klien(cfg, tema)
+    print(f"landing: warna={warna.get('warna_utama') or 'bawaan_tema'}")
+
+    nama = cfg.get('site_title') or domain
+    kerja = Path(tempfile.mkdtemp(prefix=f'landing-konten-{domain}-'))
+    SEMENTARA.append(kerja)
+    aset = siapkan_gambar(manifest, domain, nama, isi, tema, warna, kerja, coba)
+    mods = susun_mods(cfg, isi, kontak, warna, aset)
+    (kerja / 'data.json').write_text(json.dumps({'aset': aset, 'mods': mods}, ensure_ascii=False))
+    print(f"landing: siap aset={len(aset)} mods={len(mods)} paket_harga={'tampil' if mods['vlp_paket_tampil'] else 'disembunyikan'}")
+    if coba:
+        SEMENTARA.remove(kerja)
+        (kerja / 'terapkan.php').write_text(REMOTE_PHP)
+        print(f'landing: coba folder={kerja}')
+        return 0
+    keluar = TPB.kirim(cfg, kerja, REMOTE_PHP, domain)
+    if not keluar or 'landing: selesai' not in keluar:
+        return 0 if keluar and 'landing: dilewati' in keluar else 1
+    if not wa:
+        print('landing: wa_kosong (nomor WhatsApp contoh tema belum diganti)')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        # WP-CLI sebagai root di beberapa jalur: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    if '--coba' not in sys.argv:
+        for folder in SEMENTARA:
+            shutil.rmtree(folder, ignore_errors=True)
+    sys.exit(kode)

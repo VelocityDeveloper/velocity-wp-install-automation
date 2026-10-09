@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Batas pemakaian akun Claude (5 jam, mingguan, bulanan) untuk menu Token Usage di dashboard.
+
+Sumber: GET https://api.anthropic.com/api/oauth/usage dengan token OAuth Claude Code
+(/root/.claude/.credentials.json), endpoint yang sama dengan perintah /usage. Token hanya
+dibaca, tidak di-refresh: sesi Claude Code yang hidup yang memperbaruinya.
+
+Anthropic hanya punya batas 5 jam dan mingguan (plus mingguan per model). "Bulanan" di sini:
+  - extra usage (kredit berbayar sesudah batas habis) yang memang dihitung per bulan, dan
+  - rekap riwayat bulan berjalan: berapa kali jendela 5 jam penuh dan puncak tiap jendela
+    mingguan, dari catatan tiap putaran di DATA/riwayat.jsonl (disimpan 100 hari).
+
+Dua langganan: akun 1 (/root/.claude) → --out (limit.json), akun 2 (/root/.claude-2, sejak 5 Okt)
+→ limit-2.json di folder yang sama, riwayat masing-masing (riwayat.jsonl / riwayat-2.jsonl).
+
+Pemakaian: claude-limit [--out /usr/share/nginx/html/brain/limit.json]
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# (akun, kredensial, akhiran berkas)
+AKUN = [("1", Path(os.environ.get("CLAUDE_HOME", "/root/.claude")) / ".credentials.json", ""),
+        ("2", Path("/root/.claude-2/.credentials.json"), "-2")]
+DATA = Path("/var/lib/velocity/claude-limit")
+OUT = "/usr/share/nginx/html/brain/limit.json"
+URL = "https://api.anthropic.com/api/oauth/usage"
+WIB = timezone(timedelta(hours=7))
+SIMPAN_HARI = 100
+CLAUDE = shutil.which("claude") or "/root/.local/bin/claude"  # systemd: PATH tanpa ~/.local/bin
+
+
+def versi_claude():
+    try:
+        return subprocess.run([CLAUDE, "--version"], capture_output=True, text=True, timeout=20).stdout.split()[0]
+    except Exception:
+        return "2"
+
+
+def perpanjang_token(kredensial):
+    """Token OAuth (±8 jam) hanya diperbarui Claude Code saat dipakai. Akun yang lama tak dipakai
+    (akun 2) jadi kedaluwarsa, lalu panggilan berulang dengan token mati dibalas 401 lalu 429.
+    Satu panggilan Haiku kecil lewat CLI membuat Claude Code memperbarui token di berkasnya."""
+    try:
+        habis = json.loads(kredensial.read_text())["claudeAiOauth"]["expiresAt"] / 1000
+    except (OSError, KeyError, ValueError):
+        return
+    if habis > time.time() + 15 * 60:
+        return
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(kredensial.parent)}
+    try:
+        subprocess.run([CLAUDE, "-p", "balas: ok", "--model", "haiku", "--tools", "", "--no-session-persistence"],
+                       env=env, cwd=DATA, capture_output=True, timeout=120)
+    except Exception as e:
+        print(f"claude-limit: gagal memperbarui token {kredensial}: {e}", flush=True)
+
+
+def ambil(kredensial):
+    oauth = json.loads(kredensial.read_text())["claudeAiOauth"]
+    req = urllib.request.Request(URL, headers={
+        "Authorization": f"Bearer {oauth['accessToken']}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": f"claude-code/{versi_claude()}",
+    })
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r), oauth
+
+
+def detik(iso):
+    return datetime.fromisoformat(iso).timestamp() if iso else None
+
+
+def jendela(v):
+    return {"persen": v.get("utilization"), "reset": detik(v.get("resets_at"))} if v else None
+
+
+def rekap_bulan(riwayat, sekarang):
+    """Rekap bulan kalender WIB berjalan dari catatan riwayat."""
+    bulan = datetime.fromtimestamp(sekarang, WIB).strftime("%Y-%m")
+    lima, minggu = {}, {}
+    for r in riwayat:
+        if datetime.fromtimestamp(r["t"], WIB).strftime("%Y-%m") != bulan:
+            continue
+        for kunci, wadah in (("lima", lima), ("minggu", minggu)):
+            j = r.get(kunci)
+            if j and j.get("reset") is not None and j.get("persen") is not None:
+                # reset bisa bergeser sepersekian detik antar-panggilan: bulatkan ke menit
+                k = round(j["reset"] / 60) * 60
+                wadah[k] = max(wadah.get(k, 0), j["persen"])
+    return {
+        "bulan": bulan,
+        "sejak": min((r["t"] for r in riwayat), default=sekarang),
+        "jendela_5jam": len(lima),
+        "penuh_5jam": sum(1 for p in lima.values() if p >= 100),
+        "puncak_5jam": max(lima.values(), default=None),
+        "mingguan": [{"reset": k, "puncak": p} for k, p in sorted(minggu.items())],
+    }
+
+
+def tulis_json(path, isi):
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".limit-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(isi, f, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=OUT)
+    a = ap.parse_args()
+    DATA.mkdir(parents=True, exist_ok=True)
+    kode = 0
+    for akun, kredensial, akhiran in AKUN:
+        if not kredensial.exists():
+            continue
+        out = Path(a.out)
+        kode |= proses(kredensial, out.with_name(out.stem + akhiran + out.suffix), DATA / f"riwayat{akhiran}.jsonl")
+    return kode
+
+
+def proses(kredensial, out, riwayat_p):
+    sekarang = time.time()
+    riwayat = []
+    if riwayat_p.exists():
+        for baris in riwayat_p.read_text().splitlines():
+            try:
+                r = json.loads(baris)
+            except ValueError:
+                continue
+            if r.get("t", 0) >= sekarang - SIMPAN_HARI * 86400:
+                riwayat.append(r)
+
+    lama = {}
+    try:
+        lama = json.loads(Path(out).read_text())
+    except (OSError, ValueError):
+        pass
+
+    perpanjang_token(kredensial)
+    try:
+        u, oauth = ambil(kredensial)
+    except (urllib.error.URLError, OSError, KeyError, ValueError) as e:
+        # Simpan data terakhir, tandai galat supaya halaman memberi tahu datanya basi
+        pesan = f"HTTP {e.code}" if isinstance(e, urllib.error.HTTPError) else str(e)[:200]
+        if isinstance(e, urllib.error.HTTPError) and e.code == 401:
+            pesan += " (token OAuth kedaluwarsa dan gagal diperbarui otomatis)"
+        tulis_json(out, {**lama, "galat": pesan, "galat_pada": sekarang})
+        print(f"claude-limit {out.name}: {pesan}", flush=True)
+        return 1
+
+    snap = {"t": round(sekarang), "lima": jendela(u.get("five_hour")), "minggu": jendela(u.get("seven_day"))}
+    riwayat.append(snap)
+    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".riwayat-")
+    with os.fdopen(fd, "w") as f:
+        f.writelines(json.dumps(r, separators=(",", ":")) + "\n" for r in riwayat)
+    os.replace(tmp, riwayat_p)
+
+    # Batas mingguan per model (mis. Fable) dari daftar "limits"
+    per_model = [
+        {"nama": ((l.get("scope") or {}).get("model") or {}).get("display_name") or "Model tertentu",
+         "persen": l.get("percent"), "reset": detik(l.get("resets_at"))}
+        for l in u.get("limits") or [] if l.get("kind") == "weekly_scoped"
+    ]
+    aktif = next((l.get("kind") for l in u.get("limits") or [] if l.get("is_active")), None)
+    ex = u.get("extra_usage") or {}
+    pembagi = 10 ** (ex.get("decimal_places") or 2)
+    rincian = (u.get("seven_day_breakdown") or {}).get("rows") or []
+
+    tulis_json(out, {
+        "dibuat": sekarang,
+        "paket": oauth.get("subscriptionType"),
+        "tier": oauth.get("rateLimitTier"),
+        "lima_jam": jendela(u.get("five_hour")),
+        "mingguan": jendela(u.get("seven_day")),
+        "mingguan_model": per_model,
+        "batas_aktif": aktif,  # batas yang sedang paling menentukan menurut Anthropic
+        "rincian_mingguan": [{"nama": r.get("display_name"), "persen": r.get("percent")} for r in rincian],
+        "extra": {
+            "aktif": bool(ex.get("is_enabled")),
+            "batas": ex["monthly_limit"] / pembagi if ex.get("monthly_limit") is not None else None,
+            "terpakai": ex["used_credits"] / pembagi if ex.get("used_credits") is not None else None,
+            "persen": ex.get("utilization"),
+            "mata_uang": ex.get("currency"),
+        },
+        "bulanan": rekap_bulan(riwayat, sekarang),
+        # 8 hari terakhir, satu titik per putaran, untuk grafik
+        "riwayat": [r for r in riwayat if r["t"] >= sekarang - 8 * 86400],
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

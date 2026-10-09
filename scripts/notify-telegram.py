@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from folder_klien import folder_klien
 
 CONFIG = Path('/etc/velocity/secrets/telegram.env')
 MANIFEST_ROOT = Path('/home/project')
@@ -59,6 +60,22 @@ def load_config():
     # Boleh lebih dari satu tujuan, dipisah koma (mis. chat pribadi + grup webmaster).
     chats = [c.strip().strip('"\'') for c in chat.split(',') if c.strip().strip('"\'')]
     return token.strip(), chats
+
+
+def chats_tanpa_selesai():
+    """Chat yang tidak menerima laporan web selesai (SUCCESS/CHECK); status lain tetap
+    dikirim. Dipisah dari load_config supaya pemanggil lain (redesign,
+    cek-token-github) tidak ikut terfilter. Permintaan user 2026-10-01."""
+    nilai = os.environ.get('TELEGRAM_CHAT_TANPA_SELESAI', '')
+    if not nilai:
+        try:
+            for line in CONFIG.read_text().splitlines():
+                k, _, v = line.strip().partition('=')
+                if k.strip() == 'TELEGRAM_CHAT_TANPA_SELESAI':
+                    nilai = v
+        except OSError:
+            pass
+    return {c.strip().strip('"\'') for c in nilai.split(',') if c.strip().strip('"\'')}
 
 
 def manifest_situs_url(domain):
@@ -161,17 +178,68 @@ VIDEO_EXT = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v', '.wmv', '.
 
 
 def catatan_video(domain):
-    """Video di folder klien yang tidak diunggah ke situs (aturan: video klien tidak pernah
-    diupload, keputusan user 2026-09-14 & 2026-09-24). Kosong bila tidak ada video."""
-    folder = Path('/home/On Progress') / domain
+    """Video di folder klien & nasibnya di YouTube (scripts/youtube-video, semua paket sejak
+    keputusan user 2026-10-07). Berkasnya tetap tidak pernah diunggah ke hosting. Kosong bila
+    tidak ada video."""
+    folder = folder_klien(domain)
     if not domain or '/' in domain or not folder.is_dir():
         return ''
     video = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in VIDEO_EXT)
     if not video:
         return ''
-    contoh = ', '.join(p.relative_to(folder).as_posix() for p in video[:3])
-    lebih = f' +{len(video) - 3} lainnya' if len(video) > 3 else ''
-    return f'{len(video)} video klien tidak diunggah ke situs (aturan: video tidak diupload): {contoh}{lebih}'
+    try:
+        cache = json.loads((Path('/var/lib/velocity/youtube') / f'{domain}.json').read_text()).get('video') or {}
+    except (OSError, ValueError):
+        cache = {}
+    tayang = privat = 0
+    belum = []
+    for p in video:
+        v = cache.get(f'{p.relative_to(folder)}|{p.stat().st_size}')
+        if not v:
+            belum.append(p)
+        elif v.get('privasi') == 'private':
+            privat += 1
+        else:
+            tayang += 1
+    teks = f'{len(video)} video klien: {tayang} tampil di situs lewat YouTube'
+    if privat:
+        teks += f', {privat} terkunci PRIVATE oleh YouTube (belum tampil)'
+    if belum:
+        contoh = ', '.join(p.relative_to(folder).as_posix() for p in belum[:3])
+        lebih = f' +{len(belum) - 3} lainnya' if len(belum) > 3 else ''
+        teks += (f', {len(belum)} belum diunggah (cek log youtube: belum login/kuota habis/bukan video, '
+                 f'diulang run berikutnya): {contoh}{lebih}')
+    return teks
+
+
+def catatan_katalog(domain, umur_maks=12 * 3600):
+    """Ringkasan scripts/velocity-produk (katalog Paket E/F, 2026-10-06) dari run yang masih baru."""
+    try:
+        d = json.loads((Path('/var/lib/velocity/katalog-produk') / f'{domain}.json').read_text())
+    except (OSError, ValueError):
+        return ''
+    if not isinstance(d, dict) or time.time() - int(d.get('waktu') or 0) > umur_maks:
+        return ''
+    teks = f"Katalog Velocity Produk: {d.get('total', 0)} produk"
+    if d.get('contoh'):
+        teks += f" ({d['contoh']} CONTOH, ganti dengan data produk asli)"
+    if d.get('wa_kosong'):
+        teks += '; nomor WA kosong, tombol beli belum ke WhatsApp'
+    return teks
+
+
+def catatan_tour(domain, umur_maks=12 * 3600):
+    """Ringkasan paket tour Paket E/F (scripts/velocity-produk -> paket-tour, 2026-10-08)."""
+    try:
+        d = json.loads((Path('/var/lib/velocity/katalog-produk') / f'{domain}-tour.json').read_text())
+    except (OSError, ValueError):
+        return ''
+    if not isinstance(d, dict) or time.time() - int(d.get('waktu') or 0) > umur_maks:
+        return ''
+    teks = f"Paket Tour (velocity-tour-travel {d.get('versi') or '?'}): {d.get('total', 0)} paket"
+    if d.get('contoh'):
+        teks += f" ({d['contoh']} CONTOH, ganti dengan paket asli)"
+    return teks
 
 
 def wp_login(domain):
@@ -310,6 +378,12 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
         video = catatan_video(domain)
         if video:
             head += f'🎬 {html.escape(video)}\n'
+        katalog = catatan_katalog(domain)
+        if katalog:
+            head += f'🛍️ {html.escape(katalog)}\n'
+        tour = catatan_tour(domain)
+        if tour:
+            head += f'🧭 {html.escape(tour)}\n'
         situs = manifest_situs_url(domain)
         links = f'Situs: {situs}\nAdmin: {situs}/wp-admin'
         user, password = login
@@ -328,6 +402,13 @@ def build_message(domain, status, stage, paket='', theme='', maintenance='', log
     if status == 'MANUAL':
         return (f'⚠️ <b>Autopilot berhenti, perlu ditangani manual</b>\n{head}'
                 f'Alasan: <code>{stage}</code>')
+    if stage == 'paket_f_tanpa_referensi_tema':
+        # Ditahan installer-runner sebelum WordPress dipasang (keputusan user 2026-10-07).
+        return (f'⛔ <b>Instalasi ditahan: Paket F tanpa referensi tema</b>\n{head}'
+                f'Form klien tidak menyebut desain/web contoh, jadi child theme tidak bisa dipilih. '
+                f'WordPress belum dipasang.\n'
+                f'Tindak lanjut: minta referensi desain ke klien (isi TEMPLATE YANG DIPILIH di form) '
+                f'atau tulis <code>velocity_child_theme=&lt;slug&gt;</code> di manifest, lalu jalankan apply lagi.')
     return (f'❌ <b>Instalasi gagal</b>\n{head}'
             f'Tahap: <code>{stage}</code>')
 
@@ -457,6 +538,11 @@ def main():
                          perbaikan_desain(domain) if 'desain_belum_mirip' in stage else '',
                          peringatan_tema(domain) if done else '')
     failed = 0
+    if done:
+        lewati = chats_tanpa_selesai()
+        for chat in [c for c in chats if c in lewati]:
+            print(f'telegram: laporan selesai tidak dikirim ke {chat} (TELEGRAM_CHAT_TANPA_SELESAI)', file=sys.stderr)
+        chats = [c for c in chats if c not in lewati]
     for chat in chats:
         try:
             ok, message_id = send(token, chat, text)
@@ -478,7 +564,10 @@ def main():
                         record_sent(domain, status, chat, mid)
                 except (urllib.error.URLError, OSError, ValueError) as e:
                     print(f'telegram: album banding gagal ke {chat} ({e})', file=sys.stderr)
-        print(f'telegram: terkirim ke {chat}' if ok else f'telegram: ditolak API untuk {chat}', file=sys.stderr)
+        # Berstempel waktu: dashboard installer menghitung lama pengerjaan sampai laporan terkirim
+        waktu = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+        waktu = f'{waktu[:-2]}:{waktu[-2:]}'
+        print(f'[{waktu}] ' + (f'telegram: terkirim ke {chat}' if ok else f'telegram: ditolak API untuk {chat}'), file=sys.stderr)
         failed += 0 if ok else 1
     return 1 if failed else 0
 

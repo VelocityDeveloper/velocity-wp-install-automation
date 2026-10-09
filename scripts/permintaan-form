@@ -25,6 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from client_form import pesan_tambahan, read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 # VELOCITY_ON_PROGRESS: hanya untuk uji di rig lokal.
 ON_PROGRESS = Path(os.environ.get('VELOCITY_ON_PROGRESS') or '/home/On Progress')
@@ -46,7 +47,7 @@ def main():
         print(__doc__)
         return 2
     domain = domain_dari(args[0])
-    form = read_client_form(ON_PROGRESS / domain)
+    form = read_client_form(folder_klien(domain, ON_PROGRESS))
     teks_pola = pesan_tambahan(form.get('text', ''))
     # Form yang sudah dibaca agen Claude (scripts/baca-form-claude): pesan tambahan versi agen, yang
     # tahu mana kalimat template. Tanda selesai lama (md5 versi pola) tetap diakui di bawah.

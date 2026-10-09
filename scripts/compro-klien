@@ -31,7 +31,9 @@ import tempfile
 import zlib
 from collections import Counter
 from pathlib import Path
+from folder_klien import folder_klien
 from client_form import adalah_form
+from presentasi_pdf import PRESENTASI, ke_pdf
 
 ON_PROGRESS = Path('/home/On Progress')
 OUT_ROOT = Path('/var/lib/velocity/compro')
@@ -126,10 +128,22 @@ def pdf_berteks(pdf):
 
 
 def cari_compro(domain):
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     if not folder.is_dir():
         return None
     pdf = [p for p in folder.iterdir() if p.suffix.lower() == '.pdf' and not adalah_form(p)]
+    # Compro sering berupa PowerPoint (chindrasantipratama.com 2026-09-26: .pptx
+    # dilewati diam-diam, situs terpasang hanya dari form). Diubah ke PDF lewat
+    # LibreOffice — hanya bila belum ada PDF berteks, karena deck besar lambat diubah.
+    if not any(pdf_berteks(p) for p in pdf):
+        for p in sorted(folder.iterdir()):
+            if p.suffix.lower() in PRESENTASI:
+                hasil = ke_pdf(p)
+                if hasil:
+                    print(f'compro: {p.name} diubah ke PDF ({hasil})')
+                    pdf.append(hasil)
+                else:
+                    print(f'compro: {p.name} gagal diubah ke PDF (LibreOffice)')
     # Berteks dulu (logo & warna merek hanya bisa diambil dari situ), baru nama yang
     # menyebut profil, baru yang paling besar.
     pdf.sort(key=lambda p: (not pdf_berteks(p), not PROFIL_RE.search(p.name), -p.stat().st_size))
@@ -762,7 +776,7 @@ def main():
         print(f'compro: hasil tersimpan versi {versi} (sekarang {VERSI}), dibaca ulang')
     pdf = cari_compro(domain)
     if not pdf:
-        print('compro: tidak ada company profile PDF di folder klien')
+        print('compro: tidak ada company profile PDF/PowerPoint di folder klien')
         return 0
     for alat in ('pdftoppm', 'pdfimages', 'pdftotext', 'pdfinfo', 'pdftocairo'):
         if not shutil.which(alat):

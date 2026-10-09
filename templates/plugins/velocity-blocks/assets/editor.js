@@ -1252,10 +1252,10 @@
 					props.setAttributes( ubah );
 				};
 			};
-			var TAMPILAN = { overlay: 'Foto berlapis (judul di atas foto)', list: 'Baris (judul + foto kecil)', excerpt: 'Daftar (foto + ringkasan)', grid: 'Grid kartu' };
+			var TAMPILAN = { overlay: 'Foto berlapis (judul di atas foto)', slider: 'Slider geser (foto berlapis)', list: 'Baris (judul + foto kecil)', excerpt: 'Daftar (foto + ringkasan)', grid: 'Grid kartu' };
 			return el( Fragment, null,
 				el( BlockControls, { group: 'block' }, el( c.ToolbarGroup, null, Object.keys( TAMPILAN ).map( function ( k ) {
-					var ikonTb = { overlay: 'format-image', list: 'list-view', excerpt: 'excerpt-view', grid: 'grid-view' }[ k ];
+					var ikonTb = { overlay: 'format-image', slider: 'slides', list: 'list-view', excerpt: 'excerpt-view', grid: 'grid-view' }[ k ];
 					return el( c.ToolbarButton, { key: k, icon: ikonTb, label: TAMPILAN[ k ], isPressed: a.layout === k, onClick: function () {
 						props.setAttributes( { layout: k } );
 					} } );
@@ -1263,6 +1263,7 @@
 				el( InspectorControls, null,
 					Panel( 'Sumber berita', [
 						Pilih( 'Kategori', String( a.category ), opsiKat, angka( 'category' ) ),
+						el( c.ToggleControl, { key: 'ct', label: 'Di halaman arsip: ikuti kategori yang dibuka', checked: a.currentTerm, onChange: Setel( props, 'currentTerm' ), help: 'Untuk template Arsip/Kategori. Di halaman lain tetap memakai pilihan Kategori di atas.', __nextHasNoMarginBottom: true } ),
 						Pilih( 'Urutan', a.orderBy, { date: 'Terbaru', popular: 'Terpopuler (paling dibaca)', comment_count: 'Komentar terbanyak', rand: 'Acak' }, Setel( props, 'orderBy' ) ),
 						el( c.RangeControl, { key: 'n', label: 'Jumlah berita', value: a.count, min: 1, max: 24, onChange: Setel( props, 'count' ) } ),
 						el( c.RangeControl, { key: 'o', label: 'Lewati berita pertama (offset)', value: a.offset, min: 0, max: 20, onChange: Setel( props, 'offset' ), help: 'Mis. 1 bila berita teratas sudah tampil di blok lain.' } ),
@@ -1271,14 +1272,16 @@
 					Panel( 'Tampilan', [
 						Pilih( 'Tampilan', a.layout, TAMPILAN, Setel( props, 'layout' ) ),
 						a.layout === 'list' && Pilih( 'Posisi foto', a.thumbPos, { right: 'Kanan', left: 'Kiri', none: 'Tanpa foto' }, Setel( props, 'thumbPos' ) ),
-						a.layout === 'overlay' && el( c.RangeControl, { key: 'h', label: 'Tinggi foto (px)', value: a.imageHeight, min: 160, max: 900, step: 10, onChange: Setel( props, 'imageHeight' ) } ),
+						( a.layout === 'overlay' || a.layout === 'slider' ) && el( c.RangeControl, { key: 'h', label: 'Tinggi foto (px)', value: a.imageHeight, min: 160, max: 900, step: 10, onChange: Setel( props, 'imageHeight' ) } ),
 						a.layout === 'overlay' && el( c.ToggleControl, { key: 'fl', label: 'Isi penuh tinggi kolom', checked: a.fill, onChange: Setel( props, 'fill' ), __nextHasNoMarginBottom: true } ),
+						a.layout === 'slider' && el( c.ToggleControl, { key: 'ap', label: 'Geser otomatis', checked: a.autoplay, onChange: Setel( props, 'autoplay' ), __nextHasNoMarginBottom: true } ),
+						a.layout === 'slider' && a.autoplay && el( c.RangeControl, { key: 'iv', label: 'Jeda geser (detik)', value: a.interval, min: 3, max: 15, onChange: Setel( props, 'interval' ) } ),
 						Pilih( 'Ukuran judul', a.titleSize, { sm: 'Kecil', md: 'Sedang', lg: 'Besar', xl: 'Sangat besar' }, Setel( props, 'titleSize' ) ),
-						el( c.RangeControl, { key: 'c', label: 'Kolom desktop', value: a.columns, min: 1, max: 6, onChange: Setel( props, 'columns' ) } ),
+						el( c.RangeControl, { key: 'c', label: a.layout === 'slider' ? 'Berita per layar (desktop)' : 'Kolom desktop', value: a.columns, min: 1, max: 6, onChange: Setel( props, 'columns' ) } ),
 						el( c.RangeControl, { key: 'ct', label: 'Kolom tablet', value: a.columnsTablet, min: 1, max: 4, onChange: Setel( props, 'columnsTablet' ) } ),
 						el( c.RangeControl, { key: 'cm', label: 'Kolom HP', value: a.columnsMobile, min: 1, max: 3, onChange: Setel( props, 'columnsMobile' ) } ),
 						Pilih( 'Jarak antar berita', a.gap, JARAK, Setel( props, 'gap' ) ),
-						( a.layout === 'overlay' || a.layout === 'grid' ) && el( c.ToggleControl, { key: 'k', label: 'Tampilkan label kategori', checked: a.showCategory, onChange: Setel( props, 'showCategory' ), __nextHasNoMarginBottom: true } ),
+						( a.layout === 'overlay' || a.layout === 'slider' || a.layout === 'grid' ) && el( c.ToggleControl, { key: 'k', label: 'Tampilkan label kategori', checked: a.showCategory, onChange: Setel( props, 'showCategory' ), __nextHasNoMarginBottom: true } ),
 						el( c.ToggleControl, { key: 'd', label: 'Tampilkan tanggal', checked: a.showDate, onChange: Setel( props, 'showDate' ), __nextHasNoMarginBottom: true } ),
 						( a.layout === 'excerpt' || a.layout === 'grid' ) && el( c.ToggleControl, { key: 'r', label: 'Tampilkan ringkasan', checked: a.showExcerpt, onChange: Setel( props, 'showExcerpt' ), __nextHasNoMarginBottom: true } ),
 						( a.layout === 'excerpt' || a.layout === 'grid' ) && a.showExcerpt && el( c.RangeControl, { key: 'rl', label: 'Panjang ringkasan (kata)', value: a.excerptLength, min: 5, max: 60, onChange: Setel( props, 'excerptLength' ) } ),

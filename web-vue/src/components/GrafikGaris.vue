@@ -7,11 +7,11 @@ const props = defineProps({
   titik: { type: Array, required: true }, // [{ t, cpu, mem, ... }]
   seri: { type: Array, required: true }, // [{ kunci, label, warna }]
   formatWaktu: { type: Function, required: true },
+  tinggi: { type: Number, default: 260 },
 })
 
 const wadah = ref(null)
 const lebar = ref(800)
-const TINGGI = 260
 const PAD = { kiri: 40, kanan: 64, atas: 16, bawah: 28 }
 let ro = null
 onMounted(() => {
@@ -22,7 +22,7 @@ onBeforeUnmount(() => ro?.disconnect())
 
 const n = computed(() => props.titik.length)
 const x = (i) => PAD.kiri + (lebar.value - PAD.kiri - PAD.kanan) * (n.value < 2 ? 0.5 : i / (n.value - 1))
-const y = (v) => PAD.atas + (TINGGI - PAD.atas - PAD.bawah) * (1 - Math.max(0, Math.min(100, Number(v) || 0)) / 100)
+const y = (v) => PAD.atas + (props.tinggi - PAD.atas - PAD.bawah) * (1 - Math.max(0, Math.min(100, Number(v) || 0)) / 100)
 
 // Kurva halus (monotone-ish) agar mirip referensi, tanpa melewati batas 0–100
 const jalur = (kunci) => {
@@ -40,7 +40,9 @@ const area = (kunci) => n.value ? `${jalur(kunci)} L${x(n.value - 1).toFixed(1)}
 const kisi = [0, 25, 50, 75, 100]
 const labelSumbu = computed(() => {
   if (!n.value) return []
-  const idx = [...new Set([0, Math.floor((n.value - 1) / 2), n.value - 1])]
+  // Grafik sempit (HP): label tengah dibuang supaya tidak bertumpuk dengan label ujung
+  const tengah = lebar.value - PAD.kiri - PAD.kanan >= 420 ? [Math.floor((n.value - 1) / 2)] : []
+  const idx = [...new Set([0, ...tengah, n.value - 1])]
   return idx.map((i) => ({ x: x(i), teks: props.formatWaktu(props.titik[i].t), anchor: i === 0 ? 'start' : i === n.value - 1 ? 'end' : 'middle' }))
 })
 
@@ -87,7 +89,7 @@ const id = `g${Math.random().toString(36).slice(2, 8)}`
 <template>
   <div ref="wadah" class="grafik">
     <svg
-      :viewBox="`0 0 ${lebar} ${TINGGI}`" :height="TINGGI" role="img" tabindex="0"
+      :viewBox="`0 0 ${lebar} ${tinggi}`" :height="tinggi" role="img" tabindex="0"
       :aria-label="`Grafik pemakaian. ${ringkas}. Gunakan panah kiri/kanan untuk melihat nilai per waktu.`"
       @mousemove="gerak" @mouseleave="aktif = null" @keydown="tombol" @blur="aktif = null"
     >
@@ -103,7 +105,7 @@ const id = `g${Math.random().toString(36).slice(2, 8)}`
           <line :x1="PAD.kiri" :x2="lebar - PAD.kanan" :y1="y(v)" :y2="y(v)" />
           <text :x="PAD.kiri - 8" :y="y(v) + 4" text-anchor="end">{{ v }}%</text>
         </template>
-        <text v-for="(l, i) in labelSumbu" :key="i" :x="l.x" :y="TINGGI - 8" :text-anchor="l.anchor">{{ l.teks }}</text>
+        <text v-for="(l, i) in labelSumbu" :key="i" :x="l.x" :y="tinggi - 8" :text-anchor="l.anchor">{{ l.teks }}</text>
       </g>
       <g v-for="s in seri" :key="s.kunci">
         <path :d="area(s.kunci)" :fill="`url(#${id}-${s.kunci})`" />
@@ -115,8 +117,8 @@ const id = `g${Math.random().toString(36).slice(2, 8)}`
         <text v-for="l in labelUjung" :key="l.kunci" :x="lebar - PAD.kanan + 8" :y="l.y + 4">{{ l.label }} {{ l.nilai }}%</text>
       </g>
       <g v-if="tip">
-        <line class="silang" :x1="tip.x" :x2="tip.x" :y1="PAD.atas" :y2="TINGGI - PAD.bawah" />
-        <circle v-for="s in seri" :key="s.kunci" :cx="tip.x" :cy="y(tip.q[s.kunci])" r="5" :fill="s.warna" stroke="#151a33" stroke-width="2" />
+        <line class="silang" :x1="tip.x" :x2="tip.x" :y1="PAD.atas" :y2="tinggi - PAD.bawah" />
+        <circle v-for="s in seri" :key="s.kunci" :cx="tip.x" :cy="y(tip.q[s.kunci])" r="5" :fill="s.warna" style="stroke: var(--kartu)" stroke-width="2" />
       </g>
     </svg>
     <div v-if="tip" class="tip" :style="tip.kanan ? { right: `${100 - tip.kiri + 1.5}%` } : { left: `${tip.kiri + 1.5}%` }" aria-hidden="true">
@@ -130,13 +132,13 @@ const id = `g${Math.random().toString(36).slice(2, 8)}`
 .grafik { position: relative; }
 svg { display: block; width: 100%; cursor: crosshair; }
 svg:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 4px; border-radius: 8px; }
-.kisi line { stroke: #202746; stroke-width: 1; }
+.kisi line { stroke: var(--kisi); stroke-width: 1; }
 .kisi text, .ujung text { fill: var(--teks-3); font-size: 11px; }
 .ujung text { fill: var(--teks-2); font-weight: 600; }
-.silang { stroke: #5b6391; stroke-width: 1; stroke-dasharray: 3 3; }
+.silang { stroke: var(--silang); stroke-width: 1; stroke-dasharray: 3 3; }
 .tip {
   position: absolute; top: 8px; pointer-events: none; display: grid; gap: 3px; min-width: 150px;
-  padding: 10px 12px; border-radius: 10px; background: #0b0e20; border: 1px solid var(--garis);
+  padding: 10px 12px; border-radius: 10px; background: var(--tooltip); border: 1px solid var(--garis);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .45); font-size: 12.5px; color: var(--teks-2);
 }
 .tip b { color: var(--teks); font-weight: 600; }

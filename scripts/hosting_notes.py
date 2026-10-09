@@ -1,6 +1,7 @@
 """Baca username & password akun hosting (DirectAdmin) dari catatan project manager.
 
-Catatan dibuat PM di folder Drive: /home/On Progress/<domain>/<domain>.txt, dengan
+Catatan dibuat PM di folder Drive: /home/On Progress/<domain>/<domain>.txt (atau subfolder
+yang ditunjuk deskripsi tiket CRM, lihat folder_klien.py), dengan
 bagian "WEB & CPANEL" berisi baris `username:` dan `password:`. Password akun ini
 juga dipakai sebagai password admin WordPress, supaya login situs sesuai catatan.
 
@@ -12,7 +13,8 @@ Nilai kredensial TIDAK boleh dicetak ke log atau terminal.
 import re
 from pathlib import Path
 
-ON_PROGRESS = Path('/home/On Progress')
+from folder_klien import ON_PROGRESS, folder_klien  # noqa: F401 (ON_PROGRESS dipakai pemanggil lama)
+
 USER_RE = re.compile(r'^\s*(?:user ?name|user|login)\s*[:=]\s*(.*)$', re.I)
 PASS_RE = re.compile(r'^\s*(?:pass(?:word)?|sandi|pw)\s*[:=]\s*(.*)$', re.I)
 
@@ -22,7 +24,7 @@ def read_hosting_notes(domain):
 
     Hanya baris berlabel yang dipercaya: bagian atas catatan berisi baris tanpa
     label (email, kata sandi lain) yang bukan login akun hosting."""
-    path = ON_PROGRESS / domain / f'{domain}.txt'
+    path = folder_klien(domain) / f'{domain}.txt'
     try:
         lines = path.read_text(errors='replace').splitlines()
     except OSError:

@@ -1,10 +1,11 @@
 <script setup>
 // Tahap 5 Review: webmaster memeriksa tiap fitur yang sudah dikerjakan & dites agen.
 // Checklist = kriteria terima PRD; di sampingnya status & bukti dari agen. OK butuh semua tercentang; Revisi kembali ke agen.
+// Tiap Revisi menambah kriteria "Revisi N: …" (ditandai garis kuning) yang ikut dilaporkan agen & wajib dicentang.
 import { ref, reactive, computed, watch } from 'vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, keNama, STATUS_FITUR } from '../../laravel.js'
-import { tanggalWaktu } from '../../api.js'
+import { aksi, pesanGalat, namaSaya, keNama, STATUS_FITUR, tabUrl } from '../../laravel.js'
+import { tanggalWaktu, waktuLalu } from '../../api.js'
 
 const props = defineProps({ d: { type: Object, required: true } })
 const emit = defineEmits(['ubah'])
@@ -20,7 +21,7 @@ watch(() => props.d.fitur, (fs) => {
     if (draf[f.id]?.tanda !== tanda) draf[f.id] = { tanda, cek: f.kriteria.map((k) => !!k.cek), catatan: '' }
   }
 }, { immediate: true })
-const pilihan = ref('')
+const pilihan = tabUrl('fitur')
 const aktif = computed(() => pilihan.value || bisaDicek.value.find((f) => f.status === 'dites')?.id || bisaDicek.value[0]?.id || '')
 const f = computed(() => props.d.fitur.find((x) => x.id === aktif.value))
 const semuaCek = computed(() => f.value && draf[f.value.id]?.cek.every(Boolean))
@@ -29,12 +30,17 @@ async function putus(keputusan) {
   status.value = { kelas: '', teks: '' }
   const x = draf[f.value.id]
   try {
-    await aksi(props.d.slug, 'review', { fitur: f.value.id, keputusan, cek: x.cek, catatan: x.catatan })
-    status.value = { kelas: 'baik', teks: keputusan === 'ok' ? `${f.value.id} OK.` : keputusan === 'revisi' ? `${f.value.id} dikembalikan ke agen. Tekan Lanjutkan agen di tab Agen.` : 'Centang disimpan.' }
+    const r = await aksi(props.d.slug, 'review', { fitur: f.value.id, keputusan, cek: x.cek, catatan: x.catatan })
+    const lanjut = r?.agen_lanjut ? ' Agen lanjut otomatis.' : ''
+    status.value = { kelas: 'baik', teks: keputusan === 'ok' ? `${f.value.id} OK.${lanjut}` : keputusan === 'revisi' ? `${f.value.id} dikembalikan ke agen.${lanjut || ' Tekan Lanjutkan agen di tab Agen bila agen tidak sedang jalan.'}` : 'Centang disimpan.' }
     if (keputusan === 'ok') pilihan.value = ''
     emit('ubah')
   } catch (e) { status.value = { kelas: 'bahaya', teks: pesanGalat(e) } }
 }
+// Fitur lain (rencana): reviewer tahu halaman yang "belum ada" memang dijadwalkan di fitur lain
+const lain = computed(() => props.d.fitur.filter((x) => x.id !== aktif.value))
+const ringkasHalaman = (x) => (x.halaman || []).map((h) => `${h.halaman} (${h.peran.join(', ')})`).join(' · ')
+const gerbang = computed(() => props.d.review?.gerbang || [])
 const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian'], belum: ['merah', 'belum'] }
 </script>
 
@@ -48,6 +54,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
       </div>
     </div>
     <p v-if="d.agen?.deploy?.ok" class="redup kecil">Dev dideploy {{ tanggalWaktu(d.agen.deploy.waktu) }} dari commit <a :href="`${d.install.repo}/commit/${d.agen.deploy.commit}`" target="_blank" rel="noopener"><code>{{ d.agen.deploy.commit }}</code></a> — yang dicek di aplikasi dev = hasil terakhir agen.</p>
+    <p v-else-if="d.fitur.some((x) => ['antre', 'jalan', 'revisi'].includes(x.status))" class="redup kecil">Agen masih mengerjakan fitur lain — review sekarang saja: aplikasi dev di-restart dengan kode terbaru setiap kali satu fitur lolos verifikasi.</p>
     <p v-else-if="bisaDicek.some((x) => x.status === 'dites')" class="pesan-status waspada-teks">Dev belum dideploy untuk hasil terakhir agen — jalankan Deploy dev di tab Agen dulu supaya yang direview sesuai.</p>
     <p v-if="!bisaDicek.length" class="redup">Belum ada fitur yang selesai dikerjakan agen.</p>
 
@@ -57,6 +64,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
           <button type="button" :class="{ aktif: aktif === x.id }" :aria-current="aktif === x.id ? 'true' : undefined" @click="pilihan = x.id; status = { kelas: '', teks: '' }">
             <span class="fid">{{ x.id }}</span><span class="dj">{{ x.judul }}</span>
             <span class="lencana" :class="STATUS_FITUR[x.status]?.[0]">{{ STATUS_FITUR[x.status]?.[1] }}</span>
+            <small v-if="x.status === 'dites'" class="tunggu" :class="{ gerbang: gerbang.includes(x.id) }">{{ gerbang.includes(x.id) ? 'menahan agen · ' : '' }}{{ waktuLalu(x.hasil.waktu) }}</small>
           </button>
         </li>
       </ul>
@@ -69,6 +77,18 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
           <template v-if="f.review"> · review terakhir {{ f.review.oleh }} {{ tanggalWaktu(f.review.waktu) }}</template>
         </p>
 
+        <div v-if="f.halaman?.length" class="blok">
+          <b>Halaman &amp; peran di fitur ini</b>
+          <ul><li v-for="(h, i) in f.halaman" :key="i">{{ h.halaman }} — {{ h.peran.join(', ') }}</li></ul>
+        </div>
+        <details class="blok rencana">
+          <summary><b>Rencana fitur lain ({{ lain.length }})</b> <span class="redup">— yang belum ada di sini mungkin memang dijadwalkan di fitur lain</span></summary>
+          <ul>
+            <li v-for="x in lain" :key="x.id"><span class="fid">{{ x.id }}</span> {{ x.judul }} <span class="lencana" :class="STATUS_FITUR[x.status]?.[0]">{{ STATUS_FITUR[x.status]?.[1] }}</span>
+              <small v-if="x.halaman?.length" class="redup"> {{ ringkasHalaman(x) }}</small></li>
+          </ul>
+        </details>
+
         <div v-if="f.hasil.cara_cek?.length" class="blok">
           <b>Cara cek di browser (dari agen)</b>
           <ol><li v-for="(c, i) in f.hasil.cara_cek" :key="i">{{ c }}</li></ol>
@@ -77,7 +97,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
 
         <fieldset class="checklist">
           <legend>Checklist kriteria terima</legend>
-          <label v-for="(k, i) in f.kriteria" :key="i" class="kr">
+          <label v-for="(k, i) in f.kriteria" :key="i" class="kr" :class="{ rev: k.revisi }">
             <input v-model="draf[f.id].cek[i]" type="checkbox" :disabled="f.status === 'revisi'">
             <span>
               {{ k.teks }}
@@ -100,6 +120,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
           </div>
         </template>
         <p v-else class="pesan-status">Menunggu agen mengerjakan revisi (tab Agen).</p>
+        <p v-if="f.status !== 'revisi' && /belum ada/i.test(draf[f.id].catatan)" class="pesan-status redup">Sebelum mengirim "belum ada": cek Rencana fitur lain di atas — bila halamannya dijadwalkan di fitur lain, tidak perlu direvisi di sini.</p>
         <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Isi "Nama Anda" dulu →</button>
         <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
       </article>
@@ -116,6 +137,11 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
 .daftar button:hover { background: var(--kartu-2); }
 .daftar button.aktif { background: var(--kartu-2); border-color: var(--aksen-terang); }
 .daftar .lencana { grid-column: 2; width: fit-content; }
+.daftar .tunggu { grid-column: 2; font-size: 11.5px; color: var(--waspada); }
+.daftar .tunggu.gerbang { color: var(--bahaya); font-weight: 600; }
+.rencana summary { cursor: pointer; }
+.rencana ul { list-style: none; padding-left: 0; max-height: 260px; overflow: auto; }
+.rencana .lencana { margin-left: 4px; }
 .dj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13.5px; }
 .fid { font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--aksen-terang); padding-top: 2px; }
 .rinci { display: grid; gap: 12px; min-width: 0; }
@@ -132,6 +158,7 @@ code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .checklist legend { padding: 0 6px; font-weight: 600; font-size: 13px; color: var(--teks-2); }
 .kr { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; align-items: start; cursor: pointer; font-size: 14px; }
 .kr input { margin-top: 2px; }
+.kr.rev { padding: 6px 8px; margin: 0 -8px; border-radius: 8px; border-left: 3px solid var(--waspada); background: var(--kartu-2); }
 .agen { display: block; margin-top: 3px; color: var(--teks-3); font-size: 12px; overflow-wrap: anywhere; }
 .agen .lencana { margin-right: 4px; }
 .isian em { font-style: normal; color: var(--teks-3); font-weight: 500; font-size: 12px; }

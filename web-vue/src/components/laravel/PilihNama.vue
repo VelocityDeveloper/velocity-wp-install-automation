@@ -10,13 +10,14 @@ const semua = computed(() => GRUP.flatMap(([k]) => props.tim?.[k] || []))
 const LAIN = '__lain__'
 const manual = ref(false)
 const pilihan = computed({
-  get: () => (manual.value || (namaSaya.value && !semua.value.includes(namaSaya.value)) ? LAIN : namaSaya.value),
+  get: () => (manual.value || (semua.value.length && namaSaya.value && !semua.value.includes(namaSaya.value)) ? LAIN : namaSaya.value),
   set: (v) => {
     if (v === LAIN) { manual.value = true; if (semua.value.includes(namaSaya.value)) namaSaya.value = '' }
     else { manual.value = false; namaSaya.value = v }
   },
 })
-watch(semua, () => { if (namaSaya.value && !semua.value.includes(namaSaya.value)) manual.value = true }, { immediate: true })
+// Tunggu daftar tim termuat; sebelum itu nama tersimpan jangan dianggap "Lainnya…"
+watch(semua, () => { if (semua.value.length && namaSaya.value && !semua.value.includes(namaSaya.value)) manual.value = true }, { immediate: true })
 </script>
 
 <template>

@@ -32,6 +32,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 TUGAS = HERE.parent / 'templates' / 'baca-form-claude' / 'tugas.md'
 ON_PROGRESS = Path('/home/On Progress')
@@ -139,9 +140,9 @@ def main():
         return 0
     folder = Path(args[0])
     if not folder.is_dir():
-        folder = ON_PROGRESS / args[0].strip()
+        folder = folder_klien(args[0].strip())
     if not folder.is_dir():
-        folder = ON_PROGRESS / args[0].strip().lower()
+        folder = folder_klien(args[0].strip().lower())
     teks, md5 = teks_form(folder)
     if not md5:
         print('form_claude: tanpa_form')

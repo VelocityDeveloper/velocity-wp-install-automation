@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Pembungkus `claude` untuk agen installer: pilih langganan Claude yang masih punya kuota.
+
+Dua langganan (5 Okt 2026): akun 1 = /root/.claude (bantuanvdc), akun 2 = /root/.claude-2 (revisiweb).
+Akun 1 selalu didahulukan; pindah ke akun 2 kalau akun 1 mendekati batas atau baru saja kena limit,
+kembali ke akun 1 begitu kuotanya pulih.
+
+Pilihan akun:
+  - Proaktif: batas 5 jam & mingguan tiap akun dari /brain/limit.json & limit-2.json (claude-limit).
+    Data lebih tua dari 3 menit disegarkan dulu (claude-limit, dikunci supaya tidak serentak).
+    Akun dianggap penuh bila persen >= CLAUDE_AKUN_AMBANG (bawaan 95).
+  - Reaktif: kalau claude keluar gagal dengan pesan limit, akun itu ditandai habis sampai jam reset
+    (DATA/habis-<akun>.json). Untuk --output-format text/json (keluaran ditahan sampai selesai)
+    panggilan langsung diulang di akun lain; stream-json diteruskan live, jadi hanya ditandai dan
+    panggilan berikutnya yang pindah.
+  - Kalau keduanya penuh, dipilih yang persennya lebih rendah.
+
+Tiap pilihan dicatat ke DATA/pilihan.jsonl (claude-pakai memakainya untuk membagi token installer
+per akun) dan status terakhir ke /brain/claude-akun.json (dashboard /token).
+Paksa akun: CLAUDE_AKUN=1|2. Argumen lain diteruskan apa adanya ke claude.
+"""
+import ctypes
+import fcntl
+import json
+import os
+import re
+import select
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+CLAUDE = next((c for c in ('/root/.local/bin/claude', '/usr/local/bin/claude') if Path(c).is_file()), 'claude')
+AKUN = {"1": "/root/.claude", "2": "/root/.claude-2"}
+BRAIN = Path("/usr/share/nginx/html/brain")
+LIMIT = {"1": BRAIN / "limit.json", "2": BRAIN / "limit-2.json"}
+CLAUDE_LIMIT = Path(__file__).resolve().parent / "claude-limit"
+DATA = Path("/var/lib/velocity/claude-akun")
+STATUS = BRAIN / "claude-akun.json"
+AMBANG = float(os.environ.get("CLAUDE_AKUN_AMBANG") or 95)
+SEGAR = 180       # detik: umur maksimal data batas sebelum disegarkan
+BASI = 1800       # detik: data batas lebih tua dari ini tidak dipercaya (anggap akun masih bisa)
+POLA_LIMIT = re.compile(r"usage limit reached|hit your (?:usage )?limit|(?:5-hour|weekly|session) limit reached"
+                        r"|limit reached\s*[·∙|]|out of (?:extra )?usage", re.I)
+
+
+def baca(p, bawaan=None):
+    try:
+        return json.loads(Path(p).read_text())
+    except (OSError, ValueError):
+        return bawaan
+
+
+def segarkan():
+    """Jalankan claude-limit bila data akun mana pun sudah tua; satu proses saja, yang lain menunggu."""
+    if all((time.time() - (baca(p) or {}).get("dibuat", 0)) < SEGAR for p in LIMIT.values()):
+        return
+    DATA.mkdir(parents=True, exist_ok=True)
+    with open(DATA / "segar.lock", "w") as kunci:
+        fcntl.flock(kunci, fcntl.LOCK_EX)
+        if all((time.time() - (baca(p) or {}).get("dibuat", 0)) < SEGAR for p in LIMIT.values()):
+            return
+        try:
+            subprocess.run([sys.executable, str(CLAUDE_LIMIT), "--out", str(LIMIT["1"])],
+                           capture_output=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def keadaan(akun):
+    """(persen tertinggi 5 jam/mingguan, reset jendela itu, alasan) — persen None bila tak diketahui."""
+    habis = baca(DATA / f"habis-{akun}.json") or {}
+    if habis.get("sampai", 0) > time.time():
+        return 100.0, habis["sampai"], "kena limit"
+    d = baca(LIMIT[akun])
+    if not d or time.time() - d.get("dibuat", 0) > BASI:
+        return None, None, "data batas tidak tersedia"
+    jendela = [(n, d.get(k) or {}) for n, k in (("5 jam", "lima_jam"), ("mingguan", "mingguan"))]
+    n, j = max(jendela, key=lambda x: x[1].get("persen") or 0)
+    return float(j.get("persen") or 0), j.get("reset"), f"{n} {j.get('persen') or 0:.0f}%"
+
+
+def pilih(kecuali=()):
+    paksa = os.environ.get("CLAUDE_AKUN", "").strip()
+    if paksa in AKUN:
+        return paksa, "dipaksa CLAUDE_AKUN"
+    segarkan()
+    calon = [a for a in AKUN if a not in kecuali] or list(AKUN)
+    info = {a: keadaan(a) for a in calon}
+    for a in calon:
+        persen, _, alasan = info[a]
+        if persen is None or persen < AMBANG:
+            return a, alasan if a == "1" else f"Claude 1 penuh ({keadaan('1')[2]}); Claude 2 {alasan}"
+    a = min(calon, key=lambda x: info[x][0] if info[x][0] is not None else 0)
+    return a, "semua akun penuh, pakai yang paling longgar (" + ", ".join(f"Claude {x} {info[x][2]}" for x in calon) + ")"
+
+
+def catat(akun, alasan, hasil=None):
+    DATA.mkdir(parents=True, exist_ok=True)
+    induk = ""
+    try:
+        induk = Path(Path(f"/proc/{os.getppid()}/cmdline").read_bytes().split(b"\0")[1].decode()).name
+    except (OSError, IndexError, UnicodeDecodeError):
+        pass
+    baris = {"t": time.time(), "akun": akun, "alasan": alasan, "pid": os.getpid(), "induk": induk,
+             "run": os.environ.get("VELOCITY_RUN_ID", ""), "domain": os.environ.get("VELOCITY_DOMAIN", "")}
+    if hasil:
+        baris["hasil"] = hasil
+    with open(DATA / "pilihan.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(json.dumps(baris, ensure_ascii=False) + "\n")
+    try:
+        fd, tmp = tempfile.mkstemp(dir=BRAIN, prefix=".claude-akun-")
+        with os.fdopen(fd, "w") as f:
+            json.dump({**baris, "ambang": AMBANG}, f, ensure_ascii=False)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, STATUS)
+    except OSError:
+        pass
+
+
+def tandai_habis(akun):
+    """Akun kena limit: jangan dipilih sampai jendela yang penuh reset (bawaan 30 menit)."""
+    d = baca(LIMIT[akun]) or {}
+    reset = [j.get("reset") for j in (d.get("lima_jam") or {}, d.get("mingguan") or {})
+             if j.get("reset") and (j.get("persen") or 0) >= AMBANG]
+    sampai = min(reset) if reset else time.time() + 1800
+    DATA.mkdir(parents=True, exist_ok=True)
+    (DATA / f"habis-{akun}.json").write_text(json.dumps({"sampai": sampai, "dicatat": time.time()}))
+
+
+def mati_bersama_induk():
+    # Pemanggil sering memakai subprocess timeout (SIGKILL ke pembungkus): claude ikut mati.
+    try:
+        ctypes.CDLL("libc.so.6").prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except OSError:
+        pass
+
+
+def env_akun(akun):
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_AKUN")}
+    if akun != "1":
+        env["CLAUDE_CONFIG_DIR"] = AKUN[akun]
+    return env
+
+
+def jalankan_tahan(akun, argv, masukan):
+    """Keluaran ditahan sampai selesai (text/json), supaya bisa diulang di akun lain."""
+    p = subprocess.Popen([CLAUDE, *argv], env=env_akun(akun), stdin=subprocess.PIPE if masukan is not None else None,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=mati_bersama_induk)
+    terus(p)
+    out, err = p.communicate(masukan)
+    return p.returncode, out, err
+
+
+def jalankan_alir(akun, argv):
+    """stream-json: diteruskan baris demi baris, ekor keluaran disimpan untuk deteksi limit."""
+    p = subprocess.Popen([CLAUDE, *argv], env=env_akun(akun), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         preexec_fn=mati_bersama_induk)
+    terus(p)
+    ekor = {"out": b"", "err": b""}
+
+    def salur(src, dst, k):
+        for baris in iter(src.readline, b""):
+            dst.write(baris)
+            dst.flush()
+            ekor[k] = (ekor[k] + baris)[-65536:]
+
+    t = threading.Thread(target=salur, args=(p.stderr, sys.stderr.buffer, "err"), daemon=True)
+    t.start()
+    salur(p.stdout, sys.stdout.buffer, "out")
+    p.wait()
+    t.join(5)
+    return p.returncode, ekor["out"], ekor["err"]
+
+
+def terus(p):
+    # SIGTERM/SIGINT ke pembungkus diteruskan ke claude
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(s, lambda n, _f: p.send_signal(n))
+
+
+def kena_limit(kode, out, err):
+    if kode == 0:
+        return False
+    teks = (out[-65536:] + b"\n" + err[-65536:]).decode("utf-8", "replace")
+    return bool(POLA_LIMIT.search(teks))
+
+
+def main():
+    argv = sys.argv[1:]
+    # Perintah non-agen (--version, -v, update, dll.) langsung ke akun 1
+    if not argv or not ({"-p", "--print"} & set(argv)):
+        os.execve(CLAUDE, [CLAUDE, *argv], env_akun(os.environ.get("CLAUDE_AKUN") or "1"))
+    alir = "stream-json" in argv
+    akun, alasan = pilih()
+    catat(akun, alasan)
+    if alir:
+        kode, out, err = jalankan_alir(akun, argv)
+        if kena_limit(kode, out, err):
+            tandai_habis(akun)
+            catat(akun, alasan, "kena limit (stream-json, panggilan berikutnya pindah akun)")
+        return kode
+    # stdin disimpan supaya bisa dikirim ulang ke akun lain; pipa yang tidak mengirim apa pun dalam
+    # 3 detik dianggap kosong (perilaku claude sendiri sama), supaya tidak menggantung.
+    masukan = None
+    if sys.stdin is not None and not sys.stdin.isatty():
+        masukan = sys.stdin.buffer.read() if select.select([sys.stdin], [], [], 3)[0] else b""
+    kode, out, err = jalankan_tahan(akun, argv, masukan)
+    if kena_limit(kode, out, err):
+        tandai_habis(akun)
+        lain, alasan2 = pilih(kecuali=(akun,))
+        if lain != akun:
+            catat(lain, f"ulang: Claude {akun} kena limit; {alasan2}")
+            kode, out, err = jalankan_tahan(lain, argv, masukan)
+    sys.stdout.buffer.write(out)
+    sys.stderr.buffer.write(err)
+    return kode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

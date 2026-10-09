@@ -1,7 +1,8 @@
 <?php
-/** vb/posts — daftar berita (tampilan berlapis/baris/daftar/grid) dari kategori pilihan. */
+/** vb/posts — daftar berita (tampilan berlapis/slider/baris/daftar/grid) dari kategori pilihan. */
 $a      = $attributes;
-$layout = in_array( $a['layout'] ?? '', array( 'overlay', 'list', 'excerpt', 'grid' ), true ) ? $a['layout'] : 'overlay';
+$layout = in_array( $a['layout'] ?? '', array( 'overlay', 'slider', 'list', 'excerpt', 'grid' ), true ) ? $a['layout'] : 'overlay';
+$geser  = 'slider' === $layout;
 $args   = array(
 	'post_type'           => 'post',
 	'post_status'         => 'publish',
@@ -10,7 +11,17 @@ $args   = array(
 	'ignore_sticky_posts' => true,
 	'no_found_rows'       => true,
 );
-if ( ! empty( $a['category'] ) ) {
+if ( ! empty( $a['currentTerm'] ) && ( is_category() || is_tag() || is_tax() ) ) {
+	// Di halaman arsip: berita dari kategori/tag yang sedang dibuka.
+	$term = get_queried_object();
+	if ( 'category' === $term->taxonomy ) {
+		$args['cat'] = (int) $term->term_id;
+	} elseif ( 'post_tag' === $term->taxonomy ) {
+		$args['tag_id'] = (int) $term->term_id;
+	} else {
+		$args['tax_query'] = array( array( 'taxonomy' => $term->taxonomy, 'terms' => (int) $term->term_id ) ); // phpcs:ignore
+	}
+} elseif ( ! empty( $a['category'] ) ) {
 	$args['cat'] = (int) $a['category'];
 }
 $urut = $a['orderBy'] ?? 'date';
@@ -32,7 +43,7 @@ if ( ! empty( $a['excludeCurrent'] ) && is_singular() ) {
 }
 $q = new WP_Query( $args );
 
-$kelas = array( 'vb-posts', 'vb-posts--' . $layout, 'vb-gap-' . sanitize_html_class( $a['gap'] ?? 'md' ), 'vb-judul-' . sanitize_html_class( $a['titleSize'] ?? 'md' ), vb_kelas_align( $a ) );
+$kelas = array( 'vb-posts', 'vb-posts--' . ( $geser ? 'overlay vb-posts--slider vb-carousel vb-carousel--auto' : $layout ), 'vb-gap-' . sanitize_html_class( $a['gap'] ?? 'md' ), 'vb-judul-' . sanitize_html_class( $a['titleSize'] ?? 'md' ), vb_kelas_align( $a ) );
 if ( 'list' === $layout ) {
 	$kelas[] = 'vb-posts--foto-' . sanitize_html_class( $a['thumbPos'] ?? 'right' );
 }
@@ -40,17 +51,27 @@ if ( ! empty( $a['fill'] ) ) {
 	$kelas[] = 'vb-posts--fill';
 }
 $gaya = sprintf(
-	'--vb-cols:%d;--vb-cols-t:%d;--vb-cols-m:%d;--vb-post-h:%dpx;',
+	'--vb-cols:%1$d;--vb-cols-t:%2$d;--vb-cols-m:%3$d;--vb-pv:%1$d;--vb-pv-t:%2$d;--vb-pv-m:%3$d;--vb-post-h:%4$dpx;',
 	max( 1, min( 6, (int) ( $a['columns'] ?? 1 ) ) ),
 	max( 1, min( 4, (int) ( $a['columnsTablet'] ?? 1 ) ) ),
 	max( 1, min( 3, (int) ( $a['columnsMobile'] ?? 1 ) ) ),
 	max( 160, min( 900, (int) ( $a['imageHeight'] ?? 420 ) ) )
 );
-$ukuran = array( 'overlay' => 'large', 'list' => 'thumbnail', 'excerpt' => 'medium', 'grid' => 'medium_large' );
+$ukuran = array( 'overlay' => 'large', 'slider' => 'large', 'list' => 'thumbnail', 'excerpt' => 'medium', 'grid' => 'medium_large' );
 
-echo '<div ' . get_block_wrapper_attributes( array( 'class' => trim( implode( ' ', array_filter( $kelas ) ) ), 'style' => $gaya ) ) . '>'; // phpcs:ignore
+$attr = array( 'class' => trim( implode( ' ', array_filter( $kelas ) ) ), 'style' => $gaya );
+if ( $geser ) {
+	$attr['data-vb-autoplay']     = ! empty( $a['autoplay'] ) ? max( 3, (int) ( $a['interval'] ?? 5 ) ) : 0;
+	$attr['data-vb-sebutan']      = 'Berita';
+	$attr['aria-roledescription'] = 'carousel';
+	$attr['aria-label']           = 'Berita pilihan';
+}
+echo '<div ' . get_block_wrapper_attributes( $attr ) . '>'; // phpcs:ignore
 if ( ! $q->have_posts() ) {
 	echo '<p class="vb-posts__kosong">' . esc_html( $a['emptyText'] ?? '' ) . '</p>';
+}
+if ( $geser ) {
+	echo '<div class="vb-carousel__track" tabindex="0">';
 }
 while ( $q->have_posts() ) {
 	$q->the_post();
@@ -60,7 +81,7 @@ while ( $q->have_posts() ) {
 		? get_the_post_thumbnail( null, $ukuran[ $layout ], array( 'class' => 'vb-post__foto', 'loading' => 'lazy', 'alt' => esc_attr( wp_strip_all_tags( $judul ) ) ) )
 		: '<span class="vb-post__foto vb-post__foto--kosong"></span>';
 	$kat    = '';
-	if ( ! empty( $a['showCategory'] ) && in_array( $layout, array( 'overlay', 'grid' ), true ) ) {
+	if ( ! empty( $a['showCategory'] ) && in_array( $layout, array( 'overlay', 'slider', 'grid' ), true ) ) {
 		$daftar = get_the_category();
 		if ( $daftar ) {
 			$kat = '<a class="vb-post__kat" href="' . esc_url( get_category_link( $daftar[0] ) ) . '">' . esc_html( $daftar[0]->name ) . '</a>';
@@ -83,4 +104,12 @@ while ( $q->have_posts() ) {
 	);
 }
 wp_reset_postdata();
+if ( $geser ) {
+	echo '</div>';
+	if ( $q->post_count > 1 ) {
+		echo '<button type="button" class="vb-carousel__arrow vb-carousel__prev" aria-label="Sebelumnya">' . vb_ikon( 'chevron-right', 'vb-ikon' ) . '</button>'; // phpcs:ignore
+		echo '<button type="button" class="vb-carousel__arrow vb-carousel__next" aria-label="Berikutnya">' . vb_ikon( 'chevron-right', 'vb-ikon' ) . '</button>'; // phpcs:ignore
+		echo '<div class="vb-carousel__nav"><div class="vb-carousel__dots" role="tablist" aria-label="Pilih berita"></div></div>';
+	}
+}
 echo '</div>';

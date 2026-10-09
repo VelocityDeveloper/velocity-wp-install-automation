@@ -3,7 +3,7 @@
 import { ref, computed } from 'vue'
 import LogLive from './LogLive.vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, keNama } from '../../laravel.js'
+import { aksi, pesanGalat, namaSaya, keNama, jalurLaravel } from '../../laravel.js'
 import { konfirmasi } from '../../konfirmasi.js'
 import { tanggalWaktu } from '../../api.js'
 
@@ -46,9 +46,10 @@ const alamat = computed(() => inst.value.port ? `http://${location.hostname}:${i
       <span v-if="inst.status" class="pil" :class="{ ok: 'baik', jalan: 'waspada', gagal: 'bahaya' }[inst.status]">{{ { ok: 'Terpasang', jalan: 'Berjalan', gagal: 'Gagal' }[inst.status] }}</span>
     </div>
 
-    <p v-if="!d.estimasi_kunci" class="pesan-status">Kunci estimasi dulu di tab Estimasi.</p>
+    <p v-if="!jalurLaravel(d)" class="pesan-status">Platform yang dipilih bukan Laravel + Vue: install otomatis &amp; agen Claude tidak dipakai. Fitur dan estimasi di tab Estimasi menjadi pegangan webmaster.</p>
+    <p v-else-if="!d.estimasi_kunci" class="pesan-status">Kunci estimasi dulu di tab Estimasi.</p>
 
-    <template v-if="!terinstall">
+    <template v-if="!terinstall && jalurLaravel(d)">
       <div class="form">
         <label class="isian">
           <span>Nama aplikasi</span>

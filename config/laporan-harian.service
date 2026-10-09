@@ -1,0 +1,8 @@
+[Unit]
+Description=Laporan harian malam: dipelajari, diperbaiki, masih kurang (dashboard /report)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/laporan-harian
+TimeoutStartSec=2400

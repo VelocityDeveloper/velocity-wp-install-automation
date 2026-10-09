@@ -1,0 +1,7 @@
+[Unit]
+Description=Velocity Update: hitung metrik otomatis semua update
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/velocity_update.py pantau

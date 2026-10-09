@@ -1,0 +1,132 @@
+/* Kontrol repeater di panel Customizer. */
+.vlp-repeater-daftar {
+	margin: 8px 0 10px;
+}
+
+.vlp-rep-item {
+	margin: 0 0 8px;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	background: #fff;
+}
+
+.vlp-rep-kepala {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.vlp-rep-kepala:hover {
+	background: #f6f7f7;
+}
+
+.vlp-rep-geser {
+	flex: 0 0 auto;
+	color: #8c8f94;
+	cursor: move;
+}
+
+.vlp-rep-judul {
+	flex: 1 1 auto;
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.vlp-rep-panah {
+	flex: 0 0 auto;
+	color: #50575e;
+	transition: transform .15s;
+}
+
+.vlp-rep-item.terbuka .vlp-rep-panah {
+	transform: rotate(180deg);
+}
+
+.vlp-rep-isi {
+	display: none;
+	padding: 4px 12px 12px;
+	border-top: 1px solid #f0f0f1;
+}
+
+.vlp-rep-item.terbuka .vlp-rep-isi {
+	display: block;
+}
+
+.vlp-rep-field {
+	margin-top: 12px;
+}
+
+.vlp-rep-field label {
+	display: block;
+	margin-bottom: 4px;
+	font-weight: 600;
+}
+
+.vlp-rep-field input[type="text"],
+.vlp-rep-field input[type="url"],
+.vlp-rep-field textarea {
+	width: 100%;
+}
+
+.vlp-rep-pratinjau {
+	margin-bottom: 6px;
+	overflow: hidden;
+	border: 1px dashed #c3c4c7;
+	border-radius: 4px;
+	background: #f6f7f7;
+	text-align: center;
+}
+
+.vlp-rep-pratinjau img {
+	display: block;
+	width: 100%;
+	max-height: 160px;
+	object-fit: cover;
+}
+
+.vlp-rep-pratinjau span {
+	display: block;
+	padding: 18px 8px;
+	color: #787c82;
+}
+
+.vlp-rep-aksi {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 14px;
+	padding-top: 10px;
+	border-top: 1px solid #f0f0f1;
+}
+
+.vlp-repeater-tambah .dashicons {
+	margin: 3px 2px 0 -2px;
+	font-size: 16px;
+	width: 16px;
+	height: 16px;
+}
+
+.vlp-rep-item.ui-sortable-helper {
+	box-shadow: 0 4px 12px rgba(0, 0, 0, .15);
+}
+
+.vlp-repeater-daftar .ui-sortable-placeholder {
+	visibility: visible !important;
+	margin-bottom: 8px;
+	border: 1px dashed #2271b1;
+	border-radius: 4px;
+	background: #f0f6fc;
+}
+
+.vlp-rep-field .vlp-rep-pilih-gambar,
+.vlp-rep-field .vlp-rep-hapus-gambar {
+	vertical-align: middle;
+}
+
+.vlp-rep-field .vlp-rep-hapus-gambar {
+	margin-left: 8px;
+}

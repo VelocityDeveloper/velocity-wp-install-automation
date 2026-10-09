@@ -1,0 +1,12 @@
+{
+  "_catatan": "Daftar webmaster untuk panel 'Webmaster sedang mengerjakan apa' (scripts/velocity_update.py sumber `webmaster`). nama = tampilan; token = nama di brain/token.json (pemakaian Claude Code); alias = nama yang dipakai di CRM (wm_project.webmaster, huruf kecil), installer WordPress (kolom webmaster) dan PM installer Laravel. Pemetaan Aditya/Aditya K masih tebakan 2 Okt 2026, koreksi di sini.",
+  "webmaster": [
+    {"nama": "Irawan", "token": "Irawan VD", "alias": ["irawan", "irawan yulianto"]},
+    {"nama": "Afif", "token": "Afif", "alias": ["afif"]},
+    {"nama": "Lingga", "token": "Lingga", "alias": ["lingga", "lavaura lingga buana"]},
+    {"nama": "Shudqi", "token": "Shudqi", "alias": ["shudqi", "shudqi tabarak"]},
+    {"nama": "Yaya", "token": "Yaya", "alias": ["yaya", "surya andriyani"]},
+    {"nama": "Adityathok", "token": "Adityathok", "alias": ["aditya"]},
+    {"nama": "Aditya K", "token": "Aditya K", "alias": ["aditya k"]}
+  ]
+}

@@ -57,7 +57,7 @@ defineExpose({ tampilkan, tutup, buka })
 <style scoped>
 .menu-aksi { position: fixed; z-index: 55; min-width: 200px; padding: 6px; border-radius: 12px; background: var(--kartu-2); border: 1px solid var(--garis); box-shadow: 0 16px 40px rgba(0, 0, 0, .45); }
 .menu-aksi button { display: block; width: 100%; padding: 9px 12px; border: 0; border-radius: 8px; background: transparent; text-align: left; font-size: 13.5px; cursor: pointer; }
-.menu-aksi button:hover:not(:disabled), .menu-aksi button:focus-visible { background: var(--aksen-lembut); color: #fff; outline: none; }
+.menu-aksi button:hover:not(:disabled), .menu-aksi button:focus-visible { background: var(--aksen-lembut); color: var(--teks-kuat); outline: none; }
 .menu-aksi button.bahaya { color: var(--bahaya); }
 .menu-aksi button:disabled { color: var(--teks-3); cursor: default; }
 .menu-aksi small { display: block; font-size: 11.5px; }

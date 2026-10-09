@@ -28,6 +28,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / 'scripts'))
 from client_form import read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 API = os.environ.get('INSTALLER_API', 'http://127.0.0.1:9121')
 MODE = os.environ.get('AUTOPILOT_MODE', 'observe').strip().lower()
@@ -150,7 +151,7 @@ def skip_reason(row, journal, today):
     if telat is not None and telat > datetime.timedelta(0):
         # Deadline hari ini masih dihitung belum terlewat.
         return 'deadline_sudah_terlewat_biarkan_manual'
-    if not read_client_form(ON_PROGRESS / domain)['fields']:
+    if not read_client_form(folder_klien(domain))['fields']:
         return 'form_isian_klien_tidak_terbaca'
     return None
 

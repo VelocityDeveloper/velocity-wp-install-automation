@@ -53,5 +53,5 @@ onBeforeUnmount(() => { if (props.buka && pemicu) pemicu.focus() })
 .dialog.bahaya h2 { color: var(--bahaya); }
 .dialog.waspada h2 { color: var(--waspada); }
 .dialog-x { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--teks-2); cursor: pointer; flex: none; }
-.dialog-x:hover { background: var(--kartu-2); color: #fff; }
+.dialog-x:hover { background: var(--kartu-2); color: var(--teks-kuat); }
 </style>

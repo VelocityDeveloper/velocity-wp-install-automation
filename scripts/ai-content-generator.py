@@ -208,7 +208,8 @@ def prompt_bahasa(system_prompt, user_prompt):
 
 # Model berjenis agen Claude Code (halaman /ai/, provider 'claude_code', permintaan user 2026-09-30):
 # dipanggil lewat `claude -p` tanpa tools, bukan endpoint. Prompt lewat stdin (argv dibatasi 128 KB).
-CLAUDE_CLI = next((c for c in ('/root/.local/bin/claude', '/usr/local/bin/claude') if Path(c).is_file()), 'claude')
+# Lewat pembungkus claude-akun: pindah otomatis ke langganan Claude 2 bila Claude 1 kena/mendekati limit.
+CLAUDE_CLI = str(Path(__file__).resolve().parent / 'claude-akun')
 CLAUDE_KUNCI = Path('/etc/velocity/secrets/anthropic_api_key')
 
 
@@ -261,13 +262,15 @@ def claude_call(system_prompt, user_prompt, model, timeout=None):
 
 
 def ai_call(system_prompt, user_prompt, model, timeout=None, max_tokens=None):
-    """Call OpenAI-compatible API.
+    """Call OpenAI-compatible API (atau agen Claude Code bila provider model 'claude_code').
 
     `timeout` detik (bawaan VELOCITY_AI_TIMEOUT atau 120). Prompt panjang seperti isi
     contoh tema butuh lebih lama: 2026-09-16 layanan AI melambat (prompt satu kalimat
     saja 57 detik) sehingga dua percobaan isi contoh habis waktu dan gagal.
     """
     system_prompt, user_prompt = prompt_bahasa(system_prompt, user_prompt)
+    if model.get('provider') == 'claude_code':
+        return claude_call(system_prompt, user_prompt, model, timeout)
     api_key = model.get('api_key', '')
     if not api_key:
         log('ERROR: API key not found in model config')
@@ -889,7 +892,7 @@ def main():
     # Folder manifest hanya berisi <domain>.txt hasil generate, jadi kalau cuma
     # membaca itu, AI menulis konten generik tanpa data klien sama sekali.
     client_data = {}
-    for folder in (MANIFEST.parent, ON_PROGRESS / domain):
+    for folder in (MANIFEST.parent, folder_klien(domain)):
         if folder.is_dir():
             for k, v in read_client_data(folder).items():
                 client_data.setdefault(k, v)
@@ -900,14 +903,16 @@ def main():
     # perlu generate; apply ulang memakai konten tersimpan.
     need_ai = not (load_saved(GENERATED_DIR / f'{domain}-pages.json')
                    and load_saved(GENERATED_DIR / f'{domain}-articles.json'))
-    docs = (collect_client_docs(ON_PROGRESS / domain) if need_ai
-            else {'sources': [], 'unreadable': [], 'skipped': []})
+    docs = (collect_client_docs(folder_klien(domain)) if need_ai
+            else {'sources': [], 'unreadable': [], 'skipped': [], 'unsupported': []})
     for name, text in docs['sources']:
         log(f'Dokumen klien: {name} ({len(text)} karakter)')
     if docs['unreadable']:
         log(f'Dokumen tidak terbaca (mis. PDF hasil scan): {docs["unreadable"]}')
     if docs['skipped']:
         log(f'Dokumen dilewati (anggaran karakter habis): {docs["skipped"]}')
+    if docs.get('unsupported'):
+        log(f'Dokumen format belum didukung (tidak dibaca): {docs["unsupported"]}')
     client_info = format_for_prompt(client_data, docs)
     
     # Load AI model
@@ -967,7 +972,7 @@ def main():
                    for a in articles if a.get('slug')]
         articles = None
         if not docs['sources']:
-            docs = collect_client_docs(ON_PROGRESS / domain)
+            docs = collect_client_docs(folder_klien(domain))
             client_info = format_for_prompt(client_data, docs)
     if articles and kategori:
         articles = [a for a in articles if str(a.get('title') or '').strip() and str(a.get('slug') or '').strip()]
@@ -975,7 +980,7 @@ def main():
         kurang = [k for k in kategori if k['judul'] not in ada]
         for k in kurang:
             if not docs['sources']:
-                docs = collect_client_docs(ON_PROGRESS / domain)
+                docs = collect_client_docs(folder_klien(domain))
                 client_info = format_for_prompt(client_data, docs)
             log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {per_kategori}')
             bagian = generate_articles(site_title, domain, client_info, model, per_kategori, k['judul'],

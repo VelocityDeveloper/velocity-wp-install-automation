@@ -34,11 +34,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from folder_klien import folder_klien
 
 HERE = Path(__file__).resolve().parent
 # Sama dengan fse-apply: uji di lokasi lain tidak menimpa rencana situs sungguhan.
 RENCANA_DIR = Path(os.environ.get('VELOCITY_FSE_RENCANA') or '/var/lib/velocity/fse-rencana')
 ON_PROGRESS = Path('/home/On Progress')
+REDESIGN_DIR = Path(os.environ.get('VELOCITY_REDESIGN_DIR') or '/var/lib/velocity/redesign')
 UA = 'velocity-installer/1.0 (+https://velocitydeveloper.com)'
 # Naikkan bila bentuk rencana/klasifikasi berubah: tembolok versi lama diukur ulang
 # (versi 2: warna tombol WhatsApp mengambang dibuang dari warna referensi;
@@ -73,7 +75,7 @@ def desain_lokal(domain):
     mengirim folder desain/ (ekspor Next.js 8 halaman). Desain milik klien sendiri lebih
     kuat daripada website contoh, jadi didahulukan. Zip yang belum diekstrak dibuka ke
     fse-rencana/<domain>/desain-klien/ (tanpa jalur keluar folder)."""
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     if not folder.is_dir():
         return ''
     calon = []
@@ -133,12 +135,20 @@ def referensi_form(domain):
     Contoh isian template form (alamatWebContoh.com) dan tautan syarat & ketentuan
     Velocity bukan referensi."""
     sys.path.insert(0, str(HERE))
+    # Redesign (scripts/redesign, keputusan user 2026-09-29): acuannya subfolder "redesign <domain>"
+    # (brief.json), bukan FORM ISIAN pembuatan pertama. Brief tanpa URL = tanpa referensi.
+    if re.search(r'^redesign=', (Path('/home/project') / domain / f'{domain}.txt').read_text()
+                 if (Path('/home/project') / domain / f'{domain}.txt').is_file() else '', re.M):
+        try:
+            return dict(json.loads((REDESIGN_DIR / domain / 'brief.json').read_text()).get('referensi') or {})
+        except (OSError, ValueError):
+            return {}
     lokal = desain_lokal(domain)
     if lokal:
         return {'url': lokal, 'catatan': 'desain dikirim klien di folder proyek', 'sumber': 'desain_klien'}
     try:
         from client_form import read_client_form
-        form = read_client_form(ON_PROGRESS / domain)
+        form = read_client_form(folder_klien(domain))
         teks = form.get('text') or ''
     except Exception:
         return {}

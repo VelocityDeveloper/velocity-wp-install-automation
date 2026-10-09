@@ -40,6 +40,8 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from folder_klien import folder_klien
+import plugin_api
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -152,7 +154,7 @@ def siapkan(cfg, domain, kerja, permintaan):
     (kerja / 'permintaan.txt').write_text(permintaan + '\n')
     sys.path.insert(0, str(HERE))
     from client_form import read_client_form
-    form = read_client_form(ON_PROGRESS / domain).get('text', '')
+    form = read_client_form(folder_klien(domain, ON_PROGRESS)).get('text', '')
     # Baris sandi/kata kunci di form tidak ikut dibaca agen.
     # Sisa biner .doc (karakter kendali/huruf acak) dibuang, seperti client_form.pesan_tambahan.
     baris = []
@@ -197,6 +199,23 @@ def cadangkan(cfg, domain):
     return m.group(1)
 
 
+# Aturan 3 tugas.md (data berstruktur). Paket E/F: katalog = velocity-produk (keputusan user 2026-10-06).
+ATURAN_KATALOG = (
+    'Paket/harga pakai plugin `velocity-paket` (CPT `paket`, taksonomi\n'
+    '   `kategori-paket`, meta vp_harga, vp_keterangan_harga, vp_kelengkapan (array), vp_tombol, shortcode\n'
+    '   `[velocity_paket kategori="<slug>" kelompok="1"]`, tombol pesan WhatsApp otomatis).')
+ATURAN_KATALOG_EF = (
+    '**Paket E/F: katalog, produk, paket, dan harga pakai plugin `velocity-produk`**\n'
+    '   (`alat plugin velocity-produk`; bisa jadi sudah dipasang installer — cek `plugin_aktif` di situs.json).\n'
+    '   CPT `produk`, taksonomi `kategori`, meta `ak_harga` + `ak_harga_fix` (angka tanpa titik), `ak_harga_dis`\n'
+    '   (harga diskon; isi juga `ak_harga_fix` dengan harga diskon), `ak_kode`, `ak_stok`, `gallery_images` (array\n'
+    '   ID lampiran, foto ke-2 dst.); gambar unggulan = foto utama. Halaman Katalog (slug `katalog`, template\n'
+    '   `velocityproduk-templates_katalog`) dan arsip `/produk/`, `/kategori/<slug>/` tampil otomatis; tombol beli\n'
+    '   WhatsApp lewat opsi `vdproduk_tombol_beli`=`wa` + `vdproduk_nowa`. Produk CONTOH (meta\n'
+    '   `_velocity_produk_contoh`) dihapus begitu produk asli masuk. **Jangan pakai `velocity-paket`, Meta Box,\n'
+    '   atau CPT baru** untuk data produk/paket di paket ini.')
+
+
 def prompt_tugas(cfg, domain, kerja, situs, permintaan, menit):
     blok = situs.get('tema_blok')
     ganti = {
@@ -204,7 +223,9 @@ def prompt_tugas(cfg, domain, kerja, situs, permintaan, menit):
         '{{JENIS_TEMA}}': 'block theme / FSE' if blok else 'tema klasik',
         '{{URL}}': FA.muat_modul('fak', HERE / 'fse-audit-kemiripan').situs_url(domain),
         '{{PERMINTAAN}}': permintaan, '{{KERJA}}': str(kerja), '{{ALAT}}': str(ALAT), '{{MENIT}}': str(menit),
-        '{{PLUGIN_TERSEDIA}}': ', '.join(sorted(p.name for p in PLUGINS.iterdir() if p.is_dir())),
+        '{{PLUGIN_TERSEDIA}}': ', '.join(sum(plugin_api.plugin_agen(cfg.get('paket'), [p.name for p in PLUGINS.iterdir()
+                                                                                       if p.is_dir()]), [])),
+        '{{ATURAN_KATALOG}}': ATURAN_KATALOG_EF if plugin_api.paket_ef(cfg.get('paket')) else ATURAN_KATALOG,
         '{{MENU_PETUNJUK}}': ('Menu tema blok ada di post `wp_navigation` (lihat `navigasi` di situs.json): tambah '
                               '`<!-- wp:navigation-link {...} /-->` ke isinya lewat `alat php`.') if blok else
                              ('Menu klasik: `wp menu item add-post <menu> <id-halaman>` (menu utama lihat '

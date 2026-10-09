@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+"""Laporan harian malam: apa yang dipelajari, diperbaiki, dan masih kurang hari ini (permintaan user 2026-10-08).
+
+Bahan dikumpulkan dari jejak kerja hari itu (baca-saja), lalu dirangkum Claude (opus, tanpa alat):
+  - memory Claude (~/.claude/projects/*/memory): baris yang bertambah dibanding cuplikan malam sebelumnya
+  - transkrip sesi Claude (~/.claude/projects/*/*.jsonl): permintaan user + jawaban akhir per sesi, nama dari token.json
+  - commit git hari itu di repo /opt, /home, /root
+  - laporan-efisiensi --coba (installer WordPress + token AI) untuk tanggal yang sama
+  - kondisi baru di Velocity Update
+  - laporan kemarin: poin "kurang" & "fokus besok" dicek tindak lanjutnya hari ini
+Hasil: /var/lib/velocity/laporan-harian/<tanggal>.json + rekap /usr/share/nginx/html/brain/laporan-harian.json
+(dibaca halaman dashboard Pemantauan ▸ Report, /report).
+
+Pemakaian: laporan-harian [--tanggal YYYY-MM-DD] [--coba]   (--coba = cetak bahan saja, tanpa Claude)
+Timer: laporan-harian.timer 23:00 WIB.
+"""
+import argparse
+import difflib
+import fcntl
+import glob
+import json
+import re
+import shutil
+import subprocess
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+DIR = Path('/var/lib/velocity/laporan-harian')
+CUPLIKAN = DIR / 'memori-cuplikan'
+PUBLIK = Path('/usr/share/nginx/html/brain/laporan-harian.json')
+PROJECTS = Path('/root/.claude/projects')
+TOKEN = Path('/usr/share/nginx/html/brain/token.json')
+VU = Path('/var/lib/velocity/velocity-update/data.json')
+EFISIENSI = Path(__file__).resolve().parent / 'laporan-efisiensi'
+AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
+CLAUDE = '/root/.local/bin/claude'
+REPO_GLOB = ['/opt/*/.git', '/home/*/.git', '/root/*/.git']
+BULAN = 'Jan Feb Mar Apr Mei Jun Jul Agu Sep Okt Nov Des'.split()
+SIMPAN_PUBLIK = 60          # laporan terakhir yang ikut rekap halaman
+
+# Batas bahan supaya prompt tetap wajar (±200 rb karakter)
+PESAN_PER_SESI = 12
+PANJANG_PESAN = 400
+JAWABAN_AKHIR = 2
+PANJANG_JAWABAN = 1200
+TOTAL_SESI = 160_000
+TOTAL_MEMORI = 40_000
+
+SKEMA = {
+    'type': 'object',
+    'properties': {
+        'ringkasan': {'type': 'string'},
+        'dipelajari': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            'judul': {'type': 'string'}, 'isi': {'type': 'string'}, 'sumber': {'type': 'string'}},
+            'required': ['judul', 'isi']}},
+        'diperbaiki': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            'judul': {'type': 'string'}, 'isi': {'type': 'string'}, 'area': {'type': 'string'}},
+            'required': ['judul', 'isi']}},
+        'kurang': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            'judul': {'type': 'string'}, 'isi': {'type': 'string'}, 'saran': {'type': 'string'},
+            'prioritas': {'type': 'string', 'enum': ['tinggi', 'sedang', 'rendah']}, 'pic': {'type': 'string'}},
+            'required': ['judul', 'isi', 'saran', 'prioritas', 'pic']}},
+        'tindak_lanjut': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            'poin': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['tuntas', 'sebagian', 'belum']},
+            'catatan': {'type': 'string'}}, 'required': ['poin', 'status', 'catatan']}},
+        'fokus_besok': {'type': 'array', 'items': {'type': 'string'}},
+        'per_divisi': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            'divisi': {'type': 'string'}, 'ringkasan': {'type': 'string'}, 'poin': {'type': 'array', 'items': {'type': 'string'}},
+            'penilaian': {'type': 'string', 'enum': ['baik', 'cukup', 'perlu_perhatian']}, 'alasan': {'type': 'string'},
+            'berjalan_baik': {'type': 'array', 'items': {'type': 'string'}},
+            'perlu_perbaikan': {'type': 'array', 'items': {'type': 'string'}},
+            'saran': {'type': 'array', 'items': {'type': 'string'}},
+            'per_orang': {'type': 'array', 'items': {'type': 'object', 'properties': {
+                'nama': {'type': 'string'}, 'ringkasan': {'type': 'string'}}, 'required': ['nama', 'ringkasan']}}},
+            'required': ['divisi', 'ringkasan', 'poin', 'penilaian', 'alasan', 'berjalan_baik', 'perlu_perbaikan', 'saran', 'per_orang']}},
+    },
+    'required': ['ringkasan', 'dipelajari', 'diperbaiki', 'kurang', 'tindak_lanjut', 'fokus_besok', 'per_divisi'],
+}
+
+PROMPT = """Kamu menyusun LAPORAN HARIAN MALAM untuk pemilik Velocity Developer (jasa pembuatan website & aplikasi).
+Tanggal: {tgl}. Bahan di bawah adalah jejak kerja hari ini: perubahan memory Claude (pelajaran/aturan baru), ringkasan
+sesi Claude per orang tim, commit git, laporan installer & token, dan kondisi Velocity Update.
+
+Tulis dalam bahasa Indonesia yang lugas, sebut nama domain/project/orang bila ada. Jangan mengarang: setiap poin harus
+bisa ditelusuri ke bahan. Gabungkan hal yang sama; utamakan yang berdampak.
+
+- ringkasan: 2–4 kalimat gambaran hari ini.
+- dipelajari: pelajaran/aturan/temuan baru (terutama dari memory yang bertambah dan koreksi user di sesi). sumber = nama
+  berkas memory atau sesi.
+- diperbaiki: perbaikan/penyelesaian nyata (bug, revisi klien, fitur, deploy). area = project/domain/sistem.
+- kurang: yang belum beres, gagal, berulang, boros token, atau pola kesalahan yang perlu diperbaiki — sertakan saran konkret
+  dan prioritas. pic = penanggung jawab tindak lanjutnya: nama orang persis seperti judul "## <nama>" di SESI CLAUDE
+  (orang yang menangani/memegang project itu hari ini; beberapa nama pisahkan koma). "Otomasi (installer & alat)" bila
+  masalahnya di sistem otomatis tanpa pemilik jelas. "-" bila memang tidak bisa ditelusuri — jangan menebak.
+- Format isi/saran/catatan: daftar pakai baris "- " (satu poin per baris), perintah/berkas/kode diapit backtick.
+  Item di dalam array (poin, berjalan_baik, perlu_perbaikan, saran, fokus_besok) TANPA awalan "- ".
+- tindak_lanjut: untuk SETIAP poin "kurang" dan "fokus besok" di laporan kemarin (bila ada), nilai apakah hari ini tuntas,
+  sebagian, atau belum, dengan catatan bukti singkat. Kosongkan bila tidak ada laporan kemarin.
+- fokus_besok: 3–6 langkah prioritas untuk besok.
+- per_divisi: satu entri untuk tiap divisi yang punya sesi hari ini (divisi = nama dalam kurung di judul "## <nama> (<divisi>)"
+  di SESI CLAUDE; sesi tanpa divisi masuk "Lainnya"). ringkasan = 1–2 kalimat apa yang dikerjakan divisi itu; poin = 2–6
+  pekerjaan/hasil/kendala utamanya, sebut nama orang dan domain. Satu poin = satu orang; jangan menggabungkan
+  pekerjaan dua orang dalam satu poin.
+  per_orang: satu entri untuk SETIAP orang di divisi itu yang punya sesi hari ini (lihat ANGKA PER DIVISI), nama
+  persis seperti di judul sesi; ringkasan = 1–2 kalimat apa yang dia kerjakan & hasilnya. Nama yang mirip adalah
+  ORANG BERBEDA dan tidak boleh digabung atau dipertukarkan — mis. "Aditya K" dan "Adityathok" adalah dua webmaster
+  yang berbeda; pekerjaan masing-masing hanya diambil dari sesi miliknya sendiri.
+  EVALUASI divisi (cara kerja tim, bukan sekadar daftar tugas):
+  - penilaian: "baik" (tuntas, efisien, sedikit pengulangan), "cukup" (ada kendala/pemborosan tapi hasil tetap jalan),
+    "perlu_perhatian" (banyak tertunda/gagal, kesalahan berulang, risiko ke klien, atau sangat boros token).
+  - alasan: 1 kalimat dasar penilaian, merujuk bukti di bahan.
+  - berjalan_baik / perlu_perbaikan: 1–4 poin masing-masing. Perhatikan: ketuntasan permintaan (selesai vs menggantung),
+    instruksi yang diulang/dikoreksi user ke Claude (brief kurang jelas), pekerjaan ulang, pelanggaran aturan kerja
+    (backup, verifikasi, cakupan klien), token per permintaan dibanding divisi lain (lihat ANGKA PER DIVISI), dan
+    permintaan yang ditolak pengaman/izin sehingga macet.
+  - saran: 1–3 langkah konkret untuk divisi itu besok/minggu ini.
+  Nilai kerja tim lewat Claude saja (hanya itu bahannya) — jangan menyimpulkan kinerja di luar bahan, dan tulis sebagai
+  evaluasi proses, bukan menyalahkan orang.
+
+=== LAPORAN KEMARIN ===
+{kemarin}
+
+=== MEMORY YANG BERTAMBAH/BERUBAH HARI INI ===
+{memori}
+
+=== ANGKA PER DIVISI (sesi Claude) ===
+{divisi}
+
+=== SESI CLAUDE HARI INI ===
+{sesi}
+
+=== COMMIT GIT HARI INI ===
+{git}
+
+=== INSTALLER & TOKEN (laporan-efisiensi) ===
+{efisiensi}
+
+=== VELOCITY UPDATE: KONDISI BARU HARI INI ===
+{vu}
+"""
+
+
+def tgl_lokal(ts):
+    """Stempel ISO (UTC 'Z' atau berzona) → tanggal waktu server (WIB)."""
+    try:
+        return datetime.fromisoformat(ts.replace('Z', '+00:00')).astimezone().strftime('%Y-%m-%d')
+    except (ValueError, AttributeError):
+        return ''
+
+
+def potong(s, n):
+    s = re.sub(r'\s+', ' ', s or '').strip()
+    return s if len(s) <= n else s[:n - 1] + '…'
+
+
+# --- memory -------------------------------------------------------------------------------------------------------
+
+def berkas_memori():
+    return sorted(Path(p) for p in glob.glob(str(PROJECTS / '*/memory/*.md')))
+
+
+def bahan_memori(hari, hari_ini):
+    """Baris memory yang bertambah. Pakai cuplikan malam sebelumnya bila ada (hanya untuk hari ini);
+    selain itu ambil berkas yang diubah hari itu dan baris yang menyebut tanggalnya."""
+    awal = datetime.strptime(hari, '%Y-%m-%d')
+    akhir = awal + timedelta(days=1)
+    d0 = awal
+    pola_tgl = re.compile(rf'({hari}|\b{d0.day} {BULAN[d0.month - 1]}\b)')
+    keluar, berkas = [], []
+    for f in berkas_memori():
+        try:
+            mt = datetime.fromtimestamp(f.stat().st_mtime)
+            isi = f.read_text(errors='replace')
+        except OSError:
+            continue
+        if not (awal <= mt < akhir) and not (hari_ini and mt >= awal):
+            continue
+        rel = f'{f.parent.parent.name}/{f.name}'
+        lama = CUPLIKAN / f.parent.parent.name / f.name
+        if hari_ini and CUPLIKAN.exists():
+            sebelum = lama.read_text(errors='replace').splitlines() if lama.exists() else []
+            tambah = [l[1:] for l in difflib.unified_diff(sebelum, isi.splitlines(), lineterm='', n=0)
+                      if l.startswith('+') and not l.startswith('+++') and l[1:].strip()]
+            status = 'baru' if not lama.exists() else 'berubah'
+        else:
+            baris = isi.splitlines()
+            tambah = [l for l in baris if pola_tgl.search(l)] or baris[:25]
+            status = 'diubah'
+        if not tambah:
+            continue
+        berkas.append(rel)
+        keluar.append(f'## {rel} ({status})\n' + '\n'.join(potong(l, 600) for l in tambah[:40]))
+    teks = '\n\n'.join(keluar)
+    return (teks[:TOTAL_MEMORI] + '\n…(dipotong)') if len(teks) > TOTAL_MEMORI else teks, berkas
+
+
+def simpan_cuplikan():
+    tmp = DIR / 'memori-cuplikan.baru'
+    shutil.rmtree(tmp, ignore_errors=True)
+    for f in berkas_memori():
+        tujuan = tmp / f.parent.parent.name / f.name
+        tujuan.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, tujuan)
+    shutil.rmtree(CUPLIKAN, ignore_errors=True)
+    tmp.rename(CUPLIKAN)
+
+
+# --- sesi Claude --------------------------------------------------------------------------------------------------
+
+def peta_sesi():
+    try:
+        d = json.loads(TOKEN.read_text())
+    except (OSError, ValueError):
+        return {}
+    peta = {}
+    for p in d.get('pengguna') or []:
+        for s in p.get('sesi') or []:
+            peta[s['sid']] = {'nama': p.get('nama'), 'divisi': p.get('divisi'), 'jalur': s.get('jalur'),
+                              'jenis': s.get('jenis'), 'judul': s.get('judul'), 'hari': s.get('hari') or {}}
+    return peta
+
+
+def teks_user(isi):
+    if not isinstance(isi, str):
+        return ''
+    if isi.startswith(('This session is being continued', '<local-command', '<command-name>', 'Caveat:')):
+        return ''
+    m = re.search(r'<channel[^>]*>(.*?)</channel>', isi, re.S)
+    if m:
+        isi = m.group(1)
+    isi = re.sub(r'<system-reminder>.*?</system-reminder>', '', isi, flags=re.S)
+    isi = re.sub(r'<pasted_content[^>]*>.*?</pasted_content[^>]*>', '[tempelan]', isi, flags=re.S)
+    return isi.strip()
+
+
+def bahan_sesi(hari):
+    peta = peta_sesi()
+    awal = datetime.strptime(hari, '%Y-%m-%d').timestamp()
+    sesi = []
+    for f in glob.glob(str(PROJECTS / '*/*.jsonl')):
+        if Path(f).stat().st_mtime < awal:
+            continue
+        pesan, jawaban, n_alat = [], [], 0
+        try:
+            with open(f, errors='replace') as fh:
+                for ln in fh:
+                    try:
+                        r = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if r.get('type') not in ('user', 'assistant') or tgl_lokal(r.get('timestamp')) != hari:
+                        continue
+                    isi = (r.get('message') or {}).get('content')
+                    if r['type'] == 'user' and not r.get('isMeta') and not r.get('isCompactSummary'):
+                        t = teks_user(isi)
+                        if t:
+                            pesan.append(potong(t, PANJANG_PESAN))
+                    elif r['type'] == 'assistant' and isinstance(isi, list):
+                        for b in isi:
+                            if b.get('type') == 'text' and b.get('text', '').strip():
+                                jawaban.append(b['text'])
+                            elif b.get('type') == 'tool_use':
+                                n_alat += 1
+        except OSError:
+            continue
+        if not pesan and not jawaban:
+            continue
+        sid = Path(f).stem
+        info = peta.get(sid, {})
+        sesi.append({'sid': sid, 'nama': info.get('nama') or 'Belum teridentifikasi', 'divisi': info.get('divisi'),
+                     'jalur': info.get('jalur'), 'jenis': info.get('jenis'), 'judul': info.get('judul'),
+                     'cwd': Path(f).parent.name, 'pesan': pesan, 'jawaban': jawaban, 'alat': n_alat,
+                     'token': sum(v[1] + v[2] + v[3] for v in (info.get('hari', {}).get(hari) or {}).values())})
+    sesi.sort(key=lambda s: -(len(s['pesan']) * 50 + s['alat']))
+    bagian, total = [], 0
+    for s in sesi:
+        p = s['pesan']
+        if len(p) > PESAN_PER_SESI:  # awal + akhir hari, bagian tengah dibuang
+            p = p[:PESAN_PER_SESI // 2] + ['…'] + p[-PESAN_PER_SESI // 2:]
+        blok = (f"## {s['nama']}" + (f" ({s['divisi']})" if s['divisi'] else '') + f" · {s['jalur'] or '-'} · {s['jenis'] or '-'}"
+                f" · {s['alat']} alat · folder {s['cwd']}\nJudul: {potong(s['judul'] or '', 150)}\nPermintaan user:\n"
+                + '\n'.join(f'- {x}' for x in p)
+                + '\nJawaban terakhir Claude:\n' + '\n'.join(f'> {potong(x, PANJANG_JAWABAN)}' for x in s['jawaban'][-JAWABAN_AKHIR:]))
+        if total + len(blok) > TOTAL_SESI:
+            bagian.append(f'…({len(sesi) - len(bagian)} sesi kecil lain tidak dimuat)')
+            break
+        bagian.append(blok)
+        total += len(blok)
+    return '\n\n'.join(bagian), sesi
+
+
+# --- git, installer, velocity update ------------------------------------------------------------------------------
+
+def bahan_git(hari):
+    besok = (datetime.strptime(hari, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+    keluar, jumlah = [], 0
+    for g in sorted(set(sum((glob.glob(p) for p in REPO_GLOB), []))):
+        repo = str(Path(g).parent)
+        try:
+            out = subprocess.run(['git', '-c', 'safe.directory=*', '-C', repo, 'log', '--all', '--no-merges',
+                                  f'--since={hari} 00:00', f'--until={besok} 00:00', '--format=%h %s'],
+                                 capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if out:
+            jumlah += len(out)
+            keluar.append(f'## {repo} ({len(out)} commit)\n' + '\n'.join(f'- {potong(x, 200)}' for x in out[:30]))
+    return '\n\n'.join(keluar), jumlah
+
+
+def bahan_efisiensi(hari):
+    try:
+        out = subprocess.run(['/usr/bin/python3', str(EFISIENSI), '--coba', '--tanggal', hari],
+                             capture_output=True, text=True, timeout=300).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+    return re.sub(r'<[^>]+>', '', out).strip()
+
+
+def bahan_vu(hari):
+    try:
+        d = json.loads(VU.read_text())
+    except (OSError, ValueError):
+        return ''
+    keluar = []
+    for u in d.get('update') or []:
+        for k in u.get('kondisi') or []:
+            if str(k.get('waktu', '')).startswith(hari):
+                keluar.append(f"- {u['id']} {u['judul']} ({k.get('oleh')}): {potong(k.get('isi'), 600)}")
+    return '\n'.join(keluar)
+
+
+def rekap_divisi(sesi):
+    """Angka sesi/permintaan/token per divisi & orang. Divisi tanpa sesi tetap dicantumkan (sesi 0) supaya terlihat kosong."""
+    try:
+        urutan = json.loads(TOKEN.read_text()).get('divisi') or []
+    except (OSError, ValueError):
+        urutan = []
+    grup = {d: {} for d in urutan}
+    for s in sesi:
+        o = grup.setdefault(s['divisi'] or 'Lainnya', {}).setdefault(s['nama'], {'nama': s['nama'], 'sesi': 0, 'pesan': 0, 'token': 0})
+        o['sesi'] += 1
+        o['pesan'] += len(s['pesan'])
+        o['token'] += s['token']
+    hasil = []
+    for d, orang in grup.items():
+        daftar = sorted(orang.values(), key=lambda o: (-o['pesan'], o['nama']))
+        hasil.append({'divisi': d, 'sesi': sum(o['sesi'] for o in daftar), 'pesan': sum(o['pesan'] for o in daftar),
+                      'token': sum(o['token'] for o in daftar), 'orang': daftar})
+    hasil.sort(key=lambda x: (x['sesi'] == 0, x['divisi'] == 'Lainnya', -x['pesan']))
+    return hasil
+
+
+def teks_divisi(rekap):
+    baris = []
+    for d in rekap:
+        if not d['sesi']:
+            baris.append(f"- {d['divisi']}: tidak ada sesi")
+            continue
+        per = round(d['token'] / d['pesan']) if d['pesan'] else 0
+        baris.append(f"- {d['divisi']}: {d['sesi']} sesi, {d['pesan']} permintaan, {d['token']:,} token (±{per:,}/permintaan); "
+                     + ', '.join(f"{o['nama']} {o['pesan']}" for o in d['orang']))
+    return '\n'.join(baris)
+
+
+def laporan_kemarin(hari):
+    lalu = sorted(p for p in DIR.glob('20??-??-??.json') if p.stem < hari)
+    if not lalu:
+        return None
+    try:
+        return json.loads(lalu[-1].read_text())
+    except (OSError, ValueError):
+        return None
+
+
+# --- Claude & simpan ----------------------------------------------------------------------------------------------
+
+def catat_pemakaian(hasil, hari):
+    for model, x in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(x.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(x.get('outputTokens') or 0)
+        baris = {'ts': datetime.utcnow().isoformat(timespec='seconds') + '+00:00', 'domain': 'laporan-harian',
+                 'run': f'laporan-harian-{hari}', 'mode': 'harian', 'peran': 'laporan_harian', 'script': 'laporan-harian',
+                 'sumber': 'claude', 'model_id': 'claude-code', 'model': model, 'permintaan': 1,
+                 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+                 'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
+                 'biaya_usd': round(float(x.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error')}
+        try:
+            with open(AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+
+def tanya_claude(prompt, skema, hari):
+    run = subprocess.run([CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+                          '--tools', '', '--json-schema', json.dumps(skema)],
+                         input=prompt, capture_output=True, text=True, timeout=1800, cwd='/tmp')
+    try:
+        hasil = json.loads(run.stdout)
+    except ValueError:
+        raise SystemExit(f'claude gagal: {(run.stderr or run.stdout)[:400]}')
+    catat_pemakaian(hasil, hari)
+    data = hasil.get('structured_output')
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        raise SystemExit(f"claude tanpa keluaran JSON: {str(hasil.get('result'))[:400]}")
+    return hasil, data
+
+
+def terbitkan():
+    semua = []
+    for p in sorted(DIR.glob('20??-??-??.json'), reverse=True)[:SIMPAN_PUBLIK]:
+        try:
+            semua.append(json.loads(p.read_text()))
+        except (OSError, ValueError):
+            continue
+    tmp = PUBLIK.with_suffix('.tmp')
+    tmp.write_text(json.dumps({'dibuat': datetime.now().isoformat(timespec='seconds'), 'laporan': semua}, ensure_ascii=False))
+    tmp.chmod(0o644)
+    tmp.replace(PUBLIK)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--tanggal', default=datetime.now().strftime('%Y-%m-%d'))
+    ap.add_argument('--coba', action='store_true')
+    ap.add_argument('--rekap-divisi', action='store_true', help='isi ulang angka per divisi laporan yang sudah ada, tanpa Claude')
+    ap.add_argument('--evaluasi-divisi', action='store_true', help='buat ulang hanya per_divisi (evaluasi) laporan yang sudah ada')
+    a = ap.parse_args()
+    hari = a.tanggal
+    if a.rekap_divisi:
+        berkas = DIR / f'{hari}.json'
+        laporan = json.loads(berkas.read_text())
+        laporan['divisi'] = rekap_divisi(bahan_sesi(hari)[1])
+        berkas.write_text(json.dumps(laporan, ensure_ascii=False, indent=1))
+        terbitkan()
+        print(f"rekap divisi {hari}: " + ', '.join(f"{d['divisi']} {d['sesi']}" for d in laporan['divisi']))
+        return
+    hari_ini = hari == datetime.now().strftime('%Y-%m-%d')
+    DIR.mkdir(parents=True, exist_ok=True)
+
+    memori, berkas_mem = bahan_memori(hari, hari_ini)
+    sesi_teks, sesi = bahan_sesi(hari)
+    git_teks, n_commit = bahan_git(hari)
+    efisiensi = bahan_efisiensi(hari)
+    vu = bahan_vu(hari)
+    kemarin = laporan_kemarin(hari)
+    kemarin_teks = '(belum ada laporan sebelumnya)'
+    if kemarin:
+        kemarin_teks = json.dumps({'tanggal': kemarin['tanggal'], 'kurang': kemarin.get('kurang'),
+                                   'fokus_besok': kemarin.get('fokus_besok')}, ensure_ascii=False, indent=1)
+    rekap = rekap_divisi(sesi)
+    d0 = datetime.strptime(hari, '%Y-%m-%d')
+    prompt = PROMPT.format(tgl=f'{d0.day} {BULAN[d0.month - 1]} {d0.year}', kemarin=kemarin_teks, divisi=teks_divisi(rekap),
+                           memori=memori or '(tidak ada)', sesi=sesi_teks or '(tidak ada)', git=git_teks or '(tidak ada)',
+                           efisiensi=efisiensi or '(tidak ada)', vu=vu or '(tidak ada)')
+    if a.evaluasi_divisi:
+        berkas = DIR / f'{hari}.json'
+        laporan = json.loads(berkas.read_text())
+        skema = {'type': 'object', 'properties': {'per_divisi': SKEMA['properties']['per_divisi']}, 'required': ['per_divisi']}
+        hasil, data = tanya_claude(prompt + '\nTUGAS KALI INI: isi HANYA per_divisi (termasuk evaluasinya).\n', skema, hari)
+        laporan['divisi'], laporan['per_divisi'] = rekap, data.get('per_divisi') or []
+        laporan['biaya_usd'] = round(laporan.get('biaya_usd', 0) + float(hasil.get('total_cost_usd') or 0), 2)
+        berkas.write_text(json.dumps(laporan, ensure_ascii=False, indent=1))
+        terbitkan()
+        print(f"evaluasi divisi {hari}: " + ', '.join(f"{x['divisi']} {x['penilaian']}" for x in laporan['per_divisi']))
+        return
+    if a.coba:
+        print(prompt)
+        print(f'\n[{len(prompt):,} karakter, {len(sesi)} sesi, {len(berkas_mem)} memory, {n_commit} commit]')
+        return
+
+    mulai = time.time()
+    hasil, data = tanya_claude(prompt, SKEMA, hari)
+    orang = sorted({s['nama'] for s in sesi})
+    laporan = {
+        'tanggal': hari, 'dibuat': datetime.now().isoformat(timespec='seconds'),
+        'kemarin': kemarin['tanggal'] if kemarin else None,
+        'angka': {'sesi': len(sesi), 'orang': len(orang), 'pesan_user': sum(len(s['pesan']) for s in sesi),
+                  'token_sesi': sum(s['token'] for s in sesi), 'memori': len(berkas_mem), 'commit': n_commit},
+        'orang': orang, 'memori': berkas_mem, 'divisi': rekap,
+        'biaya_usd': round(float(hasil.get('total_cost_usd') or 0), 2), 'detik': round(time.time() - mulai),
+        **{k: data.get(k) or [] for k in ('dipelajari', 'diperbaiki', 'kurang', 'tindak_lanjut', 'fokus_besok', 'per_divisi')},
+        'ringkasan': data.get('ringkasan', ''),
+    }
+    (DIR / f'{hari}.json').write_text(json.dumps(laporan, ensure_ascii=False, indent=1))
+    if hari_ini:
+        simpan_cuplikan()
+    terbitkan()
+    print(f"laporan {hari} tersimpan · {laporan['biaya_usd']} USD · {laporan['detik']} dtk")
+
+
+if __name__ == '__main__':
+    main()

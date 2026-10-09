@@ -1,0 +1,8 @@
+[Unit]
+Description=Velocity Update: Claude menilai kondisi semua update aktif
+After=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=1200
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/velocity_update.py nilai --pantau-dulu

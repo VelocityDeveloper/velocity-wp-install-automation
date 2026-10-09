@@ -9,6 +9,7 @@ jadi agen tidak bisa menyentuh situs lain, SSH, atau berkas rahasia.
   permintaan-claude-alat unggah <berkas> [judul]     unggah gambar/berkas ke Media (gambar besar
                                                      diperkecil dulu: kuota hosting kecil) -> ID & URL
   permintaan-claude-alat plugin <slug>               pasang + aktifkan plugin Velocity dari templates/plugins
+                                                     (Paket E/F: velocity-produk dari API ApiCo)
   permintaan-claude-alat mu-plugin <berkas.php> <nama>   pasang PHP kecil khusus situs ke mu-plugins
   permintaan-claude-alat ambil <url> [maks-gambar]   isi halaman web lain: teks berurutan + gambar
   permintaan-claude-alat bahan [<jalur>]             daftar materi klien (Drive) / salin satu berkas ke
@@ -38,6 +39,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+from folder_klien import folder_klien
+import plugin_api
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -236,10 +239,23 @@ def unggah(cfg, berkas, judul=''):
 
 
 def plugin(cfg, slug):
-    sumber = PLUGINS / slug
-    if not re.fullmatch(r'[a-z0-9-]+', slug) or not sumber.is_dir():
-        print('plugin: tidak ada; tersedia: ' + ', '.join(sorted(p.name for p in PLUGINS.iterdir() if p.is_dir())))
+    # Paket E/F: velocity-produk dari API ApiCo, velocity-paket tidak tersedia (keputusan user 2026-10-06).
+    lokal, api = plugin_api.plugin_agen(cfg.get('paket'), [p.name for p in PLUGINS.iterdir() if p.is_dir()])
+    if not re.fullmatch(r'[a-z0-9-]+', slug) or slug not in lokal + api:
+        print('plugin: tidak tersedia untuk paket ini; tersedia: ' + ', '.join(lokal + api))
         return 2
+    if slug not in api:
+        return pasang_plugin(cfg, slug, PLUGINS / slug)
+    zip_path, _ = plugin_api.ambil_paket(slug, log=lambda p: print(f'plugin: {p}'))
+    if not zip_path:
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(tmp)
+        return pasang_plugin(cfg, slug, Path(tmp) / slug)
+
+
+def pasang_plugin(cfg, slug, sumber):
     situs = FA.Situs(cfg)
     # Plugin yang dibutuhkan (header "Requires Plugins", mis. meta-box) dipasang dulu dari wordpress.org.
     utama = sumber / f'{slug}.php'
@@ -359,7 +375,7 @@ def pribadi(p, domain):
 
 
 def bahan(cfg, domain, jalur=None):
-    akar = ON_PROGRESS / domain
+    akar = folder_klien(domain, ON_PROGRESS)
     if not akar.is_dir():
         print('bahan: folder materi klien tidak ada')
         return 1

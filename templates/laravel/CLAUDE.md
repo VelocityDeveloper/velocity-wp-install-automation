@@ -22,7 +22,8 @@ di pesan commit.
 - Sesudah menjalankan `artisan`, `composer`, atau tes sebagai root: `chown -R {{PENGGUNA}}:{{PENGGUNA}} storage bootstrap/cache`,
   kalau tidak, aplikasi gagal menulis log/cache.
 - Perbarui dev dari GitHub + build + migrasi + restart: `/root/{{SLUG}}/deploy-dev.sh`.
-- Akun uji ada di kartu **Project Lokal** dashboard (http://192.168.88.211/projects), bukan di kode.
+- Akun contoh lokal/dev (juga di kartu **Project Lokal** http://192.168.88.211/projects): satu akun per peran,
+  email `<peran>@example.com` (mis. `admin@example.com`, `guru@example.com`), sandi `password`.
 - Batas unggah PHP layanan: `/etc/{{SLUG}}/php.d/` (flag `php -d` tidak diwarisi `artisan serve`).
 
 ## Konvensi tim
@@ -54,8 +55,11 @@ di pesan commit.
   (`@/routes`, `@/actions`), bukan URL ditulis tangan.
 - **Unggahan**: whitelist `extensions` + `mimes`, simpan di disk privat dan sajikan lewat controller yang
   memeriksa hak akses. Jangan simpan berkas pengguna di `public/`.
-- **Seeder**: data demo dipisah dari data wajib; seeder tidak boleh menimpa sandi akun yang sudah ada dan
-  tidak boleh jalan di production.
+- **Seeder**: setiap model wajib punya factory + seeder (`database/seeders/<Model>Seeder.php`) yang dipanggil
+  `DatabaseSeeder` berurutan sesuai relasi, berisi data contoh realistis — `php artisan migrate:fresh --seed`
+  harus mengisi semua tabel model. Seeder aman diulang (`firstOrCreate`/`updateOrCreate`). Data demo dipisah
+  dari data wajib; seeder tidak boleh menimpa sandi akun yang sudah ada dan data demo tidak boleh jalan di production.
+  Akun contoh non-production selalu `@example.com` dengan sandi `password` (di production sandi dari env/acak).
 - **Rahasia**: `.env`, sandi, dan token tidak pernah masuk repo, log, atau pesan commit.
 - **Pengaturan aplikasi (wajib, dari installer — jangan dihapus)**: Pengaturan > Aplikasi (`/settings/aplikasi`,
   `AppSettingController`, model `Setting` kunci–nilai) untuk nama aplikasi, deskripsi aplikasi, unggah logo, dan
@@ -73,6 +77,18 @@ di pesan commit.
   `<nama>_path` (pola `Setting::IMAGES`/`replaceImage`). Kunci bawaan: `app_name`, `app_description`, `logo_path`,
   `favicon_path`. Nilai awal kunci baru diisi di `SettingSeeder`; nilai bukan teks disimpan sebagai string
   (bool `'1'`/`'0'`, angka, JSON) dan dikonversi di method kecil di model `Setting` (seperti `appName()`).
+- **Perilaku UI wajib (semua app)**:
+  - *Menu navigasi*: klik item menu → laci/menu langsung menutup sendiri lalu halaman tujuan tampil, dengan
+    transisi halus ±200ms (ease-out, tanpa hentakan). Di HP pakai `setOpenMobile(false)` dari `useSidebar()`
+    saat item diklik; menu halaman publik (hamburger) juga menutup otomatis saat pindah halaman.
+  - *Mode gelap*: tombol ikon matahari/bulan (komposabel `useAppearance` starter kit) ada di header, pojok
+    kanan atas — di header dashboard dan di header halaman publik. Bukan di sidebar atau menu pengguna.
+  - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
+    di bawah layar (`sticky bottom-0`, latar kartu, garis atas tipis) berisi Simpan (+ Batal bila ada),
+    sehingga tidak perlu menggulir ke bawah untuk menyimpan. Buat sekali sebagai komponen bersama, pakai ulang.
+  - *Kembali ke atas*: halaman publik punya tombol mengambang "kembali ke atas" (ikon panah atas, ukuran dan
+    tinggi sejajar tombol WhatsApp mengambang, posisinya di sebelah kanan tombol WA), muncul setelah digulir
+    ±400px, menggulir halus ke atas (`behavior: 'smooth'`, langsung bila `prefers-reduced-motion`).
 - **Footer wajib**: `AppFooter` ("© tahun nama aplikasi · Design by Velocity Developer") tetap tampil di semua
   layout (aplikasi, halaman masuk, halaman depan). Layout baru juga memasangnya.
 

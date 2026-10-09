@@ -24,7 +24,8 @@ Alur di installer-runner (hanya paket toko online BIASA, bukan Toko Online Custo
   Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (Marketplace Biasa: 8) (judul "Contoh – ",
   meta _velocity_contoh=1) berfoto Pexels. Produk contoh dihapus begitu produk asli masuk.
   Produk yang sudah diimpor (meta _velocity_produk_kunci) tidak digandakan pada run ulang.
-  Video di folder produk TIDAK diunggah; jumlahnya dicatat (toko: video_dilewati:N) & dilaporkan Telegram.
+  Video di folder produk TIDAK diunggah ke situs; jumlahnya dicatat (toko: video_dilewati:N). Videonya
+  diunggah ke YouTube & di-embed di halaman Galeri oleh scripts/youtube-video (2026-10-07).
 """
 import hashlib
 import importlib.machinery
@@ -45,6 +46,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import claude_vision  # noqa: E402
 from client_form import read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 ON_PROGRESS = Path('/home/On Progress')
 KERJA = Path('/var/lib/velocity/toko-produk')
@@ -53,9 +55,10 @@ DOKUMEN = {'.txt', '.docx', '.doc', '.pdf', '.xlsx', '.xls', '.csv'}
 FOLDER_PRODUK = re.compile(r'produ[ck]|product', re.I)
 BUKAN_PRODUK = re.compile(r'logo|contoh|referensi|screenshot|tangkapan|desain|banner', re.I)
 NAMA_GENERIK = re.compile(r'^(whatsapp (image|unknown)|gambar whatsapp|img[-_ ]?\d|img_|dsc|pxl_|photo|image|foto|'
-                          r'screenshot|\d{6,}|[\d\s().,_-]+$)', re.I)
+                          r'screenshot|gemini[_ ]generated|chatgpt image|dall[-_ ]?e|\d{6,}|[\d\s().,_-]+$)', re.I)
 # Video klien tidak pernah diunggah ke situs (keputusan user 2026-09-14, ditegaskan 2026-09-24);
-# yang ditemukan dicatat di log dan dilaporkan di Telegram (notify-telegram.catatan_video).
+# sejak 2026-10-07 diunggah ke YouTube & di-embed (scripts/youtube-video), dilaporkan di Telegram
+# (notify-telegram.catatan_video).
 VIDEO = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v', '.wmv', '.flv'}
 BATAS_BYTE = 100 * 1024
 MAKS_PRODUK = 60
@@ -206,6 +209,22 @@ def teks_dokumen(berkas):
         return ''
 
 
+KATEGORI = re.compile(r'^\s*(kategori|category)\b[\s:_-]*', re.I)
+
+
+def folder_kategori(d, akar):
+    """Subfolder langsung di bawah folder produk yang berupa KATEGORI (tiap foto = satu produk), bukan satu
+    produk: bernama "Kategori ..."/"Category ..." atau sejajar dengan folder bernama begitu
+    (pandanaransinergiutama.com 2026-10-01: "Tampilan Produk/Kategori ATK/Kertas A4.png", "Kebersihan/...")."""
+    if d.parent != akar:
+        return False
+    return any(KATEGORI.match(x.name) for x in akar.iterdir() if x.is_dir())
+
+
+def nama_kategori(d):
+    return bersihkan_nama(KATEGORI.sub('', d.name)) or d.name
+
+
 def susun_draf(folder):
     """Draf produk dari struktur folder & nama berkas, plus daftar yang perlu dikenali AI."""
     produk, generik, dokumen = [], [], []
@@ -215,6 +234,20 @@ def susun_draf(folder):
                 continue
             gambar = sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in GAMBAR and f.stat().st_size >= 5000)
             docs = sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in DOKUMEN)
+            if d != akar and gambar and folder_kategori(d, akar):
+                kat = nama_kategori(d)
+                dokumen += docs
+                kelompok = {}
+                for g in gambar:
+                    nama = bersihkan_nama(g.stem)
+                    if NAMA_GENERIK.search(g.stem.strip()) or not nama:
+                        generik.append(g)
+                        continue
+                    k = kelompok.setdefault(nama.lower(), {'nama': nama, 'harga': harga_dari(g.stem), 'deskripsi': '',
+                                                           'kategori': kat, 'gambar': []})
+                    k['gambar'].append(str(g))
+                produk += list(kelompok.values())
+                continue
             if d != akar and gambar:
                 teks = '\n'.join(teks_dokumen(x) for x in docs)
                 nama = bersihkan_nama(d.name) or d.name
@@ -253,7 +286,9 @@ def kenali_ai(domain, generik, dokumen, produk):
     nama_ada = ', '.join(p['nama'] for p in produk)[:1500]
     for mulai in range(0, len(generik), MAKS_GAMBAR_AI):
         potong = generik[mulai:mulai + MAKS_GAMBAR_AI]
-        daftar = '\n'.join(f'{claude_vision.nama_gambar(i)} (berkas asli: {g.name})' for i, g in enumerate(potong))
+        daftar = '\n'.join(f'{claude_vision.nama_gambar(i)} (berkas asli: {g.name}'
+                           + (f', folder kategori: {nama_kategori(g.parent)}' if KATEGORI.match(g.parent.name) else '') + ')'
+                           for i, g in enumerate(potong))
         prompt = (
             f'Kamu menyusun katalog produk toko online {domain} dari foto kiriman klien.\n'
             f'Baca SEMUA gambar ini di folder kerja:\n{daftar}\n\n'
@@ -264,7 +299,7 @@ def kenali_ai(domain, generik, dokumen, produk):
             '- Nama produk singkat & jelas dalam bahasa Indonesia; pakai nama dari dokumen atau tulisan di foto bila ada.\n'
             '- harga: angka rupiah HANYA bila tertulis di foto/dokumen/nama berkas; selain itu null. Jangan mengarang.\n'
             '- deskripsi: 1-3 kalimat dari yang terlihat/tertulis saja, tanpa klaim yang tidak terlihat.\n'
-            '- kategori: jenis produk umum (mis. "Obat Bebas", "Gamis").\n'
+            '- kategori: jenis produk umum (mis. "Obat Bebas", "Gamis"); bila gambar punya "folder kategori", pakai PERSIS itu.\n'
             '- Lewati gambar yang bukan foto produk (logo, banner promo tanpa produk, tangkapan layar chat, foto orang saja).\n'
             'Jawab HANYA JSON array: [{"nama": "...", "harga": 12000 | null, "deskripsi": "...", '
             '"kategori": "...", "gambar": ["g01.jpg", ...]}]')
@@ -289,7 +324,7 @@ def kenali_ai(domain, generik, dokumen, produk):
 
 def daftar_produk(domain):
     """(produk, sumber). sumber: folder | kosong. Hasil disimpan per sidik isi folder."""
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     produk, generik, dokumen = susun_draf(folder)
     if not produk and not generik:
         return [], 'kosong'
@@ -325,9 +360,11 @@ def jumlah_contoh(cfg):
     return JUMLAH_CONTOH_MARKETPLACE if re.sub(r'\s+', '', cfg.get('paket', '').lower()) == 'paketmarketplacebiasa' else JUMLAH_CONTOH
 
 
-def produk_contoh(domain, cfg):
-    """5 produk contoh (Marketplace Biasa: 8) sesuai bidang usaha (Claude), foto dari Pexels."""
-    jumlah = jumlah_contoh(cfg)
+def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
+    """5 produk contoh (Marketplace Biasa: 8) sesuai bidang usaha (Claude), foto dari Pexels.
+    scripts/velocity-produk memakainya untuk katalog Paket E/F (jumlah=6, jenis='katalog produk')."""
+    jumlah = jumlah or jumlah_contoh(cfg)
+    pratinjau = 'katalog' if 'katalog' in jenis else 'toko'
     simpan = KERJA / domain / 'contoh.json'
     try:
         lama = json.loads(simpan.read_text())
@@ -335,7 +372,7 @@ def produk_contoh(domain, cfg):
             return lama[:jumlah]
     except (OSError, ValueError, TypeError):
         pass
-    form = read_client_form(ON_PROGRESS / domain)
+    form = read_client_form(folder_klien(domain))
     fields = {k: v for k, v in (form.get('fields') or {}).items()
               if not re.search(r'password|sandi|login|user|alamat|nama anda|hp|telp|wa|email|bank|kodepos', k, re.I)}
     try:
@@ -344,10 +381,10 @@ def produk_contoh(domain, cfg):
         tema = {}
     layanan = ', '.join(str(x.get('judul') or x) if isinstance(x, dict) else str(x) for x in (tema.get('layanan') or []))[:600]
     prompt = (
-        f'Buat {jumlah} produk CONTOH untuk toko online "{cfg.get("site_title") or domain}".\n'
+        f'Buat {jumlah} produk CONTOH untuk {jenis} "{cfg.get("site_title") or domain}".\n'
         f'Data form klien:\n' + '\n'.join(f'- {k}: {v}' for k, v in fields.items())[:2500] + '\n'
         + (f'Layanan/bidang: {layanan}\n' if layanan else '')
-        + 'Produk harus jenis barang yang wajar dijual toko ini, harga perkiraan pasar Indonesia (angka bulat).\n'
+        + 'Produk harus jenis barang yang wajar dijual usaha ini, harga perkiraan pasar Indonesia (angka bulat).\n'
         'Jawab HANYA JSON array: [{"nama": "...", "kategori": "...", "harga": 25000, '
         '"deskripsi": "2 kalimat", "kata_kunci_foto": "english keywords for stock photo"}]')
     jawab = claude_vision.tanya(prompt, [], timeout=300, log=log)
@@ -377,7 +414,7 @@ def produk_contoh(domain, cfg):
         harga = x.get('harga')
         produk.append({'nama': 'Contoh – ' + str(x.get('nama') or f'Produk {i}').strip()[:100],
                        'harga': int(harga) if isinstance(harga, (int, float)) and harga > 0 else None,
-                       'deskripsi': 'Produk CONTOH untuk pratinjau toko; nama, harga, dan foto akan diganti data produk asli. '
+                       'deskripsi': f'Produk CONTOH untuk pratinjau {pratinjau}; nama, harga, dan foto akan diganti data produk asli. '
                                     + str(x.get('deskripsi') or '').strip(),
                        'kategori': str(x.get('kategori') or 'Produk').strip()[:60], 'gambar': gambar, 'contoh': True})
     simpan.write_text(json.dumps(produk, ensure_ascii=False, indent=1))
@@ -530,9 +567,9 @@ def main():
     try:
         if mode == '--menu':
             return kirim_dan_jalankan(cfg, MENU_PHP, stage)
-        video = [f for d in folder_produk(ON_PROGRESS / domain) for f in d.rglob('*') if f.is_file() and f.suffix.lower() in VIDEO]
+        video = [f for d in folder_produk(folder_klien(domain)) for f in d.rglob('*') if f.is_file() and f.suffix.lower() in VIDEO]
         if video:
-            log(f'video_dilewati:{len(video)} ({", ".join(f.name for f in video[:5])}) — video tidak diunggah')
+            log(f'video_dilewati:{len(video)} ({", ".join(f.name for f in video[:5])}) — tidak jadi media produk; diunggah ke YouTube & tampil di Galeri (youtube-video)')
         produk, sumber = daftar_produk(domain)
         if not produk:
             log('folder_produk_kosong: buat produk contoh')

@@ -1,6 +1,7 @@
 /* Dashboard Local PC Velocity Developer
    Arah desain dari referensi user (NeuroBank): latar navy gelap, panel kartu bersudut 16px,
-   satu aksen biru untuk tindakan & grafik, teks abu kebiruan. Tema gelap saja (keputusan 2026-09-24).
+   satu aksen biru untuk tindakan & grafik, teks abu kebiruan. Tema gelap + terang (29 Sep): data-theme di <html>
+   dipasang skrip di index.html (pilihan tersimpan, bawaan ikut sistem); warna hanya lewat token di bawah.
    Plus Jakarta Sans: huruf buatan Indonesia, geometris rapi seperti referensi. */
 :root {
   --latar: #080a17;
@@ -18,15 +19,60 @@
   --baik: #34c77b;
   --waspada: #e8b54a;
   --bahaya: #ff6b6b;
-  --radius: 16px;
-  --radius-kecil: 10px;
+  --ungu: #b2a8ff;
+  --teks-kuat: #fff;          /* teks saat hover/aktif */
+  --kaca: rgba(15, 18, 36, .72);       /* panel utama */
+  --kaca-atas: rgba(8, 10, 23, .92);   /* bilah atas HP */
+  --tooltip: #0b0e20;
+  --kisi: #202746;
+  --silang: #5b6391;
+  --garis-kuat: #2e3760;
+  --garis-halus: rgba(255, 255, 255, .03);
+  --sorot: rgba(255, 255, 255, .04);
+  --latar-redup: rgba(8, 10, 23, .35);
   --kanvas: #0d1026;               /* latar diagram bertitik */
   --kanvas-titik: rgba(150, 160, 210, .22);
+  --cahaya-1: rgba(61, 107, 255, .14);
+  --cahaya-2: rgba(38, 168, 142, .07);
+  --tag: #1d2342; --tag-garis: #2c3358; --tag-teks: #b9c0e0; --tag-aktif: #2b3a6b;
+  --radius: 16px;
+  --radius-kecil: 10px;
   color-scheme: dark;
 }
+/* Tema terang: kontras teks >= 4.5:1 di atas kartu putih */
 :root[data-theme="light"] {
+  --latar: #eef1f8;
+  --panel: #ffffff;
+  --kartu: #ffffff;
+  --kartu-2: #eef1f9;
+  --garis: #dbe0ee;
+  --teks: #151a33;
+  --teks-2: #454d70;
+  --teks-3: #626a8c;
+  --aksen: #2f5bea;
+  --aksen-terang: #2f5bea;
+  --aksen-lembut: rgba(47, 91, 234, .12);
+  --ram: #1f8f78;
+  --baik: #16804a;
+  --waspada: #9a6400;
+  --bahaya: #d03434;
+  --ungu: #5b4fd1;
+  --teks-kuat: #0b0f24;
+  --kaca: rgba(255, 255, 255, .78);
+  --kaca-atas: rgba(255, 255, 255, .92);
+  --tooltip: #ffffff;
+  --kisi: #e6e9f3;
+  --silang: #9aa1c0;
+  --garis-kuat: #c5cce0;
+  --garis-halus: rgba(20, 30, 70, .05);
+  --sorot: rgba(20, 30, 70, .04);
+  --latar-redup: rgba(20, 30, 70, .04);
   --kanvas: #f7f9fd;
   --kanvas-titik: rgba(60, 75, 130, .24);
+  --cahaya-1: rgba(47, 91, 234, .08);
+  --cahaya-2: rgba(31, 143, 120, .05);
+  --tag: #eef1f9; --tag-garis: #d3d9ea; --tag-teks: #454d70; --tag-aktif: #dfe7ff;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -37,12 +83,12 @@ body {
   color: var(--teks);
   font: 14px/1.55 "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   background:
-    radial-gradient(1200px 600px at 70% -10%, rgba(61, 107, 255, .14), transparent 60%),
-    radial-gradient(800px 500px at -10% 110%, rgba(38, 168, 142, .07), transparent 60%),
+    radial-gradient(1200px 600px at 70% -10%, var(--cahaya-1), transparent 60%),
+    radial-gradient(800px 500px at -10% 110%, var(--cahaya-2), transparent 60%),
     var(--latar);
 }
 a { color: var(--aksen-terang); text-decoration: none; }
-a:hover { color: #fff; }
+a:hover { color: var(--teks-kuat); }
 :focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 2px; border-radius: 6px; }
 button { font: inherit; color: inherit; }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
@@ -53,7 +99,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
   border-radius: var(--radius);
   padding: 18px 20px;
 }
-.kartu-judul { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.kartu-judul { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .kartu-judul h2 { font-size: 15px; }
 .redup { color: var(--teks-3); font-size: 12.5px; }
 
@@ -121,4 +167,4 @@ table.tabel { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 
 /* Tautan "Isi Nama Anda dulu" di halaman Installer Laravel → fokus ke kolom nama */
 .isi-nama { border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--waspada); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.isi-nama:hover { color: #fff; }
+.isi-nama:hover { color: var(--teks-kuat); }

@@ -15,10 +15,15 @@ import unicodedata
 from pathlib import Path
 
 from client_form import berkas_form, extract_text
+from presentasi_pdf import PRESENTASI, ke_pdf, teks_pptx
 
 OCR_PAGES = 6
 
-DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt'}
+# Presentasi (.pptx dsb.) diubah ke PDF dulu lewat LibreOffice — company profile
+# sering dikirim sebagai PowerPoint (chindrasantipratama.com 2026-09-26).
+DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt'} | PRESENTASI
+# Dokumen yang belum bisa dibaca: dicatat supaya tidak hilang diam-diam.
+UNSUPPORTED_EXTS = {'.xls', '.xlsx', '.csv', '.odt', '.rtf', '.pages', '.key', '.numbers'}
 # Dokumen yang biasanya paling kaya isi didahulukan saat anggaran karakter habis.
 PRIORITY = re.compile(r'profil|profile|compro|konsep|isian|menu|katalog', re.I)
 # Materi.docx trimurtiekapaksi.com (±7.500 karakter) terpotong di 7.000: bagian Pendaftaran,
@@ -68,6 +73,15 @@ def _ocr_pdf(path):
 def _doc_lines(path):
     ext = path.suffix.lower()
     try:
+        if ext == '.pptx':
+            baris = teks_pptx(path)
+            if baris:
+                return baris
+        if ext in PRESENTASI:
+            path = ke_pdf(path)
+            if not path:
+                return []
+            ext = '.pdf'
         if ext == '.pdf':
             r = subprocess.run(['pdftotext', '-layout', '-l', '20', '-q', str(path), '-'],
                                capture_output=True, text=True, timeout=60)
@@ -130,11 +144,13 @@ def _clean_lines(lines):
 
 
 def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DOC_BUDGET):
-    """{'sources': [(nama, teks)], 'unreadable': [...], 'skipped': [...]}"""
+    """{'sources': [(nama, teks)], 'unreadable': [...], 'skipped': [...], 'unsupported': [...]}"""
     folder = Path(folder)
-    result = {'sources': [], 'unreadable': [], 'skipped': []}
+    result = {'sources': [], 'unreadable': [], 'skipped': [], 'unsupported': []}
     if not folder.is_dir():
         return result
+    result['unsupported'] = sorted(str(p.relative_to(folder)) for p in folder.rglob('*')
+                                   if p.is_file() and p.suffix.lower() in UNSUPPORTED_EXTS)
     files = [p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in DOC_EXTS]
     # Form klien = FORM ISIAN, atau dokumen lain yang isinya form bila FORM ISIAN tidak ada (2026-09-30).
     form = {p for p in files if p.name.upper().startswith('FORM ISIAN')} | set(berkas_form(folder))
@@ -185,4 +201,5 @@ if __name__ == '__main__':
     res = collect_client_docs(sys.argv[1])
     for name, text in res['sources']:
         print(f'--- {name}: {len(text)} karakter')
-    print('tidak terbaca:', res['unreadable'], '| dilewati (anggaran habis):', res['skipped'])
+    print('tidak terbaca:', res['unreadable'], '| dilewati (anggaran habis):', res['skipped'],
+          '| format belum didukung:', res['unsupported'])

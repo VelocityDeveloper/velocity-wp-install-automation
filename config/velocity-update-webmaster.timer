@@ -1,0 +1,10 @@
+[Unit]
+Description=Velocity Update: panel webmaster 4x sehari (09.00, 13.00, 17.00, 21.30)
+
+[Timer]
+OnCalendar=*-*-* 09,13,17:00
+OnCalendar=*-*-* 21:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

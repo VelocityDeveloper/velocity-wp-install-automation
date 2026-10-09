@@ -122,6 +122,10 @@
         selesai: /http_check:/, aktif: hanyaMode('finish') },
       { id: 'install', kol: 3, jalur: 1, nama: 'Install WordPress', ket0: 'paket terbaru (API/GitHub), SSH, database, core, plugin', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /install_complete|http_check:/, gagal: /remote_failed/, aktif: hanyaMode('apply') },
+      // Paket F tanpa referensi tema (keputusan user 2026-10-07): apply instalasi baru ditahan sebelum
+      // WordPress dipasang + notif Telegram; PM melengkapi referensi / velocity_child_theme= di manifest.
+      { id: 'tahanF', kol: 3, jalur: 2, nama: 'Ditahan: Paket F tanpa referensi', ket0: 'form tanpa demo/web contoh → WP tidak dipasang, notif Telegram',
+        mulai: /paket_f_tanpa_referensi_tema/, gagal: /\] FAILED: paket_f_tanpa_referensi_tema/, aktif: c => c.tahanF },
       { id: 'server', kol: 3, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /"dry_run":"ok"|\] SUCCESS: DRY_RUN_OK/, gagal: /remote_not_ready|"status":"error"/,
         ketHasil: t => (/"dry_run":"ok"/.test(t) ? (hasilLokasi(t) ? 'staging siap' : 'server tujuan siap') : null),
@@ -244,7 +248,7 @@
           return `${dok} dokumen dibaca` + (hilang ? ` · materi terlewat: ${hilang[1]} baris` : '')
             + (luput ? ` · tak terbaca: ${luput[2]}` : '');
         } },
-      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas / kop PDF dipastikan Claude, tanpa logo = logo contoh), warna tema (form; kosong → warna logo asli, Paket F/Biasa; link ikut), favicon, WhatsApp (Portal Berita Biasa: tanpa tombol mengambang), peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, whitelist IP kantor, komentar dimatikan, SEO dasar (berita: judul + deskripsi + keywords dari rubrik)', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas / kop PDF dipastikan Claude, tanpa logo = logo contoh), warna tema (form; kosong → warna logo asli, Paket F/Biasa; link ikut), favicon, WhatsApp (Portal Berita Biasa: tanpa tombol mengambang), peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, beranda = Home Template + Berita = arsip artikel (mu-plugin velocity-blog-arsip, instalasi baru), whitelist IP kantor, komentar dimatikan, SEO dasar (berita: judul + deskripsi + keywords dari rubrik)', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
       { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
@@ -317,6 +321,26 @@
           if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2/marketplace)';
           return null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+      // Paket E/F minta katalog (menu Produk/Katalog, pesan tambahan, folder produk) & tema tanpa katalog:
+      // plugin velocity-produk dari API ApiCo, bukan Meta Box/velocity-paket (scripts/velocity-produk, 2026-10-06).
+      // Sesudah katalog produk (2026-10-08): pesan/data tambahan menyebut paket tour/wisata/trip atau
+      // itinerary -> velocity-tour-travel dari API (v1.0.0) + paket klien/3 CONTOH (scripts/paket-tour mode E/F).
+      { id: 'katalogProduk', kol: 19, jalur: 3, nama: 'Katalog Velocity Produk + tour', ket0: 'E/F minta katalog: plugin velocity-produk, produk klien / 6 CONTOH, halaman Katalog di menu · lalu paket tour: velocity-tour-travel, paket klien / 3 CONTOH',
+        mulai: /\] Katalog Velocity Produk$/, selesai: /tour: (selesai|dilewati)/, gagal: /katalog: gagal:|tour: gagal:/,
+        ketHasil: t => {
+          const bagian = [];
+          const d = /katalog: dilewati:([^\s(]+)/.exec(t);
+          const m = /katalog: selesai: produk=(\d+) contoh=(\d+)/.exec(t);
+          if (m) bagian.push(m[1] + ' produk' + (+m[2] ? ' (' + m[2] + ' contoh)' : ''));
+          else if (/katalog: gagal:/.test(t)) bagian.push('katalog gagal');
+          else if (d) bagian.push('katalog dilewati: ' + d[1].replace(/_/g, ' '));
+          const tm = /tour: selesai: paket=(\d+) contoh=(\d+)/.exec(t);
+          const td = /tour: dilewati:([^\s(]+)/.exec(t);
+          if (tm) bagian.push(tm[1] + ' paket tour' + (+tm[2] ? ' (' + tm[2] + ' contoh)' : ''));
+          else if (/tour: gagal:/.test(t)) bagian.push('tour gagal');
+          else if (td && td[1] !== 'tidak_diminta') bagian.push('tour dilewati: ' + td[1].replace(/_/g, ' '));
+          return bagian.length ? bagian.join(' · ') : null; },
+        aktif: c => dan(tanpaDry(c), c.e === null ? null : c.e || c.f) },
       { id: 'fotoKlasik', kol: 20, jalur: 2, nama: 'Foto utama artikel', ket0: 'Pexels/Openverse (≤100 KB; putaran longgar sebelum sampul), sisa: foto klien/sampul',
         mulai: /\] Foto utama artikel$/, selesai: /foto_artikel: \d+\/\d+ diisi/,
         ketHasil: t => {
@@ -419,38 +443,64 @@
       // Redesign situs lama (scripts/redesign + installer-runner INSTALL_MODE=redesign, keputusan user
       // 2026-09-29): salinan <domain>/new atau staging sudah dibuat `redesign siapkan`; desain FSE baru
       // mengikuti referensi subfolder "redesign <domain>", konten lama tetap, beranda baru.
-      { id: 'rdPersiapan', kol: 3, jalur: 4, nama: 'Persiapan salinan', ket0: 'konten lama dikunci, beranda lama disimpan',
+      // Cek hosting (keputusan user 2026-10-07, `redesign siapkan` di awal run bila salinan belum ada):
+      // hosting di server tertaut yang bisa diakses server kantor → cadangan penuh lalu salinan;
+      // tidak bisa diakses → cadangan dilewati, konten dari halaman publik ke WordPress baru di staging.
+      { id: 'rdCek', kol: 3, jalur: 7, cek: true, nama: 'Hosting terjangkau?', mulai: /redesign: cek: /,
+        ket: c => (c.rdTerjangkau === null ? 'menunggu' : c.rdTerjangkau ? 'ya: server kantor' : 'tidak: cadangan dilewati'),
+        aktif: hanyaMode('redesign') },
+      { id: 'rdCadangan', kol: 4, jalur: 7, nama: 'Cadangan penuh', ket0: 'DB + berkas ke server installer',
+        mulai: /redesign: cek: hosting terjangkau/, selesai: /redesign: cadangan: .* OK/,
+        gagal: /redesign: GAGAL: (ruang_server_installer_kurang|dump_db_gagal|tar_gagal|cadangan_tidak_utuh)/,
+        ketHasil: t => { const m = /redesign: cadangan: \S+ \(db ([\d.]+) MB gz, berkas ([\d.]+) MB gz/.exec(t);
+          return m ? (m[1] === '0' ? 'berkas ' + m[2] + ' MB' : 'DB ' + m[1] + ' MB + berkas ' + m[2] + ' MB') : null; },
+        aktif: c => dan(hanyaMode('redesign')(c), c.rdTerjangkau) },
+      { id: 'rdPublik', kol: 4, jalur: 8, nama: 'Konten publik', ket0: 'REST wp-json / halaman HTML situs lama',
+        mulai: /redesign: cek: hosting tidak terjangkau/, selesai: /redesign: inventaris: /, gagal: /redesign: GAGAL: beranda_lama/,
+        ketHasil: t => { const m = /redesign: inventaris: (\d+) halaman, (\d+) post.*sumber publik_(\w+)/.exec(t);
+          return m ? m[1] + ' halaman, ' + m[2] + ' post (' + (m[3] === 'rest' ? 'REST' : 'HTML') + ')' : null; },
+        aktif: c => dan(hanyaMode('redesign')(c), c.rdTerjangkau === null ? null : !c.rdTerjangkau) },
+      { id: 'rdSalinan', kol: 5, jalur: 7, nama: 'Salinan situs lama', ket0: '<domain>/new atau staging, noindex',
+        mulai: /redesign: duplikat: berkas/, selesai: /redesign: manifest: /, gagal: /redesign: GAGAL: /,
+        ketHasil: t => { const m = /redesign: duplikat: (https?:\S+) \(http/.exec(t); return m ? m[1] : null; },
+        aktif: c => dan(hanyaMode('redesign')(c), c.rdWpBaru === null ? null : !c.rdWpBaru) },
+      { id: 'rdWpBaru', kol: 5, jalur: 8, nama: 'WP baru + impor', ket0: 'staging, gambar ≤100 KB, noindex',
+        mulai: /redesign: wp_baru: WordPress baru/, selesai: /redesign: manifest: /, gagal: /redesign: GAGAL: /,
+        ketHasil: t => { const m = /redesign: impor: (\d+) halaman, (\d+) post, \d+ kategori, (\d+) gambar/.exec(t);
+          return m ? m[1] + ' halaman, ' + m[2] + ' post, ' + m[3] + ' gambar' : null; },
+        aktif: c => dan(hanyaMode('redesign')(c), c.rdWpBaru) },
+      { id: 'rdPersiapan', kol: 6, jalur: 7, nama: 'Persiapan salinan', ket0: 'konten lama dikunci, beranda lama disimpan',
         mulai: /\] Redesign: persiapan salinan/, selesai: /redesign: persiapan: isi contoh/, gagal: /\] FAILED: redesign_persiapan/,
         ketHasil: t => { const m = /redesign: persiapan: halaman lama dikunci (\S+)/.exec(t);
           return m ? 'dikunci: ' + (m[1] === '-;' ? '-' : m[1].replace(/;$/, '').replace(/,/g, ', ')) : null; },
         aktif: hanyaMode('redesign') },
-      { id: 'rdReferensi', kol: 4, jalur: 4, nama: 'Referensi redesign', ket0: 'subfolder "redesign <domain>"',
+      { id: 'rdReferensi', kol: 7, jalur: 7, nama: 'Referensi redesign', ket0: 'subfolder "redesign <domain>"',
         mulai: /\] Redesign: referensi desain/, selesai: /referensi: (ada:|tidak_ada|gagal:)/, gagal: /\] FAILED: redesign_jalur/,
         ketHasil: t => (/referensi: tidak_ada/.test(t) ? 'subfolder redesign tanpa website contoh' : hasilReferensi(t)),
         aktif: hanyaMode('redesign') },
-      { id: 'rdTema', kol: 5, jalur: 4, nama: 'Tema FSE', ket0: 'velocity-fse, header/footer/CSS',
+      { id: 'rdTema', kol: 8, jalur: 7, nama: 'Tema FSE', ket0: 'velocity-fse, header/footer/CSS',
         mulai: /\] Redesign: tema FSE/, selesai: /\] Redesign: (foto per slot|beranda baru)/, gagal: /\] FAILED: redesign_tema_fse/,
         ketHasil: t => hasilTemaAgen(t) || (/Redesign: tema FSE \(tanpa referensi/.test(t) ? 'velocity-fse tanpa referensi' : null),
         aktif: hanyaMode('redesign') },
-      { id: 'rdFoto', kol: 6, jalur: 4, nama: 'Foto per slot', ket0: 'hero, tentang, layanan',
+      { id: 'rdFoto', kol: 9, jalur: 7, nama: 'Foto per slot', ket0: 'hero, tentang, layanan',
         mulai: /\] Redesign: foto per slot/, selesai: /\] Redesign: beranda baru/, aktif: hanyaMode('redesign') },
-      { id: 'rdIsi', kol: 7, jalur: 4, nama: 'Beranda baru & halaman', ket0: 'blok FSE; halaman lama tidak ditimpa',
+      { id: 'rdIsi', kol: 10, jalur: 7, nama: 'Beranda baru & halaman', ket0: 'blok FSE; halaman lama tidak ditimpa',
         mulai: /\] Redesign: beranda baru/, selesai: /\] Redesign: halaman depan/, aktif: hanyaMode('redesign') },
-      { id: 'rdRapikan', kol: 8, jalur: 4, nama: 'Depan, menu & URL lama', ket0: 'menu lama + submenu, URL lama dicek',
+      { id: 'rdRapikan', kol: 11, jalur: 7, nama: 'Depan, menu & URL lama', ket0: 'menu lama + submenu, URL lama dicek',
         mulai: /\] Redesign: halaman depan/, selesai: /redesign: rapikan: URL lama/, gagal: /redesign: GAGAL rapikan|halaman depan dikembalikan_lama/,
         ketHasil: t => { const m = /redesign: rapikan: URL lama (\d+\/\d+) hidup/.exec(t); return m ? 'URL lama ' + m[1] + ' hidup' : null; },
         aktif: hanyaMode('redesign') },
-      { id: 'rdAgen', kol: 9, jalur: 4, nama: 'Agen desain Claude', ket0: 'beranda & halaman semirip referensi',
+      { id: 'rdAgen', kol: 12, jalur: 7, nama: 'Agen desain Claude', ket0: 'beranda & halaman semirip referensi',
         mulai: /\] Redesign: desain diambil alih agen Claude/, selesai: SELESAI_AGEN, ketHasil: hasilAgen,
         aktif: c => dan(hanyaMode('redesign')(c), c.rdAgen) },
-      { id: 'rdVisual', kol: 10, jalur: 4, nama: 'Cek visual', ket0: 'screenshot desktop & HP',
+      { id: 'rdVisual', kol: 13, jalur: 7, nama: 'Cek visual', ket0: 'screenshot desktop & HP',
         mulai: /\] Redesign: cek visual/, selesai: /qa_result:/, aktif: hanyaMode('redesign') },
-      { id: 'rdQa', kol: 11, jalur: 4, nama: 'Pemeriksaan akhir', ket0: 'menu, konten, tautan', mulai: /qa_result:/, selesai: /qa_result:/,
+      { id: 'rdQa', kol: 14, jalur: 7, nama: 'Pemeriksaan akhir', ket0: 'menu, konten, tautan', mulai: /qa_result:/, selesai: /qa_result:/,
         aktif: hanyaMode('redesign') },
-      { id: 'rdLaporan', kol: 12, jalur: 4, nama: 'Laporan Telegram', ket0: 'link + login WP, tanpa tombol',
+      { id: 'rdLaporan', kol: 15, jalur: 7, nama: 'Laporan Telegram', ket0: 'link + login WP, tanpa tombol',
         mulai: /\] Redesign: laporan Telegram/, selesai: /redesign: laporan: terkirim/, gagal: /redesign: laporan: (token|salinan)/,
         aktif: hanyaMode('redesign') },
-      { id: 'rdSelesai', kol: 13, jalur: 4, nama: 'Redesign siap dicek', ket0: 'pindah ke live lewat permintaan terpisah',
+      { id: 'rdSelesai', kol: 16, jalur: 7, nama: 'Redesign siap dicek', ket0: 'pindah ke live lewat permintaan terpisah',
         mulai: /\] (SUCCESS|FAILED): /, selesai: /\] SUCCESS: REDESIGN_SIAP/, gagal: /\] FAILED: /, aktif: hanyaMode('redesign') },
       // Trap EXIT runner (juga saat run gagal): berkas milik root dari WP-CLI dikembalikan ke user situs,
       // supaya pasang plugin/tema dari wp-admin tidak gagal (scripts/pemilik_wp.py, 2026-09-18).
@@ -469,7 +519,7 @@
     // dilalui; garis biasa aktif kalau kedua ujungnya dilalui.
     const GARIS = [
       ['validasi', 'bacaForm'], ['bacaForm', 'mode'],
-      ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'server', 'dry run'],
+      ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'tahanF', 'Paket F tanpa referensi', c => c.tahanF], ['mode', 'server', 'dry run'],
       ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
       ['http', 'ssl'], ['ssl', 'paket'],
       ['paket', 'referensi', 'G / Portal', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
@@ -508,11 +558,15 @@
       ['agenClaude', 'permintaan'],
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
       ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'],
-      ['isi', 'landingIsi', 'landing', c => dan(tanpaDry(c), c.landing)], ['landingIsi', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'fotoKlasik'], ['fotoKlasik', 'permintaan'],
+      ['isi', 'landingIsi', 'landing', c => dan(tanpaDry(c), c.landing)], ['landingIsi', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'katalogProduk', 'Paket E/F', c => dan(tanpaDry(c), c.e === null ? null : c.e || c.f)], ['katalogProduk', 'fotoKlasik'],
+      ['paketTour', 'fotoKlasik', '', c => dan(tanpaDry(c), c.e === null ? null : !(c.e || c.f))], ['fotoKlasik', 'permintaan'],
       ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['permintaan', 'bahasa', 'form: bahasa Inggris'], ['bahasa', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
-      ['mode', 'rdPersiapan', 'redesign'], ['rdPersiapan', 'rdReferensi'], ['rdReferensi', 'rdTema'],
+      ['mode', 'rdCek', 'redesign'], ['rdCek', 'rdCadangan', 'ya'], ['rdCek', 'rdPublik', 'tidak'],
+      ['rdCadangan', 'rdSalinan', 'WordPress'], ['rdCadangan', 'rdWpBaru', 'bukan WP', c => dan(hanyaMode('redesign')(c), c.rdTerjangkau, c.rdWpBaru)],
+      ['rdPublik', 'rdWpBaru'], ['rdSalinan', 'rdPersiapan'], ['rdWpBaru', 'rdPersiapan'],
+      ['rdPersiapan', 'rdReferensi'], ['rdReferensi', 'rdTema'],
       ['rdTema', 'rdFoto'], ['rdFoto', 'rdIsi'], ['rdIsi', 'rdRapikan'],
       ['rdRapikan', 'rdAgen', 'referensi ada'],
       ['rdRapikan', 'rdVisual', 'tanpa referensi', c => dan(hanyaMode('redesign')(c), c.rdAgen === null ? null : !c.rdAgen)],
@@ -563,6 +617,8 @@
         mode,
         custom,
         f: paket ? paket === 'paketf' : null,
+        // Apply Paket F yang ditahan karena form tanpa referensi tema (runner, 2026-10-07).
+        tahanF: /paket_f_tanpa_referensi_tema/.test(teks),
         // Paket E punya child theme baku (velocity-pakete), tidak lewat referensi form.
         e: paket ? paket === 'pakete' : null,
         // Landing Page Biasa: child theme velocity-landing, isi lewat scripts/landing-konten.
@@ -591,6 +647,10 @@
         permintaanClaude: /\] Permintaan form klien \(agen Claude\)/.test(teks) ? true : /qa_result:/.test(teks) ? false : null,
         inggris: /bahasa: dilewati:bahasa_indonesia/.test(teks) ? false : /bahasa: (\d+ teks|sudah_inggris|ditulis:)/.test(teks) ? true : /qa_result:/.test(teks) ? false : null,
         // Redesign: agen desain hanya bila subfolder redesign memberi website referensi.
+        // Redesign: hosting situs lama bisa diakses server kantor (cadangan) atau tidak (konten publik),
+        // dan salinan berupa duplikat situs lama atau WordPress baru + impor.
+        rdTerjangkau: /redesign: cek: hosting terjangkau/.test(teks) ? true : /redesign: cek: hosting tidak terjangkau/.test(teks) ? false : null,
+        rdWpBaru: /redesign: wp_baru: WordPress baru/.test(teks) ? true : /redesign: duplikat: berkas/.test(teks) ? false : null,
         rdAgen: /\] Redesign: tema FSE oleh agen Claude/.test(teks) ? true : /\] Redesign: tema FSE \(tanpa referensi/.test(teks) ? false : null,
         agenLangsung: /fse_cek: dilewati:agen_claude|desain langsung diambil alih agen Claude/.test(teks) ? true
           : /fse_cek: (sesuai|belum|masih|tidak|gagal)|Paket custom: audit kemiripan/.test(teks) ? false : null,

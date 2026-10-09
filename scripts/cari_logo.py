@@ -29,6 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 import sys  # noqa: E402
 sys.path.insert(0, str(HERE))
+from folder_klien import folder_klien  # noqa: E402
 from client_form import adalah_form  # noqa: E402
 KELUAR = Path('/var/lib/velocity/logos')
 NAMA_LOGO = re.compile(r'logo|lambang|brand|logotype', re.I)
@@ -562,7 +563,7 @@ def logo_dari_gambar(domain, gambar):
     if len(kandidat) == 1:
         try:
             from client_form import read_client_form
-            fields = read_client_form(Path('/home/On Progress') / domain).get('fields', {})
+            fields = read_client_form(folder_klien(domain)).get('fields', {})
             isian = next((v for k, v in fields.items() if re.search(r'logo', k, re.I)), '')
         except Exception:
             isian = ''

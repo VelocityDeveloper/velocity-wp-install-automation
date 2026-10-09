@@ -205,6 +205,19 @@
       ],
       "catatan": "Demo booking hotel (ala WP Hotel Booking) untuk g6.velocitydeveloper.com. Dibuat 2026-10-06. Update: /root/hotel-booking/deploy-dev.sh",
       "produksi": "https://g6.velocitydeveloper.com"
+    },
+    {
+      "id": "lp-astro-velocity-biz",
+      "nama": "Landing page velocitydeveloper.biz",
+      "jenis": "internal",
+      "stack": "Astro 7 · Tailwind 4 · Alpine",
+      "port": 8160,
+      "folder": "/home/lp-astro-velocity-biz",
+      "layanan": [
+        "lp-astro-velocity-biz-dev"
+      ],
+      "catatan": "Repo Velocity-Developer/lp-astro-velocity-biz. Naik versi package.json di master = CI deploy FTP ke produksi. Dibuat 2026-10-09.",
+      "produksi": "https://velocitydeveloper.biz"
     }
   ]
 }

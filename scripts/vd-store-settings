@@ -30,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from client_form import read_client_form
+from folder_klien import folder_klien
 
 ROOT = Path('/home/project')
 KUNCI_ONGKIR = Path('/etc/velocity/secrets/vd_ongkir_api_key')
@@ -61,7 +62,7 @@ def main():
         return 0
     domain = cfg.get('domain', '').lower()
     da_user = cfg.get('da_user', '')
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     if not folder.is_dir():
         folder = ROOT / domain
     form = read_client_form(folder) if folder.is_dir() else {'fields': {}}

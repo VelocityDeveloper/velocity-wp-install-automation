@@ -4,5 +4,7 @@
   "mesin_selesai": 22,
   "jam_agen_per_project_per_hari": 6,
   "jam_agen_total_per_hari": 10,
-  "jam_webmaster_per_hari": 7
+  "jam_webmaster_per_hari": 7,
+  "_catatan_gerbang": "fitur_gerbang_review = N fitur pertama (fondasi) yang wajib direview webmaster sebelum agen lanjut ke fitur berikutnya (audit 1 Okt: revisi elearning datang sesudah semua fitur dibangun). 0 = tanpa gerbang.",
+  "fitur_gerbang_review": 3
 }

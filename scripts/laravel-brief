@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Tahap Brief & Estimasi project Laravel dengan Claude (tanpa alat, hanya menulis teks).
 
-  laravel-brief <project-NNN> susun     catatan.md -> DESIGN.md + PRD.md (draf untuk disunting PM)
+  laravel-brief <project-NNN> saran     catatan.md + dokumen/ -> saran.json (perbandingan WordPress / Laravel+Vue / lainnya, sebelum PRD)
+  laravel-brief <project-NNN> rangkuman catatan.md + dokumen/ -> rangkuman.json + rangkuman.docx (template SIMONTAK)
+  laravel-brief <project-NNN> contoh    bahan + DESIGN/PRD -> contoh/index.html (+ dashboard.html bila Laravel), terbit ke nglorok.com
+  laravel-brief <project-NNN> susun     catatan.md + dokumen/ -> DESIGN.md + PRD.md (draf untuk disunting PM)
   laravel-brief <project-NNN> diagram   PRD.md -> DATABASE.md (ERD Mermaid) + FLOWCHART.md (alur proses Mermaid)
   laravel-brief <project-NNN> estimasi  PRD.md + DESIGN.md + DATABASE.md -> fitur.json (fitur, kriteria terima, jam internal)
 Mode susun otomatis lanjut ke diagram (dua panggilan: keluaran satu panggilan tetap wajar panjangnya).
@@ -29,6 +32,27 @@ import laravel_proyek as L  # noqa: E402
 TEMPLATE = HERE.parent / 'templates' / 'laravel'
 
 SKEMA = {
+    'saran': {
+        'type': 'object', 'required': ['rekomendasi', 'alasan', 'opsi', 'pertanyaan_klien'],
+        'properties': {
+            'rekomendasi': {'type': 'string'}, 'alasan': {'type': 'string'},
+            'pertanyaan_klien': {'type': 'array', 'items': {'type': 'string'}},
+            'opsi': {'type': 'array', 'items': {
+                'type': 'object',
+                'required': ['kunci', 'jalur', 'nama', 'stack', 'skor', 'kelebihan', 'kekurangan', 'cocok_bila',
+                             'perkiraan_waktu', 'biaya_berjalan', 'hosting', 'syarat_server'],
+                'properties': {
+                    'kunci': {'type': 'string'}, 'jalur': {'type': 'string', 'enum': ['wordpress', 'laravel_vue', 'lainnya']},
+                    'nama': {'type': 'string'}, 'stack': {'type': 'string'}, 'skor': {'type': 'number'},
+                    'kelebihan': {'type': 'array', 'items': {'type': 'string'}},
+                    'kekurangan': {'type': 'array', 'items': {'type': 'string'}},
+                    'cocok_bila': {'type': 'string'}, 'perkiraan_waktu': {'type': 'string'},
+                    'biaya_berjalan': {'type': 'string'},
+                    'hosting': {'type': 'string', 'enum': ['shared_hosting', 'shared_lalu_vps', 'vps', 'cloud_khusus']},
+                    'syarat_server': {'type': 'array', 'items': {'type': 'string'}},
+                }}},
+        },
+    },
     'susun': {
         'type': 'object', 'required': ['prd_md', 'design_md', 'ringkasan_pm'],
         'properties': {
@@ -43,6 +67,30 @@ SKEMA = {
             'catatan': {'type': 'array', 'items': {'type': 'string'}},
         },
     },
+    'rangkuman': {
+        'type': 'object',
+        'required': ['judul', 'pembuka', 'peran', 'fungsi', 'menu', 'tambahan_fitur', 'desain', 'warna', 'batasan',
+                     'catatan_teknis', 'belum_jelas'],
+        'properties': {
+            'judul': {'type': 'string'}, 'pembuka': {'type': 'string'},
+            **{k: {'type': 'array', 'items': {
+                'type': 'object', 'required': ['subjudul', 'poin'],
+                'properties': {'subjudul': {'type': 'string'}, 'poin': {'type': 'array', 'items': {'type': 'string'}}}}}
+               for k in ('peran', 'fungsi', 'menu')},
+            'desain': {'type': 'object', 'required': ['pembuka', 'poin'],
+                       'properties': {'pembuka': {'type': 'string'}, 'poin': {'type': 'array', 'items': {'type': 'string'}}}},
+            **{k: {'type': 'array', 'items': {'type': 'string'}}
+               for k in ('tambahan_fitur', 'warna', 'batasan', 'catatan_teknis', 'belum_jelas')},
+        },
+    },
+    'contoh': {
+        'type': 'object', 'required': ['nama_aplikasi', 'landing_html', 'dashboard_html', 'aset', 'catatan'],
+        'properties': {
+            'nama_aplikasi': {'type': 'string'}, 'landing_html': {'type': 'string'}, 'dashboard_html': {'type': 'string'},
+            'aset': {'type': 'array', 'items': {'type': 'string'}},
+            'catatan': {'type': 'array', 'items': {'type': 'string'}},
+        },
+    },
     'estimasi': {
         'type': 'object', 'required': ['fitur', 'tambahan'],
         'properties': {
@@ -51,12 +99,15 @@ SKEMA = {
                 'properties': {'judul': {'type': 'string'}, 'jam_agen': {'type': 'number'},
                                'jam_webmaster': {'type': 'number'}}}},
             'fitur': {'type': 'array', 'items': {
-            'type': 'object', 'required': ['judul', 'deskripsi', 'kriteria', 'jam_agen', 'jam_webmaster'],
+            'type': 'object',
             'properties': {
                 'judul': {'type': 'string'}, 'deskripsi': {'type': 'string'},
                 'kriteria': {'type': 'array', 'items': {'type': 'string'}},
                 'jam_agen': {'type': 'number'}, 'jam_webmaster': {'type': 'number'},
-            }}}},
+                'halaman': {'type': 'array', 'items': {
+                    'type': 'object', 'required': ['halaman', 'peran'],
+                    'properties': {'halaman': {'type': 'string'}, 'peran': {'type': 'array', 'items': {'type': 'string'}}}}},
+            }, 'required': ['judul', 'deskripsi', 'kriteria', 'jam_agen', 'jam_webmaster', 'halaman']}}},
     },
 }
 
@@ -79,17 +130,266 @@ def cadangkan(slug, nama):
         shutil.copy2(p, p.with_name(f"{nama}.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
 
 
+HALAMAN_WP = """### Beranda situs (`landing_html`)
+Beranda situs WordPress buatan Velocity: header (logo/nama usaha + menu: Beranda, Tentang Kami, Layanan/Produk,
+Galeri, Artikel, Kontak — sesuaikan bahan + tombol WhatsApp/Hubungi Kami), hero kuat (judul, subjudul, CTA ke
+WhatsApp/kontak, visual HTML/CSS/SVG atau foto klien), lalu 5–7 seksi khas situs usaha yang relevan dengan bahan
+(keunggulan, layanan/produk berupa kartu dengan harga "mulai dari" bila ada, tentang kami singkat, galeri/portofolio,
+testimoni, alur pemesanan, artikel terbaru, FAQ, ajakan menghubungi + peta/alamat "(isi nanti)"), footer lengkap
+(kontak, menu, sosial media, hak cipta) dan tombol WhatsApp mengambang. Tautan menu = jangkar (#layanan dsb.).
+Semua tombol ajakan menuju `#kontak` (atau https://wa.me/ tanpa nomor bila nomor tidak ada di bahan).
+`dashboard_html` = string kosong "" (situs WordPress tidak memakai dashboard)."""
+
+HALAMAN_LARAVEL = """### Landing page (`landing_html`)
+Halaman depan publik yang menjual sistem ini ke penggunanya: header (logo/nama + menu jangkar + tombol "Masuk"),
+hero kuat (judul, subjudul, CTA, visual berupa potongan dashboard/kartu KPI yang dibangun dengan HTML/CSS/SVG,
+bergaya sama dengan dashboard di bawah), lalu 4–6 seksi yang relevan (fitur utama, alur kerja/tahapan, peran
+pengguna, statistik/manfaat, FAQ atau ajakan), dan footer. Bila aplikasinya internal (wajib login), landing tetap
+dibuat sebagai halaman depan informatif + tombol Masuk. Semua tombol "Masuk"/"Login"/"Coba Dashboard" menuju
+`dashboard.html`.
+
+### Dashboard (`dashboard_html`)
+Tampilan utama peran terpenting (mis. admin/manajemen) sesudah login, berisi SEMUA menu utama dari bahan di
+sidebar (menu aktif = Dashboard), kartu statistik, tabel data terbaru dengan badge status, dan panel ringkasan.
+Logo/nama di sidebar menuju `index.html`. Menu lain boleh `href="#"`.
+
+{{GAYA_DASHBOARD}}"""
+
+
+PLATFORM_LARAVEL = """Aplikasi akan dibangun dengan stack tetap: `laravel new --vue` (Laravel 13, Inertia, Vue 3 + TypeScript,
+Tailwind 4, komponen shadcn-vue/reka-ui, auth Fortify, Pest). Yang mengerjakan kode nanti agen Claude Code,
+fitur demi fitur, lalu webmaster memeriksa hasilnya memakai kriteria terima di PRD."""
+
+PLATFORM_LAIN = """Platform yang dipilih PM: **{nama}** ({stack}). Project ini TIDAK dibangun sebagai aplikasi Laravel + Vue custom:
+{cara} PRD dan DESIGN.md dipakai webmaster sebagai pegangan pengerjaan dan bahan konfirmasi ke klien, jadi tulis
+sesuai platform tersebut: sebut fitur bawaan/plugin/modul yang wajar dipakai bila jelas."""
+
+CARA_PLATFORM = {
+    'wordpress': 'situs dibangun di WordPress oleh webmaster (tema + plugin, diisi lewat dashboard WordPress). Jangan '
+                 'menulis istilah teknis aplikasi custom (migrasi, model, Inertia, Pest); di bagian **Data utama**, tulis '
+                 'jenis konten yang dikelola (mis. halaman, jenis post/produk, kategori, field isian) beserta hubungannya.',
+    'lainnya': 'dikerjakan webmaster sesuai stack tersebut, di luar alur otomatis Laravel + Vue.',
+}
+
+
+DIAGRAM_LARAVEL = """Anda menyusun dua dokumen teknis berbahasa Indonesia untuk aplikasi Laravel **{{JUDUL}}**, turunan dari PRD
+di bawah. Dokumen dipakai PM (menjelaskan ke klien), agen Claude Code (membuat migrasi, model, alur halaman),
+dan webmaster (memeriksa). Stack: Laravel 13 + Inertia/Vue, database MariaDB, auth Fortify (tabel `users`
+bawaan starter kit: id, name, email, email_verified_at, password, two_factor_*, remember_token, timestamps)."""
+
+DIAGRAM_LAIN = """Anda menyusun dua dokumen berbahasa Indonesia untuk project **{{{{JUDUL}}}}**, turunan dari PRD di bawah. Dokumen
+dipakai PM (menjelaskan ke klien) dan webmaster (pegangan pengerjaan). Platform yang dipilih PM: **{nama}** ({stack}),
+BUKAN aplikasi Laravel + Vue custom. {cara}"""
+
+CARA_DIAGRAM = {
+    'wordpress': 'Di DATABASE.md, gambarkan struktur data situs WordPress secara konseptual: pengguna & perannya, jenis '
+                 'post/CPT, taksonomi, field isian (Meta Box/ACF) sebagai atribut, dan tabel plugin yang relevan '
+                 '(mis. keanggotaan, pesanan, pembayaran). Tabel inti WordPress tidak perlu dirinci satu per satu; '
+                 'konvensi Laravel di bawah (nama tabel jamak, `_id`, timestamps) boleh disesuaikan. Di FLOWCHART.md, '
+                 'alur mengikuti halaman situs & dashboard WordPress (wp-admin) serta plugin yang dipakai.',
+    'lainnya': 'Ikuti konvensi stack tersebut; bagian konvensi di bawah yang tidak cocok dengan stack itu boleh disesuaikan.',
+}
+
+
+def opsi_pilihan(slug):
+    saran = L.baca_json(L.folder(slug) / 'saran.json', None) or {}
+    pilihan = saran.get('pilihan') or {}
+    o = next((o for o in saran.get('opsi') or [] if o.get('kunci') == pilihan.get('kunci')), {})
+    return pilihan.get('jalur'), o.get('nama') or pilihan.get('jalur'), o.get('stack') or '-'
+
+
+def platform_diagram(slug):
+    """Paragraf pembuka prompt diagram: Laravel + Vue (bawaan & project lama) atau platform lain pilihan PM."""
+    if L.jalur_laravel(slug):
+        return DIAGRAM_LARAVEL
+    jalur, nama, stack = opsi_pilihan(slug)
+    return DIAGRAM_LAIN.format(nama=nama, stack=stack, cara=CARA_DIAGRAM.get(jalur, CARA_DIAGRAM['lainnya']))
+
+
+def platform_susun(slug):
+    """Paragraf platform untuk prompt susun: Laravel + Vue (bawaan & project lama) atau platform lain pilihan PM."""
+    if L.jalur_laravel(slug):
+        return PLATFORM_LARAVEL
+    jalur, nama, stack = opsi_pilihan(slug)
+    return PLATFORM_LAIN.format(nama=nama, stack=stack, cara=CARA_PLATFORM.get(jalur, CARA_PLATFORM['lainnya']))
+
+
+# Estimasi (user 2026-10-03: estimasi untuk semua platform). Laravel + Vue = agen Claude Code per fitur + webmaster
+# memeriksa; platform lain = webmaster mengerjakan semuanya (jam_agen 0, install & agen otomatis tetap khusus Laravel).
+ESTIMASI_LARAVEL = {
+    '{{PLATFORM}}': """Anda memecah PRD aplikasi Laravel menjadi daftar fitur yang akan dikerjakan agen Claude Code satu per satu
+(satu sesi agen per fitur, berurutan), lalu diperiksa webmaster. Estimasi ini untuk INTERNAL tim.
+
+Stack tetap: `laravel new --vue` (Laravel 13, Inertia, Vue 3 + TypeScript, Tailwind 4, shadcn-vue/reka-ui,
+Fortify: login, registrasi, lupa sandi, verifikasi email, 2FA, halaman profil & sandi SUDAH ADA dari starter kit —
+jangan dijadikan fitur kecuali PRD meminta perubahan). Installer juga SUDAH memasang Pengaturan > Aplikasi
+(nama & deskripsi aplikasi, unggah logo & favicon, logo/favicon contoh) dan footer "Design by Velocity Developer", termasuk model `Setting` kunci–nilai:
+pengaturan tambahan dari PRD cukup jadi kunci baru di model itu (bukan tabel/fitur pengaturan terpisah).""",
+    '{{FONDASI}}': """terapkan DESIGN.md ke tema (warna, font, radius) dan tata letak aplikasi,
+  bahasa Indonesia untuk antarmuka & pesan validasi (lang/id), zona waktu, peran & hak akses dasar dari PRD,
+  serta menu navigasi kerangka.""",
+    '{{UKURAN}}': 'cukup kecil untuk satu sesi agen',
+    '{{UJI}}': 'tes Pest atau dicek di browser',
+    '{{JAM_WEBMASTER}}': 'perkiraan waktu webmaster memeriksa di browser + merapikan hal kecil, angka desimal jam.',
+    '{{DESKRIPSI}}': 'apa yang dibangun (halaman, tabel/migrasi, aturan bisnis), cukup jelas untuk agen.',
+}
+
+ESTIMASI_LAIN = """Anda memecah PRD project **{{{{JUDUL}}}}** menjadi daftar fitur (paket pekerjaan) yang dikerjakan webmaster satu per
+satu, berurutan. Platform yang dipilih PM: **{nama}** ({stack}). Project ini BUKAN aplikasi Laravel + Vue custom: tidak
+ada agen Claude Code otomatis, install otomatis, atau tes Pest. {cara} Estimasi ini untuk INTERNAL tim."""
+
+CARA_ESTIMASI = {
+    'wordpress': 'Situs dibangun webmaster di WordPress (tema + plugin, diisi lewat dashboard WordPress; kode custom berupa '
+                 'plugin/child theme bila perlu). Sebut plugin/modul yang wajar dipakai bila jelas; jangan menulis istilah '
+                 'aplikasi custom (migrasi, model, Inertia, Pest).',
+    'lainnya': 'Pekerjaan dikerjakan webmaster sesuai konvensi stack tersebut.',
+}
+
+FONDASI_LAIN = {
+    'wordpress': 'pasang & atur tema dan plugin inti, terapkan DESIGN.md (warna, font, logo, favicon), peran pengguna & '
+                 'hak akses dari PRD, bahasa Indonesia, zona waktu, serta menu navigasi kerangka.',
+    'lainnya': 'siapkan kerangka project di stack tersebut, terapkan DESIGN.md (warna, font, logo), peran & hak akses '
+               'dasar dari PRD, bahasa Indonesia, zona waktu, serta menu navigasi kerangka.',
+}
+
+
+def ganti_estimasi(slug):
+    """Placeholder prompt estimasi sesuai platform pilihan PM."""
+    if L.jalur_laravel(slug):
+        return {**ESTIMASI_LARAVEL, '{{JAM_AGEN}}': 'perkiraan waktu kerja agen (menulis kode + tes), angka desimal jam. '
+                + teks_kalibrasi()}
+    jalur, nama, stack = opsi_pilihan(slug)
+    kunci = jalur if jalur in CARA_ESTIMASI else 'lainnya'
+    return {
+        '{{PLATFORM}}': ESTIMASI_LAIN.format(nama=nama, stack=stack, cara=CARA_ESTIMASI[kunci]),
+        '{{FONDASI}}': FONDASI_LAIN[kunci],
+        '{{UKURAN}}': 'cukup kecil untuk dikerjakan & diperiksa webmaster dalam satu kali kerja (±0,5–6 jam)',
+        '{{UJI}}': 'dicek webmaster di browser, desktop & HP',
+        '{{JAM_AGEN}}': 'SELALU 0 — tidak ada agen otomatis untuk platform ini (berlaku juga untuk `tambahan`).',
+        '{{JAM_WEBMASTER}}': 'perkiraan waktu webmaster MENGERJAKAN fitur ini sampai jadi (pasang/atur plugin, kode custom '
+                             'bila perlu, isi contoh, cek di browser & HP), angka desimal jam, realistis untuk webmaster '
+                             'berpengalaman.',
+        '{{DESKRIPSI}}': 'apa yang dibangun (halaman, jenis konten/field, plugin & pengaturannya, aturan bisnis), cukup '
+                         'jelas untuk webmaster.',
+    }
+
+
+def teks_kalibrasi():
+    """Data nyata lama kerja agen (L.kalibrasi_agen) supaya jam_agen tidak ditebak terlalu besar (dulu 8–17x)."""
+    k = L.kalibrasi_agen()
+    if not k:
+        return 'Agen Claude Code bekerja cepat: fitur CRUD biasa ±10 menit (0,15 jam), fondasi/fitur besar ±20–30 menit.'
+    return (f"DATA NYATA agen tim ({k['fitur']} fitur selesai, termasuk perbaikan & revisi): median {k['menit_median']:g} "
+            f"menit per fitur, 90% fitur ≤ {k['menit_p90']:g} menit. Isi jam_agen dalam skala ini (mis. 0,15 jam untuk "
+            f"CRUD sederhana, 0,3–0,5 jam untuk fondasi atau fitur dengan banyak aturan bisnis) — JANGAN jam-an seperti "
+            f"estimasi programmer manusia.")
+
+
+# Aturan cakupan (user 2026-10-03): dokumen & estimasi hanya memenuhi daftar permintaan klien, tanpa
+# peningkatan di luar itu, supaya efisien (token, jam agen) dan sesuai permintaan awal -> {{CAKUPAN}}
+CAKUPAN = """## Cakupan: sesuai permintaan klien saja (WAJIB)
+
+Tujuannya efisien dan sesuai permintaan awal. Bila semua yang diminta klien di bahan sudah terpenuhi, CUKUP sampai
+di situ:
+- Fitur, peran, halaman, tabel, dan alur hanya yang diminta klien atau mutlak diperlukan agar permintaan itu
+  berjalan (mis. login, hak akses, tabel master yang dipakai transaksi yang diminta).
+- JANGAN menambah fitur/peningkatan yang tidak diminta: notifikasi, ekspor/cetak, log aktivitas/audit, dashboard
+  statistik, laporan tambahan, multi-cabang, impor massal, API, persetujuan berlapis, riwayat versi, dsb. —
+  kecuali disebut di bahan.
+- Pilih bentuk paling sederhana: tabel & kolom secukupnya, alur tanpa cabang yang tidak diminta, satu diagram
+  bila cukup. Jangan memecah atau merinci melebihi kebutuhan.
+- Ide tambahan yang menurut Anda berguna: cukup tulis satu baris di **Di luar cakupan** / catatan PM sebagai usulan
+  opsional, JANGAN dimasukkan ke fitur, database, flowchart, atau estimasi."""
+
+
+# Tanda kebutuhan konten dari PM (proyek.json `konten.mode`, L.KONTEN_MODE) -> {{KONTEN}} di susun/estimasi/rangkuman
+KONTEN_TEKS = {
+    'statis': 'PM menandai **Statis**: teks halaman publik (beranda, FAQ, cara order, dsb.) boleh ditulis di kode; '
+              'perubahan lewat developer. JANGAN membuat fitur pengelolaan konten halaman.',
+    'bersekat': 'PM menandai **Konten bersekat** (WAJIB): klien mengubah isi halaman publik sendiri tanpa developer lewat '
+                'form di panel Admin per seksi, tata letak tetap mengikuti DESIGN.md. Cakup semua teks yang wajar '
+                'berubah: hero (judul, subjudul, tombol), daftar keunggulan, langkah cara order, FAQ (tambah/urutkan/'
+                'hapus), tautan menu & footer, kontak/WhatsApp, teks halaman informasi. Jadikan SATU fitur tersendiri '
+                '"Konten halaman publik dapat diubah Admin" (di PRD, matriks peran × halaman, dan estimasi); seeder '
+                'mengisi konten awal yang sama dengan teks rancangan.',
+    'page_builder': 'PM menandai **Page builder** (WAJIB): klien menyusun halaman sendiri (membuat halaman baru, menambah/'
+                    'mengurutkan seksi, mengedit teks & gambar) seperti project expedisi-vd: `@myissue/vue-website-page-'
+                    'builder` di editor admin layar penuh, HTML disanitasi di server (symfony/html-sanitizer), pustaka '
+                    'blok/seksi siap pakai sesuai DESIGN.md, media library, halaman publik dirender server (Blade) agar '
+                    'SEO baik. Jadikan fitur tersendiri (boleh dipecah: editor & blok, halaman & menu, media) dengan '
+                    'estimasi yang realistis besar.',
+}
+
+
+def teks_konten(p):
+    mode = (p.get('konten') or {}).get('mode')
+    if mode in KONTEN_TEKS:
+        return ('## Kebutuhan konten halaman (ditandai PM)\n\n' + KONTEN_TEKS[mode]
+                + ' Bila platform WordPress, abaikan bagian teknis ini (editor WordPress sudah memenuhinya).')
+    return ('## Kebutuhan konten halaman\n\nPM belum menandai apakah klien perlu mengubah isi halaman sendiri. Jangan '
+            'menambah fitur pengelolaan konten kecuali catatan klien memintanya; bila catatan mengisyaratkan klien ingin '
+            'mengubah teks/halaman sendiri, tulis di Pertanyaan terbuka (statis / konten bersekat / page builder).')
+
+
 def prompt_untuk(slug, jenis, p):
     t = (TEMPLATE / f'brief-{jenis}.md').read_text()
+    if jenis == 'diagram':
+        t = t.replace('{{PLATFORM}}', platform_diagram(slug))
     ganti = {'{{JUDUL}}': p.get('judul', ''), '{{KLIEN}}': p.get('klien') or '-', '{{DOMAIN}}': p.get('domain') or '-'}
-    if jenis == 'susun':
+    # Dokumen unggahan klien (dokumen/) ikut sebagai bahan di samping catatan diskusi
+    catatan = (L.baca_teks(slug, 'catatan.md').strip() or '(PM tidak menulis catatan; pakai dokumen klien di bawah)') \
+        + L.bahan_dok(slug)[0]
+    if jenis == 'saran':
+        ganti['{{CATATAN}}'] = catatan
+    elif jenis == 'rangkuman':
+        saran = L.baca_json(L.folder(slug) / 'saran.json', None) or {}
+        o = next((o for o in saran.get('opsi') or [] if o.get('kunci') == (saran.get('pilihan') or {}).get('kunci')), None)
+        ganti.update({'{{CATATAN}}': catatan,
+                      '{{PLATFORM}}': f"{o['nama']} ({o['stack']})" if o else 'belum dipilih'})
+    elif jenis == 'contoh':
+        spek = []
+        for nama, batas in (('DESIGN.md', 30_000), ('PRD.md', 40_000)):
+            isi = L.baca_teks(slug, nama).strip()
+            if isi:
+                spek.append(f'<{nama}>\n{isi[:batas]}\n</{nama}>')
+        r = L.baca_json(L.folder(slug) / 'rangkuman.json', None)
+        if r and not spek:
+            r = {k: v for k, v in r.items() if k not in ('belum_jelas', 'waktu', 'model')}
+            spek.append('<rangkuman_konsep>\n' + json.dumps(r, ensure_ascii=False, indent=1) + '\n</rangkuman_konsep>')
+        arahan = (p.get('contoh_arahan') or '').strip()
+        aset = L.aset_contoh(slug)
+        if L.platform_contoh(slug) == 'wordpress':
+            ganti.update({
+                '{{JUMLAH_HALAMAN}}': '1 halaman, yaitu **beranda (landing page) situs WordPress**',
+                '{{PLATFORM}}': 'WordPress (situs company profile / toko / layanan, bukan aplikasi ber-login)',
+                '{{HALAMAN}}': HALAMAN_WP, '{{KELUARAN_DASHBOARD}}': 'string kosong "" (situs WordPress tanpa dashboard).',
+            })
+        else:
+            ganti.update({
+                '{{JUMLAH_HALAMAN}}': '2 halaman, yaitu **Landing page** (halaman depan) dan **Dashboard** (halaman utama '
+                                      'sesudah login)',
+                '{{PLATFORM}}': 'Aplikasi custom Laravel + Vue (Inertia, shadcn-vue)',
+                '{{HALAMAN}}': HALAMAN_LARAVEL.replace('{{GAYA_DASHBOARD}}', (TEMPLATE / 'gaya-dashboard-vd.md').read_text()),
+                '{{KELUARAN_DASHBOARD}}': 'isi berkas HTML lengkap dashboard.',
+            })
+        ganti.update({
+            '{{CATATAN}}': catatan,
+            '{{SPESIFIKASI}}': ('Spesifikasi yang sudah disusun PM (utamakan ini bila berbeda dengan catatan):\n\n'
+                                + '\n\n'.join(spek)) if spek else '(Belum ada DESIGN.md/PRD.md: simpulkan dari bahan di atas.)',
+            '{{ARAHAN}}': f'## Arahan tambahan dari PM (WAJIB diikuti)\n\n{arahan}' if arahan else '',
+            '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'),
+            '{{ANTISLOP_UI}}': (TEMPLATE / 'antislop-ui.md').read_text().strip(),
+            '{{ASET}}': '\n'.join(f'  - `{tujuan}` = dokumen klien "{asal}"' for asal, tujuan in aset)
+                        or '  - (tidak ada gambar klien; pakai logo teks/SVG buatan sendiri)',
+        })
+    elif jenis == 'susun':
         lama_prd, lama_design = L.baca_teks(slug, 'PRD.md').strip(), L.baca_teks(slug, 'DESIGN.md').strip()
         lama = ''
         if lama_prd or lama_design:
             lama = ('Sudah ada draf sebelumnya (mungkin sudah disunting PM). PERTAHANKAN suntingan PM, perbarui hanya '
                     'bagian yang berubah karena catatan baru.\n\n'
                     f'<prd_lama>\n{lama_prd}\n</prd_lama>\n\n<design_lama>\n{lama_design}\n</design_lama>')
-        ganti.update({'{{CATATAN}}': L.baca_teks(slug, 'catatan.md'), '{{DOKUMEN_LAMA}}': lama,
+        ganti.update({'{{CATATAN}}': catatan, '{{DOKUMEN_LAMA}}': lama, '{{PLATFORM}}': platform_susun(slug),
                       '{{CONTOH_DESIGN}}': (TEMPLATE / 'contoh-DESIGN.md').read_text()})
     elif jenis == 'diagram':
         lama_db, lama_flow = L.baca_teks(slug, 'DATABASE.md').strip(), L.baca_teks(slug, 'FLOWCHART.md').strip()
@@ -100,11 +400,58 @@ def prompt_untuk(slug, jenis, p):
                     f'<database_lama>\n{lama_db}\n</database_lama>\n\n<flowchart_lama>\n{lama_flow}\n</flowchart_lama>')
         ganti.update({'{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DOKUMEN_LAMA}}': lama})
     else:
-        ganti.update({'{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DESIGN}}': L.baca_teks(slug, 'DESIGN.md'),
+        est = ganti_estimasi(slug)
+        t = t.replace('{{PLATFORM}}', est.pop('{{PLATFORM}}'))  # lebih dulu: paragraf platform lain memuat {{JUDUL}}
+        ganti.update({**est, '{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DESIGN}}': L.baca_teks(slug, 'DESIGN.md'),
                       '{{DATABASE}}': L.baca_teks(slug, 'DATABASE.md') or '(belum ada)'})
+    ganti['{{KONTEN}}'] = teks_konten(p)
+    ganti['{{CAKUPAN}}'] = CAKUPAN
     for k, v in ganti.items():
         t = t.replace(k, v)
     return t
+
+
+# Pita kecil di pojok: klien tahu ini pratinjau berisi data fiktif (bisa ditutup)
+PITA = ('<div id="vd-pita" style="position:fixed;left:12px;bottom:12px;z-index:2147483647;display:flex;align-items:center;'
+        'gap:8px;padding:6px 8px 6px 12px;border-radius:999px;background:rgba(15,23,42,.88);color:#fff;'
+        'font:500 12px/1.2 system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25)">Pratinjau desain · data contoh'
+        '<button type="button" aria-label="Tutup" onclick="this.parentNode.remove()" style="border:0;background:none;'
+        'color:#fff;font:16px/1 system-ui;cursor:pointer;padding:0 4px">&times;</button></div>')
+
+
+def rapikan_html(html):
+    html = html.strip()
+    if '<head' in html.lower() and 'name="robots"' not in html:
+        i = html.lower().index('<head')
+        j = html.index('>', i) + 1
+        html = html[:j] + '\n<meta name="robots" content="noindex, nofollow">' + html[j:]
+    k = html.lower().rfind('</body>')
+    html = html[:k] + PITA + '\n' + html[k:] if k >= 0 else html + PITA
+    return html + '\n'
+
+
+def simpan_contoh(slug, data, opus, dari):
+    d = L.folder_contoh(slug)
+    if d.is_dir():
+        lama = d.with_name(f"contoh.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak")
+        d.rename(lama)
+    (d / 'aset').mkdir(parents=True)
+    platform = L.platform_contoh(slug)
+    for nama, kunci in (('index.html', 'landing_html'), ('dashboard.html', 'dashboard_html')):
+        # WordPress: hanya beranda; dashboard dibuang walau Claude tetap mengisinya
+        if data.get(kunci, '').strip() and (nama == 'index.html' or platform == 'laravel'):
+            (d / nama).write_text(rapikan_html(data[kunci]))
+    dipakai = set(data.get('aset') or [])
+    teks = data['landing_html'] + data['dashboard_html']
+    for asal, tujuan in L.aset_contoh(slug):
+        if tujuan in dipakai or tujuan in teks:
+            shutil.copy2(L.folder_dok(slug) / asal, d / tujuan)
+    L.tulis_json(L.folder(slug) / 'contoh.json', {
+        'nama_aplikasi': data['nama_aplikasi'], 'platform': platform, 'catatan': [str(c) for c in data.get('catatan') or []],
+        'aset': sorted(x.name for x in (d / 'aset').iterdir()), 'waktu': L.sekarang(), 'model': opus,
+        'arahan': (L.baca_json(L.folder(slug) / 'proyek.json', {}) or {}).get('contoh_arahan') or '',
+        'brief_versi': dari,
+    })
 
 
 def catat_pemakaian(DC, slug, jenis, hasil):
@@ -150,20 +497,34 @@ def main():
     return kode
 
 
-JUDUL_KERJA = {'susun': 'menyusun DESIGN.md + PRD.md dari catatan diskusi',
+JUDUL_KERJA = {'rangkuman': 'merangkum kebutuhan klien jadi Rangkuman Website Konsep (Word)',
+               'contoh': 'membuat contoh tampilan untuk dipamerkan ke klien',
+               'saran': 'membandingkan platform (WordPress / Laravel+Vue / lainnya) dari catatan diskusi',
+               'susun': 'menyusun DESIGN.md + PRD.md dari catatan diskusi',
                'diagram': 'menyusun relasi database (ERD) + flowchart dari PRD',
                'estimasi': 'memecah PRD jadi fitur + estimasi'}
 
 
 def jalankan(DC, env, opus, slug, jenis, p):
+    # Versi brief yang menjadi bahan (dibaca sebelum Claude jalan; suntingan PM selama proses = versi berikutnya)
+    dari = L.versi_brief(L.baca_json(L.folder(slug) / 'proyek.json', {}))
     prompt = prompt_untuk(slug, jenis, p)
+    log(f'Bahan: brief v{dari}.')
     log(f"Claude ({opus}) {JUDUL_KERJA[jenis]}…")
     log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 2–6 menit.')
+    # Gambar / PDF hasil scan dibaca Claude sendiri: alat Read saja, folder kerja = folder dokumen
+    # (Read di luar folder kerja ditolak otomatis pada mode -p)
+    visual = L.bahan_dok(slug)[1] if jenis in ('saran', 'susun', 'rangkuman', 'contoh') else []
+    if visual:
+        log(f'{len(visual)} dokumen gambar/scan dibaca Claude langsung: {", ".join(visual)}')
     mulai = time.time()
     try:
-        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'opus', '--output-format', 'json',
-                              '--no-session-persistence', '--tools', '', '--json-schema', json.dumps(SKEMA[jenis])],
-                             capture_output=True, text=True, timeout=1500, env=env, cwd='/tmp')
+        # prompt lewat stdin: sebagai argumen, bahan >128 KB ditolak kernel (Argument list too long)
+        run = subprocess.run([DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json',
+                              '--no-session-persistence', '--tools', 'Read' if visual else '',
+                              '--json-schema', json.dumps(SKEMA[jenis])],
+                             input=prompt, capture_output=True, text=True, timeout=1500, env=env,
+                             cwd=str(L.folder_dok(slug)) if visual else '/tmp')
         hasil = json.loads(run.stdout)
     except subprocess.TimeoutExpired:
         log('GAGAL: Claude tidak selesai dalam 25 menit')
@@ -179,7 +540,45 @@ def jalankan(DC, env, opus, slug, jenis, p):
     detik = round(time.time() - mulai)
     biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
 
-    if jenis == 'susun':
+    if jenis == 'contoh':
+        simpan_contoh(slug, data, opus, dari)
+        dash = f", dashboard {len(data['dashboard_html']) // 1024} KB" if L.platform_contoh(slug) == 'laravel' else ' (WordPress: beranda saja)'
+        log(f"SELESAI dalam {detik} dtk (setara API ${biaya}). {data['nama_aplikasi']}: landing "
+            f"{len(data['landing_html']) // 1024} KB{dash}.")
+        for c in data.get('catatan') or []:
+            log(f'  • {c}')
+        L.catat(slug, 'Claude', 'membuat contoh tampilan ' + ('landing page + dashboard' if L.platform_contoh(slug) == 'laravel'
+                                                              else 'beranda situs WordPress'))
+        if L.konfig_preview():
+            log('Menerbitkan ke server preview…')
+            t = L.terbitkan_contoh(slug)
+            log(f"Tayang: {t['url']}" if t['ok'] else f"GAGAL terbit: {t['galat']}")
+        else:
+            log(f'Server preview belum diatur ({L.CONTOH_ENV}); contoh hanya bisa dilihat di dashboard.')
+    elif jenis == 'rangkuman':
+        import rangkuman_docx
+        data.update(waktu=L.sekarang(), model=opus, brief_versi=dari)
+        cadangkan(slug, 'rangkuman.json')
+        L.tulis_json(L.folder(slug) / 'rangkuman.json', data)
+        # Gambar kiriman klien ikut di bagian Desain, seperti infografis di contoh SIMONTAK
+        gambar = [(L.folder_dok(slug) / x['nama'], f"Referensi dari klien: {x['nama']}") for x in L.daftar_dok(slug)
+                  if Path(x['nama']).suffix.lower() in L.DOK_GAMBAR]
+        rangkuman_docx.bangun(data, gambar, L.folder(slug) / 'rangkuman.docx')
+        log(f"SELESAI dalam {detik} dtk (setara API ${biaya}). {data['judul']}: {len(data['peran'])} peran, "
+            f"{sum(len(k['poin']) for k in data['menu'])} menu, {len(gambar)} gambar klien.")
+        for c in data.get('belum_jelas') or []:
+            log(f'  ? {c}')
+        L.catat(slug, 'Claude', 'menyusun Rangkuman Website Konsep (Word)')
+    elif jenis == 'saran':
+        saran = {**L.bersihkan_saran(data, opus), 'brief_versi': dari}
+        cadangkan(slug, 'saran.json')
+        L.tulis_json(L.folder(slug) / 'saran.json', saran)
+        log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). Rekomendasi: {saran["rekomendasi"]}.')
+        for o in saran['opsi']:
+            log(f"  {o['skor']}/10 {o['nama']} — {o['stack']}")
+        L.catat(slug, 'Claude', 'menyarankan platform: ' + next(
+            (o['nama'] for o in saran['opsi'] if o['kunci'] == saran['rekomendasi']), saran['rekomendasi']))
+    elif jenis == 'susun':
         for nama, kunci in (('PRD.md', 'prd_md'), ('DESIGN.md', 'design_md')):
             cadangkan(slug, nama)
             L.tulis_teks(slug, nama, data[kunci].strip() + '\n')
@@ -189,7 +588,7 @@ def jalankan(DC, env, opus, slug, jenis, p):
             f'DESIGN {len(data["design_md"]):,} karakter.')
         for c in catatan_pm:
             log(f'  • {c}')
-        L.catat(slug, 'Claude', 'menyusun draf DESIGN.md + PRD.md')
+        L.catat(slug, 'Claude', f"menyusun draf DESIGN.md + PRD.md (brief v{L.naik_versi_brief(slug, 'Claude', ['prd', 'design'])})")
     elif jenis == 'diagram':
         for nama, kunci in (('DATABASE.md', 'database_md'), ('FLOWCHART.md', 'flowchart_md')):
             cadangkan(slug, nama)
@@ -199,15 +598,28 @@ def jalankan(DC, env, opus, slug, jenis, p):
         for c in data.get('catatan') or []:
             log(f'  • {c}')
         L.ubah_proyek(slug, lambda x: x.update(catatan_diagram=[str(c) for c in data.get('catatan') or []]))
-        L.catat(slug, 'Claude', 'menyusun relasi database & flowchart')
+        L.catat(slug, 'Claude', f"menyusun relasi database & flowchart (brief v{L.naik_versi_brief(slug, 'Claude', ['database', 'flowchart'])})")
     else:
+        if not L.jalur_laravel(slug):
+            # Platform non-Laravel: tak ada agen otomatis, semua jam dipegang webmaster
+            for x in data['fitur'] + (data.get('tambahan') or []):
+                x['jam_agen'] = 0
         fitur = L._bersihkan_fitur(data['fitur'])
         cadangkan(slug, 'fitur.json')
         L.ubah_fitur(slug, lambda f: f.__setitem__(slice(None), fitur))
         tambahan = L.bersihkan_tambahan(data.get('tambahan') or [])
-        L.ubah_proyek(slug, lambda x: x.update(tambahan=tambahan))
+        L.ubah_proyek(slug, lambda x: x.update(tambahan=tambahan, estimasi_brief_versi=dari))
         for t in tambahan:
             log(f"  + {t['judul']} — agen {t['jam_agen']} j, webmaster {t['jam_webmaster']} j")
+        cak = L.cek_cakupan(L.baca_teks(slug, 'PRD.md'), fitur)
+        if cak is None:
+            log('  ! PRD tanpa "Matriks peran × halaman": cakupan halaman per peran tidak bisa dicek (susun ulang PRD).')
+        elif cak['kurang']:
+            log(f"  ! {len(cak['kurang'])} dari {cak['sel']} akses di matriks belum masuk fitur mana pun:")
+            for x in cak['kurang']:
+                log(f'    - {x}')
+        else:
+            log(f"  Cakupan matriks: semua {cak['sel']} akses peran × halaman masuk fitur.")
         log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). {len(fitur)} fitur, '
             f'agen {sum(f["jam_agen"] for f in fitur):.1f} jam, webmaster {sum(f["jam_webmaster"] for f in fitur):.1f} jam.')
         for f in fitur:

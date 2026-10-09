@@ -1,5 +1,6 @@
 <script setup>
-// Model AI installer: pilihan model per fungsi, daftar model (endpoint kompatibel OpenAI), pemakaian token per domain.
+// Model AI installer: pilihan model per fungsi, daftar model (endpoint kompatibel OpenAI atau agen Claude Code),
+// pemakaian token per domain.
 // API key tidak pernah ditampilkan.
 import { ref, reactive, computed, onMounted } from 'vue'
 import Ikon from '../components/Ikon.vue'
@@ -49,7 +50,7 @@ async function aksiModel(m, aksi) {
     const dipakai = dipakaiOleh(m)
     if (!(await konfirmasi({ judul: `Hapus model ${m.id}?`, teks: dipakai.length ? `Sekarang dipakai: ${dipakai.join(', ')}. Fungsi itu akan ikut model default.` : 'Model ini tidak dipakai fungsi mana pun.', tombol: 'Ya, hapus', kelas: 'bahaya' }))) return
   }
-  statusModel[m.id] = { teks: aksi === 'test' ? 'Mengirim pesan uji ke endpoint (bisa sampai 60 detik)…' : 'Menyimpan…', kelas: '', proses: true }
+  statusModel[m.id] = { teks: aksi === 'test' ? (agen(m) ? 'Menjalankan agen Claude (bisa sampai 90 detik)…' : 'Mengirim pesan uji ke endpoint (bisa sampai 60 detik)…') : 'Menyimpan…', kelas: '', proses: true }
   try {
     if (aksi === 'test') {
       const j = await kirim('/api/ai/models/test', { model_id: m.id })
@@ -65,20 +66,26 @@ async function aksiModel(m, aksi) {
 }
 
 // Formulir tambah/edit
-const form = reactive({ buka: false, edit: false, id: '', model: '', endpoint: '', api_key: '', is_default: false, galat: '', proses: false })
-function bukaForm(m) {
+const form = reactive({ buka: false, edit: false, jenis: 'endpoint', id: '', model: '', endpoint: '', api_key: '', is_default: false, galat: '', proses: false })
+const MODEL_CLAUDE = [['opus', 'Opus (terbaru)'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']]
+const agen = (m) => m.provider === 'claude_code'
+function bukaForm(m, jenis = 'endpoint') {
   Object.assign(form, m
-    ? { buka: true, edit: true, id: m.id, model: m.model !== m.id ? (m.model || '') : '', endpoint: m.endpoint || '', api_key: '', is_default: !!m.is_default, galat: '' }
-    : { buka: true, edit: false, id: '', model: '', endpoint: '', api_key: '', is_default: !data.models.length, galat: '' })
+    ? { buka: true, edit: true, jenis: agen(m) ? 'claude' : 'endpoint', id: m.id, model: agen(m) ? (m.model || 'opus') : (m.model !== m.id ? (m.model || '') : ''), endpoint: m.endpoint || '', api_key: '', is_default: !!m.is_default, galat: '' }
+    : { buka: true, edit: false, jenis, id: jenis === 'claude' && !data.models.some((x) => x.id === 'claude-agent') ? 'claude-agent' : '', model: jenis === 'claude' ? 'opus' : '', endpoint: '', api_key: '', is_default: !data.models.length, galat: '' })
 }
 function isi9router() {
   form.endpoint = 'https://9router.com/api/v1'
   if (!form.edit && !form.id) form.id = '9router'
 }
 async function simpanForm() {
-  const muatan = { id: form.id.trim(), model: form.model.trim(), endpoint: form.endpoint.trim(), api_key: form.api_key.trim(), is_default: form.is_default }
+  const claude = form.jenis === 'claude'
+  const muatan = claude
+    ? { id: form.id.trim(), provider: 'claude_code', model: form.model, is_default: form.is_default }
+    : { id: form.id.trim(), model: form.model.trim(), endpoint: form.endpoint.trim(), api_key: form.api_key.trim(), is_default: form.is_default }
   form.galat = (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(muatan.id) || muatan.id.includes('..'))
     ? 'ID model boleh huruf, angka, titik, garis bawah, tanda hubung, dan garis miring (mis. meta-llama/llama-3-70b).'
+    : claude ? ''
     : !/^https?:\/\/\S+$/.test(muatan.endpoint) ? 'Endpoint harus URL http(s) lengkap.'
     : (!form.edit && !muatan.api_key) ? 'API key wajib untuk model baru.' : ''
   if (form.galat) return
@@ -130,7 +137,7 @@ const rinci = ref(null)
           <div><b>{{ p.label }}</b><span class="skrip">{{ p.script }}</span></div>
           <select :value="pilihanHilang(p) ? '' : (data.pemakaian[p.kunci] || '')" :aria-label="`Model untuk ${p.label}`" @change="gantiPeran(p, $event.target.value)">
             <option value="">Ikut default ({{ modelDefault?.id || '-' }})</option>
-            <option v-for="m in data.models" :key="m.id" :value="m.id">{{ m.id }}</option>
+            <option v-for="m in data.models" :key="m.id" :value="m.id">{{ agen(m) ? `${m.id} (agen Claude · ${m.model})` : m.id }}</option>
           </select>
           <span class="pesan-status" :class="pilihanHilang(p) ? 'bahaya' : statusPeran[p.kunci]?.kelas" aria-live="polite">
             {{ pilihanHilang(p) ? `Model "${data.pemakaian[p.kunci]}" sudah dihapus, memakai default.` : statusPeran[p.kunci]?.teks }}
@@ -147,15 +154,18 @@ const rinci = ref(null)
     <section class="kartu" aria-labelledby="judul-model">
       <div class="kartu-judul">
         <h2 id="judul-model">Model terdaftar</h2>
-        <button type="button" class="tombol kecil" @click="bukaForm(null)">+ Tambah model</button>
+        <div class="aksi">
+          <button type="button" class="tombol garis kecil" @click="bukaForm(null, 'claude')">+ Agen Claude</button>
+          <button type="button" class="tombol kecil" @click="bukaForm(null)">+ Tambah model</button>
+        </div>
       </div>
-      <p class="redup">Endpoint yang kompatibel dengan OpenAI chat completions. API key tidak pernah ditampilkan.</p>
+      <p class="redup">Endpoint yang kompatibel dengan OpenAI chat completions, atau agen Claude Code (CLI <code>claude -p</code> di Local PC, tanpa API key; tokennya tercatat sebagai Agen Claude). API key tidak pernah ditampilkan.</p>
       <div class="daftar-model">
         <article v-for="m in data.models" :key="m.id" class="model">
-          <div class="nama"><b>{{ m.id }}</b><span v-if="m.is_default" class="lencana biru">DEFAULT</span><span v-if="!m.api_key_set" class="lencana kuning">API key kosong</span></div>
+          <div class="nama"><b>{{ m.id }}</b><span v-if="m.is_default" class="lencana biru">DEFAULT</span><span v-if="agen(m)" class="lencana hijau">AGEN CLAUDE</span><span v-else-if="!m.api_key_set" class="lencana kuning">API key kosong</span></div>
           <dl>
-            <div><dt>Model API</dt><dd>{{ m.model || m.id }}</dd></div>
-            <div><dt>Endpoint</dt><dd>{{ m.endpoint }}</dd></div>
+            <div><dt>Model API</dt><dd>{{ agen(m) ? (MODEL_CLAUDE.find(([k]) => k === m.model)?.[1] || m.model) : (m.model || m.id) }}</dd></div>
+            <div><dt>{{ agen(m) ? 'Jalur' : 'Endpoint' }}</dt><dd>{{ agen(m) ? 'Claude Code CLI (claude -p, tanpa tools)' : m.endpoint }}</dd></div>
             <div><dt>Dipakai</dt><dd>{{ dipakaiOleh(m).join(', ') || 'Tidak dipakai fungsi mana pun' }}</dd></div>
           </dl>
           <div class="aksi">
@@ -202,12 +212,24 @@ const rinci = ref(null)
 
     <Dialog :buka="form.buka" :judul="form.edit ? `Edit model ${form.id}` : 'Tambah model'" lebar="560px" @tutup="form.buka = false">
       <form class="form-model" @submit.prevent="simpanForm">
+        <fieldset v-if="!form.edit" class="jenis">
+          <legend>Jenis</legend>
+          <label class="centang"><input v-model="form.jenis" type="radio" value="endpoint"> Endpoint OpenAI</label>
+          <label class="centang"><input v-model="form.jenis" type="radio" value="claude" @change="form.model = 'opus'; form.id = form.id || 'claude-agent'"> Agen Claude Code</label>
+        </fieldset>
         <label class="isian"><span>ID model</span><input v-model="form.id" :readonly="form.edit" :autofocus="!form.edit" required><small>Huruf, angka, titik, garis bawah, tanda hubung, garis miring (mis. meta-llama/llama-3-70b). Tidak bisa diubah setelah disimpan.</small></label>
-        <label class="isian"><span>Nama model di API</span><input v-model="form.model" :autofocus="form.edit"><small>Dikirim sebagai "model" ke endpoint. Kosong berarti sama dengan ID.</small></label>
-        <label class="isian"><span>Endpoint URL</span><input v-model="form.endpoint" type="url" required placeholder="https://…/v1"></label>
-        <label class="isian"><span>API key</span><input v-model="form.api_key" type="password" autocomplete="off"><small>{{ form.edit ? 'Kosongkan untuk tetap memakai API key yang tersimpan.' : 'Wajib untuk model baru.' }}</small></label>
+        <template v-if="form.jenis === 'claude'">
+          <label class="isian"><span>Model Claude</span>
+            <select v-model="form.model"><option v-for="[k, l] in MODEL_CLAUDE" :key="k" :value="k">{{ l }}</option></select>
+            <small>Dijalankan lewat Claude Code di Local PC dengan akun yang sama seperti agen desain. Lebih lambat dari endpoint (±10–60 detik per panggilan).</small></label>
+        </template>
+        <template v-else>
+          <label class="isian"><span>Nama model di API</span><input v-model="form.model" :autofocus="form.edit"><small>Dikirim sebagai "model" ke endpoint. Kosong berarti sama dengan ID.</small></label>
+          <label class="isian"><span>Endpoint URL</span><input v-model="form.endpoint" type="url" required placeholder="https://…/v1"></label>
+          <label class="isian"><span>API key</span><input v-model="form.api_key" type="password" autocomplete="off"><small>{{ form.edit ? 'Kosongkan untuk tetap memakai API key yang tersimpan.' : 'Wajib untuk model baru.' }}</small></label>
+        </template>
         <label class="centang"><input v-model="form.is_default" type="checkbox"> Jadikan model default</label>
-        <button type="button" class="tombol garis kecil pas" @click="isi9router">Isi endpoint 9router</button>
+        <button v-if="form.jenis !== 'claude'" type="button" class="tombol garis kecil pas" @click="isi9router">Isi endpoint 9router</button>
         <p v-if="form.galat" class="pesan-status bahaya" role="alert">{{ form.galat }}</p>
         <div class="aksi-dialog">
           <button type="button" class="tombol garis" @click="form.buka = false">Batal</button>
@@ -271,6 +293,9 @@ const rinci = ref(null)
 .form-model { display: grid; gap: 14px; }
 .centang { display: flex; align-items: center; gap: 10px; font-weight: 500; }
 .pas { justify-self: start; }
+.jenis { display: flex; gap: 18px; flex-wrap: wrap; border: 0; padding: 0; margin: 0; }
+.jenis legend { font-weight: 600; margin-bottom: 6px; }
+.jenis input { width: 18px; height: 18px; flex: none; margin: 0; }
 .kecil-sel { font-size: 12.5px; color: var(--teks-2); min-width: 180px; }
 @media (max-width: 800px) { .peran-baris { grid-template-columns: minmax(0, 1fr); } }
 </style>

@@ -606,6 +606,19 @@ a.vb-contact__value:hover { color: var(--vb-accent-text, #a8801f); }
 .vb-posts--overlay .vb-post__title a:hover { color: var(--vb-accent-2, var(--vb-accent)); }
 .vb-posts--overlay .vb-post__meta { color: rgba(255, 255, 255, 0.85); }
 .vb-posts--fill { height: 100%; grid-auto-rows: 1fr; }
+/* Slider berita (vb/posts layout slider): kartu berlapis di mesin vb-carousel. */
+.vb-posts--slider { display: block; position: relative; --vb-carousel-gap: 16px; }
+.vb-posts--slider .vb-carousel__track { padding: 0; margin: 0; }
+.vb-posts--slider .vb-carousel__arrow { position: absolute; top: calc(var(--vb-post-h, 420px) / 2); transform: translateY(-50%); z-index: 3; width: 38px; height: 38px; border: 0; border-radius: 6px; background: rgba(0, 0, 0, 0.45); color: #fff; }
+.vb-posts--slider .vb-carousel__arrow:hover { background: var(--vb-accent); color: var(--vb-on-accent); }
+.vb-posts--slider .vb-carousel__prev { left: 12px; }
+.vb-posts--slider .vb-carousel__next { right: 12px; }
+.vb-posts--slider .vb-carousel__arrow:disabled { display: none; }
+.vb-posts--slider .vb-carousel__nav { position: absolute; right: 20px; top: 16px; margin: 0; z-index: 3; }
+.vb-posts--slider .vb-carousel__dot { width: 8px; height: 8px; color: #fff; opacity: 0.6; }
+.vb-posts--slider .vb-carousel__dot[aria-selected="true"] { width: 22px; opacity: 1; color: var(--vb-accent); }
+@media (max-width: 600px) { .vb-posts--slider .vb-carousel__arrow { top: 12px; transform: none; width: 32px; height: 32px; } .vb-posts--slider .vb-carousel__next { right: auto; left: 50px; } .vb-posts--slider .vb-carousel__nav { top: 24px; right: 14px; } }
+
 .vb-posts--fill .vb-post { height: auto; min-height: var(--vb-post-h, 420px); }
 
 /* Baris: judul + foto kecil */

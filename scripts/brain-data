@@ -27,6 +27,12 @@ from pathlib import Path
 CLAUDE = Path(os.environ.get("CLAUDE_HOME", "/root/.claude"))
 OUT = "/usr/share/nginx/html/brain/data.json"
 BODY_MAX = 6000
+# Pemeriksaan kesehatan memory (panel Kesehatan di /brain)
+BESAR = 12_000           # byte; di atas ini (~3 rb token) sebaiknya diringkas/dipecah
+USANG_HARI = 14          # memory project yang tidak disentuh selama ini patut dicek masih berlaku
+INDEKS_BARIS = 200       # Claude Code hanya memuat ±200 baris pertama MEMORY.md
+INDEKS_BYTE = 25_000     # ...dan ±25 KB pertama — batas yang mana pun tercapai lebih dulu (1 Okt: terpotong di baris 170)
+INDEKS_PANJANG = 150     # karakter; baris indeks lebih panjang dari ini = detail yang seharusnya di berkas topik
 
 # Token/kunci yang kebetulan tertulis di memory tidak ikut tampil di halaman.
 RAHASIA = [
@@ -88,12 +94,42 @@ def normal(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
+def sub_indeks(idx):
+    """Indeks kedua yang ditautkan dari MEMORY.md (mis. klien.md): berkas .md tanpa frontmatter, isinya daftar tautan.
+    Memory yang tercantum di sana tetap dihitung terindeks; berkasnya sendiri bukan memory."""
+    hasil = []
+    try:
+        teks = idx.read_text(errors="replace")
+    except OSError:
+        return hasil
+    for nama in dict.fromkeys(re.findall(r"\]\(([^)\s/]+\.md)\)", teks)):
+        f = idx.parent / nama
+        try:
+            if f.is_file() and not f.read_text(errors="replace").lstrip().startswith("---"):
+                hasil.append(f)
+        except OSError:
+            pass
+    return hasil
+
+
+def baris_indeks(idx):
+    """Baris MEMORY.md + semua sub-indeksnya."""
+    baris = []
+    for f in [idx, *sub_indeks(idx)]:
+        try:
+            baris += f.read_text(errors="replace").splitlines()
+        except OSError:
+            pass
+    return baris
+
+
 def kumpul_memory():
     hasil = []
     for d in sorted(CLAUDE.glob("projects/*/memory")):
         proyek = d.parent.name
+        lewati = {"MEMORY.md", *(x.name for x in sub_indeks(d / "MEMORY.md"))}
         for f in sorted(d.glob("*.md")):
-            if f.name == "MEMORY.md":
+            if f.name in lewati:
                 continue
             try:
                 teks = f.read_text(errors="replace")
@@ -247,11 +283,7 @@ def bangun():
     # memory lain yang menyebut domain yang sama ikut disambungkan.
     proyek = {}
     for idx in CLAUDE.glob("projects/*/memory/MEMORY.md"):
-        try:
-            baris = idx.read_text(errors="replace").splitlines()
-        except OSError:
-            continue
-        for b in baris:
+        for b in baris_indeks(idx):
             m = re.match(r"\s*-\s*\[([^\]]+)\]\(([^)]+\.md)\)", b)
             if not m:
                 continue
@@ -267,19 +299,22 @@ def bangun():
         links.append({"source": "core", "target": "hub:proyek", "kind": "struktur"})
     pola_dom = {dm: re.compile(r"(?<![\w.-])" + re.escape(dm) + r"(?![\w-])", re.I) for dm in proyek}
     teks_mem = {m["id"]: (m["desc"] + "\n" + m["body"]) for m in memori}
+    kecil_mem = {k: v.lower() for k, v in teks_mem.items()}  # saringan substring murah sebelum regex (dulu ±14 dtk)
     for dm, pr in proyek.items():
         links.append({"source": "hub:proyek", "target": pr["id"], "kind": "struktur"})
         utama = set(pr["memory"])
-        for mid in utama:
+        for mid in sorted(utama):  # urutan tetap (set teracak per proses) → data.json bisa dilewati bila sama
             sambung(pr["id"], mid, "tentang")
         for mid, teks in teks_mem.items():
-            if mid not in utama and pola_dom[dm].search(teks):
+            if mid not in utama and dm.lower() in kecil_mem[mid] and pola_dom[dm].search(teks):
                 sambung(pr["id"], mid, "sebutan")
         pr["desc"] = f"Proyek/domain klien. {len(utama)} memory utama."
         del pr["memory"]
 
+    kesehatan = periksa(memori, hantu)
     nodes += memori + skill + list(hantu.values()) + list(proyek.values())
     return {
+        "kesehatan": kesehatan,
         "generated": int(time.time()),
         "counts": {
             "memory": len(memori),
@@ -294,6 +329,67 @@ def bangun():
     }
 
 
+def periksa(memori, hantu):
+    """Masalah memory yang membuat Claude tidak melihat atau boros membacanya. Tiap memory
+    bermasalah juga diberi daftar "masalah" supaya graf bisa menandainya."""
+    kini = time.time()
+    indeks = {}
+    for idx in CLAUDE.glob("projects/*/memory/MEMORY.md"):
+        proyek = idx.parent.parent.name
+        try:
+            teks = idx.read_text(errors="replace")
+        except OSError:
+            continue
+        semua = "\n".join(baris_indeks(idx))
+        berkas = re.findall(r"\]\(([^)\s]+\.md)\)", semua)
+        ada = {f.name for f in idx.parent.glob("*.md")}
+        # Baris pertama yang tidak lagi dimuat Claude Code (batas baris ATAU byte, mana yang lebih dulu)
+        potong, total = None, 0
+        for i, b in enumerate(teks.splitlines(), 1):
+            total += len(b.encode()) + 1
+            if i > INDEKS_BARIS or total > INDEKS_BYTE:
+                potong = i
+                break
+        panjang = [b for b in teks.splitlines() if len(b) > INDEKS_PANJANG and b.lstrip().startswith("- [")]
+        dobel = [b[:80] for b in teks.splitlines() if len(re.findall(r"^\s*-\s*\[|\s-\s\[", b)) > 1]
+        indeks[proyek] = {
+            "baris": len(teks.splitlines()), "byte": len(teks.encode()), "batas_baris": INDEKS_BARIS,
+            "batas_byte": INDEKS_BYTE, "potong_baris": potong, "batas_panjang": INDEKS_PANJANG,
+            "panjang": [re.sub(r"^\s*-\s*\[([^\]]+)\].*", r"\1", b) for b in panjang], "dobel": dobel,
+            "sub": [{"berkas": f.name, "baris": len(f.read_text(errors="replace").splitlines()),
+                     "byte": len(f.read_text(errors="replace").encode())} for f in sub_indeks(idx)],
+            "tercantum": set(berkas),
+            "mati": sorted({b for b in berkas if b not in ada}),
+        }
+    nama = {}
+    for m in memori:
+        nama.setdefault(normal(m["label"]), []).append(m["id"])
+
+    def tandai(m, kode):
+        m.setdefault("masalah", []).append(kode)
+
+    for m in memori:
+        ix = indeks.get(m["project"])
+        if ix and m["file"] not in ix["tercantum"]:
+            tandai(m, "tak_diindeks")
+        if m["size"] > BESAR:
+            tandai(m, "besar")
+        if m["group"] == "project" and kini - m["updated"] > USANG_HARI * 86400:
+            tandai(m, "usang")
+        if len(nama[normal(m["label"])]) > 1:
+            tandai(m, "nama_ganda")
+        if not m["desc"]:
+            tandai(m, "tanpa_deskripsi")
+    for ix in indeks.values():
+        ix.pop("tercantum")
+    return {
+        "indeks": indeks,
+        "batas": {"besar": BESAR, "usang_hari": USANG_HARI},
+        "hantu": sorted(h["label"] for h in hantu.values()),
+        "total_byte": sum(m["size"] for m in memori),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=OUT)
@@ -301,13 +397,32 @@ def main():
     data = bangun()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".data-")
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, out)
+    # Isi lengkap memory/skill (±85% ukuran) dipisah ke isi.json: graf cukup memuat kerangka, isi diambil
+    # halaman hanya saat panel detail dibuka atau pencarian dipakai.
+    isi = {n["id"]: n.pop("body") for n in data["nodes"] if n.get("body")}
+    ubah = [tulis(out.with_name("isi.json"), isi), tulis(out, data, abaikan="generated")]
     c = data["counts"]
-    print(f"brain-data: memory={c['memory']} skill={c['skill']} ref={c['ref']} hantu={c['ghost']} tepi={c['links']} -> {out}")
+    print(f"brain-data: memory={c['memory']} skill={c['skill']} ref={c['ref']} hantu={c['ghost']} tepi={c['links']} -> {out}"
+          + ("" if any(ubah) else " (tidak berubah, tidak ditulis ulang)"))
+
+
+def tulis(path, obj, abaikan=None):
+    """Tulis JSON atomik; dilewati bila isinya sama dengan berkas lama (kecuali kunci `abaikan`) supaya
+    ETag/Last-Modified tetap dan peramban cukup menerima 304."""
+    try:
+        lama = json.loads(path.read_text())
+        if abaikan:
+            lama.pop(abaikan, None)
+        if lama == {k: v for k, v in obj.items() if k != abaikan}:
+            return False
+    except (OSError, ValueError):
+        pass
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".data-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return True
 
 
 if __name__ == "__main__":

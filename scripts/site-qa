@@ -104,7 +104,10 @@ def main():
     # Portal berita (tema varian berita) memakai Redaksi sebagai halaman profil media.
     if re.search(r'--berita\b', home) and re.search(r'href="[^"]*/redaksi/?"', home):
         menu.add('tentang-kami')
-    if home and not maintenance and len(menu) < 2:
+    # Landing satu halaman (tema velocity-landing, Paket Landing Page Biasa) memang tanpa menu atas.
+    landing = 'id="vlp-beranda"' in home
+    info['landing'] = landing
+    if home and not maintenance and not landing and len(menu) < 2:
         problems.append('menu_tidak_lengkap')
 
     pages = fetch_json(f'{base}wp-json/wp/v2/pages?per_page=50&_fields=slug,content') or []

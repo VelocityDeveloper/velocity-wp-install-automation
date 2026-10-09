@@ -10,6 +10,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
 from urllib.parse import parse_qs, urlsplit
 
+import sys
+sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+import velocity_update  # noqa: E402 — jurnal Velocity Update (/api/velocity-update)
+import keamanan_pc  # noqa: E402 — menu Security (/api/security)
+
+VU_COOKIE = 'vu_sesi'
+VU_GAGAL = {}  # ip -> [waktu sandi salah]
+
 LAN_NETWORKS = tuple(map(ip_network, ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')))
 
 
@@ -409,11 +417,210 @@ def simpan_login(body):
     return None
 
 
+# Statistik tutorial.velocitydeveloper.com (pencatat di server Wajar, lihat /var/lib/velocity/tutorial/vue/public/api).
+# Kunci akses hanya di sisi server; browser cukup memanggil /api/tutorial?p=1|7|30|0.
+TUTORIAL_URL = 'https://tutorial.velocitydeveloper.com/api/statistik.php'
+TUTORIAL_KUNCI_FILE = '/etc/velocity/secrets/tutorial_statistik_kunci'
+_TUTORIAL_CACHE = {}
+_TUTORIAL_TTL = 60.0
+
+
+def tutorial_stats(periode):
+    import urllib.request
+    from urllib.parse import urlencode
+    if periode not in ('1', '7', '30', '0'):
+        periode = '30'
+    simpan = _TUTORIAL_CACHE.get(periode)
+    if simpan and time.time() - simpan[0] < _TUTORIAL_TTL:
+        return simpan[1]
+    try:
+        with open(TUTORIAL_KUNCI_FILE) as f:
+            kunci = f.read().strip()
+        url = f'{TUTORIAL_URL}?{urlencode({"k": kunci, "p": periode, "format": "json"})}'
+        # UA bawaan Python-urllib diblokir WAF hosting
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (VelocityLocalPC dashboard)'})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.load(r)
+    except Exception as e:
+        if simpan:
+            return {**simpan[1], 'galat': str(e)}
+        return {'galat': str(e)}
+    _TUTORIAL_CACHE[periode] = (time.time(), data)
+    return data
+
+
+# Notif email Gmail -> Telegram (/opt/pengawas-email). Sandi & token tidak pernah dikirim balik ke browser.
+EMAIL_ENV_FILE = '/etc/velocity/secrets/pengawas-email.env'
+EMAIL_DB_FILE = '/var/lib/pengawas-email/terkirim.db'
+EMAIL_ATURAN_FILE = '/opt/pengawas-email/aturan.json'
+EMAIL_UA = 'Mozilla/5.0 (VelocityLocalPC dashboard)'
+
+
+def _baca_email_env():
+    env = {}
+    try:
+        with open(EMAIL_ENV_FILE) as f:
+            for baris in f:
+                baris = baris.strip()
+                if baris and not baris.startswith('#') and '=' in baris:
+                    k, v = baris.split('=', 1)
+                    env[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return env
+
+
+def _baca_aturan():
+    try:
+        with open(EMAIL_ATURAN_FILE) as f:
+            return json.load(f)
+    except Exception as e:
+        return {'galat': str(e)}
+
+
+def _daftar_teks(nilai, batas=200):
+    if not isinstance(nilai, list):
+        return None
+    hasil = []
+    for x in nilai:
+        x = str(x or '').strip()[:200]
+        if x and x not in hasil:
+            hasil.append(x)
+    return hasil[:batas]
+
+
+def simpan_email_aturan(body):
+    chat_re = r'-?\d{5,20}'
+    default = str(body.get('chat_default') or '').strip()
+    if not re.fullmatch(chat_re, default):
+        return 'chat_id_tidak_valid'
+    subj = _daftar_teks(body.get('kecualikan_subject'))
+    pengirim = _daftar_teks(body.get('kecualikan_pengirim'))
+    if subj is None or pengirim is None or not isinstance(body.get('rute'), list) or len(body['rute']) > 50:
+        return 'aturan_tidak_valid'
+    rute = []
+    for r in body['rute']:
+        if not isinstance(r, dict):
+            return 'aturan_tidak_valid'
+        baris = {
+            'nama': str(r.get('nama') or '').strip()[:100],
+            'subject_berisi': _daftar_teks(r.get('subject_berisi') or [], 50),
+            'pengirim_berisi': _daftar_teks(r.get('pengirim_berisi') or [], 50),
+            'chat_id': str(r.get('chat_id') or '').strip(),
+            'catatan': str(r.get('catatan') or '').strip()[:300],
+        }
+        if baris['subject_berisi'] is None or baris['pengirim_berisi'] is None:
+            return 'aturan_tidak_valid'
+        if not baris['nama']:
+            return 'nama_rute_kosong'
+        if not baris['subject_berisi'] and not baris['pengirim_berisi']:
+            return 'rute_tanpa_kata_kunci'
+        if not re.fullmatch(chat_re, baris['chat_id']):
+            return 'chat_id_tidak_valid'
+        rute.append(baris)
+    aturan = {
+        'chat_default': default,
+        'catatan_default': str(body.get('catatan_default') or '').strip()[:300] or '⚠️ Silahkan CS Cek Email',
+        'kecualikan_subject': subj,
+        'kecualikan_pengirim': pengirim,
+        'rute': rute,
+    }
+    sementara = EMAIL_ATURAN_FILE + '.tmp'
+    with open(sementara, 'w') as f:
+        json.dump(aturan, f, ensure_ascii=False, indent=2)
+    os.replace(sementara, EMAIL_ATURAN_FILE)
+    return None
+
+
+def _samarkan(nilai):
+    return ('•' * 8 + nilai[-4:]) if len(nilai) > 8 else ('•' * len(nilai))
+
+
+def email_notif_status():
+    import sqlite3
+    env = _baca_email_env()
+    data = {
+        'gmail_user': env.get('GMAIL_USER', ''),
+        'sandi': _samarkan(env.get('GMAIL_APP_PASSWORD', '')),
+        'token': _samarkan(env.get('TELEGRAM_BOT_TOKEN', '')),
+        'aturan': _baca_aturan(),
+        'timer_aktif': subprocess.run(['systemctl', 'is-active', '--quiet', 'pengawas-email.timer']).returncode == 0,
+    }
+    try:
+        db = sqlite3.connect(f'file:{EMAIL_DB_FILE}?mode=ro', uri=True, timeout=5)
+        meta = dict(db.execute('SELECT kunci, nilai FROM meta').fetchall())
+        data['jalan_terakhir'] = meta.get('jalan_terakhir')
+        data['galat_terakhir'] = meta.get('galat_terakhir')
+        hari_ini = time.strftime('%Y-%m-%d')
+        data['hari_ini'] = dict(db.execute(
+            "SELECT status, COUNT(*) FROM email WHERE waktu >= ? AND status != 'awal' GROUP BY status", (hari_ini,)).fetchall())
+        seminggu = time.strftime('%Y-%m-%d', time.localtime(time.time() - 7 * 86400))
+        data['per_chat_7hari'] = dict(db.execute(
+            "SELECT chat_id, COUNT(*) FROM email WHERE status = 'terkirim' AND waktu >= ? GROUP BY chat_id", (seminggu,)).fetchall())
+        data['terakhir'] = [dict(zip(('status', 'dari', 'subject', 'waktu'), r)) for r in db.execute(
+            "SELECT status, dari, subject, waktu FROM email WHERE status != 'awal' ORDER BY waktu DESC LIMIT 15")]
+        db.close()
+    except Exception as e:
+        data['galat_db'] = str(e)
+    return data
+
+
+def _uji_gmail(user, sandi):
+    import imaplib
+    try:
+        imap = imaplib.IMAP4_SSL('imap.gmail.com', 993, timeout=20)
+        imap.login(user, sandi)
+        imap.logout()
+        return None
+    except imaplib.IMAP4.error:
+        return 'gmail_login_gagal'
+    except Exception:
+        return 'gmail_tak_terjangkau'
+
+
+def _uji_token(token):
+    import urllib.error
+    import urllib.request
+    try:
+        req = urllib.request.Request(f'https://api.telegram.org/bot{token}/getMe', headers={'User-Agent': EMAIL_UA})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return None if json.load(r).get('ok') else 'token_tidak_valid'
+    except urllib.error.HTTPError:
+        return 'token_tidak_valid'
+    except Exception:
+        return 'telegram_tak_terjangkau'
+
+
+def simpan_email_login(body):
+    """Sandi/token kosong = pakai yang lama. Login diuji dulu; gagal = tidak disimpan."""
+    env = _baca_email_env()
+    user = str(body.get('gmail_user') or '').strip()
+    sandi = re.sub(r'\s+', '', str(body.get('sandi') or '')) or env.get('GMAIL_APP_PASSWORD', '')
+    token = str(body.get('token') or '').strip() or env.get('TELEGRAM_BOT_TOKEN', '')
+    if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', user) or len(user) > 200:
+        return 'email_tidak_valid'
+    if not sandi:
+        return 'sandi_kosong'
+    if not re.fullmatch(r'\d+:[\w-]{20,}', token):
+        return 'token_tidak_valid'
+    galat = _uji_gmail(user, sandi) or _uji_token(token)
+    if galat:
+        return galat
+    env.update({'GMAIL_USER': user, 'GMAIL_APP_PASSWORD': sandi, 'TELEGRAM_BOT_TOKEN': token})
+    sementara = EMAIL_ENV_FILE + '.tmp'
+    with open(os.open(sementara, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+        f.write(''.join(f'{k}={v}\n' for k, v in env.items()))
+    os.replace(sementara, EMAIL_ENV_FILE)
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
-    def json_response(self, status, data):
+    def json_response(self, status, data, cookie=None):
         body = json.dumps(data, separators=(',', ':')).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
+        if cookie is not None:
+            self.send_header('Set-Cookie', cookie)
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
@@ -433,6 +640,23 @@ class Handler(BaseHTTPRequestHandler):
             data['projects'] = [{**p, 'login': login.get(p['id'])} for p in data.get('projects', [])]
             self.json_response(200, data)
             return
+        if path == '/api/email-notif':
+            self.json_response(200, email_notif_status())
+            return
+        if path == '/api/velocity-update':
+            if not self.vu_masuk():
+                self.json_response(401, {'error': 'perlu_masuk'})
+                return
+            self.json_response(200, {**velocity_update.status_api(), 'menilai': velocity_update.nilai_berjalan()})
+            return
+        if path == '/api/security':
+            data = keamanan_pc.status(segar=bool(parse_qs(query).get('segar')))
+            self.json_response(200, {**data, 'ip_anda': self.ip_peminta()})
+            return
+        if path == '/api/tutorial':
+            data = tutorial_stats((parse_qs(query).get('p') or ['30'])[0])
+            self.json_response(502 if 'galat' in data and 'tutorial' not in data else 200, data)
+            return
         if path == '/api/stats/history':
             self.json_response(200, history((parse_qs(query).get('range') or ['1h'])[0]))
             return
@@ -444,6 +668,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/projects/login':
             self.simpan_login()
+            return
+        if self.path in ('/api/email-notif/login', '/api/email-notif/aturan'):
+            self.simpan_email_login()
+            return
+        if self.path.startswith('/api/velocity-update/'):
+            self.velocity_update()
+            return
+        if self.path == '/api/security':
+            self.aksi_keamanan()
             return
         if self.path not in ('/api/shutdown', '/api/restart'):
             self.send_error(404)
@@ -467,6 +700,37 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.json_response(202, {'status': 'restart_scheduled'})
             subprocess.Popen(['/usr/bin/systemctl', 'reboot'], start_new_session=True)
+
+    def ip_peminta(self):
+        # Lewat dash.velocity.ai.id gerbang login mengisi X-Forwarded-For = CF-Connecting-IP (IP asli pengunjung)
+        terusan = self.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+        return terusan or self.headers.get('X-Real-IP', self.client_address[0])
+
+    def aksi_keamanan(self):
+        # Sama dengan simpan login: hanya dari LAN/Tailscale (termasuk gerbang login tunnel) dan dari halaman dashboard sendiri.
+        try:
+            client = ip_address(self.headers.get('X-Real-IP', self.client_address[0]))
+        except ValueError:
+            client = None
+        origin = self.headers.get('Origin', '')
+        origin_host = urlsplit(origin).hostname if origin else None
+        host = self.headers.get('Host', '').split(':', 1)[0]
+        if client is None or not any(client in network for network in LAN_NETWORKS) or origin_host != host:
+            self.json_response(403, {'error': 'forbidden'})
+            return
+        try:
+            panjang = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(min(panjang, 8192)) or b'{}') if panjang <= 8192 else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            self.json_response(400, {'error': 'body_tidak_valid'})
+            return
+        galat = keamanan_pc.aksi(body, self.ip_peminta())
+        if galat:
+            self.json_response(400, {'error': galat})
+            return
+        self.json_response(200, {**keamanan_pc.status(segar=True), 'ip_anda': self.ip_peminta()})
 
     def simpan_login(self):
         # Sama dengan kontrol daya: hanya dari LAN/Tailscale dan dari halaman dashboard sendiri.
@@ -493,6 +757,116 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(400, {'error': galat})
             return
         self.json_response(200, {'ok': True, 'login': projects_login().get(body['id'])})
+
+    def simpan_email_login(self):
+        # Sama dengan simpan_login: hanya dari LAN/Tailscale dan dari halaman dashboard sendiri.
+        try:
+            client = ip_address(self.headers.get('X-Real-IP', self.client_address[0]))
+        except ValueError:
+            client = None
+        origin = self.headers.get('Origin', '')
+        origin_host = urlsplit(origin).hostname if origin else None
+        host = self.headers.get('Host', '').split(':', 1)[0]
+        if client is None or not any(client in network for network in LAN_NETWORKS) or origin_host != host:
+            self.json_response(403, {'error': 'forbidden'})
+            return
+        try:
+            panjang = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(panjang) or b'{}') if panjang <= 65536 else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            self.json_response(400, {'error': 'body_tidak_valid'})
+            return
+        galat = simpan_email_aturan(body) if self.path.endswith('/aturan') else simpan_email_login(body)
+        if galat:
+            self.json_response(400, {'error': galat})
+            return
+        self.json_response(200, {'ok': True, **email_notif_status()})
+
+    def velocity_update(self):
+        # Sama dengan simpan_login: hanya dari LAN/Tailscale dan dari halaman dashboard sendiri.
+        try:
+            client = ip_address(self.headers.get('X-Real-IP', self.client_address[0]))
+        except ValueError:
+            client = None
+        origin = self.headers.get('Origin', '')
+        origin_host = urlsplit(origin).hostname if origin else None
+        host = self.headers.get('Host', '').split(':', 1)[0]
+        if client is None or not any(client in network for network in LAN_NETWORKS) or origin_host != host:
+            self.json_response(403, {'error': 'forbidden'})
+            return
+        try:
+            panjang = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(panjang) or b'{}') if panjang <= 65536 else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            self.json_response(400, {'error': 'body_tidak_valid'})
+            return
+        V = velocity_update
+        aksi = self.path.rsplit('/', 1)[1]
+        if aksi == 'masuk':
+            self.vu_login(client, body)
+            return
+        if aksi == 'keluar':
+            self.json_response(200, {'ok': True}, cookie=f'{VU_COOKIE}=; Path=/api/velocity-update; Max-Age=0; HttpOnly; SameSite=Strict')
+            return
+        if not self.vu_masuk():
+            self.json_response(401, {'error': 'perlu_masuk'})
+            return
+        uid, oleh = str(body.get('id') or ''), str(body.get('oleh') or '')
+        galat = None
+        if aksi == 'tambah':
+            u, galat = V.tambah_update(body, oleh)
+            if not galat and u['sumber']:
+                V.pantau(u['id'])
+        elif aksi == 'ubah':
+            u, galat = V.ubah_update(uid, body)
+            if not galat and u['sumber']:
+                V.pantau(u['id'])
+        elif aksi == 'hapus':
+            galat = V.hapus_update(uid)
+        elif aksi == 'kondisi':
+            _, galat = V.tambah_kondisi(uid, body.get('isi'), oleh, body.get('status') or None)
+        elif aksi == 'hapus-kondisi':
+            _, galat = V.hapus_kondisi(uid, str(body.get('kondisi') or ''))
+        elif aksi == 'pantau':
+            V.pantau()
+        elif aksi == 'nilai':
+            galat = V.mulai_nilai_latar()
+        else:
+            self.json_response(404, {'error': 'tidak_ada'})
+            return
+        if galat:
+            self.json_response(400, {'error': galat})
+            return
+        self.json_response(200, {'ok': True, **V.status_api(), 'menilai': V.nilai_berjalan()})
+
+    def vu_masuk(self):
+        for bagian in self.headers.get('Cookie', '').split(';'):
+            k, _, v = bagian.strip().partition('=')
+            if k == VU_COOKIE and velocity_update.cek_sesi(v):
+                return True
+        return False
+
+    def vu_login(self, client, body):
+        # Maks 5 sandi salah per IP per 15 menit
+        kini = time.time()
+        gagal = [t for t in VU_GAGAL.get(str(client), []) if kini - t < 900]
+        if len(gagal) >= 5:
+            VU_GAGAL[str(client)] = gagal
+            self.json_response(429, {'error': 'terlalu_banyak_percobaan'})
+            return
+        if not velocity_update.cek_sandi(body.get('sandi')):
+            VU_GAGAL[str(client)] = gagal + [kini]
+            time.sleep(1)
+            self.json_response(403, {'error': 'sandi_salah'})
+            return
+        VU_GAGAL.pop(str(client), None)
+        cookie = (f'{VU_COOKIE}={velocity_update.buat_sesi()}; Path=/api/velocity-update; '
+                  f'Max-Age={velocity_update.SESI_DETIK}; HttpOnly; SameSite=Strict')
+        self.json_response(200, {'ok': True}, cookie=cookie)
 
     def log_message(self, *_):
         pass

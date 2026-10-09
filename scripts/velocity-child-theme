@@ -45,6 +45,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from client_form import read_client_form  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
 
 API_URL = 'https://api.velocitydeveloper.co/api/v1/themes'
 ON_PROGRESS = Path('/home/On Progress')
@@ -86,6 +87,11 @@ PAKET_SLUG = {'pakete': 'velocity-pakete'}
 # mp1.velocitydeveloper.com = velocity-marketplace-child (Theme URI di style.css-nya; permintaan
 # user 2026-10-04, ghaffara.com sempat jatuh ke tema induk). Hanya instalasi baru.
 REF_SLUG = {'mp1': 'velocity-marketplace-child'}
+# Paket yang child theme-nya disimpan di repo installer (templates/<slug>), dikemas dari folder
+# itu tanpa lewat API tema. Landing Page Biasa = velocity-landing: landing satu halaman yang
+# isinya diatur lewat Customizer, diisi scripts/landing-konten (keputusan user 2026-09-30).
+PAKET_LOKAL = {'paketlandingpagebiasa': 'velocity-landing'}
+TEMA_LOKAL_DIR = HERE.parent / 'templates'
 # Kerangka desain Paket G: berkas tema lengkap dengan placeholder {{KUNCI}}.
 TEMPLATE_DIR = HERE.parent / 'templates' / 'child-theme-paket-g'
 PREFIX_RE = re.compile(r'^[a-z][a-z0-9]{1,11}$')
@@ -324,6 +330,31 @@ def zip_tembolok(slug):
     return zips[-1] if zips else None
 
 
+def versi_lokal(slug):
+    teks = (TEMA_LOKAL_DIR / slug / 'style.css').read_text(errors='replace')
+    m = re.search(r'^\s*Version:\s*([0-9A-Za-z.]+)', teks, re.M)
+    if not m:
+        raise ValueError(f'{slug}: Version tidak ada di style.css')
+    return m.group(1)
+
+
+def kemas_lokal(slug):
+    """Zip child theme dari templates/<slug>; dibuat ulang bila ada berkas yang lebih baru."""
+    folder = TEMA_LOKAL_DIR / slug
+    versi = versi_lokal(slug)
+    berkas = sorted(f for f in folder.rglob('*') if f.is_file())
+    CACHE.mkdir(parents=True, exist_ok=True)
+    dest = CACHE / f'{slug}-{versi}.zip'
+    if dest.is_file() and all(f.stat().st_mtime <= dest.stat().st_mtime for f in berkas):
+        return dest, versi
+    tmp = dest.with_suffix('.tmp')
+    with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
+        for f in berkas:
+            z.write(f, f'{slug}/{f.relative_to(folder).as_posix()}')
+    tmp.replace(dest)
+    return dest, versi
+
+
 def download(theme):
     slug, version = theme['slug'], str(theme.get('version') or '0')
     url = theme.get('package_file_url') or theme.get('package_external_url')
@@ -373,7 +404,7 @@ def paket_from_folder(domain):
     dibuat). Diperiksa 2026-09-12 atas 22 folder antrean: 5 file bernama "paket g",
     4 di antaranya memang Paket G di CRM dan sisanya paketnya kosong — tidak ada
     paket lain (E/F/Portal/Toko) yang filenya bernama begitu."""
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     if not folder.is_dir():
         return ''
     for item in folder.iterdir():
@@ -658,7 +689,7 @@ def data_klien(domain, nama=''):
     sehingga situs yang formnya tanpa "Kontak utk di web" selesai tanpa kontak sama sekali
     (cahayaratupetir.com). Email pemilik tetap penerima form pemesanan.
     """
-    folder = ON_PROGRESS / domain
+    folder = folder_klien(domain)
     try:
         form = read_client_form(folder)
     except Exception:
@@ -1145,6 +1176,23 @@ def main():
     # Override manual selalu menang: kalau PM menyebut slug, itu yang dipakai.
     paket = args.paket.strip() or paket_from_folder(domain)
     custom_paket = norm(paket) in SCAFFOLD_PAKET and not override
+    # Child theme dari repo installer (Landing Page Biasa): hanya instalasi baru — situs yang
+    # sudah ter-deploy tetap memakai tema lamanya (keputusan user 2026-09-23).
+    lokal = '' if override else PAKET_LOKAL.get(norm(paket), '')
+    if lokal and sudah_terpasang(domain):
+        out['error'] = f'{lokal}_dilewati:sudah_terpasang'
+        lokal = ''
+    if lokal:
+        out['ref'] = re.sub(r'[^a-z0-9]+', '-', paket.strip().lower()).strip('-')
+        try:
+            if args.no_download:
+                out.update(status='matched', slug=lokal, version=versi_lokal(lokal))
+            else:
+                zip_path, versi = kemas_lokal(lokal)
+                out.update(status='matched', slug=lokal, version=versi, zip=str(zip_path), sumber='lokal')
+        except Exception as e:
+            out.update(status='download_failed', slug=lokal, error=f'{type(e).__name__}: {e}'[:120])
+        return emit()
     # Paket dengan child theme baku (Paket E): slug ditentukan paketnya, form tidak dibaca.
     paket_slug = '' if override else PAKET_SLUG.get(norm(paket), '')
     if paket_slug:
@@ -1153,7 +1201,7 @@ def main():
         out['ref'] = re.sub(r'[^a-z0-9]+', '-', paket.strip().lower()).strip('-')
     ref_web = ''
     if not paket_slug and not override:
-        form = read_client_form(ON_PROGRESS / domain)
+        form = read_client_form(folder_klien(domain))
         teks_form = form['text']
         # Hanya instalasi baru: situs ter-deploy tetap memakai hasil pola seperti dulu. Paket
         # custom (G dst.) juga tidak: demo yang disebut di form-nya acuan desain untuk scaffold

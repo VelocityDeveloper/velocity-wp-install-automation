@@ -8,6 +8,8 @@ const props = defineProps({
   seri: { type: Array, required: true }, // [{ kunci, label, warna }] — urutan tumpukan dari bawah
   format: { type: Function, required: true },
   formatTanggal: { type: Function, required: true },
+  judul: { type: String, default: 'Token per hari menurut jenis penggunaan' }, // untuk aria-label
+  labelNilai: { type: Array, default: () => [] }, // tanggal yang diberi label angka di atas batang
 })
 
 const wadah = ref(null)
@@ -54,7 +56,7 @@ const batang = computed(() => props.hari.map((h, i) => {
     g.puncakY = puncakY
     g.atas = atas
   })
-  return { i, x: xTengah(i), seg: seg.filter((g) => g.tinggi > 0.5) }
+  return { i, x: xTengah(i), seg: seg.filter((g) => g.tinggi > 0.5), label: props.labelNilai.includes(h.tgl) ? { y: Math.max(11, y(dasar) - 6), teks: props.format(dasar) } : null }
 }))
 
 // Kotak bermata bulat hanya di atas (4px) — ujung data menempel ke garis dasar
@@ -105,7 +107,7 @@ const ringkas = computed(() => {
   <div ref="wadah" class="grafik">
     <svg
       :viewBox="`0 0 ${lebar} ${TINGGI}`" :height="TINGGI" role="img" tabindex="0"
-      :aria-label="`Token per hari menurut jenis penggunaan. ${ringkas}. Gunakan panah kiri/kanan untuk melihat rincian per hari.`"
+      :aria-label="`${judul}. ${ringkas}. Gunakan panah kiri/kanan untuk melihat rincian per hari.`"
       @mousemove="gerak" @mouseleave="aktif = null" @keydown="tombol" @blur="aktif = null"
     >
       <g class="kisi">
@@ -117,7 +119,8 @@ const ringkas = computed(() => {
       </g>
       <rect v-if="tip" class="sorot" :x="xTengah(aktif) - slot / 2" :y="PAD.atas" :width="slot" :height="tinggiPlot" rx="6" />
       <g v-for="b in batang" :key="b.i" :opacity="aktif == null || aktif === b.i ? 1 : 0.55">
-        <path v-for="g in b.seg" :key="g.kunci" :d="jalurSeg(b.x, lebarBatang, g.puncakY, g.tinggi, g.atas)" :fill="g.warna" />
+        <path v-for="g in b.seg" :key="g.kunci" :d="jalurSeg(b.x, lebarBatang, g.puncakY, g.tinggi, g.atas)" :style="{ fill: g.warna }" />
+        <text v-if="b.label" class="label-nilai" :x="b.x" :y="b.label.y" text-anchor="middle">{{ b.label.teks }}</text>
       </g>
     </svg>
     <div v-if="tip" class="tip" :style="tip.kanan ? { right: `${100 - tip.kiri + 2}%` } : { left: `${tip.kiri + 2}%` }" aria-hidden="true">
@@ -132,12 +135,13 @@ const ringkas = computed(() => {
 .grafik { position: relative; }
 svg { display: block; width: 100%; cursor: default; }
 svg:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 4px; border-radius: 8px; }
-.kisi line { stroke: #202746; stroke-width: 1; }
+.kisi line { stroke: var(--kisi); stroke-width: 1; }
 .kisi text { fill: var(--teks-3); font-size: 11px; font-variant-numeric: tabular-nums; }
-.sorot { fill: rgba(255, 255, 255, .04); }
+.sorot { fill: var(--sorot); }
+.label-nilai { fill: var(--teks-2); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tip {
   position: absolute; top: 8px; pointer-events: none; display: grid; gap: 3px; min-width: 190px;
-  padding: 10px 12px; border-radius: 10px; background: #0b0e20; border: 1px solid var(--garis);
+  padding: 10px 12px; border-radius: 10px; background: var(--tooltip); border: 1px solid var(--garis);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .45); font-size: 12.5px; color: var(--teks-2); z-index: 2;
 }
 .tip b { color: var(--teks); font-weight: 600; }

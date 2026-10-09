@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from folder_klien import folder_klien
 
 def situs_url(domain: str) -> str:
     """Alamat situs yang dikerjakan. Klien berhosting di luar dipasang di staging
@@ -403,7 +404,7 @@ def dokumen_klien(domain):
     try:
         sys.path.insert(0, str(HERE))
         from client_docs import collect_client_docs
-        docs = collect_client_docs(Path('/home/On Progress') / domain, 10 ** 7, 10 ** 7)
+        docs = collect_client_docs(folder_klien(domain), 10 ** 7, 10 ** 7)
         return '\n'.join(t for n, t in docs.get('sources', []) if n not in docs.get('form', ()))
     except Exception:
         return ''
@@ -414,7 +415,7 @@ def biodata_pemilik(domain):
     try:
         sys.path.insert(0, str(HERE))
         from client_form import read_client_form
-        form = read_client_form(Path('/home/On Progress') / domain)
+        form = read_client_form(folder_klien(domain))
     except Exception:
         return {}
     teks = form.get('text') or ''

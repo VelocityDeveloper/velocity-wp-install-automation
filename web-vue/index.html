@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Local PC | Velocity Developer</title>
+<script>
+  // Pasang tema sebelum halaman dilukis (lihat src/tema.js)
+  (function () { var t; try { t = localStorage.getItem('tema') } catch (e) {}
+    document.documentElement.dataset.theme = t || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') })()
+</script>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,7 +17,7 @@
 </head>
 <body>
 <div id="app"></div>
-<noscript><p style="padding:24px;font-family:sans-serif;color:#fff;background:#0b0d1c">Dashboard membutuhkan JavaScript.</p></noscript>
+<noscript><p style="padding:24px;font-family:sans-serif;color:#151a33;background:#eef1f8">Dashboard membutuhkan JavaScript.</p></noscript>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

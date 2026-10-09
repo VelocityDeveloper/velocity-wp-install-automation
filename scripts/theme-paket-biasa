@@ -295,15 +295,24 @@ def berita8_customizer(domain, isi):
     return {'warna': warna, 'sosmed': sosmed}
 
 
-def halaman_berita(nama, email):
-    """Halaman Redaksi & Pedoman Media Siber seperti demo beritab1, dipakai bila klien belum
-    mengirim materinya. Judul bagian <p><strong> (pola halaman situs berita buatan webmaster)."""
-    peran = ('Pemimpin Redaksi', 'Redaktur Pelaksana', 'Redaktur Desk', 'Kontributor', 'Fotografer', 'Desainer', 'Tim Digital')
+def halaman_berita(nama, email, susunan=None):
+    """Halaman Redaksi & Pedoman Media Siber seperti demo beritab1. Judul bagian <p><strong> (pola
+    halaman situs berita buatan webmaster). Berkas redaksi klien (scripts/redaksi-klien, keputusan user
+    2026-09-30) mengisi susunan aslinya; tanpa berkas itu peran contoh berisi "–"."""
+    if susunan:
+        bagian = [(b['peran'], b['nama']) for b in susunan['bagian']]
+    else:
+        bagian = [(p, ['–']) for p in ('Pemimpin Redaksi', 'Redaktur Pelaksana', 'Redaktur Desk', 'Kontributor',
+                                       'Fotografer', 'Desainer', 'Tim Digital')]
     redaksi = (f'<p>Berikut adalah susunan redaksi {e(nama)}:</p>\n'
-               + ''.join(f'<p><strong>{p}</strong></p>\n<ul>\n<li>–</li>\n</ul>\n' for p in peran)
+               + ''.join(f'<p><strong>{e(p)}</strong></p>\n<ul>\n' + ''.join(f'<li>{e(n)}</li>\n' for n in daftar) + '</ul>\n'
+                         for p, daftar in bagian)
+               + (f"<p><strong>Alamat Redaksi</strong></p>\n<p>{e(susunan['alamat'])}</p>\n"
+                  if susunan and susunan.get('alamat') else '')
                + (f'<p><strong>Alamat Email Redaksi</strong></p>\n<p>{tautan_email(email)}</p>\n' if email else '')
-               + '<p>Struktur redaksi ini mencakup berbagai peran dalam manajemen dan produksi konten portal berita, '
-                 'mulai dari pemimpin redaksi, redaktur desk, kontributor, fotografer, desainer, hingga tim digital.</p>')
+               + ('' if susunan else
+                  '<p>Struktur redaksi ini mencakup berbagai peran dalam manajemen dan produksi konten portal berita, '
+                  'mulai dari pemimpin redaksi, redaktur desk, kontributor, fotografer, desainer, hingga tim digital.</p>'))
     pedoman = (HERE.parent / 'templates' / 'portal-berita' / 'pedoman-media-siber.html').read_text()
     return [{'judul': 'Redaksi', 'slug': 'redaksi', 'isi': redaksi},
             {'judul': 'Pedoman Media Siber', 'slug': 'pedoman-media-siber', 'isi': pedoman}]
@@ -1158,9 +1167,8 @@ $hapus_bawaan = function ($daftar) use (&$blok_w, $bawaan, &$ch, &$tx, &$rp, &$s
 };
 $W = $d['widget']; $semua = []; $ubah = [];
 // Tema bersidebar kiri (velocity-pakete mencetak secondary-sidebar sebagai kolom kiri): isinya
-// seperti demo pakete.velocitydeveloper.com — Cari, Artikel Terbaru, Pengunjung. Dulu kosong di
-// semua situs Paket E (trimurtiekapaksi.com, permintaan user 2026-09-30); Artikel Terbaru pindah
-// ke kiri supaya tidak tampil dobel di sidebar kanan.
+// Recent Posts saja (keputusan user 2026-09-30, trimurtiekapaksi.com; dulu kosong di semua situs
+// Paket E). Artikel Terbaru pindah ke kiri supaya tidak tampil dobel di sidebar kanan.
 $kiri = (get_stylesheet() === 'velocity-pakete' && isset($wp_registered_sidebars['secondary-sidebar'])) ? 'secondary-sidebar' : '';
 $utama = isset($wp_registered_sidebars['main-sidebar']) ? 'main-sidebar' : (isset($wp_registered_sidebars['sidebar-1']) ? 'sidebar-1' : '');
 // Tema yang membawa susunan widget acuannya sendiri (velocity-toko21: Kategori, Cari Produk, Bank,
@@ -1301,13 +1309,8 @@ foreach (function_exists('velocity_tema_widget_area') ? (array) velocity_tema_wi
 }
 if ($kiri && !in_array($kiri, $ubah, true) && $boleh($sb[$kiri] ?? [])) {
     $hapus_bawaan($sb[$kiri] ?? []);
-    $n = 300; while (isset($sr[$n])) { $n++; } $sr[$n] = ['title' => 'Cari'];
-    $baru = ["search-$n"];
     $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
-    $baru[] = "recent-posts-$n";
-    $n = 300; while (isset($tx[$n])) { $n++; }
-    $tx[$n] = ['title' => 'Pengunjung', 'text' => '[velocity-statistics style="list"]', 'filter' => 'content', 'visual' => true];
-    $baru[] = "text-$n";
+    $baru = ["recent-posts-$n"];
     $sb[$kiri] = $baru; $ubah[] = $kiri; $semua = array_merge($semua, $baru);
 }
 $kaki = [['footer-widget-1', 'footer_tentang'], ['footer-widget-2', 'footer_kontak'], ['footer-widget-3', 'footer_statistik']];
@@ -1486,12 +1489,25 @@ echo 'slot_iklan: ' . wp_json_encode($slot) . "\n";
 $warna = sanitize_hex_color((string) (function_exists('velocitytheme_option') ? velocitytheme_option('primary_color', '') : get_theme_mod('primary_color', '')));
 // velocity-berita-8 mewarnai situs lewat Kirki color_theme (bawaan #740106); primary_color induk tidak
 // tampil, dulu banner faktualekonomi.com jadi biru #1e73be di tema merah (2026-10-07).
-if (get_stylesheet() === 'velocity-berita-8') { $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '#740106')); }
+// Sejak 1.3.0 (tanpa Kirki, 2026-10-08) color_theme kosong mengikuti primary_color: pakai fungsi temanya.
+if (function_exists('velocity_berita8_warna')) { $warna = sanitize_hex_color((string) velocity_berita8_warna()) ?: $warna; }
+// velocity-berita10 1.1.0 (tanpa Kirki, 2026-10-08): pola sama, bawaan #67AB01.
+elseif (function_exists('velocity_berita10_warna')) { $warna = sanitize_hex_color((string) velocity_berita10_warna()) ?: $warna; }
+// velocity-berita14 1.1.0 (tanpa Kirki, 2026-10-08): pola sama, bawaan #740106.
+elseif (function_exists('velocity_berita14_warna')) { $warna = sanitize_hex_color((string) velocity_berita14_warna()) ?: $warna; }
+// velocity-berita16 1.1.0 (tanpa Kirki, 2026-10-08): pola sama, bawaan #44AB68.
+elseif (function_exists('velocity_berita16_warna')) { $warna = sanitize_hex_color((string) velocity_berita16_warna()) ?: $warna; }
+// velocity-berita17 1.1.0 (tanpa Kirki, 2026-10-08): pola sama, bawaan #20c1eb.
+elseif (function_exists('velocity_berita17_warna')) { $warna = sanitize_hex_color((string) velocity_berita17_warna()) ?: $warna; }
+elseif (get_stylesheet() === 'velocity-berita-8') { $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '#740106')); }
 // Begitu pula 16 tema anak lain ber-Kirki color_theme (berita16 bawaan #44AB68): suarapurwakarta.com
 // 2026-10-07 banner biru #1e73be di tema hijau. Mod kosong = bawaan field Kirki.
 elseif (class_exists('Kirki') && isset(Kirki::$all_fields['color_theme'])) {
     $warna = sanitize_hex_color((string) get_theme_mod('color_theme', '')) ?: sanitize_hex_color((string) (Kirki::$all_fields['color_theme']['default'] ?? '')) ?: $warna;
 }
+// velocity-berita5 1.2.0 (tanpa Kirki): color_theme kosong mengikuti primary_color, dan bila itu masih
+// bawaan #1e73be tema tampil hijau demo; fungsi tema velocity_berita5_warna() = warna yang benar-benar tampil.
+elseif (function_exists('velocity_berita5_warna')) { $warna = sanitize_hex_color((string) velocity_berita5_warna()) ?: $warna; }
 // Kirki color_theme: "kosong" = masih bawaan (langkah 2b boleh mengisinya), "isi" = sudah dipilih.
 if (class_exists('Kirki') && isset(Kirki::$all_fields['color_theme'])) {
     echo 'color_theme_kirki: ' . (get_theme_mod('color_theme', '') === '' ? 'kosong' : 'isi') . "\n";
@@ -1835,6 +1851,11 @@ def main():
     if re.sub(r'\s', '', cfg.get('paket', '').lower()) in PAKET_CUSTOM or cfg.get('tema_fse'):
         print('tampilan: dilewati:paket_custom_atau_tema_fse')
         return 0
+    # Landing Page Biasa baru: tema velocity-landing diisi scripts/landing-konten (keputusan user
+    # 2026-09-30). Landing lama yang sudah ter-deploy masih memakai child theme klasiknya.
+    if re.sub(r'\s', '', cfg.get('paket', '').lower()) == 'paketlandingpagebiasa' and not SITUS_LAMA:
+        print('tampilan: dilewati:landing_page (landing-konten)')
+        return 0
     simpanan = GENERATED_DIR / f'{domain}-tema.json'
     if not simpanan.is_file():
         subprocess.run([sys.executable, str(HERE / 'paket-g-konten'), str(manifest)], check=False)
@@ -2006,7 +2027,9 @@ def main():
     iklan = []
     if data['berita']:
         # Halaman Redaksi & Pedoman Media Siber untuk semua tema berita (user 2026-09-30).
-        data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'])
+        # Berkas redaksi di folder klien (REDAKSI.docx dsb.) -> susunan asli (user 2026-09-30).
+        susunan = muat('redaksi_klien', HERE / 'redaksi-klien').susunan(domain)
+        data['berita_halaman'] = halaman_berita(data['nama'], kontak['email'], susunan)
     if data['berita'] and not coba:
         # Banner "Ruang Iklan" untuk setiap ukuran slot iklan tema berita aktif.
         data['berita_iklan'], warna_tema, warna_kirki = slot_iklan(cfg, domain)

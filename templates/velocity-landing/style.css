@@ -1,0 +1,14 @@
+/*
+Theme Name:   Velocity Landing
+Theme URI:    https://velocitydeveloper.com/
+Description:  Child theme landing page satu halaman untuk Velocity. Seluruh isi beranda (teks, gambar, ikon, paket harga, FAQ, warna, font, WhatsApp, footer) diatur lewat Tampilan → Sesuaikan → Landing Page, tanpa page builder.
+Author:       Velocity Developer
+Author URI:   https://velocitydeveloper.com/
+Template:     velocity
+Version:      1.2.0
+Requires PHP: 7.4
+Text Domain:  velocity-landing
+License:      GPL-2.0-or-later
+*/
+
+/* Gaya tampilan ada di assets/css/landing.css. */

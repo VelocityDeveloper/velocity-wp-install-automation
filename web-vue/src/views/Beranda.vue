@@ -75,15 +75,35 @@ const cron = computed(() => {
 })
 
 const LAYANAN = [
-  { ke: '/installer', label: 'Website Installer', ket: 'Install dan pantau website dari manifest.', ikon: 'installer' },
+  { ke: '/installer/wordpress', label: 'Website Installer', ket: 'Install dan pantau website dari manifest.', ikon: 'installer' },
   { ke: '/server', label: 'Manage Server', ket: 'Kelola server internal, shutdown & restart.', ikon: 'server' },
   { ke: '/paket', label: 'Package Manager', ket: 'Tema & plugin dari API Velocity.', ikon: 'paket' },
   { ke: '/ai', label: 'Manage Model', ket: 'Model AI untuk generate konten.', ikon: 'ai' },
   { url: '/n8n/', label: 'n8n', ket: 'Otomasi workflow dan integrasi aplikasi.', ikon: 'n8n' },
-  { url: '/hermes/', label: 'Hermes', ket: 'Asisten AI internal untuk tim.', ikon: 'hermes' },
   { url: '/files/', label: 'File Manager', ket: 'Penyimpanan dan berbagi file kantor.', ikon: 'berkas' },
   { url: '/newvdnet/', label: 'New VDNet', ket: 'CRM Velocity (dev :3005/:8005), belum untuk tim.', ikon: 'crm', dev: true },
 ]
+
+// Kartu ringkas Report Harian (/brain/laporan-harian.json, LAN-only — kartu disembunyikan bila tak bisa dimuat)
+const report = pakaiPolling('/brain/laporan-harian.json', 300000)
+const lap = computed(() => report.data.value?.laporan?.[0])
+const BULAN_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
+const tglLaporan = computed(() => {
+  if (!lap.value) return ''
+  const d = new Date(`${lap.value.tanggal}T00:00:00`)
+  return `${HARI_ID[d.getDay()]}, ${d.getDate()} ${BULAN_ID[d.getMonth()]}`
+})
+const NILAI_DIV = { baik: ['baik', 'Baik'], cukup: ['waspada', 'Cukup'], perlu_perhatian: ['bahaya', 'Perlu perhatian'] }
+const PRIO = [['tinggi', 'Tinggi', 'bahaya'], ['sedang', 'Sedang', 'waspada'], ['rendah', 'Rendah', 'abu']]
+const nilaiDivisi = computed(() => (lap.value?.per_divisi || []).filter((d) => NILAI_DIV[d.penilaian]))
+const hitungPrio = computed(() => {
+  const h = { tinggi: 0, sedang: 0, rendah: 0 }
+  for (const k of lap.value?.kurang || []) h[k.prioritas] = (h[k.prioritas] || 0) + 1
+  return h
+})
+const kurangTinggi = computed(() => (lap.value?.kurang || []).filter((k) => k.prioritas === 'tinggi').slice(0, 3))
+const picTeks = (k) => (k.pic && k.pic !== '-' ? k.pic : '')
 
 // Kotak Claude Brain hanya bila /brain/ bisa diakses (khusus jaringan kantor)
 const brainAda = ref(false)
@@ -119,6 +139,39 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
         </article>
       </template>
       <article v-else v-for="i in 4" :key="i" class="kartu stat-kartu kerangka-muat"><span /><span /></article>
+    </section>
+
+    <section v-if="lap" class="kartu report" aria-labelledby="judul-report">
+      <div class="kartu-judul">
+        <div>
+          <h2 id="judul-report">Report harian</h2>
+          <p class="redup">{{ tglLaporan }} · {{ lap.angka.sesi }} sesi · {{ lap.angka.orang }} orang · {{ lap.angka.pesan_user }} permintaan</p>
+        </div>
+        <RouterLink :to="{ path: '/report', query: { tanggal: lap.tanggal } }" class="tautan-report">Buka report →</RouterLink>
+      </div>
+      <div class="report-isi">
+        <div class="report-kiri">
+          <p class="report-ringkas">{{ lap.ringkasan }}</p>
+          <div v-if="nilaiDivisi.length" class="report-divisi" aria-label="Penilaian divisi">
+            <RouterLink v-for="d in nilaiDivisi" :key="d.divisi" :to="{ path: '/report', query: { tanggal: lap.tanggal, tab: 'divisi', divisi: d.divisi } }" class="chip-div">
+              {{ d.divisi }} <span class="pil kecil" :class="NILAI_DIV[d.penilaian][0]">{{ NILAI_DIV[d.penilaian][1] }}</span>
+            </RouterLink>
+          </div>
+        </div>
+        <div class="report-kanan">
+          <div class="report-prio">
+            <RouterLink v-for="[k, l, w] in PRIO" :key="k" :to="{ path: '/report', query: { tanggal: lap.tanggal, tab: 'kurang', prioritas: k } }" class="prio" :class="w">
+              <b>{{ hitungPrio[k] }}</b><span><i />{{ l }}</span>
+            </RouterLink>
+          </div>
+          <ul v-if="kurangTinggi.length" class="report-tinggi">
+            <li v-for="(k, i) in kurangTinggi" :key="i">
+              <RouterLink :to="{ path: '/report', query: { tanggal: lap.tanggal, tab: 'kurang', prioritas: 'tinggi' } }">{{ k.judul }}</RouterLink>
+              <small v-if="picTeks(k)" class="redup"> · {{ picTeks(k) }}</small>
+            </li>
+          </ul>
+        </div>
+      </div>
     </section>
 
     <div class="baris-2">
@@ -195,6 +248,30 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 
 <style scoped>
 .beranda { display: grid; gap: 18px; }
+.report { display: grid; gap: 14px; }
+.report .kartu-judul p { margin: 2px 0 0; }
+.tautan-report { color: var(--aksen-terang); font-weight: 600; font-size: 13.5px; white-space: nowrap; text-decoration: none; }
+.tautan-report:hover { text-decoration: underline; }
+.report-isi { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 22px; }
+.report-kiri, .report-kanan { display: grid; gap: 12px; align-content: start; }
+.report-ringkas { margin: 0; color: var(--teks-2); line-height: 1.6; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.report-divisi { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-div { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px; border: 1px solid var(--tag-garis); background: var(--tag); color: var(--tag-teks); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+.chip-div:hover { border-color: var(--garis-kuat); }
+.pil.kecil { font-size: 11px; padding: 1px 7px; }
+.report-prio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.prio { display: grid; gap: 2px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--garis); background: var(--kartu-2); color: var(--teks-2); text-decoration: none; }
+.prio:hover { border-color: var(--garis-kuat); }
+.prio b { font-size: 22px; color: var(--teks); font-variant-numeric: tabular-nums; }
+.prio span { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+.prio i { width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }
+.prio.bahaya i { background: var(--bahaya); }
+.prio.waspada i { background: var(--waspada); }
+.report-tinggi { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13.5px; line-height: 1.45; }
+.report-tinggi li { padding-left: 14px; position: relative; }
+.report-tinggi li::before { content: ''; position: absolute; left: 0; top: .5em; width: 6px; height: 6px; border-radius: 50%; background: var(--bahaya); }
+.report-tinggi a { color: var(--teks); text-decoration: none; }
+.report-tinggi a:hover { text-decoration: underline; }
 .kepala { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .kepala h1 { font-size: 26px; }
 .kepala p { margin: 4px 0 0; font-size: 13.5px; }
@@ -215,7 +292,7 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 .kartu-judul p { margin: 2px 0 0; }
 .rentang { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); }
 .rentang button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--teks-2); cursor: pointer; font-size: 12.5px; font-weight: 600; }
-.rentang button:hover { color: #fff; }
+.rentang button:hover { color: var(--teks-kuat); }
 .rentang button.on { background: var(--aksen); color: #fff; }
 .legenda { display: flex; gap: 16px; margin: -4px 0 6px; font-size: 12.5px; color: var(--teks-2); }
 .legenda span { display: inline-flex; align-items: center; gap: 6px; }
@@ -244,7 +321,7 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 
 @media (max-width: 1200px) {
   .stat { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .baris-2, .baris-3 { grid-template-columns: minmax(0, 1fr); }
+  .baris-2, .baris-3, .report-isi { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {
   .stat { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }

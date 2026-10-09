@@ -8,10 +8,14 @@ Per fitur (urutan fitur.json, status antre/revisi):
   1. tarik commit terbaru bila salinan kerja bersih; tunggu antrean agen bersama (desain-claude.lock)
   2. `claude -p` (Opus terbaru) di /home/<app> dengan tugas templates/laravel/agen-fitur.md;
      alat dibatasi (baca/tulis berkas + php artisan/composer/npm/pint/pest/git baca), tanpa web, tanpa commit
-  3. runner memverifikasi SENDIRI: pint, migrate dev, `php artisan test`, `npm run build`, dev /login HTTP 200
+  3. runner memverifikasi SENDIRI: pint, migrate dev, `php artisan test`, seeder setiap model (migrate:fresh --seed
+     di SQLite sementara, templates/laravel/cek-seeder.php), `npm run build`, dev /login HTTP 200
   4. lolos -> commit `feat(Fxx): ...` + push, status `dites` + laporan agen per kriteria (bahan checklist webmaster)
      gagal -> status `gagal` + galat, perubahan dibiarkan (belum di-commit), agen berhenti
 Berhenti juga bila PM/webmaster menekan Hentikan (dicek di antara fitur).
+Gerbang review (config fitur_gerbang_review, bawaan 3): sesudah N fitur pertama (fondasi) dikerjakan, agen tidak
+memulai fitur berikutnya selama salah satunya masih `dites` (belum direview) -> status `menunggu_review`. Revisi tetap
+dikerjakan. Review OK/Revisi di dashboard melanjutkan agen otomatis (L.lanjut_sesudah_review).
 Semua fitur selesai -> DEPLOY DEV sebelum Review: salinan kerja wajib bersih & sudah di-push, lalu
 /root/<app>/deploy-dev.sh (composer install, npm ci, build, migrate, restart layanan) dan GET /login harus 200.
 Hasil di proyek.json agen.deploy; tahap Review baru terbuka bila deploy terakhir lolos. Gagal -> `deploy_gagal`.
@@ -33,8 +37,10 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -46,11 +52,13 @@ sys.path.insert(0, str(HERE))
 import laravel_proyek as L  # noqa: E402
 
 TUGAS = HERE.parent / 'templates' / 'laravel' / 'agen-fitur.md'
-MENIT_MIN, MENIT_MAKS = 30, 150
+# Batas waktu satu sesi agen = jam_agen x3, dijepit 30–90 menit. Data nyata (audit 1 Okt, 26 fitur): median 8,5 menit,
+# 90% fitur <= 19 menit, terlama 52 menit (6 sesi ulang) — dulu 150 menit hanya memperlambat deteksi agen macet.
+MENIT_MIN, MENIT_MAKS = 30, 90
 # Jam mesin Local PC (nyala 07.00–22.00): fitur harus selesai sebelum BATAS_MULAI, agen dipotong di BATAS_KERAS
 BATAS_MULAI = (21, 45)
 BATAS_KERAS = (21, 55)
-PERKIRAAN_BAWAAN = 45  # menit per fitur sebelum ada data aktual
+PERKIRAAN_BAWAAN = 20  # menit per fitur bila belum ada data aktual sama sekali (lihat L.kalibrasi_agen)
 KUOTA_RE = re.compile(r'usage limit|limit reached|rate.?limit|overloaded|\b429\b', re.I)
 SKEMA = {
     'type': 'object', 'required': ['ringkasan', 'kriteria', 'cara_cek', 'catatan_webmaster', 'berkas'],
@@ -95,6 +103,58 @@ def ekor(teks, n=40):
     return '\n'.join(teks.splitlines()[-n:])
 
 
+LOCK_BASI_MENIT = 10  # operasi index git normal selesai dalam detik; lock setua ini pasti tertinggal
+
+
+def pemegang_git(app_dir):
+    """PID yang mungkin sedang memakai repo: proses git ber-cwd di app_dir, atau proses apa pun yang membuka
+    berkas di app_dir/.git. Proses ber-cwd app_dir lain (artisan serve, queue:work) tidak dihitung."""
+    akar = os.path.realpath(app_dir)
+    dot_git = os.path.join(akar, '.git')
+    hasil = []
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            cwd = os.path.realpath(f'/proc/{pid}/cwd')
+            nama = Path(f'/proc/{pid}/comm').read_text().strip()
+            if nama.startswith('git') and (cwd == akar or cwd.startswith(akar + '/')):
+                hasil.append(f'{pid}:{nama}')
+                continue
+            for fd in os.listdir(f'/proc/{pid}/fd'):
+                tujuan = os.readlink(f'/proc/{pid}/fd/{fd}')
+                if tujuan == dot_git or tujuan.startswith(dot_git + '/'):
+                    hasil.append(f'{pid}:{nama}')
+                    break
+        except OSError:
+            continue  # proses sudah selesai / tidak bisa dibaca
+    return hasil
+
+
+def lepas_lock_basi(app_dir):
+    """.git/index.lock tertinggal (git mati di tengah jalan: mesin mati, restart layanan) membuat setiap
+    `git add/commit` gagal berulang dan agen tidak bisa menghapusnya (project-017 F05, 2026-10-07).
+    Hanya dipindah (bukan dihapus) bila lock sudah >= LOCK_BASI_MENIT dan tak ada proses yang memakai repo."""
+    lock = Path(app_dir) / '.git' / 'index.lock'
+    try:
+        umur = (time.time() - lock.stat().st_mtime) / 60
+    except FileNotFoundError:
+        return
+    if umur < LOCK_BASI_MENIT:
+        log(f'index.lock ada ({umur:.1f} menit) — terlalu baru untuk dianggap basi, dibiarkan.')
+        return
+    pemakai = pemegang_git(app_dir)
+    if pemakai:
+        log(f'index.lock ada ({umur:.0f} menit) tetapi repo masih dipakai {", ".join(pemakai)} — dibiarkan.')
+        return
+    tujuan = lock.with_name(f"index.lock.basi-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    try:
+        lock.rename(tujuan)
+        log(f'index.lock basi ({umur:.0f} menit, tanpa proses pemakai) dipindah ke {tujuan.name}.')
+    except FileNotFoundError:
+        pass  # sudah dilepas pemiliknya
+
+
 def ringkas_langkah(blok):
     if blok.get('type') == 'text':
         teks = ' '.join(str(blok.get('text') or '').split())
@@ -121,19 +181,153 @@ def menit_sampai(jam_menit):
 
 
 def perkiraan_menit(fitur):
-    """Perkiraan lama satu fitur dari data aktual project ini (rata-rata x1,2), bawaan 45 menit."""
+    """Perkiraan lama satu fitur dari data aktual project ini (rata-rata x1,2); project baru memakai median semua
+    project x1,5 (L.kalibrasi_agen), bawaan 20 menit."""
     aktual = [float(x['hasil']['menit']) for x in fitur
               if x.get('status') in ('dites', 'ok') and (x.get('hasil') or {}).get('menit')]
-    return max(15, sum(aktual) / len(aktual) * 1.2) if aktual else PERKIRAAN_BAWAAN
+    if aktual:
+        return max(15, sum(aktual) / len(aktual) * 1.2)
+    k = L.kalibrasi_agen()
+    return max(15, k['menit_median'] * 1.5) if k else PERKIRAAN_BAWAAN
 
 
-def prompt_fitur(p, fitur, f):
+def bagian_md(teks, tingkat):
+    """Pecah Markdown per judul tingkat tertentu -> [(judul, isi lengkap termasuk baris judul)]; [('', pembuka)] di depan."""
+    tanda, hasil, judul, isi = '#' * tingkat + ' ', [], '', []
+    for baris in teks.splitlines():
+        if baris.startswith(tanda):
+            hasil.append((judul, '\n'.join(isi)))
+            judul, isi = baris[len(tanda):].strip(), [baris]
+        else:
+            isi.append(baris)
+    hasil.append((judul, '\n'.join(isi)))
+    return hasil
+
+
+def kata(teks):
+    return {k for k in re.findall(r'[a-z0-9_]{4,}', teks.lower())}
+
+
+def cocok(bagian, kf, maks):
+    """Bagian yang judulnya paling bersinggungan dengan kata fitur: minimal 2 kata sama (atau semua kata judul bila
+    judulnya pendek) dan ≥ 50% kata judul; ambil `maks` skor tertinggi."""
+    nilai = []
+    for j, isi in bagian:
+        kj = kata(j) - {'fase', 'admin', 'halaman', 'data', 'fitur'}
+        sama = len(kj & kf)
+        if kj and sama >= min(2, len(kj)) and sama * 2 >= len(kj):
+            nilai.append((sama / len(kj) + sama * 0.1, j, isi))
+    return [(j, isi) for _, j, isi in sorted(nilai, key=lambda x: -x[0])[:maks]]
+
+
+def bahan_dokumen(app_dir, fitur, f):
+    """Potongan PRD/DESIGN/DATABASE/FLOWCHART yang relevan untuk satu fitur, supaya agen tidak membaca dokumen utuh
+    di tiap sesi (konteks per giliran ±100 rb token, 3 Okt). Fondasi tetap dapat DESIGN lengkap."""
+    baca = lambda nama: (app_dir / nama).read_text(errors='ignore') if (app_dir / nama).is_file() else ''
+    prd, design, db, alur = baca('docs/PRD.md'), baca('DESIGN.md'), baca('docs/DATABASE.md'), baca('docs/FLOWCHART.md')
+    if not (prd or design or db):
+        return ''
+    teks_fitur = ' '.join([f['judul'], f.get('deskripsi') or ''] + [k['teks'] for k in f['kriteria']]
+                          + [h['halaman'] for h in f.get('halaman') or []])
+    kf = kata(teks_fitur)
+    fondasi = fitur and fitur[0]['id'] == f['id'] or 'fondasi' in f['judul'].lower()
+    out = []
+    # PRD: pembuka (ringkasan) + Peran pengguna; fitur PRD dipilih yang judulnya bersinggungan dengan fitur ini
+    if prd:
+        b2 = bagian_md(prd, 2)
+        pilih = [b2[0][1].strip()] + [isi.strip() for j, isi in b2[1:] if j.lower().startswith('peran pengguna')]
+        for j, isi in b2[1:]:
+            if j.lower().startswith('fitur'):
+                pilih += [i.strip() for _, i in cocok(bagian_md(isi, 3)[1:], kf, 3)]
+        out.append('### docs/PRD.md (potongan)\n\n' + '\n\n'.join(x for x in pilih if x))
+    # DESIGN: Fondasi lengkap; fitur lain cukup token (front matter) + Do's and Don'ts
+    if design:
+        if fondasi:
+            out.append('### DESIGN.md (lengkap, fitur Fondasi)\n\n' + design.strip())
+        else:
+            # Token sudah diterapkan ke tema oleh Fondasi: cukup aturan Do's & Don'ts, ikuti komponen/kelas yang ada
+            dd = [isi.strip() for j, isi in bagian_md(design, 2)[1:] if j.lower().startswith('do')]
+            out.append('### DESIGN.md (aturan; token warna/font/radius sudah diterapkan di tema oleh Fondasi — pakai '
+                       'kelas & komponen yang ada, Grep DESIGN.md bila butuh nilai token)\n\n' + '\n\n'.join(dd))
+    # DATABASE: daftar semua tabel + rincian tabel yang disebut fitur ini + aturan integritas
+    if db:
+        tabel = [(j, isi) for jj, blok in bagian_md(db, 2)[1:] if jj.lower().startswith('tabel')
+                 for j, isi in bagian_md(blok, 3)[1:]]
+        nama = [j.strip('` ').split()[0] for j, _ in tabel if j.strip('` ')]
+        dipakai = [isi.strip() for (j, isi), n in zip(tabel, nama) if n.lower() in kf or n.rstrip('s').lower() in kf
+                   or any(n.lower() in k for k in kf)]
+        aturan = [isi.strip() for j, isi in bagian_md(db, 2)[1:] if j.lower().startswith('aturan')]
+        if not tabel and len(db) <= 15000:  # format bebas tanpa ### per tabel: kecil -> sertakan utuh
+            dipakai, aturan, nama = [db.strip()], [], []
+        out.append('### docs/DATABASE.md (potongan)\n\nSemua tabel: ' + ', '.join(f'`{n}`' for n in nama)
+                   + '\n\n' + ('\n\n'.join(dipakai) if dipakai else '(tidak ada tabel yang disebut langsung oleh fitur ini; '
+                                 'Grep DATABASE.md untuk tabel yang dibutuhkan)') + ('\n\n' + '\n\n'.join(aturan) if aturan else ''))
+    # FLOWCHART: hanya proses yang judulnya bersinggungan dengan fitur ini
+    if alur:
+        pilih = [isi.strip() for _, isi in cocok([(j, i) for j, i in bagian_md(alur, 2)[1:]
+                                                 if not j.lower().startswith('alur umum')], kf, 2)]
+        if pilih:
+            out.append('### docs/FLOWCHART.md (potongan)\n\n' + '\n\n'.join(pilih))
+    return '## Bahan dokumen (potongan relevan)\n\n' + '\n\n'.join(out) + '\n'
+
+
+# Contoh tampilan untuk klien (proyek/<id>/contoh, dibuat di tahap Brief) = acuan visual agen (permintaan user 5 Okt:
+# beranda project-003 dibangun tanpa melihat contoh). Kata kunci teks fitur → halaman contoh yang disertakan.
+CONTOH_KATA = {'index.html': ('beranda', 'landing', 'halaman depan', 'halaman publik', 'homepage', 'welcome'),
+               'dashboard.html': ('dashboard',)}
+
+
+def bahan_contoh(p, app_dir, fitur, f):
+    """Salin contoh tampilan terbaru ke docs/contoh/ (tidak di-commit) dan beri tahu agen halaman mana yang jadi acuan;
+    beri peringatan bila brief berubah sesudah contoh dibuat."""
+    slug = p.get('slug')
+    src = L.folder_contoh(slug) if slug else None
+    if not src or not (src / 'index.html').is_file():
+        return ''
+    info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
+    if info.get('platform', 'laravel') != 'laravel':
+        return ''
+    teks = ' '.join([f['judul'], f.get('deskripsi') or ''] + [k['teks'] for k in f['kriteria']]
+                    + [h['halaman'] for h in f.get('halaman') or []]).lower()
+    fondasi = fitur and fitur[0]['id'] == f['id'] or 'fondasi' in f['judul'].lower()
+    halaman = [n for n, kk in CONTOH_KATA.items() if (src / n).is_file() and (fondasi or any(k in teks for k in kk))]
+    if not halaman:
+        return ''
+    tujuan = app_dir / 'docs' / 'contoh'
+    shutil.rmtree(tujuan, ignore_errors=True)
+    shutil.copytree(src, tujuan)
+    exclude = app_dir / '.git' / 'info' / 'exclude'
+    if exclude.parent.is_dir() and '/docs/contoh/' not in (exclude.read_text() if exclude.is_file() else ''):
+        with exclude.open('a') as fh:
+            fh.write('\n/docs/contoh/\n')
+    usang = L.info_versi_brief(slug, p)['keluaran'].get('contoh', {}).get('usang') or []
+    waktu = datetime.fromtimestamp(info['waktu']).strftime('%d %b %H:%M') if info.get('waktu') else '?'
+    log(f"contoh tampilan disertakan: {', '.join(halaman)} (brief v{info.get('brief_versi', '?')}"
+        + (f", usang: {', '.join(usang)})" if usang else ')'))
+    t = ('### Contoh tampilan untuk klien (acuan visual — WAJIB diikuti)\n\n'
+         f"Mockup yang sudah dipamerkan ke klien (dibuat {waktu}, brief v{info.get('brief_versi', '?')}), disalin ke "
+         '`docs/contoh/` (tidak di-commit). Read berkas berikut sebelum membuat tampilannya:\n'
+         + '\n'.join(f"- `docs/contoh/{n}` — {L.CONTOH_HALAMAN.get(n, n)}" for n in halaman) + '\n\n'
+         'Tiru susunan seksi, urutan, komposisi hero/kolom, hierarki teks, jarak, dan gaya komponennya ke Vue memakai '
+         'komponen & token tema yang ada (jangan menyalin CSS mentah). Warna/font/radius tetap mengikuti token DESIGN.md '
+         'yang berlaku; teks & angka di mockup hanya ilustrasi (ambil dari data/terjemahan aplikasi); pita '
+         '"Pratinjau desain" jangan ditiru. Gambar di `docs/contoh/aset/` boleh dipakai bila dibutuhkan.\n')
+    if usang:
+        t += (f"\n⚠ Contoh ini dibuat SEBELUM perubahan brief berikut: {', '.join(usang)}. Bila bertentangan (warna, "
+              'menu, isi seksi), ikuti Bahan dokumen di atas; sisanya tetap ikuti susunan contoh.\n')
+    return t
+
+
+def prompt_fitur(p, fitur, f, app_dir=None):
     kriteria = '\n'.join(f"{i}. {k['teks']}" for i, k in enumerate(f['kriteria'], 1))
     revisi = ''
     if f.get('revisi'):
         revisi = '## REVISI dari webmaster (wajib ditangani; fitur ini sudah pernah dikerjakan & di-commit)\n\n' + '\n'.join(
             f"- ({datetime.fromtimestamp(r['waktu']).strftime('%d %b %H:%M')}, {r['oleh']}) {r['catatan']}"
             for r in f['revisi'][-5:]) + '\n'
+        if any(k.get('revisi') for k in f['kriteria']):
+            revisi += ('\nSetiap revisi juga tercantum di kriteria terima sebagai "Revisi N: …" — laporkan status & buktinya '
+                       'seperti kriteria lain.\n')
     galat = ''
     if (f.get('hasil') or {}).get('galat'):
         galat = ('## Percobaan sebelumnya GAGAL diverifikasi runner\n\nPerubahan percobaan itu masih ada (belum di-commit). '
@@ -142,8 +336,14 @@ def prompt_fitur(p, fitur, f):
         galat += ('## Sesi sebelumnya untuk fitur ini TERPUTUS (mesin dimatikan)\n\nPerubahan yang belum di-commit masih ada. '
                   'Periksa `git status` / `git diff` dulu, lanjutkan dari situ, jangan mulai dari nol.\n')
     selesai = '\n'.join(f"- {x['id']} {x['judul']}" for x in fitur if x['status'] in ('dites', 'ok')) or '- (belum ada)'
+    halaman = ''
+    if f.get('halaman'):
+        halaman = ('**Halaman & peran yang wajib ada di fitur ini** (dari Matriks peran × halaman di PRD; setiap peran '
+                   'harus bisa membuka halamannya dari menu navigasi peran itu, dengan hak akses sesuai matriks):\n'
+                   + '\n'.join(f"- {h['halaman']}: {', '.join(h['peran'])}" for h in f['halaman']) + '\n')
     ganti = {'{{JUDUL}}': p['judul'], '{{ID}}': f['id'], '{{JUDUL_FITUR}}': f['judul'], '{{DESKRIPSI}}': f.get('deskripsi') or '',
-             '{{KRITERIA}}': kriteria, '{{REVISI}}': revisi, '{{GALAT_LALU}}': galat, '{{SELESAI}}': selesai}
+             '{{KRITERIA}}': kriteria, '{{HALAMAN}}': halaman, '{{REVISI}}': revisi, '{{GALAT_LALU}}': galat, '{{SELESAI}}': selesai,
+             '{{BAHAN}}': (bahan_dokumen(app_dir, fitur, f) + bahan_contoh(p, app_dir, fitur, f)) if app_dir else ''}
     t = TUGAS.read_text()
     for k, v in ganti.items():
         t = t.replace(k, v)
@@ -234,6 +434,32 @@ def hasil_tes(keluaran):
     return (int(m.group(2)), int(m.group(1) or 0)) if m else (0, 0)
 
 
+def cek_seeder(app_dir, info):
+    """Setiap model di app/Models wajib terisi oleh seeder (templates/laravel/cek-seeder.php).
+    migrate:fresh --seed di SQLite sementara, jadi database dev tidak tersentuh. -> galat ('' = lolos)"""
+    log('verifikasi: seeder setiap model (migrate:fresh --seed di SQLite sementara)')
+    with tempfile.TemporaryDirectory(prefix='cek-seeder-') as tmp:
+        db = Path(tmp, 'seed.sqlite')
+        db.touch()
+        env = dict(os.environ, DB_CONNECTION='sqlite', DB_DATABASE=str(db), DB_URL='', APP_ENV='local',
+                   MAIL_MAILER='array', CACHE_STORE='array', SESSION_DRIVER='array', QUEUE_CONNECTION='sync')
+        kode, keluar = sh(['php', str(HERE.parent / 'templates/laravel/cek-seeder.php')], app_dir, 600, env)
+    hasil = {}
+    for baris in reversed(keluar.splitlines()):
+        if baris.startswith('{'):
+            try:
+                hasil = json.loads(baris)
+                break
+            except ValueError:
+                pass
+    info['seeder'] = hasil.get('jumlah') or {}
+    if kode == 0 and hasil.get('ok'):
+        log(f"  seeder: {len(info['seeder'])} model terisi")
+        return ''
+    return 'Cek seeder gagal: ' + (hasil.get('galat') or ekor(keluar, 30)) + \
+        '\nSetiap model wajib punya factory + seeder yang dipanggil DatabaseSeeder (lihat CLAUDE.md, bagian Seeder).'
+
+
 def verifikasi(app, app_dir, pengguna, port):
     """Runner memeriksa sendiri hasil agen. -> (lolos, info, galat)"""
     info = {}
@@ -251,6 +477,10 @@ def verifikasi(app, app_dir, pengguna, port):
             log(f"  tes: {info['tes_lulus']} lolos, {info['tes_gagal']} gagal")
         if kode != 0:
             return False, info, f'$ {perintah} (kode {kode})\n{ekor(keluar, 60)}'
+        if nama == 'tes':
+            galat = cek_seeder(app_dir, info)
+            if galat:
+                return False, info, galat
     sh(['chown', '-R', f'{pengguna}:{pengguna}', 'storage', 'bootstrap/cache'], app_dir)
     sh(['php', 'artisan', 'optimize:clear', '-q'], app_dir)
     sh(['chown', '-R', f'{pengguna}:{pengguna}', 'storage', 'bootstrap/cache'], app_dir)
@@ -361,6 +591,12 @@ def main():
             if not deploy_dev(slug, app, app_dir, port):
                 akhir = 'deploy_gagal'
             break
+        gerbang = L.gerbang_review(fitur)
+        if gerbang and f['status'] != 'revisi' and f['id'] not in [x['id'] for x in fitur[:L.konfig_jadwal()['fitur_gerbang_review']]]:
+            log(f"Fitur fondasi {', '.join(gerbang)} belum direview webmaster. Agen berhenti sebelum {f['id']} supaya "
+                f"masukan soal struktur dasar masuk dulu; lanjut otomatis sesudah semuanya direview (OK atau Revisi).")
+            akhir = 'menunggu_review'
+            break
         fid = f['id']
         perkiraan = perkiraan_menit(fitur)
         jatah = L.jatah_agen_harian(slug) * 60
@@ -383,6 +619,7 @@ def main():
         L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).update(status='jalan', mulai=L.sekarang()))
         L.ubah_proyek(slug, lambda x: x['agen'].update(fitur=fid, deploy=None))
 
+        lepas_lock_basi(app_dir)
         kode, keluar = sh(['git', 'status', '--porcelain', '--untracked-files=no'], app_dir)
         if kode == 0 and not keluar:
             kode, keluar = sh(['git', 'pull', '-q', '--ff-only', 'origin', 'main'], app_dir, 120)
@@ -390,7 +627,7 @@ def main():
         else:
             log('Salinan kerja punya perubahan belum di-commit; dilanjutkan tanpa pull.')
 
-        menit = int(min(MENIT_MAKS, max(MENIT_MIN, float(f.get('jam_agen') or 1) * 60 * 2), menit_sampai(BATAS_KERAS)))
+        menit = int(min(MENIT_MAKS, max(MENIT_MIN, float(f.get('jam_agen') or 1) * 60 * 3), menit_sampai(BATAS_KERAS)))
         L.DASAR.mkdir(parents=True, exist_ok=True)
         with open('/var/lib/velocity/desain-claude.lock', 'w') as kunci:
             try:
@@ -398,7 +635,7 @@ def main():
             except BlockingIOError:
                 log('Menunggu antrean agen Claude (agen lain sedang bekerja)…')
                 fcntl.flock(kunci, fcntl.LOCK_EX)
-            hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f), menit, env)
+            hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f, app_dir), menit, env)
         catat_pemakaian(DC, slug, fid, hasil)
         hari_ini = datetime.now().strftime('%Y-%m-%d')
         L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).setdefault('riwayat_menit', []).append(
@@ -431,6 +668,7 @@ def main():
 
         commit = ''
         if not galat:
+            lepas_lock_basi(app_dir)
             sh(['git', 'add', '-A'], app_dir)
             pesan = f"feat({fid.lower()}): {f['judul']}" + (' (revisi)' if adalah_revisi else '') + \
                 f"\n\n{laporan['ringkasan']}\n\nDikerjakan agen Claude Code (installer Velocity)."

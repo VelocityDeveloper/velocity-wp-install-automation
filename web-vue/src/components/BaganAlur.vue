@@ -49,7 +49,7 @@ watch(() => [props.row, props.galat], gambar)
 .bagan :deep(.flow-legenda) { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 10px 0 0; color: var(--teks-3); font-size: 12px; }
 .bagan :deep(.alur-kanvas) {
   overflow-x: auto; overflow-y: hidden; border: 1px solid var(--garis); border-radius: 12px; cursor: grab;
-  background: var(--panel) radial-gradient(circle, #232a4a 1px, transparent 1.5px) 0 0 / 22px 22px;
+  background: var(--panel) radial-gradient(circle, var(--garis) 1px, transparent 1.5px) 0 0 / 22px 22px;
   scrollbar-color: var(--garis) var(--panel);
 }
 .bagan :deep(.alur-kanvas.geser) { cursor: grabbing; user-select: none; }
@@ -81,7 +81,7 @@ watch(() => [props.row, props.galat], gambar)
 .bagan :deep(.node.menunggu .node-nama), .bagan :deep(.node.cabang .node-ikon), .bagan :deep(.node.cabang .node-nama),
 .bagan :deep(.node-cek.cabang .node-ikon), .bagan :deep(.node-cek.cabang .cek-nama),
 .bagan :deep(.node-cek.menunggu .node-ikon), .bagan :deep(.node-cek.menunggu .cek-nama) { color: var(--teks-3); }
-.bagan :deep(.edge) { fill: none; stroke: #2e3760; stroke-width: 2; }
+.bagan :deep(.edge) { fill: none; stroke: var(--garis-kuat); stroke-width: 2; }
 .bagan :deep(.edge.selesai) { stroke: var(--baik); stroke-opacity: .7; }
 .bagan :deep(.edge.gagal) { stroke: var(--bahaya); }
 .bagan :deep(.edge.cabang) { stroke: var(--garis); stroke-dasharray: 3 5; }

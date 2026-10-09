@@ -10,6 +10,7 @@ DOMAIN=${1:?domain_required}
 # maintenance (hanya nyalakan maintenance mode untuk situs terpasang) |
 # child-theme (hanya pasang/aktifkan tema desain custom di situs terpasang) |
 # audit (periksa situs terpasang dari dalam; tidak mengubah apa pun)
+# redesign (desain FSE baru di salinan situs lama buatan scripts/redesign siapkan)
 MODE=${INSTALL_MODE:-dry-run}
 ROOT=/home/project
 SCRIPTS=/opt/velocity-wp-install-automation/scripts
@@ -37,8 +38,12 @@ PERMINTAAN_CLAUDE=${PERMINTAAN_CLAUDE:-1}
 # manifest menyebut `docroot=` + `site_url=`. Semua script pembantu (fse-apply,
 # site-finish, site-audit, paket-g-foto, ai-content-generator) memakai escape hatch
 # VELOCITY_LOKAL_SSH + VELOCITY_LOKAL_DOCROOT, jadi diisikan sekali di sini.
-SITE_URL="https://$DOMAIN"
-if [[ -f "$MANIFEST" ]]; then
+# Dibaca ulang sesudah `redesign siapkan` mengarahkan manifest ke salinan (mode redesign).
+muat_lokasi_manifest() {
+  SITE_URL="https://$DOMAIN"
+  unset VELOCITY_LOKAL_URL VELOCITY_LOKAL_DOCROOT VELOCITY_LOKAL_SSH
+  [[ -f "$MANIFEST" ]] || return 0
+  local _docroot _site_url
   _docroot=$(sed -n 's/^docroot=//p' "$MANIFEST" | head -1)
   _site_url=$(sed -n 's/^site_url=//p' "$MANIFEST" | head -1)
   if [[ -n "$_site_url" ]]; then SITE_URL="$_site_url"; export VELOCITY_LOKAL_URL="$_site_url"; fi
@@ -52,7 +57,8 @@ if [[ -f "$MANIFEST" ]]; then
       "$(sed -n 's/^target_host=//p' "$MANIFEST" | head -1)" > "$VELOCITY_LOKAL_SSH"
     chmod 700 "$VELOCITY_LOKAL_SSH"
   fi
-fi
+}
+muat_lokasi_manifest
 
 STATE_DIR=/var/lib/velocity/installer
 STATE="$STATE_DIR/$DOMAIN.json"
@@ -151,7 +157,7 @@ sys.exit(0 if (json.load(open(sys.argv[1])).get("url") or "").strip() else 1)' \
 #   (Toko Online Custom: VD Store dipasang & diatur SEBELUM paket_g_tema, keputusan user 2026-09-17)
 #   paket_g_tema  0. referensi_desain   cek isian website referensi di FORM ISIAN; kalau ada,
 #                                       tata letak & gaya referensi diukur = acuan utama FSE
-#                 1. compro-klien       baca company profile PDF
+#                 1. compro-klien       baca company profile PDF/PowerPoint (.pptx diubah ke PDF)
 #                 2. paket-g-konten     isi contoh (perusahaan atau portal berita)
 #                 3. fse-apply --tema   pasang tema FSE, data situs, palet, rubrik
 #   (konten AI & site-finish di mode apply/finish berjalan DI ANTARA keduanya:
@@ -228,8 +234,20 @@ cek_tema_referensi() {
 # kontak, widget sidebar/footer, CSS (scripts/theme-paket-biasa), lalu foto utama artikel. Harus
 # SESUDAH site-finish: finishing menulis halaman Hubungi Kami (peta) dan CSS warna.
 tampilan_klasik() {
+  # Landing Page Biasa (keputusan user 2026-09-30): beranda velocity-landing = pengaturan Customizer,
+  # diisi scripts/landing-konten (teks AI per seksi, foto, kontak, warna). Paket lain & situs yang
+  # sudah ter-deploy dilewati skripnya sendiri; theme-paket-biasa melewati landing baru.
+  if grep -qiE '^paket=paket *landing *page *biasa *$' "$MANIFEST" 2>/dev/null; then
+    echo "[$(date -Is)] Isi landing (Customizer)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/landing-konten" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
   echo "[$(date -Is)] Tampilan tema klasik" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Video klien (semua paket, keputusan user 2026-10-07): diunggah ke YouTube lalu di-embed di bagian
+  # Video halaman Galeri. Sesudah site-finish (galeri foto sudah ditulis, md5 halamannya cocok).
+  unggah_video_klien
+  echo "[$(date -Is)] Video klien di halaman Galeri" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/youtube-video" pasang "$MANIFEST" >> "$LOG" 2>&1 || true
   # Menu utama = SUSUNAN MENU ATAS form beserta submenu (halaman/kategori baru diisi AI). Sebelum foto
   # artikel: artikel contoh kategori kegiatan ikut diberi foto (lbhdkm.or.id, user 2026-09-30).
   echo "[$(date -Is)] Menu dari form" >> "$LOG"
@@ -250,12 +268,29 @@ tampilan_klasik() {
   # Paket Marketplace Biasa (2026-10-04): beranda velocity-marketplace-child (template, slider, kategori,
   # Tentang Kami, menu Produk, batas logo) — sesudah produk & menu form. Satu simpul bagan dengan Paket tour.
   /usr/bin/python3 "$SCRIPTS/marketplace-biasa" --beranda "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Paket E/F (keputusan user 2026-10-06): klien minta katalog/data produk (menu Produk/Katalog, pesan
+  # tambahan, atau folder produk) dan child theme tidak punya katalog -> plugin velocity-produk dari API
+  # ApiCo + produk klien/6 CONTOH + halaman Katalog di menu. Tanpa Meta Box/velocity-paket. Sesudah
+  # menu-form (butir menu Produk ditautkan ke Katalog), sebelum agen permintaan form. Paket lain,
+  # situs ter-deploy & tema berkatalog dilewati skripnya sendiri. Sesudah katalog produk, skrip yang
+  # sama mengecek paket tour (user 2026-10-08): pesan/data tambahan menyebut paket tour/wisata/trip
+  # atau itinerary -> velocity-tour-travel dari API (v1.0.0) + paket klien/3 CONTOH (paket-tour --ef).
+  echo "[$(date -Is)] Katalog Velocity Produk" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/velocity-produk" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Portal berita biasa ikut (mulawarmantv.com 2026-09-18: dulu dilewati, semua artikel tampil
   # sebagai kotak placeholder). paket-g-foto memilih mode berita sendiri dari jenis isi contoh.
   echo "[$(date -Is)] Foto utama artikel" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+}
+# Berkas video klien di folder Drive diunggah ke YouTube (unlisted) lalu di-embed: seksi video
+# beranda (fse-apply --isi) atau halaman Galeri tema klasik (tampilan_klasik). Semua paket,
+# keputusan user 2026-10-07. Belum login / kuota habis tidak menggagalkan install; video yang
+# tertunda diunggah di run berikutnya.
+unggah_video_klien() {
+  printf '[%s] Paket custom: unggah video klien ke YouTube\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/youtube-video" unggah "$MANIFEST" >> "$LOG" 2>&1 || true
 }
 paket_g_isi() {
   [[ "$JALUR_TEMA" == fse ]] || return 0
@@ -276,6 +311,7 @@ paket_g_isi() {
     printf '[%s] Paket custom: foto seksi klinik\n' "$(date -Is)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/fse-klinik" "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
+  unggah_video_klien
   printf '[%s] Paket custom: halaman blok & menu (FSE)\n' "$(date -Is)" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
   # Foto utama artikel (ber-caption kredit foto): portal berita dan situs perusahaan.
@@ -376,6 +412,12 @@ if [[ "$MODE" != "audit" && -f "$MANIFEST" ]] && grep -q '^tema_fse=' "$MANIFEST
   exit 0
 fi
 
+# Salinan redesign (manifest `redesign=`, scripts/redesign): hanya mode redesign & audit.
+if [[ -f "$MANIFEST" ]] && grep -q '^redesign=' "$MANIFEST" && [[ "$MODE" != redesign && "$MODE" != audit ]]; then
+  printf '[%s] %s ditolak: manifest menunjuk salinan redesign (pakai INSTALL_MODE=redesign)\n' "$(date -Is)" "$MODE" >> "$LOG"
+  exit 2
+fi
+
 # Audit hanya membaca: status instalasi & notifikasi tidak disentuh.
 if [[ "$MODE" == "audit" ]]; then
   [[ -f "$MANIFEST" ]] || { printf '[%s] audit: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
@@ -404,12 +446,114 @@ if [[ "$MODE" == "child-theme" ]]; then
   exit $rc
 fi
 
+# Redesign situs lama (scripts/redesign, keputusan user 2026-09-29), KHUSUS Paket G (keputusan user
+# 2026-10-07). Bila manifest belum menunjuk salinan (`redesign=`), `redesign siapkan` dijalankan
+# dulu: cek hosting → bisa diakses server kantor = cadangan + salinan (<domain>/new atau staging
+# vdco); tidak bisa = cadangan dilewati, WordPress baru di staging + konten publik situs lama.
+# Sesudahnya mode ini hanya mendesain SALINAN itu dengan FSE + agen desain Claude, acuannya
+# referensi di subfolder "redesign <domain>" (brief.json, dibaca referensi_desain.py), konten lama
+# dipertahankan, beranda dibuat baru. Di salinan tidak ada website-install-from-manifest (menulis
+# ulang wp-config/admin/permalink), konten AI, site-finish, SSL & maintenance.
+if [[ "$MODE" == redesign ]]; then
+  [[ -f "$MANIFEST" ]] || { printf '[%s] redesign: manifest_missing\n' "$(date -Is)" >> "$LOG"; exit 2; }
+  # Penanda awal run yang dibaca bagan alur (segmenRun), lalu cabang mode.
+  state RUNNING VALIDATING
+  printf '[%s] Mode run: redesign | paket: %s\n' "$(date -Is)" "$(sed -n 's/^paket=//p' "$MANIFEST" | head -1 || true)" >> "$LOG"
+  if ! grep -qiE '^paket= *paket *g *$' "$MANIFEST"; then
+    printf '[%s] redesign: bukan_paket_g (redesign otomatis hanya Paket G)\n' "$(date -Is)" >> "$LOG"
+    state FAILED redesign_bukan_paket_g
+    exit 2
+  fi
+  if ! grep -q '^redesign=' "$MANIFEST"; then
+    state RUNNING REDESIGN_SIAPKAN
+    printf '[%s] Redesign: cek hosting & salinan situs lama\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/redesign" siapkan "$DOMAIN" >> "$LOG" 2>&1 && rc=0 || rc=$?
+    if [[ "$rc" != 0 ]] || ! grep -q '^redesign=' "$MANIFEST"; then
+      alasan=$(python3 -c 'import json, re, sys
+try:
+    galat = json.load(open(sys.argv[1])).get("galat", "") or ""
+except Exception:
+    galat = ""
+print(re.sub(r"[^A-Za-z0-9_:.-]+", "_", galat).strip("_")[:80])' "/var/lib/velocity/redesign/$DOMAIN/status.json")
+      state FAILED "redesign_siapkan${alasan:+:$alasan}"
+      exit 1
+    fi
+    muat_lokasi_manifest
+  fi
+  # Semua Redesign memakai agen desain (keputusan user 2026-09-29), bila referensinya ada.
+  DESAIN_CLAUDE=1
+  LOG_AWAL_RUN=$(mktemp /tmp/velocity-run.XXXXXX)
+  trap 'rm -f "$LOG_AWAL_RUN"; rapikan_pemilik' EXIT
+  state RUNNING REDESIGN
+  printf '[%s] Redesign: persiapan salinan\n' "$(date -Is)" >> "$LOG"
+  if ! /usr/bin/python3 "$SCRIPTS/redesign" persiapan "$DOMAIN" >> "$LOG" 2>&1; then
+    state FAILED redesign_persiapan
+    exit 1
+  fi
+  jalur_tema
+  if [[ "$JALUR_TEMA" != fse ]]; then
+    state FAILED "redesign_jalur_${JALUR_TEMA:-gagal}"
+    exit 1
+  fi
+  printf '[%s] Redesign: referensi desain (subfolder redesign)\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/referensi_desain.py" "$MANIFEST" >> "$LOG" 2>&1 || true
+  /usr/bin/python3 "$SCRIPTS/compro-klien" "$DOMAIN" >> "$LOG" 2>&1 || true
+  if agen_langsung; then
+    printf '[%s] Redesign: tema FSE oleh agen Claude (dasar velocity-fse)\n' "$(date -Is)" >> "$LOG"
+    VELOCITY_BERITA_AGEN=1 /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1 \
+      || { state FAILED redesign_tema_fse; exit 1; }
+    /usr/bin/python3 "$SCRIPTS/desain-claude" --tahap=tema --paksa "$MANIFEST" >> "$LOG" 2>&1 || true
+  else
+    printf '[%s] Redesign: tema FSE (tanpa referensi, velocity-fse)\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/fse-apply" --tema "$MANIFEST" >> "$LOG" 2>&1 \
+      || { state FAILED redesign_tema_fse; exit 1; }
+  fi
+  if ! portal_berita; then
+    printf '[%s] Redesign: foto per slot desain\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/paket-g-foto" "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
+  unggah_video_klien
+  printf '[%s] Redesign: beranda baru & halaman blok (FSE)\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/fse-apply" --isi "$MANIFEST" >> "$LOG" 2>&1 || true
+  printf '[%s] Redesign: halaman depan, menu lama, cek URL lama\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/redesign" rapikan "$DOMAIN" >> "$LOG" 2>&1 && rapi=0 || rapi=$?
+  if agen_langsung; then
+    printf '[%s] Redesign: desain diambil alih agen Claude\n' "$(date -Is)" >> "$LOG"
+    /usr/bin/python3 "$SCRIPTS/desain-claude" --paksa "$MANIFEST" >> "$LOG" 2>&1 || true
+  fi
+  printf '[%s] Redesign: cek visual\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/paket-g-cek-visual" "$MANIFEST" >> "$LOG" 2>&1 || true
+  qa=$(/usr/bin/python3 "$SCRIPTS/site-qa" "$DOMAIN" 2>>"$LOG" | tail -1 || true)
+  echo "qa_result: $qa" >> "$LOG"
+  problems=$(python3 -c 'import json, sys
+try:
+    print(",".join(json.loads(sys.argv[1]).get("problems", [])))
+except Exception:
+    print("qa_gagal_dijalankan")' "$qa")
+  [[ "$rapi" == 0 ]] || problems="${problems:+$problems,}beranda_baru_gagal"
+  printf '[%s] Redesign: laporan Telegram\n' "$(date -Is)" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/redesign" laporan "$DOMAIN" --qa="$problems" >> "$LOG" 2>&1 || true
+  state SUCCESS REDESIGN_SIAP
+  exit 0
+fi
+
 trap 'state FAILED "installer_error"; notify FAILED installer_error' ERR
 state RUNNING VALIDATING
 # Dibaca bagan alur halaman /installer/: cabang mode run & paket tanpa menebak dari penanda log.
 printf '[%s] Mode run: %s | paket: %s\n' "$(date -Is)" "$MODE" \
   "$(sed -n 's/^paket=//p' "$MANIFEST" 2>/dev/null | head -1 || true)" >> "$LOG"
 [[ -f "$MANIFEST" ]] || { state FAILED manifest_missing; notify FAILED manifest_missing; exit 2; }
+# Folder bahan klien: /home/On Progress/<domain>, atau subfolder yang ditunjuk deskripsi tiket CRM
+# ("sub folder <nama>", keputusan user 2026-09-26, scripts/folder_klien.py). Dibaca bagan alur.
+printf '[%s] Folder klien: %s\n' "$(date -Is)" \
+  "$(/usr/bin/python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from folder_klien import folder_klien; print(folder_klien(sys.argv[2]))' "$SCRIPTS" "$DOMAIN" 2>/dev/null || echo '?')" >> "$LOG"
+# Lokasi pasang: akun DA domain klien, atau staging velocitydeveloper.co/<domain> (docroot= di
+# manifest, antara lain dari deskripsi CRM "Kerjakan diweb velocity dl"). Dibaca bagan alur.
+if [[ "$SITE_URL" == "https://$DOMAIN" ]]; then
+  printf '[%s] Lokasi pasang: domain klien %s\n' "$(date -Is)" "$SITE_URL" >> "$LOG"
+else
+  printf '[%s] Lokasi pasang: staging %s\n' "$(date -Is)" "$SITE_URL" >> "$LOG"
+fi
 # Form klien dibaca agen Claude Code (keputusan user 2026-09-25, scripts/baca-form-claude): sekali per
 # isi form — biasanya sudah saat manifest dibuat, jadi di sini langsung "tetap". Semua langkah sesudah
 # ini membaca hasilnya lewat client_form.read_client_form; gagal = kembali ke pengurai pola.
@@ -422,6 +566,22 @@ run_start=$(( $(wc -l < "$LOG") + 1 ))
 LOG_AWAL_RUN=$(mktemp /tmp/velocity-run.XXXXXX)
 # Juga saat run berhenti di tengah (exit 4, galat): berkas root dari langkah yang sempat jalan.
 trap 'rm -f "$LOG_AWAL_RUN"; rapikan_pemilik' EXIT
+# Paket F tanpa referensi tema (keputusan user 2026-10-07): form tidak menyebut demo/web contoh ->
+# child theme tidak bisa dipilih (dulu situs berhenti di tema induk polos). Instalasi baru DITAHAN
+# sebelum WordPress dipasang + notif Telegram; PM melengkapi referensi di form atau menulis
+# `velocity_child_theme=<slug>` di manifest, lalu menjalankan apply lagi. Situs yang sudah pernah
+# selesai (log SUCCESS: COMPLETE) tidak ikut aturan ini.
+if [[ "$MODE" == "apply" ]] && grep -qiE '^paket=paket *f *$' "$MANIFEST" \
+   && ! grep -q 'SUCCESS: COMPLETE' "$LOG" 2>/dev/null; then
+  cek_ref=$(timeout 300 /usr/bin/python3 "$SCRIPTS/velocity-child-theme" "$DOMAIN" --paket "Paket F" \
+    --override "$(sed -n 's/^velocity_child_theme=//p' "$MANIFEST" | head -1)" --no-download 2>/dev/null || true)
+  if [[ "$(sed -n 's/^status=//p' <<<"$cek_ref" | head -1)" == no_ref ]]; then
+    printf '[%s] child_theme:no_ref:: paket_f_tanpa_referensi_tema: instalasi ditahan\n' "$(date -Is)" >> "$LOG"
+    state FAILED paket_f_tanpa_referensi_tema
+    notify FAILED paket_f_tanpa_referensi_tema
+    exit 5
+  fi
+fi
 if [[ "$MODE" != "finish" && "$MODE" != "maintenance" ]]; then
   # Tema velocity & velocity-addons selalu versi terbaru (API atau rilis GitHub) sebelum dipasang.
   printf '[%s] %s\n' "$(date -Is)" "$(timeout 180 /usr/bin/python3 "$SCRIPTS/sinkron-paket" 2>&1 | tail -1 || echo sinkron_paket_timeout)" >> "$LOG"

@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+"""Unggah berkas video klien ke YouTube, lalu tautannya dipakai seksi video FSE.
+
+Pemakaian:
+  youtube-video login [--manual]      sekali saja: izinkan akses channel, simpan refresh token
+  youtube-video cek                   tampilkan akun & channel yang tersambung
+  youtube-video unggah <manifest|domain> [--privasi=unlisted] [--batas=12] [--coba]
+  youtube-video daftar <domain>       video yang sudah diunggah untuk domain itu
+  youtube-video pasang <manifest> [--paksa]   tema klasik: seksi Video di halaman Galeri
+
+Keputusan user 2026-10-07: berkas video klien (mp4 WhatsApp dsb.) yang ada di folder klien
+Drive diunggah otomatis ke channel YouTube akun AKUN, lalu di-embed — berkasnya tetap tidak
+pernah diunggah ke hosting (batas unggah 8 MB, lihat fse-apply VIDEO_RE). Berlaku untuk
+SEMUA paket: tema FSE memasangnya di seksi video beranda (fse-apply), tema klasik di bagian
+Video halaman Galeri (`pasang`, butuh WP_INSTALL_SSH_KEY_FILE). `pasang` hanya menulis di
+antara penanda <!-- velocity-video --> dan hanya kalau halaman Galeri masih tulisan
+installer (md5 site-finish) atau penandanya sudah ada; situs yang sudah ter-deploy
+dilewati kecuali --paksa (aturan sama dengan toko-biasa).
+
+Yang perlu disiapkan sekali (Google Cloud Console, login sebagai AKUN):
+  1. Aktifkan "YouTube Data API v3".
+  2. OAuth consent screen: tambahkan AKUN sebagai test user, lalu "Publish app" (status
+     Testing membuat refresh token kedaluwarsa tiap 7 hari).
+  3. Buat OAuth client ID tipe "TVs and Limited Input devices" (untuk `login`) atau
+     "Desktop app" (untuk `login --manual`), unduh JSON-nya ke KLIEN_BERKAS.
+
+Catatan: proyek API yang belum lolos audit YouTube hanya boleh mengunggah video PRIVATE
+(tidak bisa di-embed). Video yang terkunci private dicatat tetapi tidak dipakai di situs;
+`unggah` mengulangnya otomatis (ubah ke unlisted) sesudah audit disetujui.
+
+Cache per domain: CACHE_DIR/<domain>.json — berkas yang sama (path relatif + ukuran) tidak
+diunggah dua kali, dan sesi upload yang terputus dilanjutkan dari byte terakhir.
+fse-apply membaca cache ini di video_klien(): video tegak ditulis sebagai URL /shorts/ supaya
+embed-nya memakai rasio 9:16.
+
+Kode keluar: 0 selesai/tidak ada yang perlu diunggah, 1 gagal, 2 salah pemakaian,
+3 kuota YouTube habis (lanjut otomatis di run berikutnya), 4 belum login.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from folder_klien import folder_klien  # noqa: E402
+
+AKUN = os.environ.get('VELOCITY_YOUTUBE_AKUN') or 'mastoro12345@gmail.com'
+RAHASIA = Path('/etc/velocity/secrets')
+KLIEN_BERKAS = Path(os.environ.get('VELOCITY_YOUTUBE_KLIEN') or RAHASIA / 'youtube-client.json')
+TOKEN_BERKAS = Path(os.environ.get('VELOCITY_YOUTUBE_TOKEN') or RAHASIA / 'youtube-token.json')
+CACHE_DIR = Path(os.environ.get('VELOCITY_YOUTUBE_CACHE') or '/var/lib/velocity/youtube')
+
+SCOPE = 'openid email https://www.googleapis.com/auth/youtube'
+TOKEN_URL = 'https://oauth2.googleapis.com/token'
+DEVICE_URL = 'https://oauth2.googleapis.com/device/code'
+AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
+USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
+API = 'https://www.googleapis.com/youtube/v3'
+UPLOAD_URL = 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status'
+REDIRECT_MANUAL = 'http://127.0.0.1:8085/'
+
+EKSTENSI = {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.3gp', '.webm', '.wmv', '.flv', '.mpg', '.mpeg'}
+POTONGAN = 8 * 1024 * 1024  # kelipatan 256 KiB, syarat upload resumable
+PRIVASI = ('unlisted', 'public', 'private')
+
+
+class KuotaHabis(Exception):
+    pass
+
+
+class BelumLogin(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- HTTP & OAuth
+
+def minta(url, data=None, headers=None, method=None, timeout=60):
+    """Request JSON sederhana. Mengembalikan (status, headers, body-dict-atau-teks)."""
+    if isinstance(data, dict):
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.headers, _isi(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, _isi(e.read())
+    except (urllib.error.URLError, OSError) as e:
+        # Putus jaringan/timeout: status 0, pemanggil upload mengulang dari posisi sesi.
+        return 0, {}, str(e)
+
+
+def _isi(raw):
+    try:
+        return json.loads(raw.decode() or '{}')
+    except ValueError:
+        return raw.decode(errors='replace')
+
+
+def alasan_galat(body):
+    if isinstance(body, dict):
+        err = body.get('error')
+        if isinstance(err, dict):
+            alasan = [e.get('reason', '') for e in err.get('errors') or []]
+            return ','.join(a for a in alasan if a) or err.get('status') or str(err.get('message', ''))
+        return str(err or body)
+    return str(body)[:300]
+
+
+def cek_kuota(status, body):
+    if status == 403 and re.search(r'quotaExceeded|uploadLimitExceeded|rateLimitExceeded', alasan_galat(body)):
+        raise KuotaHabis(alasan_galat(body))
+
+
+def klien():
+    if not KLIEN_BERKAS.is_file():
+        raise SystemExit(f'youtube: OAuth client belum ada di {KLIEN_BERKAS} (lihat petunjuk di kepala skrip)')
+    data = json.loads(KLIEN_BERKAS.read_text())
+    isi = data.get('installed') or data.get('web') or data
+    return isi['client_id'], isi.get('client_secret', '')
+
+
+def simpan_token(data):
+    TOKEN_BERKAS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOKEN_BERKAS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=2))
+    os.chmod(tmp, 0o600)
+    tmp.replace(TOKEN_BERKAS)
+
+
+def email_token(akses):
+    status, _, body = minta(USERINFO_URL, headers={'Authorization': f'Bearer {akses}'})
+    return (body.get('email') or '').lower() if status == 200 and isinstance(body, dict) else ''
+
+
+def terima_token(body, paksa):
+    """Simpan token hasil login sesudah memastikan akunnya AKUN (jangan unggah ke channel lain)."""
+    if not body.get('refresh_token'):
+        raise SystemExit('youtube: Google tidak mengirim refresh_token; cabut akses aplikasi di '
+                         'myaccount.google.com/permissions lalu login ulang')
+    if 'auth/youtube' not in body.get('scope', ''):
+        # Layar persetujuan Google punya kotak centang per izin; kotak YouTube bisa tak dicentang.
+        raise SystemExit('youtube: izin "Kelola akun YouTube" tidak dicentang saat login; token TIDAK disimpan, '
+                         'login ulang dan centang semua izin')
+    email = email_token(body['access_token'])
+    if email != AKUN.lower() and not paksa:
+        raise SystemExit(f'youtube: yang login {email or "(tak terbaca)"}, bukan {AKUN}; token TIDAK disimpan '
+                         '(pakai --paksa kalau memang disengaja)')
+    simpan_token({'refresh_token': body['refresh_token'], 'email': email,
+                  'disimpan': datetime.now().isoformat(timespec='seconds')})
+    print(f'youtube: login tersimpan untuk {email}')
+    tampilkan_channel(body['access_token'])
+
+
+def login_perangkat(paksa):
+    cid, rahasia = klien()
+    status, _, body = minta(DEVICE_URL, {'client_id': cid, 'scope': SCOPE})
+    if status != 200:
+        raise SystemExit(f'youtube: device flow ditolak ({alasan_galat(body)}). Client ID harus bertipe '
+                         '"TVs and Limited Input devices", atau pakai `login --manual` dengan client Desktop.')
+    print(f"Buka {body['verification_url']} di HP/laptop, login sebagai {AKUN}, lalu masukkan kode:\n\n"
+          f"    {body['user_code']}\n\nMenunggu persetujuan...", flush=True)
+    jeda, batas = int(body.get('interval', 5)), time.time() + int(body.get('expires_in', 1800))
+    while time.time() < batas:
+        time.sleep(jeda)
+        status, _, tok = minta(TOKEN_URL, {'client_id': cid, 'client_secret': rahasia, 'device_code': body['device_code'],
+                                           'grant_type': 'urn:ietf:params:oauth:grant-type:device_code'})
+        if status == 200:
+            return terima_token(tok, paksa)
+        galat = tok.get('error') if isinstance(tok, dict) else ''
+        if galat == 'slow_down':
+            jeda += 5
+        elif galat != 'authorization_pending':
+            raise SystemExit(f'youtube: login gagal: {alasan_galat(tok)}')
+    raise SystemExit('youtube: kode kedaluwarsa, jalankan login lagi')
+
+
+def login_manual(paksa):
+    """Client Desktop: browser diarahkan ke 127.0.0.1 (halaman gagal dibuka, wajar), alamatnya ditempel ke sini."""
+    cid, rahasia = klien()
+    url = AUTH_URL + '?' + urllib.parse.urlencode({
+        'client_id': cid, 'redirect_uri': REDIRECT_MANUAL, 'response_type': 'code', 'scope': SCOPE,
+        'access_type': 'offline', 'prompt': 'consent', 'login_hint': AKUN})
+    print(f'1. Buka tautan ini dan login sebagai {AKUN}:\n\n{url}\n\n'
+          '2. Sesudah setuju, browser membuka 127.0.0.1 dan gagal — itu wajar.\n'
+          '   Salin alamat lengkap dari address bar lalu tempel di sini.\n')
+    alamat = input('Alamat: ').strip()
+    kode = urllib.parse.parse_qs(urllib.parse.urlparse(alamat).query).get('code', [alamat])[0]
+    status, _, tok = minta(TOKEN_URL, {'client_id': cid, 'client_secret': rahasia, 'code': kode,
+                                       'redirect_uri': REDIRECT_MANUAL, 'grant_type': 'authorization_code'})
+    if status != 200:
+        raise SystemExit(f'youtube: tukar kode gagal: {alasan_galat(tok)}')
+    terima_token(tok, paksa)
+
+
+_AKSES = {'token': '', 'habis': 0.0}
+
+
+def akses():
+    if _AKSES['token'] and time.time() < _AKSES['habis']:
+        return _AKSES['token']
+    if not TOKEN_BERKAS.is_file():
+        raise BelumLogin('belum login (jalankan: youtube-video login)')
+    cid, rahasia = klien()
+    simpanan = json.loads(TOKEN_BERKAS.read_text())
+    status, _, body = minta(TOKEN_URL, {'client_id': cid, 'client_secret': rahasia,
+                                        'refresh_token': simpanan['refresh_token'], 'grant_type': 'refresh_token'})
+    if status != 200:
+        # invalid_grant: token dicabut, password diganti, atau aplikasi masih status Testing (7 hari).
+        raise BelumLogin(f'refresh token ditolak ({alasan_galat(body)}); jalankan youtube-video login lagi')
+    _AKSES.update(token=body['access_token'], habis=time.time() + int(body.get('expires_in', 3600)) - 120)
+    return _AKSES['token']
+
+
+def tampilkan_channel(token=None):
+    status, _, body = minta(f'{API}/channels?part=snippet&mine=true',
+                            headers={'Authorization': f'Bearer {token or akses()}'})
+    item = (body.get('items') or [None])[0] if status == 200 and isinstance(body, dict) else None
+    if not item:
+        print(f'youtube: akun ini belum punya channel YouTube ({alasan_galat(body) if status != 200 else "kosong"}); '
+              'buat channel dulu di youtube.com')
+        return False
+    print(f"youtube: channel \"{item['snippet']['title']}\" (https://www.youtube.com/channel/{item['id']})")
+    return True
+
+
+# ---------------------------------------------------------------- berkas & cache
+
+def info_video(path):
+    """(tegak, durasi_detik) dari ffprobe; None kalau berkas bukan video yang terbaca."""
+    try:
+        out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                              'stream=width,height:stream_tags=rotate:stream_side_data=rotation:format=duration',
+                              '-of', 'json', str(path)], capture_output=True, text=True, timeout=60)
+        data = json.loads(out.stdout or '{}')
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    aliran = (data.get('streams') or [None])[0]
+    if not aliran or not aliran.get('width'):
+        return None
+    putar = aliran.get('tags', {}).get('rotate') or next(
+        (s.get('rotation') for s in aliran.get('side_data_list') or [] if 'rotation' in s), 0)
+    lebar, tinggi = aliran['width'], aliran['height']
+    if abs(int(float(putar or 0))) % 180 == 90:
+        lebar, tinggi = tinggi, lebar
+    return tinggi > lebar, float((data.get('format') or {}).get('duration') or 0)
+
+
+def berkas_video(domain):
+    folder = folder_klien(domain)
+    if not folder.is_dir():
+        return folder, []
+    daftar = [p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in EKSTENSI
+              and not any(b.startswith('.') for b in p.relative_to(folder).parts)]
+    return folder, sorted(daftar, key=lambda p: str(p.relative_to(folder)).lower())
+
+
+def baca_cache(domain):
+    berkas = CACHE_DIR / f'{domain}.json'
+    try:
+        return json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        return {'domain': domain, 'video': {}, 'sesi': {}}
+
+
+def tulis_cache(domain, data):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    berkas = CACHE_DIR / f'{domain}.json'
+    tmp = berkas.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    tmp.replace(berkas)
+
+
+def url_video(vid, tegak):
+    # /shorts/ hanya penanda rasio untuk fse-apply (VIDEO_TEGAK_RE); di sana diubah lagi ke watch?v=.
+    return f'https://www.youtube.com/shorts/{vid}' if tegak else f'https://www.youtube.com/watch?v={vid}'
+
+
+# ---------------------------------------------------------------- upload
+
+def mulai_sesi(path, judul, deskripsi, privasi):
+    meta = {'snippet': {'title': judul, 'description': deskripsi, 'categoryId': '22'},
+            'status': {'privacyStatus': privasi, 'embeddable': True, 'selfDeclaredMadeForKids': False}}
+    status, headers, body = minta(UPLOAD_URL, json.dumps(meta).encode(), method='POST', headers={
+        'Authorization': f'Bearer {akses()}', 'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Length': str(path.stat().st_size), 'X-Upload-Content-Type': 'video/*'})
+    cek_kuota(status, body)
+    if status != 200 or not headers.get('Location'):
+        raise RuntimeError(f'sesi upload ditolak ({status}): {alasan_galat(body)}')
+    return headers['Location']
+
+
+def posisi_sesi(sesi, total):
+    """Byte berikutnya yang harus dikirim; dict hasil kalau upload ternyata sudah selesai; None kalau sesi mati."""
+    status, headers, body = minta(sesi, b'', method='PUT', headers={
+        'Authorization': f'Bearer {akses()}', 'Content-Range': f'bytes */{total}'})
+    if status in (200, 201):
+        return body
+    if status == 308:
+        m = re.search(r'bytes=0-(\d+)', headers.get('Range') or '')
+        return int(m.group(1)) + 1 if m else 0
+    return None
+
+
+def kirim(sesi, path, mulai=0):
+    total = path.stat().st_size
+    coba = 0
+    with path.open('rb') as f:
+        while True:
+            f.seek(mulai)
+            potong = f.read(POTONGAN)
+            akhir = mulai + len(potong) - 1
+            status, headers, body = minta(sesi, potong, method='PUT', timeout=600, headers={
+                'Authorization': f'Bearer {akses()}', 'Content-Length': str(len(potong)),
+                'Content-Range': f'bytes {mulai}-{akhir}/{total}'})
+            if status in (200, 201):
+                return body
+            if status == 308:
+                m = re.search(r'bytes=0-(\d+)', headers.get('Range') or '')
+                mulai, coba = (int(m.group(1)) + 1 if m else 0), 0
+                print(f'  {mulai * 100 // total}%', flush=True)
+                continue
+            cek_kuota(status, body)
+            if status in (0, 500, 502, 503, 504):
+                coba += 1
+                if coba > 6:
+                    raise RuntimeError(f'server YouTube terus galat ({status})')
+                time.sleep(min(2 ** coba, 60))
+                lanjut = posisi_sesi(sesi, total)
+                if isinstance(lanjut, dict):
+                    return lanjut
+                if lanjut is None:
+                    raise RuntimeError('sesi upload kedaluwarsa')
+                mulai = lanjut
+                continue
+            raise RuntimeError(f'upload ditolak ({status}): {alasan_galat(body)}')
+
+
+def ubah_privasi(vid, privasi):
+    """Video lama yang terkunci private dicoba dijadikan unlisted lagi (sesudah audit API lolos)."""
+    status, _, body = minta(f'{API}/videos?part=status', json.dumps({
+        'id': vid, 'status': {'privacyStatus': privasi, 'embeddable': True, 'selfDeclaredMadeForKids': False}}).encode(),
+        method='PUT', headers={'Authorization': f'Bearer {akses()}', 'Content-Type': 'application/json'})
+    cek_kuota(status, body)
+    return (body.get('status') or {}).get('privacyStatus') if status == 200 and isinstance(body, dict) else None
+
+
+def bersih_judul(teks):
+    return re.sub(r'\s+', ' ', re.sub(r'[<>]', '', teks)).strip()[:100]
+
+
+def unggah(cfg, privasi, batas, coba):
+    domain = cfg['domain']
+    nama = bersih_judul(cfg.get('site_title') or domain)
+    folder, daftar = berkas_video(domain)
+    if not daftar:
+        print(f'youtube: tidak ada berkas video di {folder}')
+        return 0
+    cache = baca_cache(domain)
+    cache.setdefault('video', {})
+    cache.setdefault('sesi', {})
+    akun_token = json.loads(TOKEN_BERKAS.read_text()).get('email', '') if TOKEN_BERKAS.is_file() else ''
+    baru = 0
+    for path in daftar:
+        rel = str(path.relative_to(folder))
+        kunci = f'{rel}|{path.stat().st_size}'
+        lama = cache['video'].get(kunci)
+        if lama and lama.get('privasi') == 'private' and privasi != 'private' and not coba:
+            hasil = ubah_privasi(lama['id'], privasi)
+            if hasil and hasil != 'private':
+                lama['privasi'] = hasil
+                tulis_cache(domain, cache)
+                print(f'youtube: {rel} sekarang {hasil}')
+            continue
+        if lama:
+            continue
+        if baru >= batas:
+            print(f'youtube: batas {batas} video per run tercapai, sisanya run berikutnya')
+            break
+        info = info_video(path)
+        if not info:
+            print(f'youtube: lewati {rel} (bukan video yang terbaca ffprobe)')
+            continue
+        tegak, durasi = info
+        nomor = len(cache['video']) + (baru if coba else 0) + 1
+        judul = bersih_judul(f'{nama} - Video {nomor}')
+        print(f'youtube: {"[coba] " if coba else ""}unggah {rel} ({path.stat().st_size / 1e6:.1f} MB, '
+              f'{durasi:.0f} dtk, {"tegak" if tegak else "mendatar"}) sebagai "{judul}" [{privasi}]', flush=True)
+        if coba:
+            baru += 1
+            continue
+        deskripsi = f'Video {nama}.' + (f"\n{cfg['site_url']}" if cfg.get('site_url') else f'\nhttps://{domain}')
+        sesi, mulai, hasil = cache['sesi'].get(kunci), 0, None
+        if sesi:
+            lanjut = posisi_sesi(sesi, path.stat().st_size)
+            if isinstance(lanjut, dict):
+                hasil = lanjut  # upload run lalu ternyata sudah sampai
+            elif lanjut is None:
+                sesi = None
+            else:
+                mulai = lanjut
+                print(f'  lanjut dari {mulai * 100 // path.stat().st_size}%')
+        if hasil is None:
+            if not sesi:
+                sesi = mulai_sesi(path, judul, deskripsi, privasi)
+                cache['sesi'][kunci] = sesi
+                tulis_cache(domain, cache)
+            hasil = kirim(sesi, path, mulai)
+        vid = hasil['id']
+        privasi_jadi = (hasil.get('status') or {}).get('privacyStatus') or privasi
+        cache['video'][kunci] = {'id': vid, 'url': url_video(vid, tegak), 'tegak': tegak, 'judul': judul,
+                                 'privasi': privasi_jadi, 'akun': akun_token,
+                                 'diunggah': datetime.now().isoformat(timespec='seconds')}
+        cache['sesi'].pop(kunci, None)
+        tulis_cache(domain, cache)
+        baru += 1
+        print(f'youtube: selesai {cache["video"][kunci]["url"]} [{privasi_jadi}]')
+        if privasi_jadi == 'private' and privasi != 'private':
+            print('youtube: PERINGATAN video dikunci PRIVATE oleh YouTube (proyek API belum lolos audit) — '
+                  'tidak bisa di-embed, tidak dipasang di situs sampai audit disetujui')
+    return 0
+
+
+def daftar(domain):
+    cache = baca_cache(domain)
+    if not cache.get('video'):
+        print(f'youtube: belum ada video untuk {domain}')
+    for kunci, v in cache.get('video', {}).items():
+        print(f"{v['privasi']:9} {v['url']}  ← {kunci.rsplit('|', 1)[0]}")
+    for kunci in cache.get('sesi', {}):
+        print(f"terputus  (dilanjutkan run berikutnya)  ← {kunci.rsplit('|', 1)[0]}")
+
+
+# ---------------------------------------------------------------- tema klasik: halaman Galeri
+
+CSS_VIDEO = (
+    '.velocity-video{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1.25rem;'
+    'margin:1.5rem 0 2rem;align-items:start}'
+    '.velocity-video .wp-block-embed{margin:0}'
+    '.velocity-video .wp-block-embed__wrapper{position:relative;padding-top:56.25%;height:0;overflow:hidden;border-radius:8px}'
+    '.velocity-video .wp-embed-aspect-9-16{max-width:320px;width:100%;justify-self:center}'
+    '.velocity-video .wp-embed-aspect-9-16 .wp-block-embed__wrapper{padding-top:177.78%}'
+    '.velocity-video iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}')
+
+# Rasio dibuat CSS sendiri (CSS_VIDEO): tema klasik tanpa add_theme_support('responsive-embeds')
+# merender iframe YouTube 500x281 tetap. Konten ditulis tanpa kses (blok embed hanya berisi URL).
+PASANG_PHP = r"""<?php
+$d = json_decode(base64_decode('@@DATA@@'), true);
+if (function_exists('wp_is_block_theme') && wp_is_block_theme()) { echo "video_pasang: dilewati:tema_fse\n"; return; }
+global $wpdb;
+$id = (int) $wpdb->get_var($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type='page' AND post_status='publish' AND post_title=%s ORDER BY ID LIMIT 1", 'Galeri'));
+if (!$id) { echo "video_pasang: dilewati:tanpa_halaman_galeri\n"; return; }
+if (get_post_meta($id, '_velocity_fse_md5', true)) { echo "video_pasang: dilewati:halaman_tema_fse\n"; return; }
+$lama = (string) get_post_field('post_content', $id, 'raw');
+$pola = '/\n*<!-- velocity-video -->.*?<!-- \/velocity-video -->/s';
+$ada = preg_match($pola, $lama);
+$dikelola = get_post_meta($id, '_velocity_content_md5', true) === md5($lama . "\n");
+if (!$ada && !$dikelola) { echo "video_pasang: dilewati:galeri_disunting_orang\n"; return; }
+$blok = $d['blok'] === '' ? '' : "\n\n<!-- velocity-video -->\n" . $d['blok'] . "\n<!-- /velocity-video -->";
+$baru = $ada ? preg_replace($pola, $blok, $lama) : rtrim($lama) . $blok;
+if ($baru !== $lama) {
+    kses_remove_filters();
+    $r = wp_update_post(['ID' => $id, 'post_content' => $baru], true);
+    if (is_wp_error($r)) { echo "video_pasang: gagal:" . $r->get_error_message() . "\n"; return; }
+    if ($dikelola) { update_post_meta($id, '_velocity_content_md5', md5($baru . "\n")); }
+}
+$css = (string) wp_get_custom_css();
+$pola_css = '#\n?/\* velocity-video \*/.*?/\* /velocity-video \*/#s';
+$css_baru = trim(preg_replace($pola_css, '', $css)) . "\n/* velocity-video */\n" . $d['css'] . "\n/* /velocity-video */";
+if ($css_baru !== $css) { wp_update_custom_css_post($css_baru); }
+echo "video_pasang: " . ($baru === $lama ? 'sama' : 'galeri:' . $id) . ":" . $d['jumlah'] . "\n";
+"""
+
+
+def blok_galeri(video):
+    """Blok Gutenberg seksi Video untuk halaman Galeri tema klasik ('' = kosongkan seksi)."""
+    if not video:
+        return ''
+    embed = []
+    for v in video:
+        vid = v['url'].rsplit('/', 1)[-1].split('=')[-1]
+        url = f'https://www.youtube.com/watch?v={vid}'
+        aspek = 'wp-embed-aspect-9-16' if v.get('tegak') else 'wp-embed-aspect-16-9'
+        attrs = {'url': url, 'type': 'video', 'providerNameSlug': 'youtube', 'responsive': True,
+                 'className': f'{aspek} wp-has-aspect-ratio'}
+        embed.append(f'<!-- wp:embed {json.dumps(attrs)} -->\n'
+                     f'<figure class="wp-block-embed is-type-video is-provider-youtube wp-block-embed-youtube '
+                     f'{aspek} wp-has-aspect-ratio"><div class="wp-block-embed__wrapper">\n{url}\n</div></figure>\n'
+                     '<!-- /wp:embed -->')
+    return ('<!-- wp:heading -->\n<h2 class="wp-block-heading">Video</h2>\n<!-- /wp:heading -->\n\n'
+            '<!-- wp:group {"className":"velocity-video"} -->\n<div class="wp-block-group velocity-video">'
+            + '\n\n'.join(embed) + '</div>\n<!-- /wp:group -->')
+
+
+def pasang(cfg, paksa):
+    domain = cfg['domain']
+    if not paksa:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            print('video_pasang: dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    video = [v for v in baca_cache(domain).get('video', {}).values() if v.get('privasi') != 'private'][:12]
+    if not video:
+        print('video_pasang: tidak ada video YouTube untuk situs ini')
+        return 0
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not key or not Path(key).is_file():
+        print('video_pasang: kunci SSH tidak ada (WP_INSTALL_SSH_KEY_FILE)')
+        return 1
+    import base64
+    import importlib.machinery
+    import importlib.util
+    import shlex
+    loader = importlib.machinery.SourceFileLoader('site_finish', str(Path(__file__).resolve().parent / 'site-finish'))
+    finish = importlib.util.module_from_spec(importlib.util.spec_from_loader('site_finish', loader))
+    loader.exec_module(finish)
+    data = base64.b64encode(json.dumps({'blok': blok_galeri(video), 'css': CSS_VIDEO, 'jumlah': len(video)}).encode()).decode()
+    php = PASANG_PHP.replace('@@DATA@@', data)
+    user = cfg.get('da_user', '')
+    wp = 'php /usr/local/bin/wp eval-file "$T"'
+    jalankan = (f'set -e; T=$(mktemp /tmp/velocity-video.XXXXXX.php); cat > "$T"; chmod 644 "$T"; '
+                f'cd {shlex.quote(finish.docroot(domain, user))}; '
+                f'if id {shlex.quote(user)} >/dev/null 2>&1; then runuser -u {shlex.quote(user)} -- {wp} 2>&1 | grep -v Deprecated || true; '
+                f'else {wp} --allow-root 2>&1 | grep -v Deprecated || true; fi; rm -f "$T"')
+    hasil = subprocess.run(finish.ssh_command(cfg, key) + [jalankan], input=php.encode(), capture_output=True, timeout=300)
+    print(hasil.stdout.decode(errors='replace').strip())
+    if hasil.returncode != 0:
+        print(f"video_pasang: ssh_gagal (kode {hasil.returncode}) {hasil.stderr.decode(errors='replace').strip()[:300]}")
+        return 1
+    return 0
+
+
+def baca_sasaran(arg):
+    p = Path(arg)
+    if p.is_file():
+        cfg = {}
+        for baris in p.read_text(errors='ignore').splitlines():
+            if '=' in baris and not baris.lstrip().startswith('#'):
+                k, v = baris.split('=', 1)
+                cfg[k.strip()] = v.strip()
+        cfg['domain'] = cfg.get('domain', '').lower()
+    else:
+        cfg = {'domain': arg.lower()}
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', cfg['domain']):
+        raise SystemExit(f'youtube: domain tidak valid: {cfg["domain"]!r}')
+    return cfg
+
+
+def opsi(nama, bawaan):
+    for a in sys.argv[2:]:
+        if a.startswith(f'--{nama}='):
+            return a.split('=', 1)[1]
+    return bawaan
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    perintah = args[0] if args else ''
+    try:
+        if perintah == 'login':
+            (login_manual if '--manual' in sys.argv else login_perangkat)('--paksa' in sys.argv)
+            return 0
+        if perintah == 'cek':
+            simpanan = json.loads(TOKEN_BERKAS.read_text()) if TOKEN_BERKAS.is_file() else {}
+            print(f"youtube: akun {simpanan.get('email') or '(belum login)'}, seharusnya {AKUN}")
+            return 0 if tampilkan_channel() else 1
+        if perintah == 'daftar' and len(args) == 2:
+            daftar(baca_sasaran(args[1])['domain'])
+            return 0
+        if perintah == 'pasang' and len(args) == 2:
+            return pasang(baca_sasaran(args[1]), '--paksa' in sys.argv)
+        if perintah == 'unggah' and len(args) == 2:
+            privasi = opsi('privasi', os.environ.get('VELOCITY_YOUTUBE_PRIVASI') or 'unlisted')
+            if privasi not in PRIVASI:
+                raise SystemExit(f'youtube: --privasi harus salah satu dari {", ".join(PRIVASI)}')
+            cfg = baca_sasaran(args[1])
+            if '--coba' not in sys.argv and not TOKEN_BERKAS.is_file():
+                # Installer memanggil skrip ini di setiap situs: tanpa login cukup dilewati.
+                print('youtube: belum login, unggah video dilewati (jalankan: youtube-video login)')
+                return 4
+            return unggah(cfg, privasi, int(opsi('batas', '12')), '--coba' in sys.argv)
+    except KuotaHabis as e:
+        print(f'youtube: kuota YouTube habis ({e}); sisa video diunggah di run berikutnya')
+        return 3
+    except BelumLogin as e:
+        print(f'youtube: {e}')
+        return 4
+    except (RuntimeError, OSError) as e:
+        print(f'youtube: gagal: {e}')
+        return 1
+    print(__doc__.split('\n\n')[1], file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

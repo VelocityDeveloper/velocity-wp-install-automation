@@ -13,9 +13,21 @@ export function pakaiPolling(url, jeda) {
   const galat = ref(null)
   const memuat = ref(true)
   let timer = null
+  let etag = null
+  let urlAkhir = null
+  // cache 'no-cache': peramban bertanya ulang ke server (If-None-Match) → 304 tanpa isi untuk berkas statis
+  // yang tidak berubah (mis. /brain/*.json); ETag sama = data identik, jadi tidak diurai & tidak memicu render.
   const muatUlang = async () => {
     try {
-      data.value = await ambil(typeof url === 'function' ? url() : url)
+      const u = typeof url === 'function' ? url() : url
+      const r = await fetch(u, { cache: 'no-cache' })
+      if (!r.ok) throw new Error(`${r.status} ${u}`)
+      const e = r.headers.get('etag')
+      if (!(e && e === etag && u === urlAkhir && data.value != null)) {
+        data.value = await r.json()
+        etag = e
+        urlAkhir = u
+      }
       galat.value = null
     } catch (e) {
       galat.value = e
@@ -23,8 +35,14 @@ export function pakaiPolling(url, jeda) {
       memuat.value = false
     }
   }
-  onMounted(() => { muatUlang(); if (jeda) timer = setInterval(muatUlang, jeda) })
-  onBeforeUnmount(() => clearInterval(timer))
+  // Tab tersembunyi = tidak polling; begitu terlihat lagi langsung dimuat ulang
+  const terlihat = () => { if (!document.hidden) muatUlang() }
+  onMounted(() => {
+    muatUlang()
+    if (jeda) timer = setInterval(() => { if (!document.hidden) muatUlang() }, jeda)
+    document.addEventListener('visibilitychange', terlihat)
+  })
+  onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visibilitychange', terlihat) })
   return { data, galat, memuat, muatUlang }
 }
 

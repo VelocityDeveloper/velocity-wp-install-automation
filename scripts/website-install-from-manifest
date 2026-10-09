@@ -127,7 +127,8 @@ if [[ "$MODE" == dry-run ]]; then
      case \"\$crt\" in *$SITE_HOST*) echo ssl_cert:match;; '') echo ssl_cert:none;; *) echo ssl_cert:mismatch;; esac;
      test -x /usr/local/directadmin/scripts/letsencrypt.sh && echo le_script:yes || echo le_script:no;     echo \"da_ssl:\$(grep -hE '^(ssl|letsencrypt)=' /usr/local/directadmin/data/users/${cfg[da_user]}/domains/$SITE_HOST.conf 2>/dev/null | tr '\n' ' ')\";
      for t in wp git php mysql; do command -v \$t >/dev/null || echo missing_tool:\$t; done;
-     df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}'" 2>&1) \
+     df -Pk /home/${cfg[da_user]} 2>/dev/null | awk 'NR==2{print \"avail_kb:\" \$4}';
+     test -d /var/lib/mysql/${cfg[db_name]} && echo db:ada || echo db:baru" 2>&1) \
     || probe="ssh_failed:$probe"
   problems=""
   case "$probe" in
@@ -140,6 +141,11 @@ if [[ "$MODE" == dry-run ]]; then
        while read -r t; do
          [[ -n "$t" ]] && problems+="$t "
        done < <(grep -o 'missing_tool:[a-z]*' <<<"$probe" || true)
+       # Staging (docroot=) berbagi akun vdco dengan situs lain, dan installer memakai
+       # CREATE DATABASE IF NOT EXISTS: DB bernama sama di folder kosong = milik situs lain.
+       if [[ -n "${cfg[docroot]:-}" && "$probe" == *site:empty* && "$probe" == *db:ada* ]]; then
+         problems+="db_staging_sudah_ada:${cfg[db_name]} "
+       fi
        avail=$(grep -o 'avail_kb:[0-9]*' <<<"$probe" | head -1 | cut -d: -f2 || true)
        if [[ -n "$avail" && "$avail" -lt 512000 ]]; then
          problems+="disk_low:${avail}KB "
@@ -321,6 +327,12 @@ php -d memory_limit=512M "$WP_BIN" core download --path="$DOCROOT" --force --all
 
 # create wp-config (force overwrite to ensure correct password)
 php -d memory_limit=512M "$WP_BIN" config create --path="$DOCROOT" --dbname=__DB_NAME_Q__ --dbuser=__DB_USER_Q__ --dbpass="$WP_DB_PASSWORD" --skip-check=false --allow-root --force
+# `config create --force` menulis ulang wp-config, jadi FS_METHOD dari run sebelumnya ikut hilang.
+# Pada apply ulang dengan Kirki 6.x sudah aktif, WP-CLI root (pemilik berkas beda -> metode FTP)
+# fatal di ftp_nlist() pada perintah wp pertama (faktualekonomi.com, pgtrentalmobil.com 2026-10-07).
+# Dipasang di sini, sebelum perintah wp lain dijalankan.
+php -d memory_limit=512M "$WP_BIN" config set FS_METHOD direct --type=constant --path="$DOCROOT" --allow-root >/dev/null 2>&1 \
+  || echo "fs_method_gagal" >&2
 
 # core install idempotency
 if php -d memory_limit=512M "$WP_BIN" core is-installed --path="$DOCROOT" --allow-root 2>/dev/null; then

@@ -67,6 +67,39 @@ const barisHalaman = computed(() => tersaring.value.slice((halaman.value - 1) * 
 watch(daftarStatus, (d) => { if (status.value && !d.includes(status.value)) status.value = '' })
 function reset() { cari.value = ''; status.value = ''; deadline.value = 'semua' }
 
+// Lama pengerjaan installer: awal run sampai laporan Telegram terkirim (x.lama dari API)
+const durasi = (d) => {
+  d = Math.max(0, Math.round(d))
+  const j = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60), dt = d % 60
+  return j ? `${j} j ${m} mnt` : m ? `${m} mnt ${dt} dtk` : `${dt} dtk`
+}
+const jamMenit = (t) => new Date(t * 1000).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+const lamaBaris = (x) => {
+  const l = x.lama || {}
+  if (x.status === 'RUNNING' && l.berjalan_sejak) return { teks: durasi(Date.now() / 1000 - l.berjalan_sejak), jalan: true, judul: `Berjalan sejak ${jamMenit(l.berjalan_sejak)}, laporan Telegram belum terkirim` }
+  const t = l.terakhir
+  return t ? { teks: durasi(t.detik), mode: t.mode, judul: `Run ${t.mode || ''} ${jamMenit(t.mulai)} → Telegram terkirim ${jamMenit(t.selesai)}${t.hasil ? ` (${t.hasil})` : ''}` } : null
+}
+// Total token AI per domain (x.token dari API): Claude + model lain di halaman AI Model
+const angkaToken = (n) => n >= 1e6 ? `${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 1 })} jt` : n >= 1e3 ? `${Math.round(n / 1e3).toLocaleString('id-ID')} rb` : String(n)
+const tokenBaris = (x) => {
+  const t = x.token
+  if (!t || !t.total) return null
+  const r = t.run_terakhir
+  const judul = [
+    `Total ${t.total.toLocaleString('id-ID')} token`,
+    `Claude: ${t.claude.token.toLocaleString('id-ID')} (${t.claude.panggilan} permintaan${t.claude.model.length ? `, ${t.claude.model.join(', ')}` : ''}${t.claude.biaya_usd ? `, ≈ $${t.claude.biaya_usd}` : ''})`,
+    `Model lain: ${t.lain.token.toLocaleString('id-ID')} (${t.lain.panggilan} panggilan${t.lain.model.length ? `, ${t.lain.model.join(', ')}` : ''})`,
+    r ? `Run terakhir ${r.mode || r.run}: ${(r.claude + r.lain).toLocaleString('id-ID')} token` : '',
+  ].filter(Boolean).join('\n')
+  return { teks: angkaToken(t.total), claude: t.claude.token ? angkaToken(t.claude.token) : '', lain: t.lain.token ? angkaToken(t.lain.token) : '', judul }
+}
+// Median run apply 30 hari terakhir: patokan lama install satu situs
+const lamaApply = computed(() => {
+  const batas = Date.now() / 1000 - 30 * 86400
+  const d = domains.value.map((x) => x.lama?.terakhir).filter((t) => t && t.mode === 'apply' && t.mulai >= batas).map((t) => t.detik).sort((a, b) => a - b)
+  return d.length ? { median: d[Math.floor(d.length / 2)], n: d.length } : null
+})
 const ringkas = computed(() => {
   const h = { jalan: 0, gagal: 0, selesai: 0, antre: 0 }
   for (const x of domains.value) {
@@ -255,7 +288,7 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
         <h1>Website Installer</h1>
         <p class="redup">Antrean dari Drive <code>/home/On Progress/</code> dan CRM, diperbarui tiap 4 detik. Situs yang sudah terpasang berlabel Selesai.</p>
       </div>
-      <RouterLink to="/installer/susulan" class="tombol garis"><Ikon nama="berkas" :ukuran="18" />Susulan aturan</RouterLink>
+      <RouterLink to="/installer/wordpress/susulan" class="tombol garis"><Ikon nama="berkas" :ukuran="18" />Susulan aturan</RouterLink>
     </header>
 
     <section class="ringkas" aria-label="Ringkasan antrean">
@@ -263,6 +296,9 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
       <div class="kartu angka"><span class="redup">Gagal</span><b :class="{ merah: ringkas.gagal }">{{ ringkas.gagal }}</b></div>
       <div class="kartu angka"><span class="redup">Antrean</span><b>{{ ringkas.antre }}</b></div>
       <div class="kartu angka"><span class="redup">Selesai</span><b>{{ ringkas.selesai }}</b></div>
+      <div class="kartu angka" :title="lamaApply ? `Median ${lamaApply.n} run apply 30 hari terakhir, dari mulai install sampai laporan Telegram terkirim` : null">
+        <span class="redup">Lama install (median)</span><b>{{ lamaApply ? durasi(lamaApply.median) : '–' }}</b>
+      </div>
     </section>
 
     <p v-if="catatan.teks" class="pesan-status" :class="catatan.jenis" role="status">{{ catatan.teks }}</p>
@@ -290,12 +326,12 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
       <div class="tabel-wadah">
         <table class="tabel">
           <thead>
-            <tr><th>Domain</th><th class="sembunyi-hp">Paket</th><th class="sembunyi-hp">Deadline</th><th class="sembunyi-hp">Target</th><th>Status</th><th><span class="sr">Tindakan</span></th></tr>
+            <tr><th>Domain</th><th class="sembunyi-hp">Paket</th><th class="sembunyi-hp">Deadline</th><th class="sembunyi-hp">Target</th><th>Status</th><th class="sembunyi-hp" title="Dari mulai run installer sampai laporan Telegram terkirim; di bawahnya total token AI domain (Claude + model lain)">Lama / Token</th><th><span class="sr">Tindakan</span></th></tr>
           </thead>
           <tbody>
-            <tr v-if="!data && !galat"><td colspan="6" class="redup">Memuat…</td></tr>
-            <tr v-else-if="data && !domains.length"><td colspan="6" class="redup">Belum ada berkas domain.txt.</td></tr>
-            <tr v-else-if="data && !barisHalaman.length"><td colspan="6" class="redup">Tidak ada domain yang cocok.</td></tr>
+            <tr v-if="!data && !galat"><td colspan="7" class="redup">Memuat…</td></tr>
+            <tr v-else-if="data && !domains.length"><td colspan="7" class="redup">Belum ada berkas domain.txt.</td></tr>
+            <tr v-else-if="data && !barisHalaman.length"><td colspan="7" class="redup">Tidak ada domain yang cocok.</td></tr>
             <tr v-for="x in barisHalaman" :key="x.domain">
               <td class="kol-domain">
                 <a :href="`https://${x.domain}`" target="_blank" rel="noopener noreferrer" class="domain">{{ x.domain }}</a>
@@ -320,6 +356,16 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
                   <i v-if="jenis(x) === 'jalan'" class="putar" aria-hidden="true" />{{ labelStatus(x)[0] }}
                 </span>
                 <span v-if="x.stage && jenis(x) !== 'siap'" class="kecil tahap">{{ x.stage }}</span>
+              </td>
+              <td class="sembunyi-hp nowrap">
+                <template v-if="lamaBaris(x)">
+                  <span :class="{ 'lama-jalan': lamaBaris(x).jalan }" :title="lamaBaris(x).judul">{{ lamaBaris(x).teks }}</span>
+                  <span v-if="lamaBaris(x).mode" class="kecil tahap">{{ lamaBaris(x).mode }}</span>
+                </template>
+                <span v-else-if="!tokenBaris(x)" class="redup">-</span>
+                <span v-if="tokenBaris(x)" class="kecil token" :title="tokenBaris(x).judul">
+                  {{ tokenBaris(x).teks }} token<template v-if="tokenBaris(x).claude && tokenBaris(x).lain"> · C {{ tokenBaris(x).claude }} · lain {{ tokenBaris(x).lain }}</template><template v-else-if="tokenBaris(x).claude"> · Claude</template>
+                </span>
               </td>
               <td class="kol-aksi">
                 <button type="button" class="tombol garis kecil" aria-haspopup="menu" @click="menu.tampilkan($event.currentTarget, aksiBaris(x))">Aksi <span aria-hidden="true">▾</span></button>
@@ -379,17 +425,19 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
 
 <style scoped>
 .halaman { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; min-width: 0; }
-.ringkas { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.ringkas { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
 .angka { display: grid; gap: 2px; padding: 14px 18px; }
 .angka b { font-size: 26px; font-weight: 700; }
 .angka b.biru { color: var(--aksen-terang); }
 .angka b.merah { color: var(--bahaya); }
+.token { margin-top: 4px; }
+.lama-jalan { color: var(--aksen-terang); font-weight: 600; }
 .saring { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; margin-bottom: 14px; }
 .kol-domain { min-width: 200px; }
 .domain { font-weight: 600; color: var(--teks); }
 .domain:hover { color: var(--aksen-terang); }
 .wpadmin { display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: 2px; vertical-align: -6px; border-radius: 6px; color: var(--teks-3); }
-.wpadmin:hover { background: var(--kartu-2); color: #fff; }
+.wpadmin:hover { background: var(--kartu-2); color: var(--teks-kuat); }
 .lencana-baris { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .lencana-baris:empty { display: none; }
 .nowrap { white-space: nowrap; }
@@ -435,6 +483,7 @@ td code { display: block; font-size: 12.5px; color: var(--teks-2); margin-bottom
 
 @media (max-width: 900px) {
   .ringkas { grid-template-columns: repeat(2, 1fr); }
+  .ringkas > :last-child { grid-column: 1 / -1; }
   .saring { grid-template-columns: 1fr 1fr; }
   .saring input { grid-column: 1 / -1; }
 }

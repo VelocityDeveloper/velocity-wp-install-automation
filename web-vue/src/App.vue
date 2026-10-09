@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import Ikon from './components/Ikon.vue'
 import KonfirmasiHost from './components/KonfirmasiHost.vue'
 import { pakaiPolling } from './api.js'
+import { tema, gantiTema } from './tema.js'
 
 const route = useRoute()
 const sekarang = ref(new Date())
@@ -13,10 +14,7 @@ onBeforeUnmount(() => clearInterval(jam))
 
 const tanggal = computed(() => sekarang.value.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' }))
 const pukul = computed(() => sekarang.value.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-const sapaan = computed(() => {
-  const h = sekarang.value.getHours()
-  return h < 11 ? 'Selamat pagi' : h < 15 ? 'Selamat siang' : h < 18 ? 'Selamat sore' : 'Selamat malam'
-})
+const labelTema = computed(() => (tema.value === 'light' ? 'Ganti ke mode gelap' : 'Ganti ke mode terang'))
 
 // Status server untuk kartu sambutan: ONLINE selama /api/stats menjawab
 const stats = pakaiPolling('/api/stats', 5000)
@@ -32,19 +30,28 @@ const backupBerikut = computed(() => {
 
 const NAV = [
   { ke: '/', label: 'Dashboard', ikon: 'dashboard' },
+  { ke: '/server', label: 'Server', ikon: 'server' },
+  { ke: '/security', label: 'Security', ikon: 'perisai' },
   { grup: 'installer', label: 'Installer', ikon: 'installer', anak: [
     { ke: '/installer/wordpress', label: 'WordPress', ikon: 'wordpress' },
     { ke: '/installer/laravel', label: 'Aplikasi Custom', ikon: 'laravel' },
+    { ke: '/paket', label: 'Paket', ikon: 'paket' },
   ] },
-  { ke: '/ai', label: 'AI Model', ikon: 'ai' },
   // Grup bersub-menu: induknya tombol buka-tutup, bukan tautan
-  { grup: 'claude', label: 'Claude', ikon: 'claude', anak: [
+  { grup: 'claude', label: 'AI & Claude', ikon: 'claude', anak: [
+    { ke: '/ai', label: 'AI Model', ikon: 'ai' },
     { ke: '/token', label: 'Token Usage', ikon: 'token' },
     { ke: '/brain', label: 'Brain', ikon: 'brain' },
   ] },
-  { ke: '/paket', label: 'Paket', ikon: 'paket' },
-  { ke: '/server', label: 'Server', ikon: 'server' },
-  { ke: '/projects', label: 'Project Lokal', ikon: 'proyek' },
+  { grup: 'pc', label: 'PC Lokal', ikon: 'komputer', anak: [
+    { ke: '/berkas', label: 'File Manager', ikon: 'berkas' },
+    { ke: '/projects', label: 'Project Lokal', ikon: 'proyek' },
+  ] },
+  { grup: 'pantau', label: 'Pemantauan', ikon: 'pantau', anak: [
+    { ke: '/notif-email', label: 'Notif Email', ikon: 'email' },
+    { ke: '/tutorial', label: 'Statistik Tutorial', ikon: 'tutorial' },
+    { ke: '/report', label: 'Report', ikon: 'laporan' },
+  ] },
 ]
 const aktif = (ke) => (ke === '/' ? route.path === '/' : route.path.startsWith(ke))
 // Grup terbuka bila dibuka manual atau salah satu anaknya sedang aktif
@@ -52,8 +59,6 @@ const grupBuka = ref({})
 const grupTerbuka = (n) => grupBuka.value[n.grup] ?? n.anak.some((a) => aktif(a.ke))
 const LAYANAN = [
   { url: '/n8n/', label: 'n8n', ikon: 'n8n' },
-  { url: '/hermes/', label: 'Hermes', ikon: 'hermes' },
-  { url: '/files/', label: 'File Manager', ikon: 'berkas' },
   { url: '/newvdnet/', label: 'New VDNet', ikon: 'crm', dev: true },
 ]
 
@@ -71,13 +76,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
       <button class="ikon-tombol" type="button" aria-label="Buka menu" :aria-expanded="menuBuka" aria-controls="sisi" @click="menuBuka = true"><Ikon nama="menu" /></button>
       <RouterLink to="/" class="merek"><img src="/ikon.png" alt="" width="28" height="28"><span>Local PC</span></RouterLink>
       <span class="pil" :class="online ? 'baik' : 'bahaya'">{{ online ? 'Online' : 'Offline' }}</span>
+      <button class="ikon-tombol" type="button" :aria-label="labelTema" :title="labelTema" @click="gantiTema"><Ikon :nama="tema === 'light' ? 'bulan' : 'matahari'" /></button>
     </header>
     <div v-if="menuBuka" class="tirai" @click="menuBuka = false" />
 
     <aside id="sisi" class="sisi" :class="{ buka: menuBuka }" aria-label="Menu utama">
       <div class="sisi-atas">
         <RouterLink to="/" class="merek"><img src="/ikon.png" alt="" width="30" height="30"><span>Velocity <b>Local PC</b></span></RouterLink>
-        <button class="ikon-tombol tutup" type="button" aria-label="Tutup menu" @click="menuBuka = false"><Ikon nama="tutup" /></button>
+        <span class="sisi-aksi">
+          <button class="ikon-tombol tema-desktop" type="button" :aria-label="labelTema" :title="labelTema" @click="gantiTema"><Ikon :nama="tema === 'light' ? 'bulan' : 'matahari'" /></button>
+          <button class="ikon-tombol tutup" type="button" aria-label="Tutup menu" @click="menuBuka = false"><Ikon nama="tutup" /></button>
+        </span>
       </div>
 
       <section class="sambutan">
@@ -85,7 +94,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
           <span class="tanggal">{{ tanggal }}</span>
           <span class="pil" :class="online ? 'baik' : 'bahaya'">{{ online ? 'Online' : 'Offline' }}</span>
         </div>
-        <p class="sapaan">{{ sapaan }},<br>Tim Velocity!</p>
         <p class="pukul"><Ikon nama="jam" :ukuran="15" /> {{ pukul }}</p>
       </section>
 
@@ -134,29 +142,33 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 
 <style scoped>
 .kerangka { display: grid; grid-template-columns: 272px minmax(0, 1fr); gap: 20px; padding: 20px; min-height: 100vh; }
-.sisi { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 20px; align-self: start; height: calc(100vh - 40px); overflow-y: auto; }
+.sisi { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 20px; align-self: start; height: calc(100vh - 40px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--garis) transparent; }
+.sisi::-webkit-scrollbar { width: 4px; }
+.sisi::-webkit-scrollbar-track { background: transparent; }
+.sisi::-webkit-scrollbar-thumb { background: var(--garis); border-radius: 999px; }
+.sisi::-webkit-scrollbar-thumb:hover { background: var(--teks-3); }
 .sisi-atas { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 2px; }
 .merek { display: inline-flex; align-items: center; gap: 10px; color: var(--teks); font-weight: 600; font-size: 15px; }
 .merek b { font-weight: 700; color: var(--aksen-terang); }
 .merek img { border-radius: 8px; }
 .ikon-tombol { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 10px; background: transparent; color: var(--teks-2); cursor: pointer; }
-.ikon-tombol:hover { background: var(--kartu-2); color: #fff; }
+.ikon-tombol:hover { background: var(--kartu-2); color: var(--teks-kuat); }
 .tutup { display: none; }
+.sisi-aksi { display: flex; gap: 2px; }
 
 .sambutan { padding: 16px 18px; border-radius: var(--radius); background: var(--kartu); border: 1px solid var(--garis); }
 .sambutan-baris { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tanggal { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--teks-3); }
-.sapaan { margin: 10px 0 8px; font-size: 21px; font-weight: 700; line-height: 1.25; }
-.pukul { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--teks-2); font-variant-numeric: tabular-nums; }
+.pukul { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--teks-2); font-variant-numeric: tabular-nums; }
 
 .nav-kartu { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: var(--radius); background: var(--kartu); border: 1px solid var(--garis); }
 .nav-judul { margin: 6px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--teks-3); text-transform: uppercase; letter-spacing: .04em; }
 .nav-item { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-radius: var(--radius-kecil); color: var(--teks-2); font-weight: 500; }
-.nav-item:hover { background: var(--kartu-2); color: #fff; }
-.nav-item.aktif { background: var(--kartu-2); color: #fff; box-shadow: inset 3px 0 0 var(--aksen-terang); }
+.nav-item:hover { background: var(--kartu-2); color: var(--teks-kuat); }
+.nav-item.aktif { background: var(--kartu-2); color: var(--teks-kuat); box-shadow: inset 3px 0 0 var(--aksen-terang); }
 .nav-item.aktif :deep(svg) { color: var(--aksen-terang); }
 .nav-induk { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
-.nav-induk.berisi { color: #fff; }
+.nav-induk.berisi { color: var(--teks-kuat); }
 .nav-induk.berisi > :deep(svg:first-child) { color: var(--aksen-terang); }
 .nav-induk:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: -2px; }
 .nav-induk .panah { margin-left: auto; transition: transform .2s; }
@@ -175,16 +187,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 .kartu-bawah small { display: block; font-size: 12px; opacity: .85; }
 .kb-ikon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: rgba(255, 255, 255, .16); flex: none; }
 
-.utama { min-width: 0; border-radius: 22px; background: rgba(15, 18, 36, .72); border: 1px solid var(--garis); padding: 26px 28px 32px; }
+.utama { min-width: 0; border-radius: 22px; background: var(--kaca); border: 1px solid var(--garis); padding: 26px 28px 32px; }
 .atas-hp, .tirai { display: none; }
 
 @media (max-width: 960px) {
   .kerangka { grid-template-columns: minmax(0, 1fr); padding: 0; gap: 0; }
-  .atas-hp { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; padding: 10px 16px; background: rgba(8, 10, 23, .92); border-bottom: 1px solid var(--garis); backdrop-filter: blur(8px); }
+  .atas-hp { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; padding: 10px 16px; background: var(--kaca-atas); border-bottom: 1px solid var(--garis); backdrop-filter: blur(8px); }
   .atas-hp .pil { margin-left: auto; }
   .sisi { position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(300px, 86vw); height: 100vh; top: 0; padding: 16px; background: var(--panel); transform: translateX(-105%); transition: transform .2s ease; visibility: hidden; }
   .sisi.buka { transform: none; visibility: visible; }
   .tutup { display: grid; }
+  .tema-desktop { display: none; }
   .tirai { display: block; position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .55); }
   .utama { border-radius: 0; border: 0; padding: 20px 16px 32px; background: transparent; }
 }

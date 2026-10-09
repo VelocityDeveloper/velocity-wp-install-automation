@@ -4,7 +4,7 @@
 Dipanggil laravel-agen-lanjut.timer (sesudah boot + tiap jam 07–20). Project dilanjutkan bila status agennya
 `menunggu_pagi` / `terputus` / `menunggu_kuota` (kuota Claude habis, dicoba lagi tiap jam) / `jatah_habis`
 (jatah harian project habis — hanya dilanjutkan esok harinya) (atau `jalan` padahal prosesnya sudah mati = mesin mati mendadak), tidak ada proses
-berjalan, sudah terpasang, masih ada fitur antre/revisi, dan tidak ada fitur gagal. Agen yang dihentikan manual
+berjalan, sudah terpasang, (`menunggu_review`: fitur fondasi sudah direview atau ada revisi), masih ada fitur antre/revisi, dan tidak ada fitur gagal. Agen yang dihentikan manual
 (`berhenti`) atau gagal TIDAK dilanjutkan otomatis. Mulai lewat API installer_status supaya prosesnya tercatat
 sama seperti tombol di dashboard.
 """
@@ -28,7 +28,12 @@ def main():
         slug = ringkas['slug']
         status = (ringkas.get('agen') or {}).get('status')
         fitur = L.baca_json(L.folder(slug) / 'fitur.json', []) or []
-        if status not in ('menunggu_pagi', 'terputus', 'menunggu_kuota', 'jatah_habis', 'jalan') or ringkas.get('job'):
+        if ringkas.get('status_proyek') != 'aktif':  # Selesai/Batal/Ditunda: jangan dilanjutkan otomatis
+            continue
+        if status not in ('menunggu_pagi', 'terputus', 'menunggu_kuota', 'jatah_habis', 'jalan', 'menunggu_review') or ringkas.get('job'):
+            continue
+        # Tertahan gerbang review: lanjut hanya bila fitur fondasi sudah direview atau ada revisi untuk dikerjakan
+        if status == 'menunggu_review' and L.gerbang_review(fitur) and not any(f.get('status') == 'revisi' for f in fitur):
             continue
         if status == 'jatah_habis' and (ringkas.get('agen') or {}).get('jatah_tanggal') == datetime.now().strftime('%Y-%m-%d'):
             continue

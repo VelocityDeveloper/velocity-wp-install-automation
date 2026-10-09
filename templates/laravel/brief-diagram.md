@@ -1,10 +1,11 @@
-Anda menyusun dua dokumen teknis berbahasa Indonesia untuk aplikasi Laravel **{{JUDUL}}**, turunan dari PRD
-di bawah. Dokumen dipakai PM (menjelaskan ke klien), agen Claude Code (membuat migrasi, model, alur halaman),
-dan webmaster (memeriksa). Stack: Laravel 13 + Inertia/Vue, database MariaDB, auth Fortify (tabel `users`
-bawaan starter kit: id, name, email, email_verified_at, password, two_factor_*, remember_token, timestamps).
+{{PLATFORM}}
 
 Diagram ditulis dengan **Mermaid** dan harus bisa dirender Mermaid versi 11 TANPA galat. Patuhi aturan sintaks
 di bawah dengan ketat.
+
+**Batas panjang (WAJIB, hemat token — dokumen ini dibaca ulang di estimasi dan setiap sesi agen):**
+DATABASE.md maksimal ±9.000 karakter, FLOWCHART.md maksimal ±7.000 karakter. Hanya tabel & proses yang ada di
+PRD; tulis padat tanpa paragraf pengantar.
 
 ## 1. DATABASE.md — relasi database
 
@@ -14,9 +15,10 @@ Susunan:
   kelompok (mis. `### Master`, `### Stok`, `### Penjualan`); tabel penghubung antarkelompok boleh muncul di dua
   diagram. Tabel bawaan framework (sessions, cache, jobs, password_reset_tokens, migrations) TIDAK digambar.
 - `## Tabel` — untuk tiap tabel: `### <nama_tabel>` + fungsi (1 kalimat), lalu tabel Markdown
-  `| Kolom | Tipe | Keterangan |` (tandai PK, FK → tabel.kolom, unik, nullable, default), lalu baris
-  **Indeks/unik** dan **Hapus**: perilaku FK (`restrict` / `cascade` / `null`) beserta alasannya.
-- `## Aturan integritas` — aturan yang dijaga database/aplikasi (mis. stok tidak boleh minus, nomor faktur unik per cabang).
+  `| Kolom | Tipe | Keterangan |` berisi kolom milik aplikasi saja (`id`, `created_at`/`updated_at` tidak perlu
+  ditulis ulang). Keterangan singkat: PK, FK → tabel.kolom + perilaku hapus (`restrict`/`cascade`/`null`), unik,
+  nullable, default — tanpa kalimat alasan panjang.
+- `## Aturan integritas` — maks. 6 poin, hanya yang penting (mis. stok tidak boleh minus, nomor faktur unik per cabang).
 
 Konvensi: nama tabel snake_case jamak ala Laravel (`sales`, `sale_items`, atau bahasa Indonesia bila PRD memakainya —
 konsisten), PK `id` bigint, FK `<tunggal>_id`, `created_at`/`updated_at`, uang `decimal(15,2)` → di diagram tulis `decimal`.
@@ -34,8 +36,9 @@ Aturan sintaks erDiagram (WAJIB):
 Susunan:
 - `# Flowchart — <judul>` lalu daftar isi proses.
 - `## Alur umum` — satu diagram: masuk → dashboard per peran → menu utama tiap peran.
-- Satu `## <nama proses>` untuk setiap proses bisnis utama di PRD (mis. transaksi kasir, barang masuk, mutasi,
-  pembatalan, laporan). Tiap proses: 1–3 kalimat penjelasan, lalu satu blok ```mermaid flowchart TD```
+- Satu `## <nama proses>` hanya untuk proses bisnis yang punya langkah/keputusan berarti (mis. transaksi kasir,
+  persetujuan, pembatalan); CRUD biasa dan laporan sederhana TIDAK perlu diagram. Umumnya 2–5 proses. Tiap proses:
+  1–2 kalimat penjelasan, lalu satu blok ```mermaid flowchart TD```
   dengan `subgraph` per peran yang terlibat, keputusan (validasi, hak akses, stok cukup?) sebagai belah ketupat,
   dan jalur gagal/penolakan juga digambar. Sebutkan tabel yang ditulis bila penting (mis. "Simpan ke sales & stock_movements").
 
@@ -46,6 +49,8 @@ Aturan sintaks flowchart (WAJIB):
   mulai/selesai `S(["Mulai"])`. Di dalam label jangan ada tanda kutip ganda; pakai `#quot;` bila perlu.
 - Subgraph: `subgraph kasir["Kasir"]` … `end` (ID subgraph huruf kecil tanpa spasi).
 - Panah berlabel: `K2 -->|"Ya"| K3`.
+
+{{CAKUPAN}}
 
 {{DOKUMEN_LAMA}}
 

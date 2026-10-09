@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Velocity Blocks
  * Description: Pustaka blok siap pakai ala page builder: seksi, judul, kotak ikon, grid, wadah geser, tombol, statistik, langkah, kartu, kartu paket, portofolio, katalog produk, daftar sewa + form booking WhatsApp, remah halaman, kontak, form pemesanan, serta blok portal berita (Judul Rubrik, Daftar Berita, Kotak) + pola seksi berita. Semua isi diedit langsung di kanvas (ketik teks, pilih ikon, atur tautan), blok bisa di-drag, disalin, dan dihapus.
- * Version: 1.9.1
+ * Version: 1.9.3
  * Requires at least: 6.6
  * Requires PHP: 7.4
  * Author: Velocity Developer
@@ -12,7 +12,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'VB_VERSI', '1.9.1' );
+define( 'VB_VERSI', '1.9.3' );
 define( 'VB_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VB_URL', plugin_dir_url( __FILE__ ) );
 

@@ -1,0 +1,1960 @@
+#!/usr/bin/env python3
+"""Redesign situs lama (khusus Paket G): cek, cadangan, inventaris, lokasi, salinan, laporan.
+
+Alur Redesign (keputusan user 2026-09-29, lewat Telegram; cabang hosting 2026-10-07):
+  1. cek situs lama   hosting di server tertaut (/server/) yang bisa diakses server kantor?
+                      ya → WP | bukan WP;  tidak (hosting luar / server tak terjangkau) → tahap 2 dilewati
+  2. cadangan penuh   hanya bila hosting terjangkau: DB + public_html disalin ke server installer
+                      (bukan kuota klien), diverifikasi (gzip utuh, wp-config di tar, jumlah tabel sama)
+  3. inventaris       URL, halaman, post, CPT, menu, logo, warna, kontak, plugin,
+                      kode GA/pixel, SEO → inventaris.json. Hosting tak terjangkau / bukan WP:
+                      dari halaman publik (REST wp-json, atau rayapan HTML) → konten-publik.json
+  4. lokasi           WP terjangkau: sisa kuota DA ≥ ukuran situs (berkas+DB) + 150 MB dan batas
+                      jumlah DB belum tercapai → duplikat ke <domain>/new; selain itu → duplikat ke
+                      staging velocitydeveloper.co/<domain>. Hosting luar / bukan WP → WordPress
+                      BARU di staging (installer dasar yang sama) + konten publik dipindahkan
+  5–6.                desain baru di salinan: installer-runner INSTALL_MODE=redesign
+  7. laporan          Telegram: link salinan + login WP, TANPA tombol
+Memindahkan salinan ke live BUKAN bagian alur ini: dicek & ditanyakan ke klien dulu,
+lalu dikerjakan lewat prompt lain. Situs asli tidak pernah ditulis skrip ini.
+
+Pemakaian (butuh WP_INSTALL_SSH_KEY_FILE):
+  redesign siapkan <domain> [--coba] [--lokasi=new|staging] [--ulang]
+                                 dipanggil installer-runner mode redesign bila manifest belum
+                                 menunjuk salinan; paket manifest bukan Paket G = berhenti (exit 3)
+      --coba    tahap 1, 3, 4 saja (baca), tanpa cadangan & tanpa menulis apa pun
+      --lokasi  paksa lokasi salinan (default: keputusan kuota)
+      --ulang   buat ulang salinan walau sudah ada (desain di salinan hilang)
+  redesign persiapan <domain> [--coba]
+                                 sebelum desain FSE (installer-runner mode redesign): halaman
+                                 lama berisi dikunci dari generator, beranda lama → beranda-lama,
+                                 isi contoh dari konten lama bila belum ada, tanpa_halaman
+  redesign rapikan <domain>      sesudah fse-apply --isi: beranda baru jadi halaman depan (gagal
+                                 = depan lama dikembalikan), menu lama + submenu, cek URL lama
+  redesign laporan <domain> [--qa=<masalah>]   kirim laporan tahap 7
+  redesign status <domain>       cetak status.json
+
+Uji tanpa situs klien: --sumber=<nama server>:<docroot>:<url> memakai WordPress mana
+pun di server tertaut sebagai situs lama (mis. staging vdco kita sendiri);
+--luar=<url> memperlakukan situs publik itu sebagai hosting luar (cabang tanpa cadangan).
+
+Hasil & jejak: /var/lib/velocity/redesign/<domain>/ (status.json, inventaris.json,
+cadangan-<waktu>/). Manifest asli disimpan sebagai <domain>.txt.sebelum-redesign.
+"""
+import base64
+import html
+import http.client
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import secrets
+import shlex
+import shutil
+import ssl
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))  # notify-telegram.py mengimpor folder_klien
+GENERATED = Path(os.environ.get('VELOCITY_AI_GENERATED') or '/var/lib/velocity/ai/generated')
+AKAR = Path(os.environ.get('VELOCITY_REDESIGN_DIR') or '/var/lib/velocity/redesign')
+# Dua yang pertama bisa dialihkan untuk uji (--sumber) supaya tidak muncul di daftar installer.
+PROJECT = Path(os.environ.get('VELOCITY_REDESIGN_PROJECT') or '/home/project')
+SECRETS = Path(os.environ.get('VELOCITY_REDESIGN_SECRETS') or '/etc/velocity/secrets')
+SERVERS = Path('/var/lib/velocity/servers.json')
+DA_MYCNF = '/usr/local/directadmin/conf/my.cnf'
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+CADANGAN_PER_DOMAIN = 3
+# Patokan kuota (keputusan user 2026-09-29): sisa ≥ ukuran situs lama + 150 MB.
+CADANGAN_KUOTA_MB = 150
+# Staging untuk kuota kurang / hosting luar (sama dengan manifest staging lain).
+STAGING = {'name': 'Kiya', 'host': '202.73.26.2', 'port': '57258', 'user': 'root', 'da_user': 'vdco',
+           'akar': '/home/vdco/domains/velocitydeveloper.co/public_html', 'url': 'https://velocitydeveloper.co'}
+# Tidak ikut ke salinan (cadangan tetap penuh): cache & arsip cadangan plugin memakan kuota
+# tanpa gunanya untuk desain.
+BUANG_SALIN = ['./new', './wp-content/cache', './wp-content/litespeed', './wp-content/et-cache',
+               './wp-content/updraft', './wp-content/ai1wm-backups', './wp-content/backups-dup-lite',
+               './wp-content/wpvivid*', './wp-content/uploads/backwpup*', './wp-content/backup-db',
+               '*.wpress', './error_log', './wp-content/debug.log']
+TANDA = '.velocity-redesign'
+# Palet bawaan Gutenberg/wp-admin tercetak di setiap situs WP, bukan warna klien.
+WARNA_WP = {'000000', 'ffffff', 'abb8c3', 'f78da7', 'cf2e2e', 'ff6900', 'fcb900', '7bdcb5', '00d084', '8ed1fc',
+            '0693e3', '9b51e0', '7a00df', '007cba', '006ba1', '005a87', '00a0d2', '0073aa', '135e96', '2271b1',
+            '3858e9', '1e1e1e', 'eeeeee', '313131', '32373c'}
+WP = 'php -d memory_limit=512M /usr/local/bin/wp --allow-root --skip-plugins --skip-themes'
+# mariadb-dump bawaan DirectAdmin mencari /tmp/mysql.sock walau my.cnf menunjuk tempat lain.
+SOKET = ('SOK=; for s in /tmp/mysql.sock /var/lib/mysql/mysql.sock /run/mysqld/mysqld.sock '
+         '/var/run/mysqld/mysqld.sock; do [ -S "$s" ] && { SOK="--socket=$s"; break; }; done\n')
+
+
+def log(pesan):
+    print(f'[{datetime.now().astimezone().isoformat(timespec="seconds")}] redesign: {pesan}', flush=True)
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+class Server:
+    def __init__(self, srv):
+        self.nama = srv.get('name', '')
+        self.host = srv['host']
+        key = os.environ.get('WP_INSTALL_SSH_KEY_FILE') or '/root/.ssh/id_ed25519'
+        self.ssh = ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+                    '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30', '-p', str(srv.get('port') or 22),
+                    f"{srv.get('user') or 'root'}@{srv['host']}"]
+        self.srv = srv
+
+    def bash(self, skrip, timeout=300, **kw):
+        return subprocess.run(self.ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True,
+                              timeout=timeout, **kw)
+
+    def keluar(self, skrip, timeout=300):
+        """Jalankan skrip; gagal (exit ≠ 0) = RuntimeError berisi ekor keluaran."""
+        run = self.bash('set -e\n' + skrip, timeout=timeout)
+        if run.returncode:
+            raise RuntimeError(re.sub(r'\s+', ' ', run.stdout + run.stderr).strip()[-400:])
+        return run.stdout
+
+    def sql(self, query, timeout=300):
+        """Kueri sebagai da_admin DirectAdmin; keluaran tanpa judul kolom."""
+        return self.keluar(f'mysql --defaults-extra-file={DA_MYCNF} -N -e {shlex.quote(query)}', timeout=timeout).strip()
+
+    def php(self, docroot, kode, timeout=300):
+        """PHP di dalam WordPress salinan/asli (hanya baca); hasil JSON di baris VRD:."""
+        skrip = (
+            'T=$(mktemp -d /tmp/velocity-redesign.XXXXXX)\n'
+            "trap 'rm -rf \"$T\"' EXIT\n"
+            "cat > \"$T/s.php\" <<'VELOCITY_REDESIGN_PHP'\n<?php\n" + kode + '\nVELOCITY_REDESIGN_PHP\n'
+            f'{WP} eval-file "$T/s.php" --path={shlex.quote(docroot)} 2>&1\n'
+        )
+        run = self.bash(skrip, timeout=timeout)
+        for baris in reversed(run.stdout.splitlines()):
+            if baris.startswith('VRD:'):
+                return json.loads(baris[4:])
+        raise RuntimeError('php_gagal: ' + re.sub(r'\s+', ' ', run.stdout + run.stderr).strip()[-300:])
+
+
+def daftar_server():
+    try:
+        data = json.loads(SERVERS.read_text())
+        return data.get('servers') or [] if isinstance(data, dict) else data
+    except (OSError, ValueError):
+        return []
+
+
+def baca_manifest(domain):
+    cfg = {}
+    try:
+        for baris in (PROJECT / domain / f'{domain}.txt').read_text().splitlines():
+            k, sep, v = baris.partition('=')
+            if sep:
+                cfg[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return cfg
+
+
+def folder(domain):
+    d = AKAR / domain
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    return d
+
+
+def status_baca(domain):
+    try:
+        return json.loads((AKAR / domain / 'status.json').read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def status_tulis(domain, **isi):
+    st = status_baca(domain)
+    st.update(isi, diperbarui=datetime.now().astimezone().isoformat(timespec='seconds'))
+    p = folder(domain) / 'status.json'
+    p.with_suffix('.tmp').write_text(json.dumps(st, ensure_ascii=False, indent=1))
+    os.replace(p.with_suffix('.tmp'), p)
+    return st
+
+
+def http_get(url, timeout=25):
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={'User-Agent': UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            return r.status, r.geturl(), r.read(3_000_000).decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        return e.code, url, e.read(500_000).decode('utf-8', 'replace')
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return 0, url, str(e)
+
+
+# ── Tahap 1: cek situs lama ─────────────────────────────────────────────────
+
+def cek(domain, sumber=None, luar=None):
+    """Temukan situs lama. Hasil: dict jenis=wp_tertaut|tertaut_bukan_wp (hosting terjangkau dari
+    server kantor) | luar_wp|luar_bukan_wp (tidak terjangkau) | tidak_aktif."""
+    if sumber:
+        nama, docroot, url = sumber
+        srv = next((s for s in daftar_server() if s.get('name', '').lower() == nama.lower()), None)
+        if not srv:
+            raise RuntimeError(f'server_tidak_dikenal:{nama}')
+        s = Server(srv)
+        pemilik = s.keluar(f'stat -c %U {shlex.quote(docroot)}').strip()
+        return _cek_wp(s, docroot, pemilik, url_paksa=url)
+    tak_terjangkau = []
+    for srv in [] if luar else daftar_server():
+        s = Server(srv)
+        try:
+            out = s.keluar(f'grep -lxF {shlex.quote(domain)} /usr/local/directadmin/data/users/*/domains.list '
+                           '2>/dev/null || true', timeout=40)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            log(f'cek: server {s.nama} tidak terjangkau ({str(e)[:120]})')
+            tak_terjangkau.append(s.nama)
+            continue
+        m = re.search(r'/users/([^/]+)/domains\.list', out)
+        if m:
+            u = m.group(1)
+            info = _cek_wp(s, f'/home/{u}/domains/{domain}/public_html', u)
+            if info['jenis'] == 'tertaut_bukan_wp':
+                info['url'] = _url_hidup(domain)[1]
+            return info
+    # Tidak ada di server yang bisa diakses server kantor (keputusan user 2026-10-07): tahap 2
+    # (cadangan) dilewati. Domain di server tertaut yang sedang tak terjangkau ikut cabang ini.
+    kode, akhir, isi = _url_hidup(domain, luar)
+    wp = bool(re.search(r'/wp-content/|/wp-includes/|wp-json', isi))
+    return {'jenis': ('luar_wp' if wp else 'luar_bukan_wp') if kode == 200 else 'tidak_aktif',
+            'http': kode, 'url': akhir.rstrip('/'), 'server_tak_terjangkau': tak_terjangkau}
+
+
+def _url_hidup(domain, url=None):
+    """(kode, url akhir tanpa garis miring, html) beranda publik: https dulu, lalu http."""
+    for calon in [url] if url else [f'https://{domain}/', f'http://{domain}/']:
+        kode, akhir, isi = http_get(calon)
+        if kode:
+            break
+    p = urllib.parse.urlparse(akhir)
+    return kode, f'{p.scheme}://{p.netloc}{p.path}'.rstrip('/'), isi
+
+
+def _cek_wp(s, docroot, da_user, url_paksa=None):
+    q = shlex.quote(docroot)
+    out = s.keluar(
+        f'[ -f {q}/wp-config.php ] || {{ echo WPCONFIG=0; exit 0; }}\n'
+        'echo WPCONFIG=1\n'
+        f'cd {q}\n'
+        f'echo "HOME=$({WP} option get home 2>/dev/null)"\n'
+        f'echo "DB=$({WP} config get DB_NAME 2>/dev/null)"\n'
+        f'echo "PREFIX=$({WP} config get table_prefix 2>/dev/null)"\n'
+        f'echo "VERSI=$({WP} core version 2>/dev/null)"\n'
+        f'[ -e {q}/new ] && echo "NEW=$([ -f {q}/new/{TANDA} ] && echo milik_redesign || echo ada)" || echo NEW=kosong\n'
+    )
+    kv = dict(re.findall(r'^([A-Z]+)=(.*)$', out, re.M))
+    info = {'server': s.srv, 'da_user': da_user, 'docroot': docroot, 'folder_new': kv.get('NEW', '')}
+    if kv.get('WPCONFIG') != '1':
+        return dict(info, jenis='tertaut_bukan_wp')
+    if not kv.get('HOME') or not kv.get('DB'):
+        raise RuntimeError('wp_cli_gagal_membaca_situs_lama')
+    return dict(info, jenis='wp_tertaut', url=url_paksa or kv['HOME'].rstrip('/'), db=kv['DB'],
+                prefix=kv.get('PREFIX', 'wp_'), versi_wp=kv.get('VERSI', ''))
+
+
+# ── Tahap 2: cadangan penuh ke server installer ────────────────────────────
+
+def cadangan(domain, info):
+    """Situs bukan WordPress di server tertaut (tanpa `db`): berkas saja."""
+    s = Server(info['server'])
+    q = shlex.quote(info['docroot'])
+    tujuan = folder(domain) / f"cadangan-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    ukuran = s.keluar(f'du -sk --exclude=./new {q} | cut -f1').strip()
+    bebas = shutil.disk_usage(AKAR).free // 1024
+    if not ukuran.isdigit() or int(ukuran) * 1.2 + 2_000_000 > bebas:
+        raise RuntimeError(f'ruang_server_installer_kurang: situs {ukuran} KB, bebas {bebas} KB')
+    tujuan.mkdir(mode=0o700)
+    if not info.get('db'):
+        return _cadangan_berkas(domain, s, q, tujuan, ukuran)
+    db = shlex.quote(info['db'])
+    with open(tujuan / 'db.sql.gz', 'wb') as f:
+        run = subprocess.run(s.ssh + ['bash', '-s'], stdout=f, stderr=subprocess.PIPE, timeout=3600,
+                             input=('set -o pipefail\n' + SOKET +
+                                    f'mariadb-dump --defaults-extra-file={DA_MYCNF} $SOK --single-transaction '
+                                    f'--quick --default-character-set=utf8mb4 {db} | gzip -6\n').encode())
+    if run.returncode:
+        raise RuntimeError('dump_db_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
+    with open(tujuan / 'berkas.tar.gz', 'wb') as f:
+        run = subprocess.run(s.ssh + ['bash', '-s'], stdout=f, stderr=subprocess.PIPE, timeout=7200,
+                             input=f'set -o pipefail\ntar -C {q} --exclude=./new -czf - . \n'.encode())
+    # tar exit 1 = berkas berubah saat dibaca (log/cache situs hidup): arsip tetap sah.
+    if run.returncode not in (0, 1):
+        raise RuntimeError('tar_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
+    # Verifikasi, bukan percaya exit code (feedback_verifikasi_hasil_perintah).
+    tabel_server = s.sql(f"select count(*) from information_schema.tables where table_schema='{info['db']}' "
+                         "and table_type='BASE TABLE'")
+    tabel_dump = subprocess.run(f"gzip -dc {shlex.quote(str(tujuan / 'db.sql.gz'))} | grep -c '^CREATE TABLE'",
+                                shell=True, capture_output=True, text=True).stdout.strip()
+    selesai = subprocess.run(f"gzip -dc {shlex.quote(str(tujuan / 'db.sql.gz'))} | tail -c 300",
+                             shell=True, capture_output=True, text=True).stdout
+    tar_ok = subprocess.run(f"tar -tzf {shlex.quote(str(tujuan / 'berkas.tar.gz'))} | grep -qx './wp-config.php'",
+                            shell=True).returncode == 0
+    hasil = {'folder': str(tujuan), 'db_mb': round((tujuan / 'db.sql.gz').stat().st_size / 1048576, 1),
+             'berkas_mb': round((tujuan / 'berkas.tar.gz').stat().st_size / 1048576, 1),
+             'situs_kb': int(ukuran), 'tabel': tabel_server}
+    if tabel_dump != tabel_server or 'Dump completed' not in selesai or not tar_ok:
+        raise RuntimeError(f'cadangan_tidak_utuh: tabel dump {tabel_dump} vs server {tabel_server}, '
+                           f'dump_selesai={"Dump completed" in selesai}, wp-config_di_tar={tar_ok}')
+    return _cadangan_selesai(domain, tujuan, hasil)
+
+
+def _cadangan_berkas(domain, s, q, tujuan, ukuran):
+    with open(tujuan / 'berkas.tar.gz', 'wb') as f:
+        run = subprocess.run(s.ssh + ['bash', '-s'], stdout=f, stderr=subprocess.PIPE, timeout=7200,
+                             input=f'set -o pipefail\ntar -C {q} --exclude=./new -czf - . \n'.encode())
+    if run.returncode not in (0, 1):
+        raise RuntimeError('tar_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
+    jumlah = subprocess.run(f"tar -tzf {shlex.quote(str(tujuan / 'berkas.tar.gz'))} | grep -vc '/$'",
+                            shell=True, capture_output=True, text=True).stdout.strip()
+    if not jumlah.isdigit() or not int(jumlah):
+        raise RuntimeError(f'cadangan_tidak_utuh: arsip berkas kosong/rusak ({jumlah or "-"})')
+    hasil = {'folder': str(tujuan), 'db_mb': 0, 'tabel': 0, 'situs_kb': int(ukuran), 'berkas_jumlah': int(jumlah),
+             'berkas_mb': round((tujuan / 'berkas.tar.gz').stat().st_size / 1048576, 1)}
+    return _cadangan_selesai(domain, tujuan, hasil)
+
+
+def _cadangan_selesai(domain, tujuan, hasil):
+    (tujuan / 'OK').write_text(json.dumps(hasil))
+    # Simpan 3 cadangan terakhir per domain.
+    for lama in sorted(folder(domain).glob('cadangan-*'))[:-CADANGAN_PER_DOMAIN]:
+        shutil.rmtree(lama, ignore_errors=True)
+    return hasil
+
+
+# ── Tahap 3: inventaris ─────────────────────────────────────────────────────
+
+PHP_INVENTARIS = r'''
+$tautan = function ($p) { return array('id' => $p->ID, 'judul' => get_the_title($p), 'slug' => $p->post_name,
+    'status' => $p->post_status, 'url' => get_permalink($p), 'induk' => $p->post_parent,
+    'template' => get_page_template_slug($p), 'kata' => str_word_count(wp_strip_all_tags($p->post_content)),
+    'builder' => get_post_meta($p->ID, '_elementor_edit_mode', true) ? 'elementor'
+        : (get_post_meta($p->ID, '_fl_builder_enabled', true) ? 'beaver' : (has_blocks($p) ? 'blok' : 'klasik'))); };
+$halaman = array_map($tautan, get_posts(array('post_type' => 'page', 'post_status' => array('publish', 'private', 'draft'),
+    'numberposts' => -1, 'orderby' => 'menu_order title', 'order' => 'ASC')));
+$post = array_map(function ($p) { return array('id' => $p->ID, 'judul' => get_the_title($p), 'url' => get_permalink($p),
+    'tanggal' => $p->post_date); }, get_posts(array('post_type' => 'post', 'numberposts' => -1)));
+$cpt = array();
+foreach (get_post_types(array('public' => true, '_builtin' => false), 'objects') as $t) {
+    $n = wp_count_posts($t->name);
+    $cpt[] = array('nama' => $t->name, 'label' => $t->label, 'terbit' => (int) ($n->publish ?? 0),
+        'contoh_url' => array_map('get_permalink', get_posts(array('post_type' => $t->name, 'numberposts' => 5))));
+}
+$menu = array();
+foreach (wp_get_nav_menus() as $m) {
+    $item = array_map(function ($i) { return array('id' => (int) $i->ID, 'judul' => $i->title, 'url' => $i->url, 'induk' => (int) $i->menu_item_parent); },
+        wp_get_nav_menu_items($m->term_id) ?: array());
+    $menu[] = array('nama' => $m->name, 'lokasi' => array_keys(array_filter(get_nav_menu_locations(),
+        function ($id) use ($m) { return (int) $id === (int) $m->term_id; })), 'item' => $item);
+}
+$kategori = array_map(function ($t) { return array('nama' => $t->name, 'slug' => $t->slug, 'jumlah' => $t->count,
+    'url' => get_term_link($t)); }, get_terms(array('taxonomy' => 'category', 'hide_empty' => false)));
+$logo = get_theme_mod('custom_logo');
+$tema = wp_get_theme();
+$plugin = array();
+foreach ((array) get_option('active_plugins') as $p) { $plugin[] = $p; }
+$seo = array();
+foreach (array('wordpress-seo/wp-seo.php' => 'yoast', 'seo-by-rank-math/rank-math.php' => 'rankmath',
+    'all-in-one-seo-pack/all_in_one_seo_pack.php' => 'aioseo') as $f => $n) {
+    if (in_array($f, $plugin, true)) { $seo[] = $n; }
+}
+foreach (array('home_title', 'home_description', 'home_keywords') as $k) {
+    $v = get_option($k); if ($v) { $seo['velocity_' . $k] = $v; }
+}
+echo 'VRD:' . wp_json_encode(array(
+    'nama' => get_bloginfo('name'), 'slogan' => get_bloginfo('description'), 'email_admin' => get_option('admin_email'),
+    'home' => home_url('/'), 'permalink' => get_option('permalink_structure'),
+    'depan' => array('tampil' => get_option('show_on_front'), 'halaman' => (int) get_option('page_on_front'),
+        'blog' => (int) get_option('page_for_posts')),
+    'tema' => array('slug' => get_stylesheet(), 'induk' => get_template(), 'nama' => $tema->get('Name'),
+        'blok' => function_exists('wp_is_block_theme') && wp_is_block_theme()),
+    'logo' => $logo ? wp_get_attachment_url($logo) : '', 'ikon' => get_site_icon_url(),
+    'plugin' => $plugin, 'seo' => $seo, 'halaman' => $halaman, 'post' => $post, 'jumlah_post' => count($post),
+    'cpt' => $cpt, 'menu' => $menu, 'kategori' => $kategori,
+    'media' => (int) array_sum((array) wp_count_attachments()),
+    'pengguna' => count_users()['total_users'],
+));
+'''
+
+
+def inventaris(domain, info):
+    s = Server(info['server'])
+    inv = s.php(info['docroot'], PHP_INVENTARIS, timeout=600)
+    kode, akhir, beranda = http_get(info['url'] + '/')
+    inv['beranda_http'] = kode
+    # Semua URL lama yang harus tetap hidup di desain baru (dicek lagi di tahap 6).
+    inv['url_lama'] = sorted(set([p['url'] for p in inv['halaman'] if p['status'] == 'publish'] +
+                                 [p['url'] for p in inv['post']] + [k['url'] for k in inv['kategori'] if k['jumlah']] +
+                                 [u for c in inv['cpt'] for u in c['contoh_url']]))
+    return _simpan_inventaris(domain, _ciri_beranda(inv, beranda))
+
+
+def _ciri_beranda(inv, beranda):
+    """Pelacak, kontak, warna, judul & deskripsi dari HTML beranda publik."""
+    inv['pelacak'] = {
+        'ga4': sorted(set(re.findall(r'\bG-[A-Z0-9]{6,12}\b', beranda))),
+        'ua': sorted(set(re.findall(r'\bUA-\d{4,10}-\d{1,4}\b', beranda))),
+        'gtm': sorted(set(re.findall(r'\bGTM-[A-Z0-9]{4,9}\b', beranda))),
+        'meta_pixel': sorted(set(re.findall(r"fbq\(\s*['\"]init['\"]\s*,\s*['\"](\d{6,20})", beranda))),
+        'verifikasi': sorted(set(re.findall(r'<meta[^>]+name=["\'](google-site-verification|facebook-domain-verification'
+                                            r'|msvalidate\.01)["\'][^>]*content=["\']([^"\']+)', beranda))),
+    }
+    wa = set(re.findall(r'(?:wa\.me/|api\.whatsapp\.com/send\?phone=)(\+?\d{9,15})', beranda))
+    inv['kontak'] = {
+        'wa': sorted(wa),
+        'telepon': sorted(set(re.findall(r'tel:([+\d][\d\s-]{7,18})', beranda))),
+        'email': sorted(set(e for e in re.findall(r'mailto:([^"\'?<>\s]+)', beranda))),
+        'sosmed': sorted(set(re.findall(r'https?://(?:www\.)?(?:facebook|instagram|tiktok|youtube|x|twitter|linkedin)\.com/'
+                                        r'[^"\'<>\s]+', beranda)))[:20],
+    }
+    # Warna: hex yang paling sering di CSS inline beranda (palet tema/builder), abu-abu dibuang.
+    hitung = {}
+    for h in re.findall(r'#([0-9a-fA-F]{6})\b', beranda):
+        h = h.lower()
+        r, g, b = int(h[:2], 16), int(h[2:4], 16), int(h[4:], 16)
+        if max(r, g, b) - min(r, g, b) > 24 and h not in WARNA_WP:
+            hitung[h] = hitung.get(h, 0) + 1
+    inv['warna'] = ['#' + h for h, _ in sorted(hitung.items(), key=lambda x: -x[1])[:8]]
+    inv['judul_beranda'] = html.unescape((re.search(r'<title[^>]*>(.*?)</title>', beranda, re.S | re.I)
+                                          or [None, ''])[1]).strip()
+    inv['meta_deskripsi'] = html.unescape((re.search(r'<meta[^>]+name=["\']description["\'][^>]*content=["\']([^"\']*)',
+                                                     beranda, re.I) or [None, ''])[1])
+    return inv
+
+
+def _simpan_inventaris(domain, inv):
+    inv['dibuat'] = datetime.now().astimezone().isoformat(timespec='seconds')
+    p = folder(domain) / 'inventaris.json'
+    p.write_text(json.dumps(inv, ensure_ascii=False, indent=1))
+    return inv
+
+
+# ── Tahap 3 (hosting tak terjangkau / bukan WP): inventaris & konten publik ──
+# Keputusan user 2026-10-07: hosting yang tidak bisa diakses server kantor → cadangan dilewati,
+# WordPress baru dipasang di staging dan konten publik situs lama dipindahkan ke sana:
+# WordPress lewat REST API (wp-json), REST tertutup / bukan WordPress lewat rayapan halaman HTML.
+# Gambar diperkecil ≤ 100 KB sebelum diunggah (feedback media maks 100 KB).
+PUBLIK_MAKS_HALAMAN = 60
+PUBLIK_MAKS_POST = 100
+PUBLIK_MAKS_GAMBAR = 150
+GAMBAR_MAKS_BYTE = 100 * 1024
+TAG_BLOK = {'p', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr',
+            'th', 'td', 'figure', 'figcaption'}
+TAG_SEBARIS = {'strong', 'em', 'u', 'sup', 'sub', 'a'}
+TAG_BUANG = {'script', 'style', 'noscript', 'svg', 'form', 'button', 'input', 'select', 'textarea', 'header', 'nav',
+             'footer', 'aside', 'template', 'canvas', 'link', 'meta', 'object', 'embed', 'video', 'audio', 'title'}
+# Bagian tema/builder di sekitar isi halaman (kepala, kaki, sidebar, menu, berbagi, komentar).
+KELAS_BUANG = re.compile(r'(?<![\w-])(site-header|site-footer|masthead|colophon|elementor-location-(header|footer)|'
+                         r'breadcrumbs?|sidebar|widget-area|screen-reader-text|sharedaddy|share-buttons?|'
+                         r'comments?-area|comment-respond|wp-block-navigation|cookie[\w-]*|skip-link)(?![\w-])', re.I)
+BUKAN_HALAMAN = re.compile(r'\.(jpe?g|png|gif|webp|svg|pdf|zip|rar|7z|docx?|xlsx?|pptx?|mp4|mp3|css|js|xml|ico|txt)$'
+                           r'|/(wp-admin|wp-login|wp-json|feed|cart|checkout|keranjang|my-account|wp-content)(/|$)', re.I)
+# Arsip WordPress (REST tertutup): ditelusuri untuk mencari tautan post, tidak disimpan sebagai halaman.
+ARSIP = re.compile(r'/(author|category|tag|page)/|^/\d{4}(/\d{2}){0,2}/?$', re.I)
+
+
+def ambil(url, timeout=25, maks=8_000_000):
+    """(kode, url akhir, isi bytes, header berhuruf kecil) — permintaan publik ber-UA peramban."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            return r.status, r.geturl(), r.read(maks), {k.lower(): v for k, v in r.headers.items()}
+    except urllib.error.HTTPError as e:
+        return e.code, url, b'', {k.lower(): v for k, v in (e.headers or {}).items()}
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
+        return 0, url, b'', {}
+
+
+def ambil_json(url):
+    kode, _, isi, hdr = ambil(url)
+    if kode != 200:
+        return None, hdr
+    try:
+        return json.loads(isi.decode('utf-8-sig', 'replace')), hdr
+    except ValueError:
+        return None, hdr
+
+
+def _host(u):
+    return urllib.parse.urlparse(u).netloc.lower().removeprefix('www.')
+
+
+def ke_asal(u, asal):
+    """URL situs lama (http/https, www/tanpa www) → bentuk baku `asal` + path; URL luar dibiarkan."""
+    p = urllib.parse.urlparse(u)
+    if p.scheme not in ('http', 'https') or _host(u) != _host(asal):
+        return u
+    return asal + (p.path or '/') + (f'?{p.query}' if p.query else '')
+
+
+def dok_html(isi, url):
+    import lxml.html
+    try:
+        d = lxml.html.fromstring(isi) if isinstance(isi, bytes) else lxml.html.fragment_fromstring(isi, create_parent='div')
+        d.make_links_absolute(url, resolve_base_href=True, handle_failures='ignore')
+        return d
+    except (ValueError, TypeError, lxml.etree.LxmlError):
+        return None
+
+
+def src_gambar(img, dasar):
+    for k in ('data-src', 'data-lazy-src', 'data-original', 'data-orig-file', 'src'):
+        v = (img.get(k) or '').strip()
+        if v and not v.startswith('data:'):
+            return urllib.parse.urljoin(dasar, v)
+    calon = [c.strip().split(' ')[0] for c in (img.get('data-srcset') or img.get('srcset') or '').split(',') if c.strip()]
+    return urllib.parse.urljoin(dasar, calon[-1]) if calon else ''
+
+
+def bersihkan(el, dasar, asal, gambar):
+    """Isi situs lama → HTML sederhana (judul, paragraf, daftar, tabel, gambar, tautan, peta/YouTube)
+    tanpa kelas/gaya builder. Gambar jadi {{vrd-img:N}} (N = indeks di `gambar`), tautan internal
+    {{vrd-home}}/path — keduanya diganti saat impor."""
+    keluar = []
+    e_ = lambda t: html.escape(t, quote=False) if t else ''
+
+    def jalan(e):
+        tag = e.tag.lower() if isinstance(e.tag, str) else None
+        kelas = f"{e.get('class') or ''} {e.get('id') or ''}" if tag else ''
+        if tag is None or tag in TAG_BUANG or KELAS_BUANG.search(kelas) or 'display:none' in (e.get('style') or '').replace(' ', ''):
+            keluar.append(e_(e.tail))
+            return
+        if tag == 'img':
+            u = src_gambar(e, dasar)
+            ukuran = [int(x) for x in (e.get('width'), e.get('height')) if x and x.isdigit()]
+            if u.startswith('http') and not (ukuran and min(ukuran) < 40):
+                n = gambar.setdefault(ke_asal(u, asal), len(gambar))
+                keluar.append(f'<img src="{{{{vrd-img:{n}}}}}" alt="{html.escape(e.get("alt") or "")}">')
+            keluar.append(e_(e.tail))
+            return
+        if tag == 'iframe':
+            src = urllib.parse.urljoin(dasar, e.get('src') or e.get('data-src') or '')
+            if re.search(r'youtube(-nocookie)?\.com/embed/|google\.[a-z.]+/maps|maps\.google\.', src):
+                keluar.append(f'<iframe src="{html.escape(src)}" width="100%" height="400" style="border:0" '
+                              'loading="lazy" allowfullscreen></iframe>')
+            keluar.append(e_(e.tail))
+            return
+        if tag in ('br', 'hr'):
+            keluar.append(f'<{tag}>' + e_(e.tail))
+            return
+        t = {'h1': 'h2', 'b': 'strong', 'i': 'em'}.get(tag, tag)
+        attr = ''
+        if t == 'a':
+            href = urllib.parse.urljoin(dasar, (e.get('href') or '').strip())
+            if not href or href.startswith(('javascript:', '#')) or href.split('#')[0] == dasar.split('#')[0]:
+                t = None
+            else:
+                href = ke_asal(href, asal)
+                href = '{{vrd-home}}' + href[len(asal):] if href.startswith(asal) else href
+                attr = f' href="{html.escape(href)}"'
+        elif t in ('td', 'th') and (e.get('colspan') or '').isdigit():
+            attr = f' colspan="{e.get("colspan")}"'
+        if t in TAG_BLOK or t in TAG_SEBARIS:
+            keluar.append(f'<{t}{attr}>' + e_(e.text))
+            for c in e:
+                jalan(c)
+            keluar.append(f'</{t}>')
+        else:
+            # div/section/span/dll. dibuka bungkusnya; batas blok jadi baris kosong (wpautop).
+            blok = tag in ('div', 'section', 'article', 'main', 'center', 'dl', 'dd', 'dt')
+            keluar.append(('\n\n' if blok else '') + e_(e.text))
+            for c in e:
+                jalan(c)
+            keluar.append('\n\n' if blok else '')
+        keluar.append(e_(e.tail))
+
+    jalan(el)
+    isi = ''.join(keluar)
+    for _ in range(3):
+        isi = re.sub(r'<(p|strong|em|u|a|li|h[2-6]|figure|figcaption|blockquote)(\s[^>]*)?>\s*</\1>', '', isi)
+    isi = re.sub(r'[ \t\r\f\v]+', ' ', isi)
+    return re.sub(r'\s*\n\s*\n\s*', '\n\n', isi).strip()
+
+
+def kata(isi_html):
+    return len(re.sub(r'<[^>]+>|\{\{[^}]+\}\}', ' ', isi_html).split())
+
+
+def isi_utama(d):
+    """Elemen isi halaman HTML (tanpa kepala/kaki/menu tema) + judulnya."""
+    el = None
+    for xp in ('//main', '//article', '//*[@id="content"]', '//*[@id="main"]', '//*[@role="main"]',
+               '//*[contains(concat(" ", normalize-space(@class), " "), " entry-content ")]', '//body'):
+        r = d.xpath(xp)
+        if r:
+            el = r[0]
+            break
+    h1 = (el if el is not None else d).xpath('.//h1')
+    judul = ' '.join(h1[0].text_content().split()) if h1 else ''
+    if not judul:
+        t = d.xpath('//title')
+        judul = re.split(r'\s+[|–—-]\s+', ' '.join(t[0].text_content().split()))[0] if t else ''
+    if h1 and el is not None:
+        h1[0].drop_tree()  # judul halaman dicetak template, bukan diulang di isi
+    return el, judul
+
+
+def menu_dari(d, asal):
+    """Menu utama dari HTML beranda (nav pertama), beserta submenu; URL internal → `asal`."""
+    nav = d.xpath('//header//nav | //nav | //*[contains(@class, "main-navigation")] | //*[contains(@class, "navbar")]')
+    if not nav:
+        return []
+    akar = nav[0].xpath('.//ul[not(ancestor::ul)]')
+    item = []
+
+    def susun(ul, induk):
+        for li in ul.xpath('./li'):
+            a = li.xpath('./a | ./*[not(self::ul)]/a')
+            judul = ' '.join(a[0].text_content().split()) if a else ''
+            if not judul or len(item) >= 40:
+                continue
+            item.append({'id': len(item) + 1, 'judul': judul, 'url': ke_asal(a[0].get('href') or asal + '/', asal),
+                         'induk': induk})
+            nid = item[-1]['id']
+            for sub in li.xpath('./ul | ./*/ul')[:1]:
+                susun(sub, nid)
+
+    if akar:
+        susun(akar[0], 0)
+    else:
+        for a in nav[0].xpath('.//a[@href]')[:20]:
+            judul = ' '.join(a.text_content().split())
+            if judul:
+                item.append({'id': len(item) + 1, 'judul': judul, 'url': ke_asal(a.get('href'), asal), 'induk': 0})
+    return item
+
+
+def logo_dari(d, dasar):
+    for xp in ('//*[contains(@class, "custom-logo")]//img | //img[contains(@class, "custom-logo")]',
+               '//header//img[contains(translate(concat(@class, @id, @alt, @src), "LOGO", "logo"), "logo")]',
+               '//img[contains(translate(concat(@class, @id, @alt, @src), "LOGO", "logo"), "logo")]',
+               '//header//img'):
+        r = d.xpath(xp)
+        if r and src_gambar(r[0], dasar):
+            return src_gambar(r[0], dasar)
+    return ''
+
+
+def ikon_dari(d, dasar):
+    calon = d.xpath('//link[contains(@rel, "apple-touch-icon")]/@href | //link[contains(@rel, "icon")]/@href')
+    return urllib.parse.urljoin(dasar, calon[0]) if calon else ''
+
+
+def permalink_dari(link_post, slug_kategori=()):
+    p = urllib.parse.urlparse(link_post or '').path
+    for pola, struktur in ((r'^/\d{4}/\d{2}/\d{2}/[^/]+/?$', '/%year%/%monthnum%/%day%/%postname%/'),
+                           (r'^/\d{4}/\d{2}/[^/]+/?$', '/%year%/%monthnum%/%postname%/'),
+                           (r'^/[^/]+\.html$', '/%postname%.html')):
+        if re.match(pola, p):
+            return struktur
+    m = re.match(r'^/([^/]+)/[^/]+/?$', p)
+    if m and m.group(1) in slug_kategori:
+        return '/%category%/%postname%/'
+    return '/%postname%/'
+
+
+def halaman_html(asal, url, beranda=None):
+    """Rayap satu halaman: (data halaman | None, tautan internal, dokumen)."""
+    if beranda is not None:
+        kode, akhir, isi = 200, url, beranda
+    else:
+        kode, akhir, isi, hdr = ambil(url)
+        if kode != 200 or 'html' not in hdr.get('content-type', 'text/html'):
+            return None, [], None
+        time.sleep(0.3)
+    if _host(akhir) != _host(asal):
+        return None, [], None
+    d = dok_html(isi, akhir)
+    if d is None:
+        return None, [], None
+    tautan = []
+    for h in d.xpath('//a/@href'):
+        h = ke_asal(h.split('#')[0], asal)
+        if h.startswith(asal) and '?' not in h and not BUKAN_HALAMAN.search(urllib.parse.urlparse(h).path):
+            tautan.append(h.rstrip('/') or asal)
+    return {'url': ke_asal(akhir, asal).split('#')[0], 'dok': d}, tautan, d
+
+
+def konten_rayap(asal, beranda_html, gambar):
+    """Bukan WordPress / REST tertutup: halaman ditelusuri dari beranda (menu dulu), maks PUBLIK_MAKS_HALAMAN.
+    Path lama dipertahankan sebagai hierarki halaman (/a/b → halaman b ber-induk a)."""
+    antre, dilihat, halaman = [asal], {asal}, []
+    while antre and len(halaman) < PUBLIK_MAKS_HALAMAN:
+        u = antre.pop(0)
+        data, tautan, d = halaman_html(asal, u, beranda_html.encode() if u == asal else None)
+        for t in tautan:
+            if t not in dilihat and len(dilihat) < PUBLIK_MAKS_HALAMAN * 3:
+                dilihat.add(t)
+                antre.append(t)
+        if not data:
+            continue
+        path = urllib.parse.urlparse(data['url']).path
+        if ARSIP.search(path):
+            continue
+        seg = [re.sub(r'\.(html?|php|aspx?)$', '', s) for s in path.split('/') if s]
+        if any(h['kunci'] == '/'.join(seg) for h in halaman):
+            continue
+        el, judul = isi_utama(d)
+        isi = bersihkan(el, data['url'], asal, gambar) if el is not None else ''
+        halaman.append({'kunci': '/'.join(seg), 'induk': '/'.join(seg[:-1]), 'slug': seg[-1] if seg else 'beranda',
+                        'judul': 'Beranda' if not seg else (judul or seg[-1].replace('-', ' ').title()),
+                        'isi': isi, 'status': 'publish', 'urut': len(halaman), 'depan': not seg,
+                        'url': asal + path})
+    # Induk yang tidak ikut terayap dibuat draf supaya URL anak tetap sama.
+    ada = {h['kunci'] for h in halaman}
+    for h in list(halaman):
+        k = h['induk']
+        while k and k not in ada:
+            seg = k.split('/')
+            halaman.insert(0, {'kunci': k, 'induk': '/'.join(seg[:-1]), 'slug': seg[-1], 'status': 'draft',
+                               'judul': seg[-1].replace('-', ' ').title(), 'isi': '', 'urut': 0, 'url': ''})
+            ada.add(k)
+            k = '/'.join(seg[:-1])
+    return urut_induk(halaman, 'kunci')
+
+
+def konten_rest(buat, asal, gambar):
+    """WordPress dengan REST terbuka: halaman, post terbaru, kategori, gambar utama."""
+    def semua(jalur, kolom, maks):
+        hasil, hal, total = [], 1, 0
+        while len(hasil) < maks:
+            data, hdr = ambil_json(buat(jalur, f'per_page=100&page={hal}&_fields={kolom}'))
+            if not isinstance(data, list) or not data:
+                break
+            hasil += data
+            total = int(hdr.get('x-wp-total') or 0)
+            if hal >= int(hdr.get('x-wp-totalpages') or 1):
+                break
+            hal += 1
+        return hasil[:maks], max(total, len(hasil))
+
+    teks = lambda v: html.unescape(re.sub(r'<[^>]+>', '', (v or {}).get('rendered', '') if isinstance(v, dict) else str(v or ''))).strip()
+    hal_rest, total_hal = semua('wp/v2/pages', 'id,slug,link,title,content,parent,menu_order,featured_media,status',
+                                PUBLIK_MAKS_HALAMAN)
+    post_rest, total_post = semua('wp/v2/posts', 'id,slug,link,title,content,date,categories,featured_media',
+                                  PUBLIK_MAKS_POST)
+    kat_rest, _ = semua('wp/v2/categories', 'id,name,slug,parent,description,count,link', 300)
+    utama = {x['featured_media'] for x in hal_rest + post_rest if x.get('featured_media')}
+    sumber_utama = {}
+    for i in range(0, len(utama), 100):
+        data, _ = ambil_json(buat('wp/v2/media', f'include={",".join(map(str, list(utama)[i:i + 100]))}'
+                                                 f'&per_page=100&_fields=id,source_url'))
+        sumber_utama.update({m['id']: m['source_url'] for m in data or [] if m.get('source_url')})
+
+    def isi_dari(x):
+        d = dok_html(x.get('content', {}).get('rendered') or '', x['link'])
+        isi = bersihkan(d, x['link'], asal, gambar) if d is not None else ''
+        if kata(isi) < 15:
+            # Isi dirakit template/builder di luar post_content: ambil dari halaman publiknya.
+            data, _, d = halaman_html(asal, x['link'])
+            if d is not None:
+                el, _ = isi_utama(d)
+                lain = bersihkan(el, x['link'], asal, gambar) if el is not None else ''
+                isi = lain if kata(lain) > kata(isi) else isi
+        return isi
+
+    def foto(x):
+        u = sumber_utama.get(x.get('featured_media'))
+        return gambar.setdefault(ke_asal(u, asal), len(gambar)) if u else None
+
+    halaman = [{'kunci': str(x['id']), 'induk': str(x['parent']) if x.get('parent') else '', 'slug': x['slug'],
+                'judul': teks(x.get('title')) or x['slug'], 'isi': isi_dari(x), 'status': 'publish',
+                'urut': x.get('menu_order') or 0, 'depan': ke_asal(x['link'], asal).rstrip('/') == asal,
+                'url': ke_asal(x['link'], asal), 'gambar_utama': foto(x)} for x in hal_rest]
+    post = [{'judul': teks(x.get('title')) or x['slug'], 'slug': x['slug'], 'isi': isi_dari(x),
+             'tanggal': (x.get('date') or '').replace('T', ' '), 'kategori': x.get('categories') or [],
+             'url': ke_asal(x['link'], asal), 'gambar_utama': foto(x)} for x in post_rest]
+    kategori = [{'id': k['id'], 'nama': html.unescape(k['name']), 'slug': k['slug'], 'induk': k.get('parent') or 0,
+                 'deskripsi': k.get('description') or '', 'jumlah': k.get('count') or 0,
+                 'url': ke_asal(k.get('link') or '', asal)} for k in kat_rest]
+    return urut_induk(halaman, 'kunci'), post, urut_induk(kategori, 'id'), total_hal, total_post
+
+
+def urut_induk(daftar, kunci):
+    """Induk selalu sebelum anaknya (impor memetakan induk saat menyisipkan)."""
+    peta = {x[kunci]: x for x in daftar}
+
+    def dalam(x, n=0):
+        return n if n > 20 or not x['induk'] or x['induk'] not in peta else dalam(peta[x['induk']], n + 1)
+    return sorted(daftar, key=dalam)
+
+
+def inventaris_publik(domain, info):
+    """(inventaris, konten) dari halaman publik situs lama; bentuk inventaris sama dengan inventaris()."""
+    asal = info['url'].rstrip('/')
+    kode, akhir, beranda = http_get(asal + '/')
+    d = dok_html(beranda.encode(), akhir) if beranda else None
+    if d is None:
+        raise RuntimeError(f'beranda_lama_tidak_terbaca:{kode}')
+    gambar = {}
+    buat, akar_rest = None, None
+    for dasar, f in ((f'{asal}/wp-json/', lambda p, q: f'{asal}/wp-json/{p}?{q}'),
+                     (f'{asal}/?rest_route=/', lambda p, q: f'{asal}/?rest_route=/{p}&{q}')):
+        data, _ = ambil_json(dasar)
+        if isinstance(data, dict) and 'wp/v2' in (data.get('namespaces') or []):
+            buat, akar_rest = f, data
+            break
+    if buat:
+        halaman, post, kategori, total_hal, total_post = konten_rest(buat, asal, gambar)
+        sumber = 'rest'
+    if not buat or not (halaman or post):
+        halaman, post, kategori = konten_rayap(asal, beranda, gambar), [], []
+        total_hal, total_post, sumber = len(halaman), 0, 'rayap_html'
+    akar_rest = akar_rest or {}
+    logo = ikon = ''
+    if akar_rest.get('site_logo'):
+        data, _ = ambil_json(buat('wp/v2/media/' + str(akar_rest['site_logo']), '_fields=source_url'))
+        logo = (data or {}).get('source_url', '')
+    logo = ke_asal(logo or logo_dari(d, akhir), asal)
+    ikon = ke_asal(akar_rest.get('site_icon_url') or ikon_dari(d, akhir), asal)
+    judul_tab = html.unescape((re.search(r'<title[^>]*>(.*?)</title>', beranda, re.S | re.I) or [None, ''])[1]).strip()
+    nama = html.unescape(akar_rest.get('name') or '') or re.split(r'\s+[|–—-]\s+', judul_tab)[0] or domain
+    tema = re.search(r'/wp-content/themes/([\w.-]+)/', beranda)
+    menu = menu_dari(d, asal)
+    inv = {
+        'sumber': f'publik_{sumber}', 'nama': nama, 'slogan': html.unescape(akar_rest.get('description') or ''),
+        'email_admin': '', 'home': asal + '/',
+        'permalink': permalink_dari(post[0]['url'] if post else '', {k['slug'] for k in kategori}),
+        'depan': {}, 'tema': {'slug': tema.group(1) if tema else ('-' if info['jenis'] != 'luar_wp' else '?'),
+                              'induk': '', 'nama': '', 'blok': False},
+        'logo': logo, 'ikon': ikon,
+        'plugin': sorted(set(re.findall(r'/wp-content/plugins/([\w.-]+)/', beranda))), 'seo': [],
+        'halaman': [{'id': h['kunci'], 'judul': h['judul'], 'slug': h['slug'], 'status': h['status'], 'url': h['url'],
+                     'induk': h['induk'], 'template': '', 'kata': kata(h['isi']), 'builder': 'publik'} for h in halaman],
+        'post': [{'id': i, 'judul': p['judul'], 'url': p['url'], 'tanggal': p['tanggal']} for i, p in enumerate(post)],
+        'jumlah_post': total_post, 'halaman_total': total_hal, 'cpt': [],
+        'menu': [{'nama': 'Menu utama (dari beranda)', 'lokasi': ['primary'], 'item': menu}] if menu else [],
+        'kategori': [{'nama': k['nama'], 'slug': k['slug'], 'jumlah': k['jumlah'], 'url': k['url']} for k in kategori],
+        'media': len(gambar), 'pengguna': 0, 'beranda_http': kode,
+    }
+    _ciri_beranda(inv, beranda)
+    # URL lama yang wajib hidup = yang ikut dipindahkan (post di luar batas tidak dihitung).
+    kat_terpakai = {c for p in post for c in p['kategori']}
+    inv['url_lama'] = sorted({h['url'] for h in halaman if h['status'] == 'publish' and h['url']}
+                             | {p['url'] for p in post}
+                             | {k['url'] for k in kategori if k['id'] in kat_terpakai and k['url'].startswith(asal)})
+    if logo:
+        gambar.setdefault(logo, len(gambar))
+    if ikon:
+        gambar.setdefault(ikon, len(gambar))
+    konten = {'sumber': sumber, 'asal': asal, 'nama': nama, 'slogan': inv['slogan'], 'permalink': inv['permalink'],
+              'halaman': halaman, 'post': post, 'kategori': kategori, 'logo': gambar.get(logo), 'ikon': gambar.get(ikon),
+              'gambar': {str(n): u for u, n in gambar.items()},
+              'basis_kategori': (re.match(r'^/([^/]+)/[^/]+/?$', urllib.parse.urlparse(kategori[0]['url']).path)
+                                 or [None, ''])[1] if kategori else ''}
+    p = folder(domain) / 'konten-publik.json'
+    p.write_text(json.dumps(konten, ensure_ascii=False, indent=1))
+    os.chmod(p, 0o600)
+    return _simpan_inventaris(domain, inv), konten
+
+
+# ── Tahap 3b: brief redesign dari subfolder "redesign <domain>" ─────────────
+# Keputusan user 2026-09-29: desain baru (FSE) mengikuti referensi di subfolder redesign
+# folder klien (keterangan.doc/docx/txt: "desain diubah menjadi seperti ..."), BUKAN
+# referensi di FORM ISIAN lama (itu referensi pembuatan pertama). Baris login hosting
+# tidak disimpan & tidak dianggap referensi.
+ON_PROGRESS = Path(os.environ.get('VELOCITY_REDESIGN_ON_PROGRESS') or '/home/On Progress')
+BRIEF_LOGIN = re.compile(r'login|user ?name|password|pass(word)?\s*[:=]|sandi|cpanel|:2222|:2083|/wp-admin|'
+                         r'\bmanage\.|hosting|dashboard|\bftp\b', re.I)
+BRIEF_NIAT = re.compile(r'desain|design|seperti|mirip|referensi|refrensi|contoh|nuansa|tampilan|layout|'
+                        r'acuan|\bala\b|model', re.I)
+BRIEF_URL = re.compile(r'(?:https?://[^\s"<>]+|(?<![@\w./-])(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*'
+                       r'\.(?:com|net|org|id|biz|info|io|co|store|shop|site)(?:/[^\s"<>]*)?)(?![\w@-])', re.I)
+BRIEF_BUKAN = re.compile(r'drive\.google|docs\.google|mail\.google|wa\.me|whatsapp|youtube|youtu\.be|bit\.ly|'
+                         r'alamatwebcontoh|woocommerce\.com/doc|instagram\.com|facebook\.com|tiktok\.com', re.I)
+
+
+def folder_redesign(domain):
+    """Subfolder redesign terbaru di folder klien (nama folder domain tak peka huruf besar)."""
+    try:
+        akar = next((d for d in ON_PROGRESS.iterdir() if d.is_dir() and d.name.lower() == domain), None)
+        calon = [d for d in akar.iterdir() if d.is_dir() and 'redesign' in d.name.lower()] if akar else []
+    except OSError:
+        return None
+    return max(calon, key=lambda d: d.stat().st_mtime) if calon else None
+
+
+def brief(domain):
+    """brief.json: referensi desain, paket tujuan, catatan klien (tanpa baris login)."""
+    from client_form import extract_text
+    f = folder_redesign(domain)
+    hasil = {'folder': str(f or ''), 'berkas': [], 'referensi': {}, 'semua_referensi': [], 'paket_tujuan': '',
+             'catatan': ''}
+    baris = []
+    # Referensi berupa gambar (goa-jomblang.com: "desain seperti screenshot di atas" di dalam
+    # docx, tanpa URL): gambar lepas & gambar di dalam docx disalin untuk agen desain.
+    gambar = folder(domain) / 'brief-gambar'
+    shutil.rmtree(gambar, ignore_errors=True)
+    for p in sorted(f.iterdir()) if f else []:
+        if not p.is_file() or re.search(r'login|akses|password|sandi', p.name, re.I):
+            continue
+        if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp') and p.stat().st_size < 15_000_000:
+            gambar.mkdir(exist_ok=True)
+            shutil.copy2(p, gambar / p.name)
+            hasil['berkas'].append(p.name)
+        if p.suffix.lower() not in ('.doc', '.docx', '.txt', '.md', '.pdf'):
+            continue
+        teks = (p.read_text(errors='replace').splitlines() if p.suffix.lower() in ('.txt', '.md')
+                else extract_text(p))
+        hasil['berkas'].append(p.name)
+        baris += [re.sub(r'\s+', ' ', b).strip() for b in teks if b.strip()]
+        if p.suffix.lower() == '.docx':
+            try:
+                with zipfile.ZipFile(p) as z:
+                    for n in z.namelist():
+                        if n.startswith('word/media/') and n.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            gambar.mkdir(exist_ok=True)
+                            (gambar / f'{p.stem}-{Path(n).name}').write_bytes(z.read(n))
+            except (OSError, zipfile.BadZipFile):
+                pass
+    hasil['gambar'] = sorted(str(g) for g in gambar.iterdir()) if gambar.is_dir() else []
+    refs = []
+    for i, b in enumerate(baris):
+        if BRIEF_LOGIN.search(b):
+            continue
+        sebelum = baris[i - 1] if i and not BRIEF_LOGIN.search(baris[i - 1]) else ''
+        if not (BRIEF_NIAT.search(b) or BRIEF_NIAT.search(sebelum)):
+            continue
+        for u in BRIEF_URL.findall(b):
+            u = u.rstrip('.,)"\'')
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(u).query).get('q')
+            if 'google.com/url' in u and q:
+                u = q[0]
+            if not u.lower().startswith('http'):
+                u = 'https://' + u
+            host = urllib.parse.urlparse(u).netloc.lower().removeprefix('www.')
+            if not host or host == domain or host.endswith('.' + domain) or BRIEF_BUKAN.search(u):
+                continue
+            if host not in [r['host'] for r in refs]:
+                refs.append({'url': u, 'host': host, 'catatan': b[:300]})
+    hasil['semua_referensi'] = [{'url': r['url'], 'catatan': r['catatan']} for r in refs]
+    if refs:
+        hasil['referensi'] = {'url': refs[0]['url'], 'catatan': refs[0]['catatan'], 'sumber': 'redesign'}
+    m = re.search(r'paket\s+(toko online custom|toko online|portal berita custom|portal berita|[a-h])\b',
+                  ' '.join(baris + hasil['berkas']), re.I)
+    hasil['paket_tujuan'] = m.group(1).lower() if m else ''
+    hasil['catatan'] = '\n'.join(b for b in baris if not BRIEF_LOGIN.search(b))[:4000]
+    hasil['dibuat'] = datetime.now().astimezone().isoformat(timespec='seconds')
+    p = folder(domain) / 'brief.json'
+    p.write_text(json.dumps(hasil, ensure_ascii=False, indent=1))
+    os.chmod(p, 0o600)
+    return hasil
+
+
+# ── Tahap 4: lokasi salinan ─────────────────────────────────────────────────
+
+def lokasi(domain, info, ukuran_kb=None):
+    """('new'|'staging', alasan, rincian) menurut patokan kuota keputusan user."""
+    if info.get('jenis') != 'wp_tertaut':
+        # WordPress baru + konten publik selalu di staging (tidak menyentuh hosting klien).
+        return 'staging', 'bukan_wp' if info.get('jenis') == 'tertaut_bukan_wp' else 'hosting_luar', {}
+    if info.get('folder_new') == 'ada':
+        return 'staging', 'folder_new_sudah_dipakai_situs_lama', {}
+    s = Server(info['server'])
+    u, q = info['da_user'], shlex.quote(info['docroot'])
+    buang = ' '.join(f'--exclude={shlex.quote(b)}' for b in BUANG_SALIN)
+    out = s.keluar(
+        f'cd {q}; echo "SALIN=$(du -sk {buang} . | cut -f1)"\n'
+        f'echo "PAKAI=$(quota -u {u} 2>/dev/null | awk \'NR>2 {{print $2+0; exit}}\')"\n'
+        f'echo "BATAS=$(quota -u {u} 2>/dev/null | awk \'NR>2 {{print $4+0; exit}}\')"\n'
+        f'C=/usr/local/directadmin/data/users/{u}\n'
+        'echo "DA_KUOTA=$(sed -n \'s/^quota=//p\' $C/user.conf)"\n'
+        'echo "DA_PAKAI=$(sed -n \'s/^quota=//p\' $C/user.usage)"\n'
+        'echo "DA_DB=$(sed -n \'s/^mysql=//p\' $C/user.conf)"\n'
+        'echo "BEBAS=$(df -BM --output=avail /home | tail -1 | tr -dc 0-9)"\n'
+    )
+    kv = {k: v.strip() for k, v in re.findall(r'^([A-Z_]+)=(.*)$', out, re.M)}
+    kv['DB_ADA'] = s.sql(f"select count(*) from information_schema.schemata where schema_name like '{u}\\_%'")
+    kv['DB_MB'] = s.sql("select round(coalesce(sum(data_length+index_length),0)/1048576) from information_schema.tables "
+                        f"where table_schema='{info['db']}'")
+    kv['DBU_MB'] = s.sql("select round(coalesce(sum(data_length+index_length),0)/1048576) from information_schema.tables "
+                         f"where table_schema like '{u}\\_%'")
+    angka = lambda k: float(re.sub(r'[^0-9.]', '', kv.get(k, '')) or 0)
+    salin_mb = angka('SALIN') / 1024
+    butuh = round(salin_mb + angka('DB_MB') + CADANGAN_KUOTA_MB)
+    sisa = []
+    if angka('BATAS'):  # kuota sistem (yang benar-benar menolak tulisan), berkas saja
+        sisa.append((angka('BATAS') - angka('PAKAI')) / 1024 - angka('DBU_MB'))
+    if kv.get('DA_KUOTA', '').replace('.', '').isdigit() and float(kv['DA_KUOTA']):
+        sisa.append(float(kv['DA_KUOTA']) - angka('DA_PAKAI'))
+    sisa.append(angka('BEBAS'))
+    rinci = {'butuh_mb': butuh, 'sisa_mb': round(min(sisa)), 'salinan_berkas_mb': round(salin_mb),
+             'db_mb': round(angka('DB_MB')), 'db_ada': int(angka('DB_ADA')), 'batas_db': kv.get('DA_DB', '')}
+    batas_db = kv.get('DA_DB', '')
+    if batas_db.isdigit() and int(batas_db) and rinci['db_ada'] >= int(batas_db):
+        return 'staging', 'batas_jumlah_db_tercapai', rinci
+    if rinci['sisa_mb'] < butuh:
+        return 'staging', 'kuota_kurang', rinci
+    return 'new', 'kuota_cukup', rinci
+
+
+# ── Duplikat ────────────────────────────────────────────────────────────────
+
+def _nama_db(s, da_user, akhiran):
+    """Nama DB+user baru ber-awalan DA yang belum dipakai (≤ 32 huruf untuk user MySQL)."""
+    dasar = f'{da_user}_{akhiran}'[:30]
+    ada = set(s.sql(f"select schema_name from information_schema.schemata where schema_name like '{da_user}\\_%'").split())
+    for i in [''] + list(range(2, 10)):
+        calon = f'{dasar[:30 - len(str(i))]}{i}'
+        if calon not in ada:
+            return calon
+    raise RuntimeError('nama_db_habis')
+
+
+def duplikat(domain, info, tempat, cad, ulang=False):
+    """Salin berkas + DB ke <domain>/new atau staging vdco; kembalikan data manifest salinan."""
+    if tempat == 'new':
+        s = Server(info['server'])
+        da_user, docroot = info['da_user'], info['docroot'] + '/new'
+        url = info['url'].rstrip('/') + '/new'
+    else:
+        s = Server(STAGING)
+        da_user = STAGING['da_user']
+        docroot = f"{STAGING['akar']}/{domain}"
+        url = f"{STAGING['url']}/{domain}"
+    dasar = urllib.parse.urlparse(url).path.rstrip('/') + '/'  # RewriteBase salinan
+    q = shlex.quote(docroot)
+    ada = s.keluar(f'[ -e {q} ] && {{ [ -f {q}/{TANDA} ] && echo milik || echo asing; }} || echo kosong').strip()
+    if ada == 'asing':
+        raise RuntimeError(f'folder_tujuan_sudah_ada_bukan_salinan:{docroot}')
+    st = status_baca(domain)
+    if ada == 'milik' and not ulang:
+        raise RuntimeError('salinan_sudah_ada (pakai --ulang untuk membuat ulang; desain di salinan akan hilang)')
+    db_lama = st.get('salinan', {}).get('db') if ada == 'milik' else ''
+    akhiran = 'rdsgn' if tempat == 'new' else re.sub(r'[^a-z0-9]', '', domain.split('.')[0])[:10] + '_rd'
+    db = db_lama or _nama_db(s, da_user, akhiran)
+    sandi_db = secrets.token_urlsafe(18).replace('-', 'x').replace('_', 'y')
+    buang = ' '.join(f'--exclude={shlex.quote(b)}' for b in BUANG_SALIN)
+    log(f'duplikat: berkas → {docroot}')
+    # 1. Berkas. new: salin di server itu sendiri; staging: dari cadangan di server installer.
+    if ada == 'milik':
+        s.keluar(f'rm -rf --one-file-system {q}')
+    if tempat == 'new':
+        s.keluar(f'mkdir {q}\ntar -C {shlex.quote(info["docroot"])} {buang} -cf - . | tar -C {q} -xpf -\n'
+                 f'chown {da_user}:{da_user} {q}\n', timeout=7200)
+    elif info['server']['host'] == s.srv['host']:
+        s.keluar(f'mkdir {q}\ntar -C {shlex.quote(info["docroot"])} {buang} -cf - . | tar -C {q} -xf -\n'
+                 f'chown -R {da_user}:{da_user} {q}\n', timeout=7200)
+    else:
+        salin_antar_server(Server(info['server']), info['docroot'], s, docroot, buang)
+        s.keluar(f'chown -R {da_user}:{da_user} {q}')
+    s.keluar(f'echo {shlex.quote(json.dumps({"domain": domain, "dibuat": time.time()}))} > {q}/{TANDA}\n'
+             f'chown {da_user}:{da_user} {q}/{TANDA}; chmod 600 {q}/{TANDA}')
+    log(f'duplikat: database {db}')
+    # 2. Database baru + impor dari cadangan.
+    my = f'mysql --defaults-extra-file={DA_MYCNF}'
+    s.sql(f"DROP DATABASE IF EXISTS `{db}`; CREATE DATABASE `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; "
+          f"CREATE USER IF NOT EXISTS '{db}'@'localhost'; ALTER USER '{db}'@'localhost' IDENTIFIED BY '{sandi_db}'; "
+          f"GRANT ALL PRIVILEGES ON `{db}`.* TO '{db}'@'localhost'; FLUSH PRIVILEGES;")
+    with open(Path(cad['folder']) / 'db.sql.gz', 'rb') as f:
+        run = subprocess.run(s.ssh + [f'gunzip | {my} {db}'], stdin=f, capture_output=True, timeout=7200)
+    if run.returncode:
+        raise RuntimeError('impor_db_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
+    log('duplikat: wp-config, .htaccess')
+    # 3. wp-config, jalur absolut, .htaccess.
+    lama_q = shlex.quote(info['docroot'])
+    # Jalur absolut situs asli → salinan, hanya bila diikuti / ' " (bukan awalan jalur lain).
+    ganti_jalur = 's#' + re.sub(r'([.\[\]*^$\\#])', r'\\\1', info['docroot']) + '\\([/\'"]\\)#' + docroot + r'\1#g'
+    sed_dasar = r's#^\(\s*RewriteBase\s\+\)\S*#\1' + dasar + '#'
+    sed_aturan = r's#^\(\s*RewriteRule\s\+\.\s\+\)\S*index\.php#\1' + dasar + 'index.php#'
+    htaccess = HTACCESS.replace('__DASAR__', dasar)
+    s.keluar(
+        f'cd {q}\n'
+        f'{WP} config set DB_NAME {db} --path={q} --quiet\n'
+        f'{WP} config set DB_USER {db} --path={q} --quiet\n'
+        f'{WP} config set DB_PASSWORD {shlex.quote(sandi_db)} --path={q} --quiet\n'
+        f'{WP} config set DB_HOST localhost --path={q} --quiet\n'
+        f'for k in WP_HOME WP_SITEURL; do {WP} config has $k --path={q} 2>/dev/null && '
+        f'{WP} config set $k {shlex.quote(url)} --path={q} --quiet; done; true\n'
+        # Wordfence (.user.ini auto_prepend_file), cache & jalur absolut lain menunjuk situs asli.
+        'for f in wp-config.php .user.ini wordfence-waf.php wp-content/advanced-cache.php '
+        'wp-content/object-cache.php wp-content/wp-cache-config.php; do\n'
+        f'  [ -f "$f" ] && grep -qF {lama_q} "$f" && sed -i {shlex.quote(ganti_jalur)} "$f"; done; true\n'
+        'if [ -f .htaccess ]; then\n'
+        f'  sed -i -e {shlex.quote(sed_dasar)} -e {shlex.quote(sed_aturan)} .htaccess\n'
+        f'else printf %s {shlex.quote(htaccess)} > .htaccess; chown {da_user}:{da_user} .htaccess; fi\n'
+    )
+    log(f"duplikat: ganti URL {info['url']} → {url}")
+    # 4. URL situs lama → URL salinan (serialized aman lewat WP-CLI; guid tidak diubah).
+    host = re.sub(r'^https?://', '', info['url']).split('/')[0]
+    sisa_path = info['url'].split(host, 1)[1].rstrip('/')
+    tanpa_www = host[4:] if host.startswith('www.') else host
+    pasangan = []
+    for h in (f'www.{tanpa_www}', tanpa_www):
+        for skema in ('https', 'http'):
+            lama = f'{skema}://{h}{sisa_path}'
+            pasangan += [(lama, url), (lama.replace('/', '\\/'), url.replace('/', '\\/'))]
+    for lama, baru in pasangan:
+        s.keluar(f'{WP} search-replace {shlex.quote(lama)} {shlex.quote(baru)} --path={q} --all-tables-with-prefix '
+                 f'--skip-columns=guid --quiet', timeout=1800)
+    log('duplikat: pengaman salinan + login')
+    # 5. Pengaman salinan: noindex, email mati, login installer.
+    mu = MU_PLUGIN.replace('__DOMAIN__', domain)
+    s.keluar(
+        f'mkdir -p {q}/wp-content/mu-plugins\n'
+        f"cat > {q}/wp-content/mu-plugins/velocity-redesign.php <<'VELOCITY_REDESIGN_MU'\n{mu}\nVELOCITY_REDESIGN_MU\n"
+        f'{WP} option update blog_public 0 --path={q} --quiet\n'
+        f'{WP} cache flush --path={q} --quiet 2>/dev/null; true\n'
+        f'{WP} transient delete --all --path={q} --quiet 2>/dev/null; true\n'
+        f'chown -R {da_user}:{da_user} {q}/wp-content/mu-plugins {q}/.htaccess {q}/wp-config.php\n'
+    )
+    user, sandi = login_salinan(domain, s, docroot)
+    # 6. Verifikasi dari luar: salinan hidup dan URL-nya sudah benar.
+    home = s.keluar(f'{WP} option get home --path={q}').strip().rstrip('/')
+    kode, akhir, isi = http_get(url + '/')
+    if home != url:
+        raise RuntimeError(f'home_salinan_salah:{home}')
+    return {'tempat': tempat, 'server': s.srv.get('name', ''), 'target_host': s.srv['host'],
+            'ssh_port': str(s.srv.get('port') or 22), 'ssh_user': s.srv.get('user') or 'root', 'da_user': da_user,
+            'docroot': docroot, 'url': url, 'db': db, 'db_password': sandi_db, 'admin_user': user,
+            'http': kode, 'http_akhir': akhir, 'noindex': 'noindex' in isi.lower()}
+
+
+def salin_antar_server(asal, jalur_asal, tujuan, jalur_tujuan, buang):
+    """Server tujuan menarik berkas langsung dari server asal (ssh -A, agen sementara).
+
+    Lewat server installer, unggahan kantor hanya ±115 KB/dtk (27 MB = 4 menit saat uji
+    2026-09-29), jadi berkas tidak dikirim ulang dari cadangan."""
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE') or '/root/.ssh/id_ed25519'
+    keluaran = subprocess.run(['ssh-agent', '-s'], capture_output=True, text=True, check=True).stdout
+    env = dict(os.environ, **dict(re.findall(r'(SSH_AUTH_SOCK|SSH_AGENT_PID)=([^;]+);', keluaran)))
+    try:
+        subprocess.run(['ssh-add', '-q', key], env=env, check=True, capture_output=True, timeout=30)
+        tarik = (f"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p {asal.srv.get('port') or 22} "
+                 f"{asal.srv.get('user') or 'root'}@{asal.host} "
+                 f"{shlex.quote(f'tar -C {shlex.quote(jalur_asal)} {buang} -czf - .')}")
+        skrip = f'set -o pipefail\nmkdir {shlex.quote(jalur_tujuan)}\n{tarik} | tar -C {shlex.quote(jalur_tujuan)} -xzf -\n'
+        run = subprocess.run(tujuan.ssh[:1] + ['-A'] + tujuan.ssh[1:] + ['bash', '-s'], input=skrip, env=env,
+                             capture_output=True, text=True, timeout=7200)
+        if run.returncode:
+            raise RuntimeError('salin_berkas_gagal: ' + (run.stdout + run.stderr)[-300:])
+    finally:
+        subprocess.run(['ssh-agent', '-k'], env=env, capture_output=True)
+
+
+# ── WordPress baru di staging + konten publik (hosting tak terjangkau / bukan WP) ──
+
+PHP_IMPOR = r'''
+$d = json_decode(file_get_contents('__BERKAS__'), true);
+$folder = dirname('__BERKAS__');
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+$hasil = array('gambar' => 0, 'gambar_gagal' => 0, 'halaman' => 0, 'post' => 0, 'kategori' => 0, 'gagal' => array());
+// Isi bawaan WordPress baru + halaman 1-Click Setup installer (beranda, tentang-kami, galeri, ...)
+// dibuang: slug yang sama dengan situs lama dulu jadi "-2" sehingga URL lama patah dan isi lama
+// tidak terkunci dari generator (uji 2026-10-07). Situs redesign = halaman situs lama saja.
+foreach (get_posts(array('post_type' => array('post', 'page'), 'post_status' => array('publish', 'draft', 'private', 'pending', 'future'),
+    'numberposts' => 100)) as $p) {
+    if (!get_post_meta($p->ID, '_velocity_redesign_impor', true)) { wp_delete_post($p->ID, true); }
+}
+foreach (array('page_on_front', 'page_for_posts', 'wp_page_for_privacy_policy') as $o) { update_option($o, 0); }
+update_option('show_on_front', 'posts');
+$media = array();
+$per_berkas = array();  // satu berkas (ukuran turunan berbeda di situs lama) = satu lampiran
+foreach ($d['berkas'] as $n => $nama) {
+    if (isset($per_berkas[$nama])) { $media[(string) $n] = $per_berkas[$nama]; continue; }
+    $sumber = $folder . '/' . $nama;
+    if (!is_file($sumber)) { $hasil['gambar_gagal']++; continue; }
+    $tmp = wp_tempnam($nama);
+    copy($sumber, $tmp);
+    $id = media_handle_sideload(array('name' => $nama, 'tmp_name' => $tmp), 0);
+    if (is_wp_error($id)) { @unlink($tmp); $hasil['gambar_gagal']++; continue; }
+    update_post_meta($id, '_velocity_redesign_impor', 1);
+    $media[(string) $n] = $per_berkas[$nama] = array('id' => $id, 'url' => wp_get_attachment_url($id));
+    $hasil['gambar']++;
+}
+$home = untrailingslashit(home_url());
+$ganti = function ($isi) use ($media, $home) {
+    $isi = preg_replace_callback('/\{\{vrd-img:(\d+)\}\}/', function ($m) use ($media) {
+        return isset($media[$m[1]]) ? $media[$m[1]]['url'] : ''; }, (string) $isi);
+    $isi = preg_replace('/<img src=""[^>]*>/', '', $isi);
+    return str_replace('{{vrd-home}}', $home, $isi);
+};
+$utama = function ($id, $n) use ($media) {
+    if ($n !== null && $n !== '' && isset($media[(string) $n])) { set_post_thumbnail($id, $media[(string) $n]['id']); }
+};
+if (!empty($d['permalink'])) { update_option('permalink_structure', $d['permalink']); }
+if (!empty($d['basis_kategori']) && $d['basis_kategori'] !== 'category') { update_option('category_base', $d['basis_kategori']); }
+$kat = array();
+foreach ($d['kategori'] as $k) {
+    $ada = get_term_by('slug', $k['slug'], 'category');
+    if ($ada) { $kat[$k['id']] = (int) $ada->term_id; continue; }
+    $r = wp_insert_term($k['nama'], 'category', array('slug' => $k['slug'], 'description' => $k['deskripsi'],
+        'parent' => ($k['induk'] && isset($kat[$k['induk']])) ? $kat[$k['induk']] : 0));
+    if (is_wp_error($r)) { $hasil['gagal'][] = 'kategori:' . $k['slug']; continue; }
+    $kat[$k['id']] = (int) $r['term_id'];
+    $hasil['kategori']++;
+}
+$hal = array();
+$depan = 0;
+foreach ($d['halaman'] as $h) {
+    $id = wp_insert_post(wp_slash(array('post_type' => 'page', 'post_status' => $h['status'], 'post_title' => $h['judul'],
+        'post_name' => $h['slug'], 'post_content' => $ganti($h['isi']), 'menu_order' => (int) $h['urut'],
+        'post_parent' => ($h['induk'] !== '' && isset($hal[$h['induk']])) ? $hal[$h['induk']] : 0)), true);
+    if (is_wp_error($id)) { $hasil['gagal'][] = 'halaman:' . $h['slug']; continue; }
+    $hal[$h['kunci']] = $id;
+    update_post_meta($id, '_velocity_redesign_impor', 1);
+    if ($h['status'] === 'publish' && preg_match('/privas|privacy/', $h['slug'])) { update_option('wp_page_for_privacy_policy', $id); }
+    $utama($id, isset($h['gambar_utama']) ? $h['gambar_utama'] : null);
+    if (!empty($h['depan'])) { $depan = $id; }
+    if ($h['status'] === 'publish') { $hasil['halaman']++; }
+}
+foreach ($d['post'] as $p) {
+    $kats = array();
+    foreach ($p['kategori'] as $c) { if (isset($kat[$c])) { $kats[] = $kat[$c]; } }
+    $id = wp_insert_post(wp_slash(array('post_type' => 'post', 'post_status' => 'publish', 'post_title' => $p['judul'],
+        'post_name' => $p['slug'], 'post_content' => $ganti($p['isi']), 'post_date' => $p['tanggal'],
+        'post_category' => $kats)), true);
+    if (is_wp_error($id)) { $hasil['gagal'][] = 'post:' . $p['slug']; continue; }
+    update_post_meta($id, '_velocity_redesign_impor', 1);
+    $utama($id, isset($p['gambar_utama']) ? $p['gambar_utama'] : null);
+    $hasil['post']++;
+}
+if ($depan) {
+    update_option('show_on_front', 'page');
+    update_option('page_on_front', $depan);
+}
+if (!empty($d['nama'])) { update_option('blogname', $d['nama']); }
+update_option('blogdescription', (string) $d['slogan']);
+if ($d['logo'] !== null && isset($media[(string) $d['logo']])) {
+    update_option('site_logo', $media[(string) $d['logo']]['id']);
+    $hasil['logo'] = $media[(string) $d['logo']]['id'];
+}
+if ($d['ikon'] !== null && isset($media[(string) $d['ikon']])) {
+    update_option('site_icon', $media[(string) $d['ikon']]['id']);
+}
+flush_rewrite_rules(false);
+echo 'VRD:' . wp_json_encode($hasil);
+'''
+
+
+def kecilkan(data, logo=False):
+    """(bytes, ekstensi) gambar ≤ GAMBAR_MAKS_BYTE, atau None (bukan gambar / terlalu kecil)."""
+    from PIL import Image, ImageOps
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        im = ImageOps.exif_transpose(im)
+    except Exception:  # noqa: BLE001 — PIL melempar banyak jenis galat untuk berkas rusak
+        return None
+    if min(im.size) < (16 if logo else 48):
+        return None
+    alfa = im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info)
+    lebar = 600 if logo else 1200
+    if im.width > lebar:
+        im = im.resize((lebar, max(1, round(im.height * lebar / im.width))), Image.LANCZOS)
+    for _ in range(4):
+        if alfa:
+            im = im.convert('RGBA')
+            for x in (im, im.quantize(256, method=Image.FASTOCTREE)):
+                b = io.BytesIO()
+                x.save(b, 'PNG', optimize=True)
+                if b.tell() <= GAMBAR_MAKS_BYTE:
+                    return b.getvalue(), '.png'
+        else:
+            im = im.convert('RGB')
+            for q in range(82, 34, -8):
+                b = io.BytesIO()
+                im.save(b, 'JPEG', quality=q, optimize=True, progressive=True)
+                if b.tell() <= GAMBAR_MAKS_BYTE:
+                    return b.getvalue(), '.jpg'
+        im = im.resize((max(1, round(im.width * .75)), max(1, round(im.height * .75))), Image.LANCZOS)
+    return None
+
+
+def unduh_gambar(konten, tujuan):
+    """{indeks: nama berkas} gambar konten publik yang berhasil diunduh & diperkecil di `tujuan`."""
+    hasil = {}
+    tujuan.mkdir(parents=True, exist_ok=True)
+    khusus = {konten.get('logo'), konten.get('ikon')}
+    urut = sorted(konten['gambar'].items(), key=lambda x: (int(x[0]) not in khusus, int(x[0])))
+    sudah = {}  # berkas asli yang sama dalam beberapa ukuran turunan cukup sekali
+    for n, u in urut[:PUBLIK_MAKS_GAMBAR]:
+        data = None
+        asli = re.sub(r'-\d{2,4}x\d{2,4}(?=\.\w{3,4}$)', '', u.split('?')[0])  # ukuran turunan WP → berkas asli
+        if asli in sudah:
+            hasil[n] = sudah[asli]
+            continue
+        for calon in dict.fromkeys([asli, u]):
+            kode, _, isi, _ = ambil(calon, timeout=30, maks=15_000_000)
+            if kode == 200 and len(isi) > 200:
+                data = isi
+                break
+        kecil = kecilkan(data, logo=int(n) in khusus) if data else None
+        if not kecil:
+            continue
+        dasar = re.sub(r'[^a-z0-9]+', '-', Path(urllib.parse.urlparse(asli).path).stem.lower()).strip('-')[:50] or 'gambar'
+        nama = f'{int(n):03d}-{dasar}{kecil[1]}'
+        (tujuan / nama).write_bytes(kecil[0])
+        hasil[n] = sudah[asli] = nama
+    return hasil
+
+
+def pasang_baru(domain, info, inv, konten, ulang=False):
+    """WordPress baru di staging velocitydeveloper.co/<domain> lewat installer dasar yang sama dengan
+    instalasi staging biasa (website-install-from-manifest), lalu konten publik situs lama diimpor.
+    Situs lama tidak disentuh sama sekali. Kembalian sama dengan duplikat()."""
+    s = Server(STAGING)
+    da_user, docroot, url = STAGING['da_user'], f"{STAGING['akar']}/{domain}", f"{STAGING['url']}/{domain}"
+    q = shlex.quote(docroot)
+    ada = s.keluar(f'[ -e {q} ] && {{ [ -f {q}/{TANDA} ] && echo milik || echo asing; }} || echo kosong').strip()
+    if ada == 'asing':
+        raise RuntimeError(f'folder_tujuan_sudah_ada_bukan_salinan:{docroot}')
+    if ada == 'milik' and not ulang:
+        raise RuntimeError('salinan_sudah_ada (pakai --ulang untuk membuat ulang; desain di salinan akan hilang)')
+    st = status_baca(domain)
+    if ada == 'milik':
+        s.keluar(f'rm -rf --one-file-system {q}')
+        db_lama = (st.get('salinan') or {}).get('db', '')
+        if re.match(rf'^{da_user}_\w+$', db_lama):
+            s.sql(f'DROP DATABASE IF EXISTS `{db_lama}`')
+    db = _nama_db(s, da_user, re.sub(r'[^a-z0-9]', '', domain.split('.')[0])[:10] + '_rd')
+    sandi_db = secrets.token_urlsafe(18).replace('-', 'x').replace('_', 'y')
+    user, sandi = akun_salinan(domain)
+    salinan = {'tempat': 'staging', 'server': STAGING['name'], 'target_host': STAGING['host'],
+               'ssh_port': STAGING['port'], 'ssh_user': STAGING['user'], 'da_user': da_user, 'docroot': docroot,
+               'url': url, 'db': db, 'db_password': sandi_db, 'admin_user': user}
+    # Manifest menunjuk staging lebih dulu: installer dasar membaca docroot=/site_url= dari sana.
+    tulis_manifest(domain, info, salinan, inv)
+    manifest_set(domain, redesign_sumber=f"publik_{konten['sumber']}")
+    log(f'wp_baru: WordPress baru → {url} (db {db})')
+    sandi_f = folder(domain) / 'admin-sandi.tmp'
+    sandi_f.write_text(sandi + '\n')
+    os.chmod(sandi_f, 0o600)
+    try:
+        subprocess.run([sys.executable, str(HERE / 'sinkron-paket')], capture_output=True, timeout=180)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    # paket-g-konten di installer dasar menulis isi contoh dari form/folder klien (bahan pembuatan
+    # pertama). Redesign memakai konten lama (keputusan user 2026-09-29): isi contoh baru dibuang
+    # sesudah instalasi supaya `persiapan` menyusunnya dari situs lama (isi_contoh_lama).
+    tema = GENERATED / f'{domain}-tema.json'
+    tema_ada = tema.exists()
+    env = dict(os.environ, INSTALL_MODE='apply', MANIFEST=str(PROJECT / domain / f'{domain}.txt'),
+               WP_INSTALL_DB_PASSWORD_FILE=str(SECRETS / f'db_password_{domain}.txt'),
+               WP_INSTALL_ADMIN_PASSWORD_FILE=str(sandi_f))
+    try:
+        run = subprocess.run([str(HERE / 'website-install-from-manifest')], env=env, capture_output=True, text=True,
+                             timeout=2400)
+    finally:
+        sandi_f.unlink(missing_ok=True)
+    akhir = next((b for b in reversed(run.stdout.splitlines()) if b.startswith('{')), '')
+    try:
+        hasil_pasang = json.loads(akhir)
+    except ValueError:
+        hasil_pasang = {}
+    if run.returncode or hasil_pasang.get('status') != 'applied':
+        raise RuntimeError('wp_baru_gagal: ' + (akhir or re.sub(r'\s+', ' ', run.stdout + run.stderr)[-300:])[:400])
+    log(f"wp_baru: terpasang ({hasil_pasang.get('status')})")
+    if not tema_ada and tema.exists():
+        tema.unlink()
+    # Pengaman salinan + penanda milik redesign (sama dengan duplikat).
+    mu = MU_PLUGIN.replace('__DOMAIN__', domain)
+    s.keluar(
+        f'echo {shlex.quote(json.dumps({"domain": domain, "dibuat": time.time(), "sumber": "publik"}))} > {q}/{TANDA}\n'
+        f'chmod 600 {q}/{TANDA}\n'
+        f'mkdir -p {q}/wp-content/mu-plugins\n'
+        f"cat > {q}/wp-content/mu-plugins/velocity-redesign.php <<'VELOCITY_REDESIGN_MU'\n{mu}\nVELOCITY_REDESIGN_MU\n"
+        f'{WP} option update blog_public 0 --path={q} --quiet\n'
+        f'chown -R {da_user}:{da_user} {q}/{TANDA} {q}/wp-content/mu-plugins\n')
+    impor = impor_konten(domain, s, docroot, da_user, konten)
+    log(f"impor: {impor['halaman']} halaman, {impor['post']} post, {impor['kategori']} kategori, "
+        f"{impor['gambar']} gambar (≤100 KB){', gagal ' + ','.join(impor['gagal'][:8]) if impor.get('gagal') else ''}"
+        f"{', logo ' + str(impor['logo']) if impor.get('logo') else ', logo tidak ada'}")
+    login_salinan(domain, s, docroot)
+    home = s.keluar(f'{WP} option get home --path={q}').strip().rstrip('/')
+    if home != url:
+        raise RuntimeError(f'home_salinan_salah:{home}')
+    kode, akhir_url, isi = http_get(url + '/')
+    return dict(salinan, http=kode, http_akhir=akhir_url, noindex='noindex' in isi.lower(), impor=impor)
+
+
+def impor_konten(domain, s, docroot, da_user, konten):
+    kerja = folder(domain) / 'impor-gambar'
+    shutil.rmtree(kerja, ignore_errors=True)
+    berkas = unduh_gambar(konten, kerja)
+    log(f"impor: {len(berkas)}/{min(len(konten['gambar']), PUBLIK_MAKS_GAMBAR)} gambar diunduh & diperkecil")
+    data = {k: konten[k] for k in ('nama', 'slogan', 'permalink', 'basis_kategori', 'halaman', 'post', 'kategori',
+                                   'logo', 'ikon')}
+    data['berkas'] = berkas
+    (kerja / 'impor.json').write_text(json.dumps(data, ensure_ascii=False))
+    # Satu arsip berisi berkas saja (tanpa entri "."), dibongkar ke folder sementara baru.
+    b = io.BytesIO()
+    with tarfile.open(fileobj=b, mode='w') as tar:
+        for p in sorted(kerja.iterdir()):
+            tar.add(p, arcname=p.name)
+    tmp = s.keluar('mktemp -d /tmp/velocity-redesign-impor.XXXXXX').strip()
+    try:
+        run = subprocess.run(s.ssh + [f'tar -xf - -C {shlex.quote(tmp)}'], input=b.getvalue(), capture_output=True,
+                             timeout=1800)
+        if run.returncode:
+            raise RuntimeError('unggah_impor_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
+        hasil = s.php(docroot, PHP_IMPOR.replace('__BERKAS__', f'{tmp}/impor.json'), timeout=3600)
+    finally:
+        s.bash(f'rm -rf {shlex.quote(tmp)}')
+        shutil.rmtree(kerja, ignore_errors=True)
+    s.keluar(f'chown -R {da_user}:{da_user} {shlex.quote(docroot)}/wp-content\n'
+             f'{WP} cache flush --path={shlex.quote(docroot)} --quiet 2>/dev/null; true')
+    return hasil
+
+
+HTACCESS = """# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase __DASAR__
+RewriteRule ^index\\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . __DASAR__index.php [L]
+</IfModule>
+# END WordPress
+"""
+
+
+MU_PLUGIN = r'''<?php
+/**
+ * Salinan Redesign __DOMAIN__ (installer Velocity) — BUKAN situs live.
+ * Tidak diindeks mesin pencari dan tidak mengirim email (form, notifikasi, WooCommerce)
+ * supaya klien & pengunjungnya tidak menerima apa pun dari salinan ini.
+ * Dihapus saat salinan dipindah ke live.
+ */
+add_filter('pre_wp_mail', '__return_false', 1);
+add_filter('pre_option_blog_public', function () { return '0'; });
+add_filter('wp_robots', 'wp_robots_no_robots');
+add_action('send_headers', function () { header('X-Robots-Tag: noindex, nofollow', true); });
+'''
+
+
+def telegram():
+    tg = muat('notify_telegram', HERE / 'notify-telegram.py')
+    tg.MANIFEST_ROOT = PROJECT
+    return tg
+
+
+def login(domain):
+    """Sumber login sama dengan laporan instalasi (notify-telegram.wp_login)."""
+    user, sandi = telegram().wp_login(domain)
+    if not sandi:
+        try:
+            sandi = (SECRETS / f'admin_password_{domain}.txt').read_text().strip()
+        except OSError:
+            pass
+    return user, sandi
+
+
+def akun_salinan(domain):
+    """User & sandi admin salinan = yang dikirim laporan Telegram (sumber sama dengan installer)."""
+    user, sandi = login(domain)
+    if not user:
+        user = re.sub(r'[^a-z0-9]', '', domain.split('.')[0])[:12] or 'velocity'
+    if not sandi:
+        # Belum ada sumber sandi sama sekali: buat, lalu simpan di tempat yang dibaca laporan.
+        sandi = secrets.token_urlsafe(14)
+        p = SECRETS / f'admin_password_{domain}.txt'
+        p.write_text(sandi + '\n')
+        os.chmod(p, 0o600)
+    return user, sandi
+
+
+def login_salinan(domain, s, docroot):
+    """Admin installer di salinan (bukan di situs asli): user & sandi yang sama dengan laporan Telegram."""
+    user, sandi = akun_salinan(domain)
+    q = shlex.quote(docroot)
+    email = f'redesign+{user}@velocitydeveloper.com'
+    s.keluar(
+        f'if {WP} user get {shlex.quote(user)} --path={q} --field=ID >/dev/null 2>&1; then\n'
+        f'  {WP} user update {shlex.quote(user)} --user_pass={shlex.quote(sandi)} --role=administrator --path={q} --quiet '
+        '--skip-email\n'
+        f'else {WP} user create {shlex.quote(user)} {shlex.quote(email)} --role=administrator '
+        f'--user_pass={shlex.quote(sandi)} --path={q} --quiet; fi\n')
+    return user, sandi
+
+
+def tulis_manifest(domain, info, salinan, inv):
+    """Manifest menunjuk SALINAN; aslinya disimpan .sebelum-redesign (sekali saja)."""
+    p = PROJECT / domain / f'{domain}.txt'
+    p.parent.mkdir(parents=True, exist_ok=True)
+    asli = p.with_name(p.name + '.sebelum-redesign')
+    if p.exists() and not asli.exists():
+        shutil.copy2(p, asli)
+    baris, kunci = [], set()
+    ganti = {
+        'target_host': salinan['target_host'], 'ssh_port': salinan['ssh_port'], 'ssh_user': salinan['ssh_user'],
+        'da_user': salinan['da_user'], 'domain': domain, 'db_name': salinan['db'], 'db_user': salinan['db'],
+        'admin_user': salinan['admin_user'], 'docroot': salinan['docroot'], 'site_url': salinan['url'],
+        'tema_desain': 'fse', 'redesign': salinan['tempat'], 'redesign_asli_url': info.get('url', ''),
+        'redesign_asli_docroot': info.get('docroot', ''),
+    }
+    lama = p.read_text().splitlines() if p.exists() else []
+    for b in lama:
+        k = b.partition('=')[0].strip()
+        if k in ganti:
+            if k not in kunci:
+                baris.append(f'{k}={ganti[k]}')
+                kunci.add(k)
+        else:
+            baris.append(b)
+    for k, v in ganti.items():
+        if k not in kunci:
+            baris.append(f'{k}={v}')
+    if not any(b.startswith('site_title=') for b in baris):
+        judul = re.sub(r'[\r\n=]', ' ', inv.get('nama') or domain)
+        baris.append(f'site_title={judul}')
+    if not any(b.startswith('admin_email=') for b in baris):
+        baris.append(f"admin_email={inv.get('email_admin') or 'admin@' + domain}")
+    tmp = p.with_suffix('.txt.tmp')
+    tmp.write_text('\n'.join(baris) + '\n')
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, p)
+    sec = SECRETS / f'db_password_{domain}.txt'
+    if sec.exists() and not sec.with_name(sec.name + '.sebelum-redesign').exists():
+        shutil.copy2(sec, sec.with_name(sec.name + '.sebelum-redesign'))
+    sec.write_text(salinan['db_password'] + '\n')
+    os.chmod(sec, 0o600)
+
+
+def manual(domain, alasan, **isi):
+    status_tulis(domain, tahap='manual', galat=alasan, **isi)
+    log(f'berhenti: {alasan}')
+    return 3
+
+
+def siapkan(domain, coba=False, paksa_lokasi='', ulang=False, sumber=None, luar=None):
+    status_tulis(domain, tahap='cek', mulai=datetime.now().astimezone().isoformat(timespec='seconds'), galat='')
+    # Alur redesign otomatis khusus Paket G (keputusan user 2026-10-07); paket lain dikerjakan tim.
+    cfg = baca_manifest(domain)
+    paket = cfg.get('paket', '')
+    if not re.fullmatch(r'paket\s*g', paket.strip(), re.I):
+        return manual(domain, f"bukan_paket_g:{paket or '-'}")
+    # Uji lewat installer-runner (domain .test): sama dengan --luar.
+    if domain.endswith('.test') and re.match(r'^https?://', cfg.get('redesign_uji_luar', '')):
+        luar = luar or cfg['redesign_uji_luar']
+    info = cek(domain, sumber, luar)
+    terjangkau = info['jenis'] in ('wp_tertaut', 'tertaut_bukan_wp')
+    log(f"cek: {info['jenis']}" + (f" di {info['server']['name']} ({info['da_user']}) {info.get('url', '')}"
+                                  if terjangkau else f" http={info.get('http')} {info.get('url', '')}"))
+    if info.get('server_tak_terjangkau'):
+        log(f"cek: server tertaut tak terjangkau: {', '.join(info['server_tak_terjangkau'])} — domain dianggap hosting luar")
+    if info['jenis'] == 'tidak_aktif':
+        return manual(domain, 'situs_lama_tidak_aktif', jenis=info['jenis'])
+    # Hosting bisa diakses server kantor → tahap 2 (cadangan) dijalankan; tidak → dilewati.
+    log('cek: hosting terjangkau dari server kantor → cadangan' if terjangkau
+        else 'cek: hosting tidak terjangkau dari server kantor → cadangan dilewati, konten dari halaman publik')
+    if info['jenis'] == 'wp_tertaut':
+        inv, konten = inventaris(domain, info), None
+    else:
+        inv, konten = inventaris_publik(domain, info)
+    log(f"inventaris: {len(inv['halaman'])} halaman, {inv['jumlah_post']} post, {len(inv['cpt'])} CPT, "
+        f"{len(inv['menu'])} menu, {len(inv['plugin'])} plugin aktif, tema {inv['tema']['slug']}, "
+        f"{len(inv['url_lama'])} URL lama" + (f", sumber {inv['sumber']}" if inv.get('sumber') else ''))
+    b = brief(domain)
+    log(f"brief: {b['folder'] or 'subfolder redesign tidak ada'} — referensi {b['referensi'].get('url') or '-'}"
+        f", paket tujuan {b['paket_tujuan'] or '-'}, {len(b['gambar'])} gambar")
+    status_tulis(domain, brief={'folder': b['folder'], 'referensi': b['referensi'].get('url', ''),
+                                'paket_tujuan': b['paket_tujuan'], 'gambar': len(b['gambar'])})
+    tempat, alasan, rinci = lokasi(domain, info)
+    if paksa_lokasi in ('new', 'staging') and info['jenis'] == 'wp_tertaut':
+        alasan = f'dipaksa ({alasan})'
+        tempat = paksa_lokasi
+    log(f'lokasi: {tempat} — {alasan} {json.dumps(rinci)}')
+    ringkas = {k: info[k] for k in ('jenis', 'da_user', 'docroot', 'url', 'db', 'versi_wp') if k in info}
+    status_tulis(domain, tahap='lokasi', asli=dict(ringkas, server=(info.get('server') or {}).get('name', '')),
+                 lokasi={'tempat': tempat, 'alasan': alasan, **rinci}, terjangkau=terjangkau)
+    if coba:
+        return 0
+    if terjangkau:
+        status_tulis(domain, tahap='cadangan')
+        cad = cadangan(domain, info)
+        log(f"cadangan: {cad['folder']} (db {cad['db_mb']} MB gz, berkas {cad['berkas_mb']} MB gz, "
+            f"{cad['tabel']} tabel) OK")
+    else:
+        cad = {'dilewati': 'hosting_tidak_terjangkau'}
+        log('cadangan: dilewati (hosting tidak terjangkau dari server kantor)')
+    status_tulis(domain, tahap='duplikat', cadangan=cad)
+    if info['jenis'] == 'wp_tertaut':
+        sal = duplikat(domain, info, tempat, cad, ulang=ulang)
+        log(f"duplikat: {sal['url']} (http {sal['http']}, noindex={sal['noindex']}, db {sal['db']})")
+    else:
+        sal = pasang_baru(domain, info, inv, konten, ulang=ulang)
+        log(f"wp_baru: {sal['url']} (http {sal['http']}, noindex={sal['noindex']}, db {sal['db']})")
+    if sal['http'] != 200:
+        raise RuntimeError(f"salinan_tidak_200:{sal['http']} {sal['http_akhir']}")
+    tulis_manifest(domain, info, sal, inv)
+    log(f'manifest: {PROJECT / domain / (domain + ".txt")} menunjuk salinan (asli: .sebelum-redesign)')
+    status_tulis(domain, tahap='salinan_siap', salinan={k: v for k, v in sal.items() if k != 'db_password'})
+    return 0
+
+# ── Tahap 5–6: persiapan & perapian salinan di sekitar langkah desain FSE ────
+# Dipanggil installer-runner INSTALL_MODE=redesign (lihat urutannya di sana). Keduanya hanya
+# menulis ke SALINAN (manifest sudah menunjuk salinan, dicek ulang di salinan_server).
+# Konten lama dipertahankan (keputusan user 2026-09-29): halaman target fse-apply yang berisi
+# tulisan lama diberi _velocity_fse_md5 yang sengaja tidak cocok → fse-apply menganggapnya
+# "sudah disunting orang" dan tidak menimpanya. Beranda dibuat baru (keputusan user): halaman
+# `beranda` lama berganti slug `beranda-lama` (tetap disimpan), fse-apply membuat beranda baru,
+# lalu `rapikan` menjadikannya halaman depan.
+TARGET_FSE = ('tentang-kami', 'galeri', 'hubungi-kami', 'berita', 'layanan', 'pemesanan', 'produk')
+KUNCI_LAMA = 'redesign-konten-lama'
+
+PHP_PERSIAPAN = r'''
+$d = json_decode(base64_decode('__DATA__'), true);
+$cari = function ($slug) {
+    $p = get_posts(array('name' => $slug, 'post_type' => 'page', 'post_status' => array('publish', 'private', 'draft'),
+        'numberposts' => 1));
+    return $p ? $p[0] : null;
+};
+$teks = function ($isi) {
+    $isi = preg_replace('/\[[^\]]*\]/', ' ', (string) $isi);
+    return trim(preg_replace('/\s+/', ' ', html_entity_decode(wp_strip_all_tags($isi), ENT_QUOTES)));
+};
+$hasil = array('ada' => array(), 'kunci' => array(), 'beranda_lama' => 0,
+    'depan_lama' => array('tampil' => get_option('show_on_front'), 'halaman' => (int) get_option('page_on_front')),
+    'blog' => (int) get_option('page_for_posts'), 'post' => (int) wp_count_posts('post')->publish,
+    'tentang' => '', 'layanan' => array());
+foreach ($d['target'] as $s) {
+    $p = $cari($s);
+    if (!$p) { continue; }
+    $hasil['ada'][] = $s;
+    // Berisi tulisan lama (bukan sekadar shortcode tema lama/placeholder) → dikunci.
+    if (str_word_count($teks($p->post_content)) >= 15 && !get_post_meta($p->ID, '_velocity_fse_md5', true)) {
+        if (empty($d['coba'])) { update_post_meta($p->ID, '_velocity_fse_md5', $d['kunci']); }
+        $hasil['kunci'][] = $s;
+    } elseif (get_post_meta($p->ID, '_velocity_fse_md5', true) === $d['kunci']) {
+        $hasil['kunci'][] = $s;
+    }
+}
+$tentang = $cari('tentang-kami') ?: $cari('tentang') ?: $cari('about') ?: $cari('about-us') ?: $cari('profil');
+if ($tentang) { $hasil['tentang'] = mb_substr($teks($tentang->post_content), 0, 900); }
+$induk = $cari('layanan') ?: $cari('produk') ?: $cari('services');
+$anak = $induk ? get_posts(array('post_type' => 'page', 'post_parent' => $induk->ID, 'numberposts' => 8,
+    'orderby' => 'menu_order title', 'order' => 'ASC')) : array();
+if (!$anak) {
+    foreach (get_post_types(array('public' => true, '_builtin' => false)) as $t) {
+        $anak = get_posts(array('post_type' => $t, 'numberposts' => 8));
+        if ($anak) { break; }
+    }
+}
+foreach ($anak as $p) {
+    $hasil['layanan'][] = array('slug' => $p->post_name, 'judul' => get_the_title($p),
+        'teks' => wp_trim_words($teks($p->post_content), 28, '…'), 'rincian' => array());
+}
+if (empty($d['coba']) && !$d['sudah']) {
+    $b = $cari('beranda');
+    if ($b) {
+        wp_update_post(array('ID' => $b->ID, 'post_name' => 'beranda-lama',
+            'post_title' => $b->post_title . ' (lama)'));
+        $hasil['beranda_lama'] = $b->ID;
+    } elseif ($hasil['depan_lama']['halaman']) {
+        $hasil['beranda_lama'] = $hasil['depan_lama']['halaman'];
+    }
+    // Kosong = beranda baru dibuat fse-apply --isi; `rapikan` menjadikannya halaman depan.
+    update_option('page_on_front', 0);
+}
+echo 'VRD:' . wp_json_encode($hasil);
+'''
+
+
+def salinan_server(domain):
+    """Server + docroot salinan dari status.json, dicocokkan dengan manifest (pengaman situs asli)."""
+    st = status_baca(domain)
+    sal = st.get('salinan') or {}
+    cfg = baca_manifest(domain)
+    if not sal.get('docroot') or cfg.get('docroot') != sal['docroot'] or not cfg.get('redesign'):
+        raise RuntimeError('salinan_tidak_cocok_manifest')
+    if sal['docroot'] == (st.get('asli') or {}).get('docroot'):
+        raise RuntimeError('salinan_sama_dengan_asli')
+    s = Server({'name': sal.get('server', ''), 'host': sal['target_host'], 'port': sal.get('ssh_port') or 22,
+                'user': sal.get('ssh_user') or 'root'})
+    return s, sal, st
+
+
+def php_data(kode, data):
+    return kode.replace('__DATA__', base64.b64encode(json.dumps(data).encode()).decode())
+
+
+def isi_contoh_lama(domain, inv, hasil, cfg):
+    """<domain>-tema.json dari konten lama bila belum ada (situs buatan installer sudah punya; tidak ditimpa)."""
+    p = GENERATED / f'{domain}-tema.json'
+    if p.exists():
+        return 'ada'
+    warna = inv.get('warna') or []
+    nama = inv.get('nama') or domain
+    tema = {
+        'jenis': 'berita' if 'berita' in (cfg.get('paket') or '').lower() else 'perusahaan',
+        'nama_tampil': nama, 'slogan': inv.get('slogan') or '',
+        'hero_judul': nama, 'hero_teks': inv.get('meta_deskripsi') or inv.get('slogan') or '',
+        'hero_poin': [], 'layanan': hasil.get('layanan') or [], 'produk': [], 'keunggulan': [], 'alur': [],
+        'galeri': [], 'foto_umum': [], 'judul_seksi': {}, 'profil': hasil.get('tentang') or '', 'visi': '',
+        'misi': [], 'moto': '', 'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
+        'warna': {'utama': warna[0] if warna else '', 'aksen': warna[1] if len(warna) > 1 else ''},
+        'sumber': 'redesign_konten_lama',
+    }
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(tema, ensure_ascii=False, indent=1))
+    return 'dibuat'
+
+
+def manifest_set(domain, **isi):
+    """Tambah/ganti kunci manifest (salinan). Nilai kosong = kunci dihapus."""
+    p = PROJECT / domain / f'{domain}.txt'
+    baris = [b for b in p.read_text().splitlines() if b.partition('=')[0].strip() not in isi]
+    baris += [f'{k}={v}' for k, v in isi.items() if v]
+    tmp = p.with_suffix('.txt.tmp')
+    tmp.write_text('\n'.join(baris) + '\n')
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, p)
+
+
+def persiapan(domain, coba=False):
+    s, sal, st = salinan_server(domain)
+    inv = json.loads((folder(domain) / 'inventaris.json').read_text())
+    cfg = baca_manifest(domain)
+    sudah = bool((st.get('persiapan') or {}).get('selesai'))
+    hasil = s.php(sal['docroot'], php_data(PHP_PERSIAPAN, {'target': TARGET_FSE, 'kunci': KUNCI_LAMA,
+                                                           'coba': coba, 'sudah': sudah}))
+    # Halaman target yang tidak ada di situs lama tidak dibuat (kecuali Hubungi Kami); arsip Berita
+    # hanya bila situs lama bertulisan tanpa halaman blog lain.
+    ada = set(hasil['ada'])
+    tanpa = [t for t in TARGET_FSE if t not in ada and t != 'hubungi-kami'
+             and not (t == 'berita' and hasil['post'] and not hasil['blog'])]
+    log(f"persiapan: halaman lama dikunci {','.join(hasil['kunci']) or '-'}; tanpa_halaman {','.join(tanpa) or '-'}; "
+        f"beranda lama id {hasil['beranda_lama'] or '-'}")
+    if coba:
+        return 0
+    contoh = isi_contoh_lama(domain, inv, hasil, cfg)
+    ubah = {'tanpa_halaman': ','.join(tanpa)}
+    # Kontak publik dari situs lama bila manifest belum punya (form tidak berlaku untuk situs lama).
+    kontak = inv.get('kontak') or {}
+    if not cfg.get('wa_publik') and kontak.get('wa'):
+        ubah['wa_publik'] = kontak['wa'][0]
+    if not cfg.get('email_publik') and kontak.get('email'):
+        ubah['email_publik'] = kontak['email'][0]
+    manifest_set(domain, **ubah)
+    log(f"persiapan: isi contoh {contoh}, manifest {', '.join(f'{k}={v}' for k, v in ubah.items())}")
+    per = st.get('persiapan') or {}
+    status_tulis(domain, tahap='desain', persiapan={
+        'selesai': True, 'kunci': hasil['kunci'], 'tanpa_halaman': tanpa,
+        'beranda_lama': per.get('beranda_lama') or hasil['beranda_lama'],
+        'depan_lama': per.get('depan_lama') or hasil['depan_lama']})
+    return 0
+
+
+PHP_RAPIKAN = r'''
+$d = json_decode(base64_decode('__DATA__'), true);
+$hasil = array();
+$b = get_posts(array('name' => 'beranda', 'post_type' => 'page', 'post_status' => 'publish', 'numberposts' => 1));
+if ($b && get_post_meta($b[0]->ID, '_velocity_fse_md5', true) && get_post_meta($b[0]->ID, '_velocity_fse_md5', true) !== $d['kunci']) {
+    update_option('show_on_front', 'page');
+    update_option('page_on_front', $b[0]->ID);
+    $hasil['depan'] = 'beranda_baru:' . $b[0]->ID;
+} else {
+    // Beranda baru gagal dibuat: halaman depan lama dikembalikan, salinan tidak dibiarkan tanpa beranda.
+    $lama = $d['depan_lama'];
+    update_option('show_on_front', $lama['tampil'] ?: 'posts');
+    update_option('page_on_front', (int) ($d['beranda_lama'] ?: $lama['halaman']));
+    $hasil['depan'] = 'dikembalikan_lama';
+}
+if (!empty($d['menu'])) {
+    $nav = null;
+    foreach (get_posts(array('post_type' => 'wp_navigation', 'post_status' => 'publish', 'numberposts' => 20,
+        'orderby' => 'date', 'order' => 'DESC')) as $n) {
+        if (get_post_meta($n->ID, '_velocity_fse_md5', true)) { $nav = $n; break; }
+    }
+    if ($nav) {
+        wp_update_post(array('ID' => $nav->ID, 'post_content' => wp_slash($d['menu'])));
+        // Sengaja tidak sama dengan md5 isi: fse-apply berikutnya membiarkan menu lama ini.
+        update_post_meta($nav->ID, '_velocity_fse_md5', 'redesign-menu-lama');
+        $hasil['menu'] = 'ditulis:' . $nav->ID;
+    } else {
+        $hasil['menu'] = 'tidak_ada_menu_installer';
+    }
+}
+echo 'VRD:' . wp_json_encode($hasil);
+'''
+
+
+def menu_lama(inv, asal, tujuan):
+    """Menu utama situs lama (beserta submenu) sebagai markup wp_navigation, URL → salinan."""
+    menu = next((m for m in inv.get('menu') or [] if set(m.get('lokasi') or []) & {'primary', 'main', 'menu-1',
+                                                                                     'primary-menu', 'header'}),
+                None) or next(iter(inv.get('menu') or []), None)
+    if not menu or not menu.get('item'):
+        return ''
+    item = menu['item']
+    anak = {}
+    for i in item:
+        # Inventaris lama tanpa ID item: submenu tidak bisa disusun, semua item jadi tingkat atas.
+        anak.setdefault((i.get('induk') or 0) if all(x.get('id') for x in item) else 0, []).append(i)
+    alih = lambda u: tujuan + u[len(asal):] if u.startswith(asal) else u
+
+    def blok(i):
+        label = json.dumps(html.unescape(i['judul']), ensure_ascii=False)
+        dasar = f'"label":{label},"url":{json.dumps(alih(i["url"]))},"kind":"custom","isTopLevelLink":true'
+        sub = anak.get(i.get('id'), []) if i.get('id') else []
+        if sub:
+            return (f'<!-- wp:navigation-submenu {{{dasar}}} -->\n' + '\n'.join(blok(x) for x in sub)
+                    + '\n<!-- /wp:navigation-submenu -->')
+        return f'<!-- wp:navigation-link {{{dasar}}} /-->'
+    return '\n'.join(blok(i) for i in anak.get(0, []))
+
+
+def cek_url_lama(inv, asal, tujuan):
+    hidup, mati = 0, []
+    for u in inv.get('url_lama') or []:
+        if not u.startswith(asal):
+            continue
+        kode, akhir, _ = http_get(tujuan + u[len(asal):], timeout=20)
+        if kode == 200:
+            hidup += 1
+        else:
+            mati.append(f'{u[len(asal):] or "/"}={kode}')
+    return hidup, mati
+
+
+def rapikan(domain):
+    s, sal, st = salinan_server(domain)
+    inv = json.loads((folder(domain) / 'inventaris.json').read_text())
+    per = st.get('persiapan') or {}
+    asal = (st.get('asli') or {}).get('url', '').rstrip('/')
+    tujuan = sal['url'].rstrip('/')
+    menu = menu_lama(inv, asal, tujuan)
+    hasil = s.php(sal['docroot'], php_data(PHP_RAPIKAN, {
+        'kunci': KUNCI_LAMA, 'menu': menu, 'beranda_lama': per.get('beranda_lama') or 0,
+        'depan_lama': per.get('depan_lama') or {'tampil': 'posts', 'halaman': 0}}))
+    s.bash(f'{WP} cache flush --path={shlex.quote(sal["docroot"])} --quiet 2>/dev/null; true')
+    log(f"rapikan: halaman depan {hasil.get('depan')}, menu {hasil.get('menu', 'tanpa_menu_lama')}")
+    hidup, mati = cek_url_lama(inv, asal, tujuan)
+    ringkas = f'{hidup}/{hidup + len(mati)} hidup' + (f" — gagal: {', '.join(mati[:6])}" if mati else '')
+    log(f'rapikan: URL lama {ringkas}')
+    status_tulis(domain, tahap='rapikan', url_lama=ringkas, rapikan=hasil)
+    return 0 if hasil.get('depan', '').startswith('beranda_baru') else 1
+
+
+def laporan(domain):
+    """Tahap 7: link salinan + login WP, tanpa tombol (keputusan user 2026-09-29)."""
+    st = status_baca(domain)
+    sal = st.get('salinan') or {}
+    if not sal.get('url'):
+        log('laporan: salinan belum ada')
+        return 1
+    tg = telegram()
+    token, chats = tg.load_config()
+    user, sandi = login(domain)
+    e = html.escape
+    lok = st.get('lokasi') or {}
+    tempat = ('salinan di folder <code>/new</code> hosting klien (situs asli tidak diubah)' if sal.get('tempat') == 'new'
+              else 'staging velocitydeveloper.co (' + e(str(lok.get('alasan', ''))) + ')')
+    cad = st.get('cadangan') or {}
+    impor = sal.get('impor') or {}
+    if cad.get('dilewati'):
+        cadangan_teks = ('Cadangan: dilewati — hosting tidak bisa diakses server kantor. WordPress baru + konten '
+                         f"publik situs lama ({impor.get('halaman', 0)} halaman, {impor.get('post', 0)} post, "
+                         f"{impor.get('gambar', 0)} gambar)")
+    else:
+        cadangan_teks = (f"Cadangan: {e(str(cad.get('db_mb', '')))} MB DB + {e(str(cad.get('berkas_mb', '')))} MB "
+                         'berkas di server installer')
+        if impor:
+            cadangan_teks += (f"; situs lama bukan WordPress — konten publik dipindahkan ({impor.get('halaman', 0)} "
+                              f"halaman, {impor.get('gambar', 0)} gambar)")
+    teks = [f'🎨 <b>REDESIGN SIAP DICEK</b> — {e(domain)}', '',
+            f'Link redesign: {e(sal["url"])}/',
+            f'Login: {e(sal["url"])}/wp-admin/',
+            f'User: <code>{e(user)}</code>', f'Password: <code>{e(sandi)}</code>', '',
+            f'Lokasi: {tempat}',
+            f'Situs lama: {e((st.get("asli") or {}).get("url", ""))} — tetap live, tidak disentuh',
+            cadangan_teks]
+    if (st.get('brief') or {}).get('referensi'):
+        teks.append(f"Referensi desain: {e(st['brief']['referensi'])} (subfolder redesign)")
+    if st.get('qa'):
+        teks.append(f'QA: {e(str(st["qa"]))}')
+    if st.get('url_lama'):
+        teks.append(f'URL lama: {e(str(st["url_lama"]))}')
+    teks += ['', 'Salinan tidak diindeks Google & tidak mengirim email. Pindah ke live menunggu persetujuan klien '
+                 '(lewat permintaan terpisah).']
+    if not token or not chats:
+        log('laporan: token/chat telegram belum diset')
+        return 1
+    gagal = 0
+    for chat in chats:
+        try:
+            ok, mid = tg.send(token, chat, '\n'.join(teks))
+            if ok and mid:
+                tg.record_sent(domain, 'REDESIGN', chat, mid)
+            else:
+                gagal += 1
+        except (urllib.error.URLError, OSError, ValueError) as ex:
+            log(f'laporan: gagal kirim ke {chat} ({ex})')
+            gagal += 1
+    status_tulis(domain, laporan=datetime.now().astimezone().isoformat(timespec='seconds'))
+    log(f'laporan: terkirim ke {len(chats) - gagal}/{len(chats)} chat')
+    return 1 if gagal == len(chats) else 0
+
+
+def main():
+    arg = [a for a in sys.argv[1:] if not a.startswith('--')]
+    opsi = dict(a[2:].partition('=')[::2] for a in sys.argv[1:] if a.startswith('--'))
+    if len(arg) != 2 or arg[0] not in ('siapkan', 'persiapan', 'rapikan', 'laporan', 'status'):
+        print(__doc__, file=sys.stderr)
+        return 2
+    perintah, domain = arg[0], arg[1].lower().strip()
+    if not re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$', domain):
+        print('domain tidak sah', file=sys.stderr)
+        return 2
+    if perintah == 'status':
+        print(json.dumps(status_baca(domain), ensure_ascii=False, indent=1))
+        return 0
+    if perintah == 'laporan':
+        if 'qa' in opsi:
+            status_tulis(domain, qa=opsi['qa'] or 'bersih')
+        return laporan(domain)
+    if perintah in ('persiapan', 'rapikan'):
+        try:
+            return persiapan(domain, coba='coba' in opsi) if perintah == 'persiapan' else rapikan(domain)
+        except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError, KeyError) as e:
+            status_tulis(domain, galat=f'{perintah}: {e}'[:500])
+            log(f'GAGAL {perintah}: {e}')
+            return 1
+    sumber = tuple(opsi['sumber'].split(':', 2)) if opsi.get('sumber') else None
+    if sumber and len(sumber) != 3:
+        print('--sumber=<server>:<docroot>:<url>', file=sys.stderr)
+        return 2
+    luar = opsi.get('luar') or None
+    if luar and not re.match(r'^https?://[^/\s]+', luar):
+        print('--luar=<url situs publik>', file=sys.stderr)
+        return 2
+    try:
+        return siapkan(domain, coba='coba' in opsi, paksa_lokasi=opsi.get('lokasi', ''), ulang='ulang' in opsi,
+                       sumber=sumber, luar=luar)
+    except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError) as e:
+        status_tulis(domain, galat=str(e)[:500])
+        log(f'GAGAL: {e}')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

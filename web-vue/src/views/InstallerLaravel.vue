@@ -21,6 +21,10 @@ const prasyarat = computed(() => data.value?.prasyarat || {})
 // Status server dev (panel Server dev + badge di kartu project yang sudah di-install, dicocokkan lewat nama app)
 const srv = pakaiPolling('/api/laravel/server', 15000)
 const serverApp = computed(() => Object.fromEntries((srv.data.value?.server || []).map((s) => [s.id, s])))
+// Halaman dibagi dua tab: Project (bawaan) & Server dev — ?bagian=server supaya tautan langsung membuka tabnya.
+const BAGIAN = [{ nilai: 'project', label: 'Project' }, { nilai: 'server', label: 'Server dev' }]
+const bagian = tabUrl('bagian', 'project', { boleh: BAGIAN.map((b) => b.nilai) })
+const perluRestart = computed(() => (srv.data.value?.server || []).filter((s) => s.kondisi === 'perlu_restart').length)
 
 const STACK = ['Laravel 13', 'Inertia', 'Vue 3 + TypeScript', 'Tailwind 4', 'shadcn-vue / reka-ui', 'Fortify', 'Wayfinder', 'Pest', 'Boost', 'MariaDB']
 
@@ -123,6 +127,19 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
       </ul>
     </div>
 
+    <div class="tab tab-bagian" role="tablist" aria-label="Bagian halaman">
+      <button v-for="b in BAGIAN" :id="`tab-${b.nilai}`" :key="b.nilai" type="button" role="tab" :aria-selected="bagian === b.nilai" :aria-controls="`panel-${b.nilai}`" :class="{ aktif: bagian === b.nilai }" @click="bagian = b.nilai">
+        {{ b.label }}
+        <span v-if="b.nilai === 'project'" class="hitung">{{ jumlah('semua') }}</span>
+        <span v-else-if="perluRestart" class="hitung waspada" :title="`${perluRestart} server perlu restart`">{{ perluRestart }}</span>
+      </button>
+    </div>
+
+    <div v-show="bagian === 'server'" id="panel-server" role="tabpanel" aria-labelledby="tab-server">
+      <ServerDev :data="srv.data.value" :galat="srv.galat.value" @ubah="srv.muatUlang" />
+    </div>
+
+    <div v-show="bagian === 'project'" id="panel-project" class="panel" role="tabpanel" aria-labelledby="tab-project">
     <div class="aksi-atas">
       <button type="button" class="tombol" @click="bukaBaru"><Ikon nama="tambah" :ukuran="18" /> Project baru</button>
       <button type="button" class="tombol garis" @click="alurBuka = true">Alur</button>
@@ -172,8 +189,6 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
 
     <UbahStatus :p="ubahStatus" @tutup="ubahStatus = null" @ubah="muatUlang" />
     <HapusProyek :p="hapusProyek" @tutup="hapusProyek = null" @hapus="muatUlang" />
-
-    <ServerDev :data="srv.data.value" :galat="srv.galat.value" @ubah="srv.muatUlang" />
 
     <section class="kartu" aria-labelledby="judul-daftar">
       <div class="kartu-judul">
@@ -240,6 +255,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
         </div>
       </nav>
     </section>
+    </div>
   </div>
 </template>
 
@@ -247,6 +263,11 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
 .halaman { display: grid; gap: 18px; max-width: 1100px; }
 .nama-saya { display: grid; gap: 4px; min-width: 200px; }
 .nama-saya > label { font-size: 12px; }
+.tab-bagian { justify-self: start; }
+.tab-bagian button { padding: 8px 18px; font-size: 14px; }
+.tab .hitung.waspada { opacity: 1; color: var(--waspada); }
+.tab button.aktif .hitung.waspada { color: #fff; }
+.panel { display: grid; gap: 18px; }
 .aksi-atas { display: flex; gap: 10px; flex-wrap: wrap; }
 .ket-id { margin: -4px 0 14px; }
 .peringatan { border-color: rgba(232, 181, 74, .5); background: rgba(232, 181, 74, .07); }

@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Susunan redaksi dari berkas klien untuk halaman Redaksi portal berita.
+
+Keputusan user 2026-09-30 (cybersumatra.com, REDAKSI.docx): Portal Berita Custom yang
+foldernya berisi berkas redaksi (nama berkas memuat "redaksi": .docx/.doc/.pdf/.txt/.odt
+atau gambar box redaksi) wajib menampilkan isinya di halaman Redaksi. Dulu halaman itu hanya
+berisi profil + pedoman karangan AI, dan nama awak redaksi kiriman klien tidak pernah tampil.
+
+Agen Claude (tanpa alat untuk dokumen teks; alat Read untuk gambar) menyusun isi berkas jadi
+peran -> nama. Nama TIDAK boleh dikarang: setiap baris hasil dari dokumen teks harus tersusun
+dari kata yang tertulis di berkas, baris lain dibuang. Hasil disimpan per isi berkas (md5).
+
+  redaksi-klien <domain|folder> [--paksa] [--coba]
+
+Hasil: /var/lib/velocity/redaksi-klien/<domain>.json {md5, berkas, data}; dibaca fse-apply
+(halaman_redaksi). Baris terakhir: redaksi_klien: <baru|tetap|tanpa_berkas|tanpa_nama|gagal:...>.
+Dipanggil sebagai modul: susunan(domain) -> dict data atau None.
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from folder_klien import folder_klien  # noqa: E402
+
+SIMPAN = Path(os.environ.get('VELOCITY_REDAKSI_KLIEN') or '/var/lib/velocity/redaksi-klien')
+NAMA_BERKAS = re.compile(r'redaksi', re.I)
+# Gambar hanya bila namanya memang box redaksi: di folder klien banyak tangkapan layar yang nama
+# berkasnya instruksi ("masukan ke redaksi.jpg", "Tulisan redaksinya di bawah page aja ....jpeg").
+NAMA_GAMBAR = re.compile(r'^(?:box|susunan|struktur|dewan|tim|daftar)?[\s_-]*redaksi[\s_-]*\d*$', re.I)
+# Folder revisi = instruksi revisi yang dikerjakan manual; "redaksi sebelum.txt" = versi lama.
+LEWATI = re.compile(r'revisi|revision|sebelum|lama\b|old\b', re.I)
+DOKUMEN = {'.docx', '.doc', '.pdf', '.txt', '.odt'}
+GAMBAR = {'.jpg', '.jpeg', '.png', '.webp'}
+TEKS_MAKS = 20_000
+
+SKEMA = {
+    'type': 'object', 'additionalProperties': False, 'required': ['bagian', 'alamat'],
+    'properties': {
+        'bagian': {'type': 'array', 'items': {
+            'type': 'object', 'additionalProperties': False, 'required': ['peran', 'nama'],
+            'properties': {
+                'peran': {'type': 'string', 'description': 'Jabatan/bagian, rapi (Title Case), tanpa titik dua'},
+                'nama': {'type': 'array', 'items': {'type': 'string'},
+                         'description': 'Nama persis seperti di berkas; kosong bila berkas tidak menulis nama'}}}},
+        'alamat': {'type': 'string', 'description': 'Alamat redaksi persis seperti di berkas, satu baris; kosong bila tidak ada'},
+    },
+}
+
+TUGAS = """Berkas berikut adalah SUSUNAN REDAKSI kiriman klien portal berita {domain}.
+Susun isinya jadi JSON sesuai skema: daftar bagian (peran -> nama) BERURUTAN seperti di berkas, plus alamat redaksi.
+
+Aturan:
+- Salin nama PERSIS seperti tertulis (ejaan, gelar, singkatan). Jangan menambah, menebak, atau melengkapi nama.
+- Buang awalan/isian formulir yang bukan nama: "Nama.", "Nama:", titik-titik "......", nomor urut "1.".
+- Peran tanpa nama (hanya titik-titik atau kosong) dibuang. Baris wilayah tanpa nama (mis. "Musi Banyuasin.") dibuang.
+- Biro/perwakilan daerah: satu bagian (mis. "Biro/Perwakilan Daerah"), tiap butir "<Wilayah> — <Nama>".
+- Peran ditulis rapi: Title Case, tanpa titik dua (mis. "Pimpinan Perusahaan", "Admin/IT").
+- Nama media, tagline, dan alamat website TIDAK dimasukkan ke bagian.
+- alamat: alamat redaksi satu baris (gabungkan baris lanjutannya); kosong bila berkas tidak menulis alamat.
+- Bila ada beberapa berkas: gabungkan. Bila isinya dua versi susunan yang sama, pakai yang terbaru (tanggal ubah
+  terbaru, atau berkas di subfolder bernama "baru"/"tambahan"). Abaikan bagian berkas yang bukan susunan redaksi
+  (profil perusahaan, pedoman, dsb.).
+
+{isi}"""
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def berkas_redaksi(folder):
+    """Berkas redaksi di folder klien (termasuk subfolder), urut nama."""
+    if not folder or not Path(folder).is_dir():
+        return []
+    hasil = []
+    for p in sorted(Path(folder).rglob('*')):
+        rel = p.relative_to(folder)
+        if not (p.is_file() and NAMA_BERKAS.search(p.name) and len(rel.parts) <= 3):
+            continue
+        if any(x.startswith('.') or LEWATI.search(x if i < len(rel.parts) - 1 else p.stem)
+               for i, x in enumerate(rel.parts)):
+            continue
+        ext = p.suffix.lower()
+        if ext in DOKUMEN or (ext in GAMBAR and NAMA_GAMBAR.match(p.stem.strip())):
+            hasil.append(p)
+    return hasil
+
+
+def teks_berkas(path):
+    import client_docs
+    return '\n'.join(b.rstrip() for b in client_docs._doc_lines(path) if b.strip())[:TEKS_MAKS]
+
+
+def _kata(teks):
+    return set(re.findall(r'[a-z0-9]+', teks.lower()))
+
+
+def saring(data, sumber):
+    """Buang baris yang memuat kata di luar teks berkas (nama karangan). Gambar tidak bisa dicek."""
+    kata_sumber = _kata(sumber) if sumber else None
+    boleh = {'dan', 'biro', 'perwakilan', 'daerah', 'wilayah'}
+
+    def asli(t):
+        if kata_sumber is None:
+            return True
+        kata = {k for k in _kata(t) if len(k) >= 3} - boleh
+        return bool(kata) and kata <= kata_sumber
+
+    bagian = []
+    for b in data.get('bagian') or []:
+        peran = str(b.get('peran') or '').strip().rstrip(':').strip()
+        nama = [n.strip() for n in b.get('nama') or [] if str(n).strip() and not re.fullmatch(r'[.\s…_-]*', str(n))]
+        nama = [n for n in nama if asli(n)]
+        if peran and nama:
+            bagian.append({'peran': peran[:80], 'nama': [n[:120] for n in nama][:40]})
+    alamat = str(data.get('alamat') or '').strip()
+    if alamat and kata_sumber is not None and not asli(alamat):
+        alamat = ''
+    return {'bagian': bagian[:30], 'alamat': alamat[:300]}
+
+
+def _domain_folder(arg):
+    folder = Path(arg)
+    if folder.is_dir():
+        return folder.name.lower(), folder
+    return arg.strip().lower(), folder_klien(arg.strip().lower())
+
+
+def jalankan(arg, paksa=False, coba=False):
+    domain, folder = _domain_folder(arg)
+    berkas = berkas_redaksi(folder)
+    if not berkas:
+        return 'tanpa_berkas', None
+    md5 = hashlib.md5()
+    for p in berkas:
+        md5.update(p.name.encode() + b'\0' + p.read_bytes())
+    md5 = md5.hexdigest()
+    simpan = SIMPAN / f'{domain}.json'
+    try:
+        lama = json.loads(simpan.read_text())
+    except (OSError, ValueError):
+        lama = {}
+    if lama.get('md5') == md5 and isinstance(lama.get('data'), dict) and not paksa:
+        # Hasil kosong (berkas bukan susunan redaksi) ikut di-cache supaya agen tidak dipanggil tiap run.
+        return ('tetap', lama['data']) if lama['data'].get('bagian') else ('tanpa_nama', None)
+    dokumen = [p for p in berkas if p.suffix.lower() in DOKUMEN]
+    gambar = [p for p in berkas if p.suffix.lower() in GAMBAR]
+    def kepala(p):
+        return f"=== {p.relative_to(folder)} (diubah {datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d}) ==="
+    sumber = '\n\n'.join(f'{kepala(p)}\n{teks_berkas(p)}' for p in dokumen)
+    isi = sumber + ''.join(f'\n\n{kepala(p)}\n(gambar: baca berkas {p} dengan alat Read)' for p in gambar)
+    prompt = TUGAS.format(domain=domain, isi=isi)
+    if coba:
+        print(prompt)
+        return 'coba', None
+
+    DC = muat('desain_claude', HERE / 'desain-claude')
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    opus = DC.opus_terbaru(env)
+    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus, ANTHROPIC_SMALL_FAST_MODEL=opus)
+    mulai = time.time()
+    try:
+        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'opus', '--output-format', 'json',
+                              '--no-session-persistence', '--tools', 'Read' if gambar else '',
+                              '--json-schema', json.dumps(SKEMA)],
+                             capture_output=True, text=True, timeout=600, env=env, cwd='/tmp')
+        hasil = json.loads(run.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return f'gagal:{type(e).__name__}', lama.get('data')
+    data = hasil.get('structured_output')
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        return f"gagal:{str(hasil.get('result') or 'tanpa_json')[:200]}", lama.get('data')
+    # Gambar tidak punya teks pembanding: saringan kata hanya berlaku bila semua berkas dokumen.
+    data = saring(data, sumber if not gambar else '')
+    SIMPAN.mkdir(parents=True, exist_ok=True)
+    sementara = simpan.with_suffix('.tmp')
+    sementara.write_text(json.dumps({
+        'md5': md5, 'waktu': datetime.now().astimezone().isoformat(timespec='seconds'),
+        'berkas': [str(p.relative_to(folder)) for p in berkas], 'detik': round(time.time() - mulai),
+        'biaya_usd': round(float(hasil.get('total_cost_usd') or 0), 4), 'data': data}, ensure_ascii=False, indent=1))
+    sementara.replace(simpan)
+    return ('baru', data) if data['bagian'] else ('tanpa_nama', None)
+
+
+def susunan(domain):
+    """Data susunan redaksi (dari cache, atau dibaca sekarang) atau None. Tidak pernah melempar."""
+    try:
+        status, data = jalankan(domain)
+    except Exception as e:  # halaman Redaksi tetap dibuat tanpa susunan
+        status, data = f'gagal:{type(e).__name__}', None
+    print(f"redaksi_klien: {status}" + (f" bagian={len(data['bagian'])}" if data else ''))
+    return data
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    opsi = {a[2:] for a in sys.argv[1:] if a.startswith('--')}
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    status, data = jalankan(args[0], paksa='paksa' in opsi, coba='coba' in opsi)
+    if data:
+        print(json.dumps(data, ensure_ascii=False, indent=1))
+    print(f"redaksi_klien: {status}" + (f" bagian={len(data['bagian'])}" if data else ''))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

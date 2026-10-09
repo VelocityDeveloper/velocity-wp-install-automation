@@ -115,11 +115,13 @@ const angka=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1).replace('.',',')+'rb':Stri
 const namaTool=t=>{const m=t.match(/^mcp__(?:plugin_)?(.+?)__(.+)$/);if(!m)return t;const srv=m[1].replace(/_[a-z]+$/,'').replace(/^claude_ai_/,'');return`${srv}.${m[2]}`.replace(/^telegram.*?\./,'tg.')};
 const JENIS_TEKS=n=>n.kind==='memory'?`memory · ${n.group}`:n.kind==='skill'?`skill · ${n.group}`:n.kind==='ref'?'berkas skill':n.kind==='ghost'?'belum ditulis':n.kind==='proyek'?'proyek klien':n.kind==='sesi'?`sesi · ${n.jenis}${n.hidup?'':' (selesai)'}`:n.kind==='tool'?'tool':n.kind==='hub'?'kelompok':'inti';
 
-let dasar=null,akt=null,N=[],L=[],byId=new Map(),adj=new Map();
+let dasar=null,akt=null,N=[],L=[],byId=new Map(),adj=new Map(),tandaMasalah=true;
+const MASALAH={tak_diindeks:'tidak ada di MEMORY.md',besar:'terlalu besar',usang:'lama tidak diperbarui',nama_ganda:'nama ganda',tanpa_deskripsi:'tanpa deskripsi'};
 let mati=new Set(),cari='',pilih=null,hover=null,tampil='graf',urut={k:'deg',arah:-1};
 const terakhirPakai=new Map(); // id simpul -> {t, sesi, aksi}
 const cv=$('cv'),ctx=cv.getContext('2d');let W=0,H=0,dpr=1;
 let cam={x:0,y:0,k:1},panas=1,tandaDinamis='';
+let ISI=null,janjiIsi=null; // isi.json (lihat muatIsi)
 
 function ukur(){const r=$('stage').getBoundingClientRect();dpr=window.devicePixelRatio||1;W=r.width;H=r.height;cv.width=W*dpr;cv.height=H*dpr}
 new ResizeObserver(()=>{ukur();ulang()}).observe($('stage'));
@@ -162,7 +164,10 @@ function pasang(d){
   // Perubahan yang hanya menyangkut garis dinamis (sesi↔tool/memory) tidak boleh mengguncang tata letak;
   // hanya simpul baru yang memanaskan simulasi, dan cukup sedikit.
   const simpulSama=lama.size&&N.length===lama.size&&N.every(n=>lama.has(n.id));
-  panas=!lama.size?1:simpulSama?panas:Math.max(panas,.3);
+  // Simpul dinamis (sesi/tool) datang & pergi tiap beberapa detik; dulu tiap kali itu seluruh graf dipanaskan
+  // ke .3 sehingga simulasi O(n²) praktis tak pernah berhenti. Kini hanya simpul baru yang dihangatkan
+  // (langkahLokal: simpul hangat vs semua, simpul lama diam) — tata letak lama juga tidak bergeser.
+  if(!lama.size)panas=1;else if(!simpulSama)for(const n of N)if(!lama.has(n.id))n.hangat=1;
   if(pilih)pilih=byId.get(pilih.id)||null;if(hover)hover=byId.get(hover.id)||null;
   statistik();legenda();detail();daftar();
 }
@@ -183,7 +188,7 @@ const acak=k=>{let h=2166136261;for(let i=0;i<k.length;i++){h^=k.charCodeAt(i);h
 function titikLengan(g,t){return[Math.cos(g.a+t*PUTAR)*(95+t*g.R),Math.sin(g.a+t*PUTAR)*(95+t*g.R)]}
 function hitungGalaksi(){lengan=[];const ada=LENGAN.filter(([,f])=>N.some(f));
   ada.forEach(([nama,f],i)=>{const a=N.filter(f).sort((x,y)=>(y.deg||0)-(x.deg||0)||(y.minggu||0)-(x.minggu||0)||(x.mulai||0)-(y.mulai||0)||(x.id<y.id?-1:1));
-    const g={nama,a:LENGAN.findIndex(x=>x[0]===nama)/LENGAN.length*Math.PI*2-Math.PI/2,R:150+Math.sqrt(a.length)*52,n:a.length};lengan.push(g);
+    const g={nama,f,a:LENGAN.findIndex(x=>x[0]===nama)/LENGAN.length*Math.PI*2-Math.PI/2,R:150+Math.sqrt(a.length)*52,n:a.length};lengan.push(g);
     a.forEach((n,k)=>{const t=Math.min(1,Math.max(0,(k+1)/(a.length+1)+(acak(n.id+'t')-.5)*.3)),[x,y]=titikLengan(g,t),sud=g.a+t*PUTAR+(acak(n.id+'s')-.5)*.9,lebar=(acak(n.id)-.5)*(90+t*230);n.tj=[x+Math.cos(sud)*lebar,y+Math.sin(sud)*lebar]});
     // hub kelompok di pangkal lengannya
     const hub=N.find(h=>h.kind==='hub'&&(h.id==='hub:m:'+nama||h.id==='hub:'+nama));if(hub)hub.tj=titikLengan(g,.06)});
@@ -193,10 +198,22 @@ function hitungGalaksi(){lengan=[];const ada=LENGAN.filter(([,f])=>N.some(f));
     const r=n.id.startsWith('hub:s:')?70:45;n.tj=[Math.cos(a)*r,Math.sin(a)*r]}}
 const PANJANG={struktur:70,bagian:22,tautan:55,sebutan:60,memakai:70,tentang:40,sentuh:160,pakai:120};
 const KUAT={struktur:.035,bagian:.1,tautan:.018,sebutan:.012,memakai:.012,tentang:.03,sentuh:.0015,pakai:.002};
+function langkahLokal(){const h=N.filter(n=>n.hangat>.01&&terlihat(n));if(!h.length)return false;const vis=N.filter(terlihat),hs=new Set(h);
+  for(const a of h){const p=a.hangat;for(const b of vis){if(b===a)continue;let dx=b.x-a.x,dy=b.y-a.y,d2=dx*dx+dy*dy||.01;if(d2>250000)continue;const f=(a.kind==='ref'||b.kind==='ref'?120:380)/d2*p,d=Math.sqrt(d2);a.vx-=dx/d*f;a.vy-=dy/d*f}}
+  for(const l of L){const sa=hs.has(l.s),ta=hs.has(l.t);if(!sa&&!ta||!terlihat(l.s)||!terlihat(l.t))continue;const pj=l.kind==='struktur'?(l.s.kind==='hub'&&l.t.kind==='hub'?130:70):PANJANG[l.kind]||60,kuat=(KUAT[l.kind]||.015)*(l.kind==='bagian'?1:.4);
+    let dx=l.t.x-l.s.x,dy=l.t.y-l.s.y,d=Math.sqrt(dx*dx+dy*dy)||.01;dx/=d;dy/=d;if(sa){const f=(d-pj)*kuat*l.s.hangat;l.s.vx+=dx*f;l.s.vy+=dy*f}if(ta){const f=(d-pj)*kuat*l.t.hangat;l.t.vx-=dx*f;l.t.vy-=dy*f}}
+  for(const n of h){if(n.tj){const ka=(n.kind==='hub'?.05:.014)*n.hangat;n.vx+=(n.tj[0]-n.x)*ka;n.vy+=(n.tj[1]-n.y)*ka}
+    if(n.fx!=null){n.x=n.fx;n.y=n.fy;n.vx=n.vy=0}else{n.vx*=.6;n.vy*=.6;n.x+=Math.max(-30,Math.min(30,n.vx));n.y+=Math.max(-30,Math.min(30,n.vy))}n.hangat*=.985}
+  return true}
 function langkah(){
-  if(panas<.004)return false;
+  if(panas<.004)return langkahLokal();
   const vis=N.filter(terlihat);
-  for(let i=0;i<vis.length;i++){const a=vis[i];for(let j=i+1;j<vis.length;j++){const b=vis[j];let dx=b.x-a.x,dy=b.y-a.y,d2=dx*dx+dy*dy||.01;if(d2>250000)continue;const f=(a.kind==='ref'||b.kind==='ref'?120:380)/d2*panas;const d=Math.sqrt(d2);dx/=d;dy/=d;a.vx-=dx*f;a.vy-=dy*f;b.vx+=dx*f;b.vy+=dy*f}}
+  // gaya tolak (jangkau < 500): koordinat disalin ke typed array dulu — akses properti objek simpul yang bentuknya
+  // beragam membuat loop O(n²) ini ±10x lebih lambat
+  const nv=vis.length,X=new Float64Array(nv),Y=new Float64Array(nv),RF=new Uint8Array(nv),FX=new Float64Array(nv),FY=new Float64Array(nv);
+  for(let i=0;i<nv;i++){const n=vis[i];X[i]=n.x;Y[i]=n.y;RF[i]=n.kind==='ref'?1:0}
+  for(let i=0;i<nv;i++){const xi=X[i],yi=Y[i],ri=RF[i];for(let j=i+1;j<nv;j++){let dx=X[j]-xi,dy=Y[j]-yi;const d2=dx*dx+dy*dy||.01;if(d2>250000)continue;const f=(ri|RF[j]?120:380)/d2*panas,d=Math.sqrt(d2);dx=dx/d*f;dy=dy/d*f;FX[i]-=dx;FY[i]-=dy;FX[j]+=dx;FY[j]+=dy}}
+  for(let i=0;i<nv;i++){vis[i].vx+=FX[i];vis[i].vy+=FY[i]}
   for(const l of L){if(!terlihat(l.s)||!terlihat(l.t))continue;const pj=l.kind==='struktur'?(l.s.kind==='core'?170:l.s.kind==='hub'&&l.t.kind==='hub'?130:70):PANJANG[l.kind]||60;const kuat=(KUAT[l.kind]||.015)*(l.kind==='bagian'?1:.4);let dx=l.t.x-l.s.x,dy=l.t.y-l.s.y,d=Math.sqrt(dx*dx+dy*dy)||.01;const f=(d-pj)*kuat*panas;dx/=d;dy/=d;l.s.vx+=dx*f;l.s.vy+=dy*f;l.t.vx-=dx*f;l.t.vy-=dy*f}
   for(const n of vis){if(n.tj){const ka=(n.kind==='hub'?.05:.014)*panas;n.vx+=(n.tj[0]-n.x)*ka;n.vy+=(n.tj[1]-n.y)*ka}else{n.vx-=n.x*.002*panas;n.vy-=n.y*.002*panas}
     if(n.fx!=null){n.x=n.fx;n.y=n.fy;n.vx=n.vy=0;continue}n.vx*=.6;n.vy*=.6;n.x+=Math.max(-30,Math.min(30,n.vx));n.y+=Math.max(-30,Math.min(30,n.vy))}
@@ -226,16 +243,25 @@ function jalur(n,x,y,rr){const b=bentuk(n);ctx.beginPath();
 
 // Latar galaksi: tonjolan inti yang berpendar, debu di sepanjang lengan, nama kelompok di ujung lengan.
 const KABUT_NAMA={project:'MEMORY · PROJECT',feedback:'MEMORY · FEEDBACK',proyek:'PROYEK KLIEN',skill:'SKILLS',tool:'TOOLS',sesi:'SESI',lain:'MEMORY · LAIN'};
+// Nama kelompok ditempel di tepi luar simpul kelompoknya yang sebenarnya (ujung lengan teoretis sering jauh
+// dari simpul karena tarikan koneksi → nama terpotong di tepi kanvas).
+function posNama(g){const a=N.filter(n=>g.f(n)&&terlihat(n)&&isFinite(n.x));if(!a.length)return titikLengan(g,1.05);
+  a.sort((p,q)=>Math.hypot(q.x,q.y)-Math.hypot(p.x,p.y));const luar=a.slice(0,Math.max(1,Math.ceil(a.length/4)));
+  let x=0,y=0;for(const n of luar){x+=n.x;y+=n.y}x/=luar.length;y/=luar.length;const d=Math.hypot(x,y)||1,w=(KABUT_NAMA[g.nama]||g.nama).length*7.8/2/cam.k,geser=(Math.abs(x/d)*w+Math.abs(y/d)*10/cam.k)+14/cam.k;return[x+x/d*geser,y+y/d*geser]}
 function latarOtak(){const z=cam.k,T=kini();
   const inti=ctx.createRadialGradient(0,0,0,0,0,190);inti.addColorStop(0,'#fff7dd40');inti.addColorStop(.25,'#cfe9c822');inti.addColorStop(.6,'#55e8790c');inti.addColorStop(1,'#55e87900');
   ctx.globalAlpha=1;ctx.fillStyle=inti;ctx.beginPath();ctx.arc(0,0,190,0,Math.PI*2);ctx.fill();
   for(const g of lengan){if(mati.has(g.nama==='lain'?'reference':g.nama))continue;const c=(GRUP[g.nama]||GRUP.lain).warna;
     // awan nebula: beberapa gumpalan lembut di sekitar lengan, bukan pita
-    for(let i=0;i<7;i++){const t=.1+i/6*.85,[bx,by]=titikLengan(g,t),o=(acak(g.nama+'b'+i)-.5)*120,sd=g.a+t*PUTAR,cx=bx+Math.cos(sd)*o,cy=by+Math.sin(sd)*o,R=70+acak(g.nama+'R'+i)*110;
-      const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,R);gr.addColorStop(0,c+'1c');gr.addColorStop(1,c+'00');ctx.globalAlpha=1;ctx.fillStyle=gr;ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.fill()}
+    if(!g.awan){g.awan=[];for(let i=0;i<7;i++){const t=.1+i/6*.85,[bx,by]=titikLengan(g,t),o=(acak(g.nama+'b'+i)-.5)*120,sd=g.a+t*PUTAR,cx=bx+Math.cos(sd)*o,cy=by+Math.sin(sd)*o,R=70+acak(g.nama+'R'+i)*110;
+      const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,R);gr.addColorStop(0,c+'1c');gr.addColorStop(1,c+'00');g.awan.push([gr,cx,cy,R])}}
+    ctx.globalAlpha=1;for(const[gr,cx,cy,R]of g.awan){ctx.fillStyle=gr;ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.fill()}
     if(!g.debu){g.debu=[];for(let i=0;i<Math.round(90+g.n*4);i++){const t=Math.pow(acak(g.nama+i),.8)*1.05,u=acak(g.nama+'u'+i)+acak(g.nama+'v'+i)-1,[px,py]=titikLengan(g,t),sd=g.a+t*PUTAR,w=u*(90+t*240);g.debu.push([px+Math.cos(sd)*w,py+Math.sin(sd)*w,.4+acak(g.nama+'r'+i)*1.1,.15+acak(g.nama+'a'+i)*.45])}}
-    ctx.fillStyle=c;for(const[dx,dy,dr,da]of g.debu){ctx.globalAlpha=da*(.75+.25*Math.sin(T/900+dx));ctx.beginPath();ctx.arc(dx,dy,dr/Math.max(z,.6),0,Math.PI*2);ctx.fill()}
-    const[x,y]=titikLengan(g,1.05);ctx.font=`600 ${Math.max(16,g.R*.09)}px ui-monospace,Menlo,Consolas,monospace`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.globalAlpha=.09;ctx.fillStyle=c;ctx.fillText(KABUT_NAMA[g.nama]||g.nama,x,y)}
+    // kelip debu dibulatkan ke 8 tingkat alfa → satu path per tingkat (dulu ±3000 fill per frame)
+    ctx.fillStyle=c;const tingkat=Array.from({length:8},()=>new Path2D()),zr=Math.max(z,.6);
+    for(const[dx,dy,dr,da]of g.debu){const a=da*(.75+.25*Math.sin(T/900+dx)),k=Math.min(7,Math.round(a/.6*7)),p=tingkat[k],rr=dr/zr;p.moveTo(dx+rr,dy);p.arc(dx,dy,rr,0,Math.PI*2)}
+    for(let k=0;k<8;k++){ctx.globalAlpha=Math.max(.02,k/7*.6);ctx.fill(tingkat[k])}
+    const[x,y]=posNama(g);ctx.font=`600 ${13/z}px ui-monospace,Menlo,Consolas,monospace`;ctx.textAlign='center';ctx.textBaseline='middle';const nm=KABUT_NAMA[g.nama]||g.nama;ctx.globalAlpha=.85;ctx.lineWidth=4/z;ctx.lineJoin='round';ctx.strokeStyle='#0a0e0c';ctx.strokeText(nm,x,y);ctx.globalAlpha=.7;ctx.fillStyle=c;ctx.fillText(nm,x,y)}
   ctx.lineCap='butt';ctx.globalAlpha=1}
 function gambar(){
   if(!dasar)return;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
@@ -259,15 +285,25 @@ function gambar(){
     else if(n.kind==='ghost'){ctx.setLineDash([2/cam.k,2/cam.k]);ctx.strokeStyle=c;ctx.lineWidth=1.2/cam.k;ctx.stroke();ctx.setLineDash([])}
     else if(b==='r'||b==='h'||(n.kind==='sesi'&&!n.hidup)){ctx.fillStyle='#0a0e0c';ctx.fill();ctx.lineWidth=(b==='h'?1.8:2.4)/cam.k;ctx.strokeStyle=c;ctx.stroke()}
     else{ctx.fillStyle=n.kind==='ref'?c+'99':c;ctx.fill();ctx.lineWidth=2/cam.k;ctx.strokeStyle='#0a0e0c';ctx.stroke()}
-    if(n===pilih){ctx.beginPath();ctx.arc(n.x,n.y,rr+5/cam.k+2,0,Math.PI*2);ctx.strokeStyle='#fff';ctx.lineWidth=1.5/cam.k;ctx.stroke()}}
+    if(n===pilih){ctx.beginPath();ctx.arc(n.x,n.y,rr+5/cam.k+2,0,Math.PI*2);ctx.strokeStyle='#fff';ctx.lineWidth=1.5/cam.k;ctx.stroke()}
+    // memory yang perlu dirapikan (panel Kesehatan): cincin putus-putus merah
+    if(tandaMasalah&&n.masalah&&n.masalah.length){ctx.beginPath();ctx.arc(n.x,n.y,rr+3/cam.k+1.5,0,Math.PI*2);ctx.setLineDash([3/cam.k,2.5/cam.k]);ctx.strokeStyle='#ff6b6b';ctx.lineWidth=1.4/cam.k;ctx.stroke();ctx.setLineDash([])}}
   efekAtas();
   // label: inti/hub selalu; skill, sesi hidup & simpul besar di layar lebar; semuanya saat diperbesar atau bertetangga dengan fokus
   ctx.textAlign='center';ctx.textBaseline='top';
+  // kumpulkan dulu, urutkan prioritas, lalu lewati label yang menimpa label lain (dulu bertumpuk di area padat)
+  const kand=[];
   for(const n of N){if(!terlihat(n))continue;const sempit=W<700||MINI,penting=n.kind==='core'||(!sempit&&(n.kind==='skill'||(n.kind==='sesi'&&n.hidup&&cam.k>1.2)||(n.kind==='tool'&&(n.minggu||0)>300)||(n.deg||0)>=12));
     if(fokus&&tetangga.has(n.id)&&n!==fokus&&tetangga.size>25&&(n.deg||0)<4&&!['hub','skill','sesi','tool'].includes(n.kind)&&cam.k<2.4)continue;
-    const tampilkan=(fokus?tetangga.has(n.id):penting||cam.k>1.6)||(cari&&cocok(n)&&n.kind!=='ref')||(cam.k>2.4)||nyala.has(n.id)&&nyala.get(n.id).kuat>.9;if(!tampilkan)continue;if(redup(n)&&!(fokus&&tetangga.has(n.id)))continue;
-    const fs=(n.kind==='core'?14:n.kind==='hub'?12:11)/cam.k;ctx.font=`${n.kind==='hub'||n.kind==='core'?600:400} ${fs}px ui-monospace,Menlo,Consolas,monospace`;
+    const menyala=nyala.has(n.id)&&nyala.get(n.id).kuat>.9;
+    const tampilkan=(fokus?tetangga.has(n.id):penting||cam.k>1.6)||(cari&&cocok(n)&&n.kind!=='ref')||(cam.k>2.4)||menyala;if(!tampilkan)continue;if(redup(n)&&!(fokus&&tetangga.has(n.id)))continue;
+    const prio=n.kind==='core'?1e9:n===fokus?1e8:menyala?1e7:(cari&&cocok(n))?1e6:n.kind==='hub'?1e5:(n.deg||0)+(n.kind==='skill'?5:0)+(n.kind==='sesi'&&n.hidup?8:0);
+    kand.push([prio,n])}
+  kand.sort((a,b)=>b[0]-a[0]);const kotak=[];
+  for(const[,n]of kand){const fs=(n.kind==='core'?14:n.kind==='hub'?12:11)/cam.k;ctx.font=`${n.kind==='hub'||n.kind==='core'?600:400} ${fs}px ui-monospace,Menlo,Consolas,monospace`;
     let t=n.label;if(n.kind==='tool')t+=` ${angka(n.minggu||0)}`;if(t.length>34)t=t.slice(0,32)+'…';const y=n.y+r(n)*(bentuk(n)==='t'?1.1:1)+4/cam.k;
+    const w=ctx.measureText(t).width/2+2/cam.k,bx=[n.x-w,y-1/cam.k,n.x+w,y+fs*1.15];
+    if(n.kind!=='core'&&n!==fokus&&kotak.some(k=>bx[0]<k[2]&&bx[2]>k[0]&&bx[1]<k[3]&&bx[3]>k[1]))continue;kotak.push(bx);
     ctx.globalAlpha=1;ctx.lineWidth=3/cam.k;ctx.strokeStyle='#0a0e0c';ctx.strokeText(t,n.x,y);ctx.fillStyle=n.kind==='core'?'#55e879':n.kind==='hub'?'#e9d36b':(n===fokus?'#ffffff':'#c8d7cc');ctx.fillText(t,n.x,y)}
   ctx.restore();ctx.globalAlpha=1;
 }
@@ -306,7 +342,18 @@ function efekAtas(){const T=kini();for(const[id,s]of nyala){const n=byId.get(id)
 const sibuk=()=>pulsa.length||nyala.size||kini()<aktifSampai||jejak.size;
 
 let butuhGambar=true;const ulang=()=>{butuhGambar=true};
-function loop(){const gerak=langkah();if(gerak||butuhGambar||sibuk()){gambar();butuhGambar=false}requestAnimationFrame(loop)}
+// pas ulang sekali saat simulasi awal sudah tenang (simpul masih bergeser sesudah pas() pertama → nama kelompok
+// keluar kanvas), asal kamera belum digeser/zoom pengguna
+let pasAwal=null;
+// Hemat: loop & polling berhenti saat tab tersembunyi atau graf di luar layar (mis. iframe mini di dashboard
+// yang digulir lewat). Bila yang tersisa hanya pendar jejak 15 menit (kedip pelan), gambar ±7 fps saja.
+let jalan=!document.hidden,diLayar=true,loopHidup=false,tGambar=0;
+const ramai=()=>pulsa.length||nyala.size||kini()<aktifSampai;
+function loop(t){if(!jalan){loopHidup=false;return}const gerak=langkah();if(!gerak&&pasAwal){if(cam.x===pasAwal.x&&cam.y===pasAwal.y&&cam.k===pasAwal.k&&!pilih)pas();pasAwal=null}
+  if(gerak||butuhGambar||ramai()||(jejak.size&&t-tGambar>150)){gambar();tGambar=t;butuhGambar=false}requestAnimationFrame(loop)}
+function aturJalan(){const v=!document.hidden&&diLayar;if(v===jalan)return;jalan=v;if(v){if(!loopHidup){loopHidup=true;requestAnimationFrame(loop)}pantau();ulang();dispatchEvent(new Event('brain-jalan'))}}
+document.addEventListener('visibilitychange',aturJalan);
+new IntersectionObserver(([e])=>{diLayar=e.isIntersecting;aturJalan()}).observe($('stage'));
 
 function kena(sx,sy){const[x,y]=dunia(sx,sy);let best=null,bd=1e9;for(const n of N){if(!terlihat(n))continue;const d=Math.hypot(n.x-x,n.y-y);const batas=r(n)*1.2+6/cam.k;if(d<batas&&d<bd){bd=d;best=n}}return best}
 let tekan=null,cubit=null;const jari=new Map();
@@ -326,7 +373,8 @@ cv.addEventListener('pointerleave',()=>{if(!tekan){hover=null;$('tip').hidden=tr
 let zhintT=0;
 cv.addEventListener('wheel',e=>{if(MINI&&!penuh()&&!e.ctrlKey&&!e.metaKey){$('zhint').classList.add('on');clearTimeout(zhintT);zhintT=setTimeout(()=>$('zhint').classList.remove('on'),1200);return}e.preventDefault();const b=cv.getBoundingClientRect();zoom(Math.exp(-e.deltaY*.0015),e.clientX-b.left,e.clientY-b.top)},{passive:false});
 function zoom(f,sx=W/2,sy=H/2){const[x,y]=dunia(sx,sy);cam.k=Math.max(.2,Math.min(6,cam.k*f));cam.x=x-(sx-W/2)/cam.k;cam.y=y-(sy-H/2)/cam.k;ulang()}
-function pas(){const vis=N.filter(terlihat);if(!vis.length)return;let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const n of vis){a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x);d=Math.max(d,n.y)}cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.max(.2,Math.min(2.5,Math.min(W/(c-a+120),H/(d-b+120))));ulang()}
+function pas(){const vis=N.filter(terlihat);if(!vis.length)return;let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const n of vis){a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x);d=Math.max(d,n.y)}
+  for(const g of lengan){if(mati.has(g.nama==='lain'?'reference':g.nama))continue;const[x,y]=posNama(g),fs=13/cam.k,w=(KABUT_NAMA[g.nama]||g.nama).length*fs*.31;a=Math.min(a,x-w);c=Math.max(c,x+w);b=Math.min(b,y-fs*.6);d=Math.max(d,y+fs*.6)}cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.max(.2,Math.min(2.5,Math.min(W/(c-a+120),H/(d-b+120))));ulang()}
 function fokusKe(n){if(!n)return;pilih=n;cam.x=n.x;cam.y=n.y;cam.k=Math.max(cam.k,1.4);detail();ulang()}
 // Layar penuh: Fullscreen API; bila tidak didukung (iPhone) halaman penuh pakai kelas .penuh, mode mini buka /brain/ di tab baru
 const stg=$('stage'),zf=$('z-full');
@@ -346,7 +394,7 @@ function tip(n,sx,sy){const el=$('tip');if(!n||tekan){el.hidden=true;return}
 
 function markdown(s){return esc(s).replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\[\[([^\]]+)\]\]/g,(m,t)=>`<span class="wl" data-wl="${esc(t)}">[[${esc(t)}]]</span>`)}
 const baris=(n,k='')=>`<li>${sw(n)}<button data-id="${esc(n.id)}">${esc(n.kind==='tool'?n.nama:n.label)}</button><span class="k">${k}</span></li>`;
-function detail(){const el=$('side');const n=pilih;
+function detail(){const el=$('side');const n=pilih;if(n&&!ISI&&(n.kind==='memory'||n.kind==='skill'))muatIsi();
   if(!n){const top=N.filter(x=>x.kind==='memory'||x.kind==='skill'||x.kind==='proyek').sort((a,b)=>b.deg-a.deg).slice(0,10);
     const sesi=N.filter(x=>x.kind==='sesi').sort((a,b)=>(b.hidup-a.hidup)||(b.terakhir-a.terakhir));
     const pr=[...terakhirPakai].filter(([id])=>id.startsWith('p:')).sort((a,b)=>b[1].t-a[1].t).slice(0,6).map(([id,p])=>[byId.get(id),p]).filter(x=>x[0]);
@@ -355,7 +403,7 @@ function detail(){const el=$('side');const n=pilih;
       (pr.length?`<div class="sect">proyek disentuh terakhir</div><ul class="conn">${pr.map(([x,p])=>baris(x,waktu(p.t))).join('')}</ul>`:'')+
       `<div class="sect">paling terhubung</div><ul class="conn">${top.map(x=>baris(x,x.deg)).join('')}</ul>`+
       `<div class="sect">memory terbaru diubah</div><ul class="conn">${N.filter(x=>x.kind==='memory').sort((a,b)=>b.updated-a.updated).slice(0,6).map(x=>baris(x,waktu(x.updated))).join('')}</ul>`;return}
-  const meta=[];if(n.file)meta.push(['berkas',n.file]);if(n.project)meta.push(['proyek',n.project]);if(n.source)meta.push(['sumber',n.source]);if(n.updated)meta.push(['diubah',`${tgl(n.updated)} (${waktu(n.updated)})`]);if(n.size)meta.push(['ukuran',`${(n.size/1024).toFixed(1)} KB`]);if(n.refs)meta.push(['berkas',`${n.refs.length} dokumen + ${n.files||0} lainnya`]);
+  const meta=[];if(n.file)meta.push(['berkas',n.file]);if(n.project)meta.push(['proyek',n.project]);if(n.source)meta.push(['sumber',n.source]);if(n.updated)meta.push(['diubah',`${tgl(n.updated)} (${waktu(n.updated)})`]);if(n.size)meta.push(['ukuran',`${(n.size/1024).toFixed(1)} KB`]);if(n.masalah&&n.masalah.length)meta.push(['perlu dicek',n.masalah.map(k=>MASALAH[k]||k).join(', ')]);if(n.refs)meta.push(['berkas',`${n.refs.length} dokumen + ${n.files||0} lainnya`]);
   const p=n.kind!=='sesi'&&terakhirPakai.get(n.id);if(p)meta.push(['dipakai',`${tgl(p.t)} (${waktu(p.t)}) · ${(byId.get('sesi:'+p.sesi)||{label:'sesi '+p.sesi}).label}`]);
   let tambahan='';
   if(n.kind==='sesi'){meta.push(['status',n.hidup?'sedang berjalan':'selesai'],['mulai',tgl(n.mulai)],['aktif',n.terakhir?`${tgl(n.terakhir)} (${waktu(n.terakhir)})`:'-'],['aksi',`${angka(n.jumlah||0)} pemakaian tool (7 hari)`]);
@@ -388,7 +436,7 @@ function legenda(){const hit={};for(const n of N){const g=grupSimpul(n);if(g&&n.
   $('legend').innerHTML=Object.entries(GRUP).filter(([k])=>hit[k]).map(([k,g])=>`<button type="button" class="chip ${mati.has(k)?'off':''}" data-g="${k}" aria-pressed="${!mati.has(k)}"><span class="sw ${KELAS_SW[g.bentuk]||''}" style="background:${g.warna};border-color:${g.warna}"></span>${g.nama} <span class="n">${hit[k]}</span></button>`).join('')}
 $('legend').addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b)return;const g=b.dataset.g;mati.has(g)?mati.delete(g):mati.add(g);panas=Math.max(panas,.3);legenda();daftar();ulang()});
 
-let tunda;$('q').addEventListener('input',e=>{clearTimeout(tunda);tunda=setTimeout(()=>{cari=e.target.value.trim().toLowerCase();daftar();ulang()},120)});
+let tunda;$('q').addEventListener('input',e=>{if(!ISI)muatIsi();clearTimeout(tunda);tunda=setTimeout(()=>{cari=e.target.value.trim().toLowerCase();daftar();ulang()},120)});
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(tunda);cari=e.target.value.trim().toLowerCase();daftar();const cocokan=N.filter(x=>['memory','skill','proyek','sesi','tool'].includes(x.kind)&&terlihat(x)&&cocok(x));const skor=x=>{const l=(x.label||'').toLowerCase();return l===cari?2:l.includes(cari)?1:0};const n=cocokan.sort((a,b)=>skor(b)-skor(a)||b.deg-a.deg)[0];if(n)fokusKe(n)}if(e.key==='Escape'){e.target.value='';cari='';daftar();ulang()}});
 
 function daftar(){if(!dasar)return;const rows=N.filter(n=>['memory','skill','ghost','proyek','sesi','tool'].includes(n.kind)&&terlihat(n)&&cocok(n));
@@ -413,8 +461,12 @@ let feedLipat=window.innerWidth<700;try{const v=localStorage.getItem('brain-feed
 $('feed').addEventListener('click',e=>{if(e.target.closest('.fh')){feedLipat=!feedLipat;try{localStorage.setItem('brain-feed',feedLipat?'1':'0')}catch{}umpan();return}const b=e.target.closest('[data-id]');if(b&&b.dataset.id){const n=byId.get(b.dataset.id);fokusKe(n);nyalakan(n,'klik',{dariInti:false})}});
 function catatPakai(e){const id=idSimpulEvent(e);if(!id)return;const o=terakhirPakai.get(id);if(!o||o.t<e.t)terakhirPakai.set(id,{t:e.t,sesi:e.sesi,aksi:e.aksi});const s='sesi:'+e.sesi;const os=terakhirPakai.get(s);if(!os||os.t<e.t)terakhirPakai.set(s,{t:e.t,sesi:e.sesi,aksi:e.aksi})}
 // tools bisa dipakai puluhan kali per menit: antre & batasi supaya tetap terbaca
-setInterval(()=>{const a=antreAlat.shift();if(!a)return;const t=byId.get('tool:'+a.tool),s=byId.get('sesi:'+a.sesi);if(t)nyalakan(t,'tool',{dari:s,dariInti:!s,rambat:false,kuat:.7})},220);
-async function pantau(){try{const d=await fetch('aktivitas.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()});akt=d;if(!dasar)return;
+setInterval(()=>{if(!jalan)return;const a=antreAlat.shift();if(!a)return;const t=byId.get('tool:'+a.tool),s=byId.get('sesi:'+a.sesi);if(t)nyalakan(t,'tool',{dari:s,dariInti:!s,rambat:false,kuat:.7})},220);
+// cache 'no-cache' = peramban selalu bertanya ke server (If-None-Match) → 304 tanpa isi bila tidak berubah;
+// ETag sama dengan sebelumnya berarti data identik, jadi tidak perlu diurai ulang (null).
+const etag={};
+async function ambilJson(url){const r=await fetch(url,{cache:'no-cache'});if(!r.ok)throw Error(r.status);const e=r.headers.get('etag');if(e&&etag[url]===e)return null;const d=await r.json();etag[url]=e;return d}
+async function pantau(){try{const d=await ambilJson('aktivitas.json');if(!d)return;akt=d;if(!dasar)return;
   const now=Date.now()/1000,ev=d.events||[],al=d.alat||[];bangun();petaSinaps();
   if(akTerakhir===null){for(const e of ev){catatPakai(e);const n=byId.get(idSimpulEvent(e));if(n&&now-e.t<900)jejak.set(n.id,{t:e.t*1000,w:(AKSI[e.aksi]||AKSI.baca).warna})}
     for(const a of al)if(now-a.t<900)jejak.set('tool:'+a.tool,{t:a.t*1000,w:AKSI.tool.warna});
@@ -426,8 +478,18 @@ $('z-uji').onclick=()=>{const kand=N.filter(n=>['memory','skill','proyek'].inclu
   if(n)nyalakan(n,n.kind==='skill'?'skill':n.kind==='proyek'?'proyek':Math.random()<.7?'baca':'tulis',{dari:s,dariInti:!s});const tl=N.filter(x=>x.kind==='tool');const t=tl[Math.floor(Math.random()*tl.length)];if(t&&s)setTimeout(()=>nyalakan(t,'tool',{dari:s,rambat:false,kuat:.7}),300)};
 
 let genTerakhir=0;
-async function muat(){try{const d=await fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()});if(d.generated!==genTerakhir){const awal=!genTerakhir;genTerakhir=d.generated;dasar=d;tandaDinamis='';
-    if(awal&&!akt)await pantau();bangun();if(awal){for(let i=0;i<300;i++)langkah();pas()}ulang()}else statistik()}catch(err){if(!dasar)$('side').innerHTML=`<p class="detail" style="color:var(--red)">Gagal memuat data.json (${esc(err.message)}).</p>`}}
+// Halaman Vue /brain mengendalikan graf mini lewat postMessage (asal sama): cari & fokus simpul,
+// nyala/matikan penanda masalah. Simpul yang dituju juga dinyalakan supaya mudah terlihat.
+addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||typeof e.data!=='object')return;const m=e.data;
+  if(m.brain==='fokus'){const n=byId.get(m.id);if(n){fokusKe(n);nyalakan(n,'klik',{dariInti:false})}}
+  else if(m.brain==='lepas'){pilih=null;detail();ulang()}
+  else if(m.brain==='masalah'){tandaMasalah=!!m.on;ulang()}});
+// Isi lengkap memory/skill ada di isi.json (dipisah dari data.json oleh brain-data); dimuat sekali saat panel
+// detail dibuka atau pencarian dipakai, lalu ditempel ke simpul sebagai n.body.
+function tempelIsi(nodes){if(ISI)for(const n of nodes){const b=ISI[n.id];if(b)n.body=b}}
+function muatIsi(segar){if(janjiIsi&&!segar)return janjiIsi;janjiIsi=ambilJson('isi.json').then(d=>{if(d)ISI=d;tempelIsi(N);if(dasar)tempelIsi(dasar.nodes);detail();if(cari)daftar();ulang()}).catch(()=>{janjiIsi=null});return janjiIsi}
+async function muat(){try{const d=await ambilJson('data.json');if(!d){statistik();return}if(d.generated!==genTerakhir){const awal=!genTerakhir;genTerakhir=d.generated;dasar=d;tandaDinamis='';tempelIsi(d.nodes);if(ISI)muatIsi(true);
+    if(awal&&!akt)await pantau();bangun();if(awal){for(let i=0;i<300;i++)langkah();pas();pasAwal={...cam}}ulang()}else statistik()}catch(err){if(!dasar)$('side').innerHTML=`<p class="detail" style="color:var(--red)">Gagal memuat data.json (${esc(err.message)}).</p>`}}
 // Latar bintang: kanvas terpisah di bawah graf, 3 lapis paralaks mengikuti kamera, kelip + sesekali bintang jatuh.
 (()=>{const bc=$('bintang'),bx=bc.getContext('2d'),diam=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let bw=0,bh=0,bd=1,bintang=[],jatuh=null,akhir=0;
@@ -441,7 +503,7 @@ async function muat(){try{const d=await fetch('data.json',{cache:'no-store'}).th
     for(const b of bintang){const p=[.015,.04,.08][b.lapis];
       let x=(b.x*bw-cam.x*p)%bw,y=(b.y*bh-cam.y*p)%bh;if(x<0)x+=bw;if(y<0)y+=bh;
       const k=diam?1:.55+.45*Math.sin(t/1000*b.f+b.ph);bx.globalAlpha=b.a*k;bx.fillStyle=b.c;
-      if(b.lapis===2){bx.shadowColor=b.c;bx.shadowBlur=6}else bx.shadowBlur=0;
+      if(b.lapis===2){const a=bx.globalAlpha;bx.globalAlpha=a*.18;bx.beginPath();bx.arc(x,y,b.r*3.2,0,6.283);bx.fill();bx.globalAlpha=a}
       bx.beginPath();bx.arc(x,y,b.r,0,6.283);bx.fill()}
     bx.shadowBlur=0;
     if(!diam){if(!jatuh&&Math.random()<.0025){const kiri=Math.random()<.5;jatuh={x:Math.random()*bw,y:Math.random()*bh*.5,vx:(kiri?-1:1)*(5+Math.random()*4),vy:2.5+Math.random()*2,hidup:1}}
@@ -450,10 +512,11 @@ async function muat(){try{const d=await fetch('data.json',{cache:'no-store'}).th
         bx.globalAlpha=1;bx.strokeStyle=g;bx.lineWidth=1.4;bx.beginPath();bx.moveTo(j.x,j.y);bx.lineTo(j.x-j.vx*14,j.y-j.vy*14);bx.stroke();
         j.x+=j.vx;j.y+=j.vy;j.hidup-=.018;if(j.hidup<=0||j.x<-50||j.x>bw+50||j.y>bh+50)jatuh=null}}
     bx.globalAlpha=1}
-  function putar(t){if(t-akhir>33){akhir=t;lukis(t)}requestAnimationFrame(putar)}
+  let hidup=false;function putar(t){if(!jalan){hidup=false;return}if(t-akhir>50){akhir=t;lukis(t)}requestAnimationFrame(putar)}
+  const mulai=()=>{if(!hidup&&!diam){hidup=true;requestAnimationFrame(putar)}};addEventListener('brain-jalan',mulai);
   new ResizeObserver(()=>{isi();lukis(performance.now())}).observe($('stage'));
-  isi();if(diam){let cx=null;setInterval(()=>{const k=cam.x+','+cam.y;if(k!==cx){cx=k;lukis(0)}},100)}else requestAnimationFrame(putar)})();
-ukur();muat().then(pantau);setInterval(muat,60000);setInterval(pantau,2000);setInterval(umpan,30000);requestAnimationFrame(loop);
+  isi();if(diam){let cx=null;setInterval(()=>{const k=cam.x+','+cam.y;if(k!==cx){cx=k;lukis(0)}},100)}else mulai()})();
+ukur();muat().then(pantau);setInterval(()=>jalan&&muat(),60000);setInterval(()=>jalan&&pantau(),2000);setInterval(()=>jalan&&umpan(),30000);loopHidup=true;requestAnimationFrame(loop);
 </script>
 </body>
 </html>

@@ -1,10 +1,11 @@
 <script setup>
 // Server: daftar server tujuan installer (/api/servers, data /var/lib/velocity/servers.json)
+// + kapasitas disk & resource tiap server (/api/servers/resource, SSH, cache 60 dtk)
 // + kontrol daya Local PC (dipindah dari beranda agar tidak terpencet).
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
-import { minta, kirim } from '../api.js'
+import { minta, kirim, pakaiPolling, ukuranBerkas, waktuLalu } from '../api.js'
 import { konfirmasi } from '../konfirmasi.js'
 
 const PESAN = {
@@ -63,6 +64,32 @@ async function hapus(i) {
   try { terapkan(await kirim('/api/servers/delete', { index: i })); bersihkanTes(); beriStatus(`Server ${s.name} dihapus.`) }
   catch (e) { beriStatus(pesan(e.message), true) }
 }
+
+// Resource (disk, CPU, RAM, load) per host
+const resource = pakaiPolling('/api/servers/resource', 60000)
+const segarkan = ref(false)
+async function muatSegar() {
+  segarkan.value = true
+  try { resource.data.value = await minta('/api/servers/resource?segar=1'); resource.galat.value = null }
+  catch (e) { resource.galat.value = e }
+  finally { segarkan.value = false }
+}
+const resPerHost = computed(() => Object.fromEntries((resource.data.value?.servers || []).map((r) => [r.host, r])))
+const tingkat = (p) => (p >= 90 ? 'bahaya' : p >= 75 ? 'waspada' : '')
+const lamaNyala = (u) => (u >= 86400 ? `${Math.floor(u / 86400)} hari` : `${Math.floor(u / 3600)} jam`)
+const ringkasan = computed(() => {
+  const semua = (resource.data.value?.servers || []).filter((r) => r.ok)
+  const disk = semua.flatMap((r) => r.disks || [])
+  const total = disk.reduce((a, d) => a + d.total, 0)
+  const pakai = disk.reduce((a, d) => a + d.used, 0)
+  const sisa = disk.reduce((a, d) => a + d.free, 0)
+  return {
+    online: semua.length, jumlah: resource.data.value?.servers?.length || 0,
+    total, pakai, sisa, persen: pakai + sisa ? Math.round((pakai * 1000) / (pakai + sisa)) / 10 : 0,
+    core: semua.reduce((a, r) => a + (r.cpu_core || 0), 0),
+    ram: semua.reduce((a, r) => a + (r.ram?.total || 0), 0),
+  }
+})
 
 // Tambah
 const baru = reactive({ name: '', host: '', user: 'root', port: '', notes: '' })
@@ -132,9 +159,32 @@ async function jalankanDaya() {
     <header class="kepala-halaman">
       <div>
         <h1>Server</h1>
-        <p class="redup">Server tujuan installer dan kontrol daya Local PC.</p>
+        <p class="redup">Server tujuan installer, kapasitas disk, pemakaian resource, dan kontrol daya Local PC.</p>
       </div>
     </header>
+
+    <section class="kartu" aria-labelledby="judul-ringkas">
+      <div class="kartu-judul">
+        <h2 id="judul-ringkas">Kapasitas semua server</h2>
+        <span class="redup">
+          <template v-if="resource.data.value?.diambil">Diperbarui {{ waktuLalu(resource.data.value.diambil) }} · </template>
+          <button type="button" class="tombol garis kecil" :disabled="segarkan" @click="muatSegar">{{ segarkan ? 'Mengambil…' : 'Segarkan' }}</button>
+        </span>
+      </div>
+      <p v-if="resource.memuat.value" class="redup">Mengambil data dari server lewat SSH…</p>
+      <p v-else-if="resource.galat.value" class="pesan-status bahaya">Gagal mengambil resource: {{ resource.galat.value.message }}</p>
+      <div v-else class="ringkas">
+        <div class="tile">
+          <span class="redup">Disk terpakai</span>
+          <strong>{{ ringkasan.persen }}%</strong>
+          <div class="meter" :class="tingkat(ringkasan.persen)" role="meter" :aria-valuenow="ringkasan.persen" aria-valuemin="0" aria-valuemax="100" aria-label="Disk terpakai semua server"><i :style="{ width: `${ringkasan.persen}%` }" /></div>
+          <small class="redup">{{ ukuranBerkas(ringkasan.pakai) }} dari {{ ukuranBerkas(ringkasan.total) }}</small>
+        </div>
+        <div class="tile"><span class="redup">Sisa disk</span><strong>{{ ukuranBerkas(ringkasan.sisa) }}</strong><small class="redup">gabungan semua server</small></div>
+        <div class="tile"><span class="redup">Total CPU · RAM</span><strong>{{ ringkasan.core }} core</strong><small class="redup">RAM {{ ukuranBerkas(ringkasan.ram) }}</small></div>
+        <div class="tile"><span class="redup">Server tersambung</span><strong :class="{ 'teks-bahaya': ringkasan.online < ringkasan.jumlah }">{{ ringkasan.online }} / {{ ringkasan.jumlah }}</strong><small class="redup">cek SSH tiap 1 menit</small></div>
+      </div>
+    </section>
 
     <section class="kartu" aria-labelledby="judul-daftar">
       <div class="kartu-judul">
@@ -155,6 +205,35 @@ async function jalankanDaya() {
             </div>
             <code class="alamat">{{ s.user }}@{{ s.host }}:{{ s.port }}</code>
             <p v-if="s.notes" class="redup catatan">{{ s.notes }}</p>
+            <template v-if="resPerHost[s.host]">
+              <p v-if="!resPerHost[s.host].ok" class="pesan-status bahaya">✗ Resource tidak terbaca: {{ resPerHost[s.host].error }}</p>
+              <div v-else class="resource">
+                <div v-for="d in resPerHost[s.host].disks" :key="d.mount" class="res">
+                  <div class="res-kepala"><span>Disk {{ d.mount }}</span><b>{{ d.persen }}%</b></div>
+                  <div class="meter" :class="tingkat(d.persen)" role="meter" :aria-valuenow="d.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="`Disk ${d.mount} ${s.name}`"><i :style="{ width: `${d.persen}%` }" /></div>
+                  <small class="redup">Sisa {{ ukuranBerkas(d.free) }} dari {{ ukuranBerkas(d.total) }}</small>
+                </div>
+                <div class="res">
+                  <div class="res-kepala"><span>CPU</span><b>{{ resPerHost[s.host].cpu }}%</b></div>
+                  <div class="meter" :class="tingkat(resPerHost[s.host].cpu)" role="meter" :aria-valuenow="resPerHost[s.host].cpu" aria-valuemin="0" aria-valuemax="100" :aria-label="`CPU ${s.name}`"><i :style="{ width: `${resPerHost[s.host].cpu}%` }" /></div>
+                  <small class="redup">{{ resPerHost[s.host].cpu_core }} core · load {{ resPerHost[s.host].load?.map((v) => v.toFixed(2)).join(' · ') }}</small>
+                </div>
+                <div v-if="resPerHost[s.host].ram" class="res">
+                  <div class="res-kepala"><span>RAM</span><b>{{ resPerHost[s.host].ram.persen }}%</b></div>
+                  <div class="meter" :class="tingkat(resPerHost[s.host].ram.persen)" role="meter" :aria-valuenow="resPerHost[s.host].ram.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="`RAM ${s.name}`"><i :style="{ width: `${resPerHost[s.host].ram.persen}%` }" /></div>
+                  <small class="redup">{{ ukuranBerkas(resPerHost[s.host].ram.used) }} dari {{ ukuranBerkas(resPerHost[s.host].ram.total) }}</small>
+                </div>
+                <div v-if="resPerHost[s.host].swap" class="res">
+                  <div class="res-kepala"><span>Swap</span><b>{{ resPerHost[s.host].swap.persen }}%</b></div>
+                  <div class="meter" :class="tingkat(resPerHost[s.host].swap.persen)" role="meter" :aria-valuenow="resPerHost[s.host].swap.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="`Swap ${s.name}`"><i :style="{ width: `${resPerHost[s.host].swap.persen}%` }" /></div>
+                  <small class="redup">{{ ukuranBerkas(resPerHost[s.host].swap.used) }} dari {{ ukuranBerkas(resPerHost[s.host].swap.total) }} · nyala {{ lamaNyala(resPerHost[s.host].uptime) }}</small>
+                </div>
+                <div v-else class="res">
+                  <div class="res-kepala"><span>Uptime</span><b>{{ lamaNyala(resPerHost[s.host].uptime) }}</b></div>
+                  <small class="redup">tanpa swap</small>
+                </div>
+              </div>
+            </template>
             <p v-if="hasilTes[i] === 'jalan'" class="pesan-status">Tes SSH berjalan…</p>
             <p v-else-if="hasilTes[i]" class="pesan-status" :class="hasilTes[i].ok ? 'baik' : 'bahaya'">
               <template v-if="hasilTes[i].ok">✓ SSH tersambung · {{ hasilTes[i].hostname }} · DirectAdmin {{ hasilTes[i].directadmin ? 'ada' : 'tidak ada' }} · {{ hasilTes[i].ms }} ms</template>
@@ -239,6 +318,19 @@ async function jalankanDaya() {
 .formulir { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-content: start; }
 .formulir .lebar { grid-column: 1 / -1; }
 .kanan { display: flex; justify-content: flex-end; }
+.ringkas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.tile { display: grid; gap: 6px; align-content: start; padding: 14px 16px; border-radius: 12px; background: var(--kartu-2); }
+.tile strong { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile .meter, .resource .meter { background: var(--kartu); }
+.teks-bahaya { color: var(--bahaya); }
+.resource { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 16px; margin-top: 12px; }
+.res { display: grid; gap: 5px; align-content: start; }
+.res-kepala { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.res-kepala b { font-variant-numeric: tabular-nums; }
+.res small { font-size: 12px; }
+.meter.waspada i { background: var(--waspada); }
+.meter.bahaya i { background: var(--bahaya); }
 .aksi-daya { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+@media (max-width: 800px) { .ringkas { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .formulir { grid-template-columns: minmax(0, 1fr); } }
 </style>

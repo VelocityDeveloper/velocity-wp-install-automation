@@ -43,6 +43,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
+from folder_klien import folder_klien
 
 HERE = Path(__file__).resolve().parent
 TEMA = HERE.parent / 'templates' / 'tema-fse'
@@ -619,6 +620,11 @@ def data_situs(cfg, domain, isi, vct, ref=None):
             print('fse: cpt_produk dilewati (Toko Online Custom: produk = store_product VD Store)', file=sys.stderr)
         else:
             hasil['cpt_produk'] = True
+    # Portal berita tidak punya katalog: CPT `product` bawaan tema tidak didaftarkan, jadi menu
+    # "Produk" wp-admin tidak muncul (keputusan user 2026-09-28; j45news.id & desalangkas.com
+    # sebelumnya dimatikan manual). Hanya instalasi baru; berkas khusus tetap bisa menimpanya.
+    if hasil['jenis'] == 'berita' and not vct.sudah_terpasang(domain):
+        hasil['katalog_produk'] = False
     if isinstance(khusus.get('katalog_produk'), bool):
         hasil['katalog_produk'] = khusus['katalog_produk']
     if isinstance(khusus.get('ganti_tautan'), dict):
@@ -750,7 +756,7 @@ def klien_minta_warna_beda(domain):
     try:
         sys.path.insert(0, str(HERE))
         from client_form import read_client_form
-        form = read_client_form(Path('/home/On Progress') / domain)
+        form = read_client_form(folder_klien(domain))
     except Exception:
         return False
     warna = ' '.join(str(v) for k, v in (form.get('fields') or {}).items() if re.search(r'warna', k, re.I))
@@ -1462,7 +1468,9 @@ VIDEO_HERO_CONTOH = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
 # Video klien dipasang sebagai TAUTAN EMBED, berkas videonya tidak pernah diunggah ke
 # situs (keputusan user 2026-09-20; batas unggah hosting 8 MB dan video WhatsApp klien
 # jauh lebih besar). Sumbernya: manifest `video_embed=<url,url>` lebih dulu, lalu berkas
-# teks berisi tautan di folder klien Drive (mis. "video/link embet video.txt").
+# teks berisi tautan di folder klien Drive (mis. "video/link embet video.txt"), lalu berkas
+# video klien yang diunggah scripts/youtube-video ke YouTube (cache YOUTUBE_CACHE).
+YOUTUBE_CACHE = Path(os.environ.get('VELOCITY_YOUTUBE_CACHE') or '/var/lib/velocity/youtube')
 VIDEO_RE = re.compile(r'https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|shorts/|embed/|live/)'
                       r'|youtu\.be/)([A-Za-z0-9_-]{6,})', re.I)
 # Shorts = video tegak 9:16; watch/embed biasa dianggap 16:9.
@@ -1476,7 +1484,7 @@ def video_klien(cfg, domain):
     oEmbed WordPress; rasio tegaknya tetap dicatat supaya embed-nya tidak terpotong."""
     teks = str(cfg.get('video_embed', '') or '')
     if not teks and domain:
-        folder = Path('/home/On Progress') / domain
+        folder = folder_klien(domain)
         if folder.is_dir():
             for berkas in sorted(folder.rglob('*.txt')):
                 try:
@@ -1485,6 +1493,13 @@ def video_klien(cfg, domain):
                     continue
                 if VIDEO_RE.search(isi):
                     teks += '\n' + isi
+        # Berkas video klien yang sudah diunggah scripts/youtube-video (video PRIVATE tidak
+        # bisa di-embed, jadi dilewati).
+        try:
+            unggahan = json.loads((YOUTUBE_CACHE / f'{domain}.json').read_text()).get('video') or {}
+        except (OSError, ValueError):
+            unggahan = {}
+        teks += ''.join('\n' + v['url'] for v in unggahan.values() if v.get('privasi') != 'private')
     hasil, terlihat = [], set()
     for m in VIDEO_RE.finditer(teks):
         kode = m.group(1)
@@ -2884,16 +2899,29 @@ def beranda_perusahaan(q, sd, isi, info):
     return '\n\n'.join(bagian)
 
 
+def seksi_susunan_redaksi(data):
+    """Susunan redaksi dari berkas redaksi klien (scripts/redaksi-klien, keputusan user
+    2026-09-30): peran tebal + daftar nama, blok inti supaya mudah disunting."""
+    anak = [judul('Susunan Redaksi')]
+    for b in data['bagian']:
+        anak += [paragraf(f"<strong>{esc(b['peran'])}</strong>"), daftar_poin([esc(n) for n in b['nama']])]
+    if data.get('alamat'):
+        anak += [paragraf('<strong>Alamat Redaksi</strong>'), paragraf(esc(data['alamat']))]
+    return grup(anak, kelas='vf-susunan-redaksi')
+
+
 def halaman_redaksi(sd, isi, info):
     kepala = f"<strong>{esc(sd['nama'])}</strong>" + (f"<br><em>{esc(sd['slogan'])}</em>" if sd['slogan'] else '')
     anak = [paragraf(kepala)]
     if sd['tentang']:
         anak.append(paragraf(esc(sd['tentang'])))
+    # Nama awak redaksi tidak dikarang: hanya dari berkas redaksi kiriman klien.
+    if info.get('susunan_redaksi'):
+        anak.append(seksi_susunan_redaksi(info['susunan_redaksi']))
     pedoman = [p for p in isi.get('redaksi') or [] if str(p).strip()]
     if pedoman:
         anak.append(judul('Pedoman Redaksi'))
         anak += [paragraf(esc(p)) for p in pedoman]
-    # Nama awak redaksi tidak dikarang: dilengkapi PM bila klien mengirimnya.
     anak += [judul('Kontak Redaksi'), blok('velocity/kontak')]
     kontak = (info['halaman'].get('hubungi-kami') or {}).get('url')
     if kontak:
@@ -3522,6 +3550,9 @@ def langkah_isi(cfg, situs, coba):
         if timpa.is_file() and timpa.read_text().strip():
             isi_baru = timpa.read_text().strip()
             print(f'fse: halaman_claude:{slug}')
+            # Susunan agen tidak memuat berkas redaksi klien: disisipkan di sini.
+            if slug == 'redaksi' and info.get('susunan_redaksi') and 'vf-susunan-redaksi' not in isi_baru:
+                isi_baru += '\n\n' + seksi_susunan_redaksi(info['susunan_redaksi'])
         # Situs satu halaman (referensi landing page): tiap seksi beranda diberi id jangkar
         # supaya menu bisa menggulir ke sana. Dilakukan di sini, sesudah susunan agen dipilih,
         # jadi halaman generator maupun halaman agen sama-sama dapat jangkarnya.
@@ -3696,6 +3727,8 @@ def langkah_isi(cfg, situs, coba):
             tambahan_kontak.append(('vf-faq-grup', faq_kontak))
         rencanakan('hubungi-kami', 'Hubungi Kami', lanjutan('hubungi-kami', tambahan_kontak))
     if berita:
+        # Berkas redaksi di folder klien (REDAKSI.docx dsb.) -> Susunan Redaksi (user 2026-09-30).
+        info['susunan_redaksi'] = muat_modul('redaksi_klien', HERE / 'redaksi-klien').susunan(domain)
         rencanakan('redaksi', 'Redaksi', halaman_redaksi(sd, isi, info))
     elif dealer:
         rencanakan('test-drive', 'Test Drive', '\n\n'.join([

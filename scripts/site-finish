@@ -719,6 +719,35 @@ chown --reference="$DOCROOT/wp-content" "$MU/velocity-galeri-popup.php" 2>/dev/n
 chmod 644 "$MU/velocity-galeri-popup.php"
 php -l "$MU/velocity-galeri-popup.php" >/dev/null 2>&1 && echo "galeri_popup_set" >&2 || { rm -f "$MU/velocity-galeri-popup.php"; echo "galeri_popup_gagal:php_lint" >&2; }
 
+# Halaman depan & Posts page tema klasik (permintaan user 2026-10-06, sanggaumineralabadi.com):
+# Front page = Beranda dengan template "Home Template", Posts page = Berita berisi arsip artikel.
+# Child theme seperti velocity-property1 memakai index.php sebagai "Home Template" tanpa home.php,
+# sehingga Berita ikut tampil seperti beranda -> mu-plugin velocity-blog-arsip mengarahkannya ke
+# archive.php (hanya bila template yang terpilih bertanda Home Template). Instalasi baru saja.
+if [[ "$SITUS_BARU" != 1 ]]; then
+  echo "beranda_berita_skip:situs_sudah_terpasang" >&2
+elif [[ "$(wp option get show_on_front 2>/dev/null)" != page ]]; then
+  echo "beranda_berita_skip:beranda_tulisan_terbaru" >&2
+else
+  wp eval '
+if (wp_is_block_theme()) { echo "beranda_template_skip:tema_blok"; return; }
+$depan = (int) get_option("page_on_front");
+if (!$depan) { echo "beranda_template_skip:tanpa_halaman_depan"; return; }
+$file = (string) array_search("Home Template", wp_get_theme()->get_page_templates(), true);
+$tpl = (string) get_post_meta($depan, "_wp_page_template", true);
+if ($file === "") { echo "beranda_template_skip:tema_tanpa_home_template"; }
+elseif (in_array($tpl, array("", "default"), true)) { update_post_meta($depan, "_wp_page_template", $file); echo "beranda_template_set:" . $file; }
+else { echo "beranda_template_skip:sudah_" . $tpl; }
+' >&2 || echo "beranda_template_gagal" >&2
+  echo >&2
+  cat > "$MU/velocity-blog-arsip.php" <<'PHP'
+@@BLOG_ARSIP@@
+PHP
+  chown --reference="$DOCROOT/wp-content" "$MU/velocity-blog-arsip.php" 2>/dev/null || true
+  chmod 644 "$MU/velocity-blog-arsip.php"
+  php -l "$MU/velocity-blog-arsip.php" >/dev/null 2>&1 && echo "blog_arsip_set" >&2 || { rm -f "$MU/velocity-blog-arsip.php"; echo "blog_arsip_gagal:php_lint" >&2; }
+fi
+
 # IP kantor Velocity masuk ke "IP Whitelist" Maintenance Mode velocity-addons (>= 2.3.1), setiap
 # finishing (keputusan user 2026-09-22): pengunjung dari kantor tetap melihat situs walau maintenance
 # aktif. IP Telkom kantor dinamis -> dideteksi ulang tiap run di server installer (_ip_kantor).
@@ -745,6 +774,7 @@ rm -rf "$M"
 echo "finish_done" >&2
 '''
 REMOTE = REMOTE.replace('@@GALERI_POPUP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-galeri-popup.php').read_text().rstrip('\n'))
+REMOTE = REMOTE.replace('@@BLOG_ARSIP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-blog-arsip.php').read_text().rstrip('\n'))
 
 
 def _ip_kantor_terkini():

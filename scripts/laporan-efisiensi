@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Laporan harian ke Telegram: hal di installer yang perlu diperbaiki + efisiensi token (permintaan user 2026-10-03).
+
+Sumber (semua lokal, baca-saja):
+  - /var/lib/velocity/ai/usage.jsonl          pemakaian AI installer per bagian (Claude: biaya USD; gateway: token)
+  - /var/lib/velocity/installer/*.json|*.log  status & log run installer WordPress
+  - /usr/share/nginx/html/brain/token.json    rekap sesi Claude interaktif (claude-pakai)
+Periode = kemarin (WIB), dibandingkan rata-rata 7 hari sebelumnya. Bagian "Perlu diperbaiki" disusun dari aturan
+ambang di bawah; bila tidak ada temuan, laporan tetap dikirim singkat.
+
+Pemakaian: laporan-efisiensi [--tanggal YYYY-MM-DD] [--coba]   (--coba = cetak saja, tidak dikirim)
+Timer: laporan-efisiensi.timer 07:00 WIB.
+"""
+import argparse
+import collections
+import glob
+import html
+import json
+import re
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+WIB = timezone(timedelta(hours=7))
+USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
+INSTALLER = Path('/var/lib/velocity/installer')
+TOKEN = Path('/usr/share/nginx/html/brain/token.json')
+TOKEN_INSTALLER = Path('/usr/share/nginx/html/brain/token-installer.json')
+TELEGRAM_ENV = Path('/etc/velocity/secrets/telegram.env')
+CHAT = ['785329499']  # Aditya K (permintaan 2026-10-03)
+DASBOR = 'http://192.168.30.14/token?tab=jenis'
+
+# Ambang temuan
+RUN_MAHAL_USD = 10          # satu jalan agen
+LONJAKAN = 1.5              # biaya kemarin vs rata-rata 7 hari
+GAGAL_MODEL_PERSEN = 30     # panggilan gagal per model/skrip
+GAGAL_MODEL_MIN = 3
+ULANG_GAGAL = 10            # baris FAILED/ERROR berulang per domain per hari = pengulangan sia-sia
+KONTEKS_BESAR = 300_000     # sesi interaktif: token dibaca per panggilan
+SESI_BESAR = 50_000_000     # sesi interaktif: total token sehari
+ULANG_TAHAP = 10            # panggilan Claude per bagian+project per hari (brief/agen dijalankan ulang berkali-kali)
+ULANG_FITUR = 3             # laravel-agen: fitur yang sama dijalankan ≥3× sehari
+BULAN = 'Jan Feb Mar Apr Mei Jun Jul Agu Sep Okt Nov Des'.split()
+
+
+def usd(x):
+    return f'${x:,.2f}'
+
+
+def pendek(n):
+    for batas, akhiran in ((1e9, ' M'), (1e6, ' jt'), (1e3, ' rb')):
+        if n >= batas:
+            return f'{n / batas:.1f}'.replace('.', ',') + akhiran
+    return str(int(n))
+
+
+def tgl_wib(ts):
+    try:
+        return datetime.fromisoformat(ts).astimezone(WIB).strftime('%Y-%m-%d')
+    except (ValueError, TypeError):
+        return ''
+
+
+def label_bagian():
+    try:
+        return {k: v[0] for k, v in json.loads(TOKEN_INSTALLER.read_text())['bagian'].items()}
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def bagian_token(hari, sebelum):
+    """Pemakaian AI installer: kemarin per bagian, run mahal, kegagalan model, dan rata-rata biaya 7 hari."""
+    kini = collections.defaultdict(lambda: {'biaya': 0.0, 'token': 0, 'n': 0, 'gagal': 0, 'domain': set()})
+    biaya_hari = collections.defaultdict(float)
+    run = {'jalan': [], 'ulang': collections.Counter()}
+    model = collections.defaultdict(lambda: [0, 0])
+    try:
+        baris = USAGE.read_text().splitlines()
+    except OSError:
+        baris = []
+    for ln in baris:
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        t = tgl_wib(r.get('ts'))
+        b = float(r.get('biaya_usd') or 0)
+        if t in sebelum:
+            biaya_hari[t] += b
+        if t != hari:
+            continue
+        x = kini[r.get('peran') or 'lainnya']
+        x['biaya'] += b
+        x['token'] += int(r.get('total_tokens') or 0)
+        x['n'] += 1
+        x['gagal'] += 0 if r.get('ok', True) else 1
+        x['domain'].add(r.get('domain') or '-')
+        k = (r.get('script') or '-', r.get('model') or '-')
+        model[k][0] += 1
+        model[k][1] += 0 if r.get('ok', True) else 1
+        if r.get('sumber') == 'claude':
+            # satu baris = satu jalan agen (laravel-brief: satu tahap); ulangan dihitung per peran+domain
+            run['jalan'].append((b, int(r.get('giliran') or 0), r.get('peran') or '-', r.get('domain') or '-', r.get('mode') or ''))
+            # laravel-agen: satu panggilan = satu fitur, jadi ulangan dihitung per fitur (run); lainnya per project
+            kunci = r.get('run') if r.get('peran') == 'laravel_agen' else r.get('domain')
+            run['ulang'][(r.get('peran') or '-', kunci or '-')] += 1
+    rata = sum(biaya_hari.get(t, 0) for t in sebelum) / len(sebelum)
+    return kini, rata, run, model
+
+
+def bagian_installer(hari):
+    """Run installer WordPress kemarin: status akhir per domain + pola galat berulang di log."""
+    status = []
+    for f in glob.glob(str(INSTALLER / '*.json')):
+        try:
+            d = json.loads(Path(f).read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get('status') and tgl_wib(d.get('updated_at')) == hari:
+            status.append(d)
+    pola, ulang = collections.Counter(), collections.Counter()
+    for f in glob.glob(str(INSTALLER / '*.log')):
+        domain = Path(f).stem.removeprefix('ai-')
+        try:
+            with open(f, errors='ignore') as fh:
+                for ln in fh:
+                    if not ln.startswith('[' + hari):
+                        continue
+                    isi = ln.split('] ', 1)[-1].strip()
+                    if not re.search(r'\b(ERROR|FAILED|gagal)\b', isi):
+                        continue
+                    ulang[domain] += 1
+                    pola[re.sub(r'\d+', 'N', isi)[:90]] += 1
+        except OSError:
+            continue
+    return status, pola, ulang
+
+
+def bagian_sesi(hari):
+    """Sesi Claude interaktif kemarin yang boros: konteks per panggilan besar atau total besar."""
+    try:
+        d = json.loads(TOKEN.read_text())
+    except (OSError, ValueError):
+        return 0, []
+    total, boros = 0, []
+    for o in d.get('pengguna') or []:
+        if o['nama'].startswith('Otomasi'):
+            continue
+        for s in o.get('sesi') or []:
+            pm = (s.get('hari') or {}).get(hari) or {}
+            if not pm:
+                continue
+            t = sum(v[0] + v[1] + v[2] + v[3] for v in pm.values())
+            n = sum(v[4] for v in pm.values())
+            total += t
+            konteks = sum(v[0] + v[1] + v[2] for v in pm.values()) / max(1, n)
+            if konteks >= KONTEKS_BESAR or t >= SESI_BESAR:
+                boros.append((t, konteks, o['nama'], (s.get('judul') or '(tanpa judul)')[:60]))
+    return total, sorted(boros, reverse=True)[:5]
+
+
+def susun(hari):
+    sebelum = [(datetime.strptime(hari, '%Y-%m-%d') - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(1, 8)]
+    label = label_bagian()
+    kini, rata, run, model = bagian_token(hari, sebelum)
+    status, pola, ulang = bagian_installer(hari)
+    total_sesi, boros = bagian_sesi(hari)
+    e = html.escape
+    biaya = sum(x['biaya'] for x in kini.values())
+    saran = []
+
+    # --- temuan -> saran perbaikan
+    if rata and biaya > rata * LONJAKAN:
+        saran.append(f'Biaya AI installer {usd(biaya)}, {biaya / rata:.1f}× rata-rata 7 hari ({usd(rata)}). Cek bagian teratas di bawah.')
+    for b, giliran, peran, domain, mode in sorted(run['jalan'], reverse=True):
+        if b >= RUN_MAHAL_USD:
+            saran.append(f"Jalan mahal: {label.get(peran, peran)}{f' ({mode})' if mode else ''} · {domain} {usd(b)}"
+                         + (f", {giliran} giliran" if giliran else '') + '. Pertimbangkan batas giliran/anggaran.')
+    for (peran, kunci), n in run['ulang'].most_common():
+        if peran == 'laravel_agen' and n >= ULANG_FITUR:
+            fitur = kunci.rsplit('-', 1)[-1]
+            proyek = kunci.removeprefix('laravel-agen-').rsplit('-', 1)[0]
+            saran.append(f'Laravel · Agen · {proyek} fitur {fitur} diulang {n}× dalam sehari. Cek galat verifikasi '
+                         'atau kriteria yang sulit dipenuhi sebelum diulang lagi.')
+        elif peran != 'laravel_agen' and n >= ULANG_TAHAP:
+            biaya_u = sum(x[0] for x in run['jalan'] if x[2] == peran and x[3] == kunci)
+            saran.append(f'{label.get(peran, peran)} · {kunci} dijalankan {n}× dalam sehari ({usd(biaya_u)}). '
+                         'Kumpulkan revisi PM dulu sebelum menjalankan ulang.')
+    for (skrip, m), (n, g) in sorted(model.items(), key=lambda kv: -kv[1][1]):
+        if g >= GAGAL_MODEL_MIN and g * 100 >= n * GAGAL_MODEL_PERSEN:
+            saran.append(f'Model {m} di {skrip} gagal {g}/{n} panggilan. Ganti model atau pasang fallback.')
+    for domain, n in ulang.most_common():
+        if n >= ULANG_GAGAL:
+            saran.append(f'{domain}: {n} baris galat dalam sehari (kemungkinan diulang terus). Hentikan pengulangan & cek penyebabnya.')
+    for p, n in pola.most_common(8):
+        if n >= 3 and re.search(r'parse|kosong|finish_reason', p, re.I):
+            saran.append(f'Jawaban AI tidak terbaca {n}×: "{p[:70]}". Perbaiki prompt/batas token keluaran.')
+    for t, konteks, nama, judul in boros:
+        saran.append(f'Sesi {nama} "{judul}": {pendek(t)} token, konteks {pendek(konteks)}/panggilan. Sarankan sesi baru atau /clear.')
+
+    # --- pesan
+    d0 = datetime.strptime(hari, '%Y-%m-%d')
+    tgl = f'{d0.day} {BULAN[d0.month - 1]} {d0.year}'
+    s = [f'<b>Laporan efisiensi installer & token</b> · {tgl}', '']
+    s.append('<b>⚠️ Perlu diperbaiki</b>' if saran else '<b>✅ Tidak ada temuan yang perlu diperbaiki</b>')
+    s += [f'{i}. {e(x)}' for i, x in enumerate(saran[:12], 1)]
+    if len(saran) > 12:
+        s.append(f'… dan {len(saran) - 12} temuan lain.')
+    s += ['', f'<b>💰 Token AI installer</b>: {usd(biaya)} Claude'
+              + (f' (rata-rata 7 hari {usd(rata)})' if rata else '')]
+    for k, x in sorted(kini.items(), key=lambda kv: (-kv[1]['biaya'], -kv[1]['token']))[:6]:
+        s.append(f"• {e(label.get(k, k))}: {usd(x['biaya']) if x['biaya'] else '–'} · {pendek(x['token'])} token · "
+                 f"{x['n']} panggilan" + (f", {x['gagal']} gagal" if x['gagal'] else '') + f" · {len(x['domain'])} domain")
+    if not kini:
+        s.append('• Tidak ada panggilan AI installer.')
+    hit = collections.Counter(d['status'] for d in status)
+    s += ['', '<b>🛠 Installer WordPress</b>: ' + (', '.join(f'{k} {v}' for k, v in hit.most_common()) or 'tidak ada run selesai')]
+    for d in status:
+        if d['status'] != 'SUCCESS':
+            s.append(f"• {e(d['domain'])}: {e(d['status'])} di {e(str(d.get('stage')))}")
+    if pola:
+        s.append('Galat terbanyak di log:')
+        s += [f'• {n}× {e(p[:80])}' for p, n in pola.most_common(3)]
+    s += ['', f'<b>👥 Sesi Claude tim</b>: {pendek(total_sesi)} token kemarin'
+              + (f', {len(boros)} sesi boros' if boros else '')]
+    s += ['', f'Rincian: {DASBOR}']
+    return '\n'.join(s)
+
+
+def kirim(teks):
+    env = dict(l.split('=', 1) for l in TELEGRAM_ENV.read_text().splitlines() if '=' in l and not l.startswith('#'))
+    token = env['TELEGRAM_BOT_TOKEN'].strip().strip('"\'')
+    potong, buf = [], ''
+    for baris in teks.split('\n'):  # batas pesan Telegram 4096
+        if len(buf) + len(baris) > 3800:
+            potong.append(buf)
+            buf = ''
+        buf += baris + '\n'
+    potong.append(buf)
+    for chat in CHAT:
+        for p in potong:
+            data = urllib.parse.urlencode({'chat_id': chat, 'text': p, 'parse_mode': 'HTML',
+                                           'disable_web_page_preview': 'true'}).encode()
+            with urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=30) as r:
+                if not json.loads(r.read()).get('ok'):
+                    raise SystemExit(f'Telegram menolak pesan ke {chat}')
+        print(f'terkirim ke {chat}')
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--tanggal', default=(datetime.now(WIB) - timedelta(days=1)).strftime('%Y-%m-%d'))
+    ap.add_argument('--coba', action='store_true')
+    a = ap.parse_args()
+    teks = susun(a.tanggal)
+    if a.coba:
+        print(teks)
+    else:
+        kirim(teks)
+
+
+if __name__ == '__main__':
+    main()

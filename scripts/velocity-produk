@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""Katalog produk Paket E/F memakai plugin Velocity Produk (keputusan user 2026-10-06).
+
+Paket E/F yang child theme-nya tidak punya fitur katalog, tetapi klien meminta katalog/data produk:
+pasang plugin velocity-produk (CPT `produk`, taksonomi `kategori`, halaman Katalog) — BUKAN Meta Box,
+velocity-paket, atau CPT baru.
+
+  velocity-produk <manifest>            pasang + isi (hanya bila lolos gerbang)
+  velocity-produk --coba <manifest>     tampilkan alasan & daftar produk tanpa SSH
+  --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
+
+Gerbang (tidak lolos = "katalog: dilewati:<alasan>"):
+  - paket bukan Paket E / Paket F; situs sudah ter-deploy (tanpa --paksa);
+  - form tidak meminta katalog (menu Produk/Katalog/Price list, atau pesan tambahan menyebut
+    katalog/daftar produk/data produk) DAN tidak ada folder produk berisi foto di folder klien;
+  - tema sudah punya katalog sendiri (CPT produk bawaan tema, store_product, paket-tour, property, mobil).
+Isi: produk dari folder produk klien (pembacaan sama dengan scripts/toko-biasa: subfolder = produk,
+nama berkas = nama/harga, foto generik dikenali Claude; gambar < 100 KB), atau 6 produk CONTOH
+(judul "Contoh – ", meta _velocity_produk_contoh=1, foto Pexels) bila folder produk tidak ada.
+Contoh dihapus begitu produk asli masuk; meta _velocity_produk_kunci mencegah dobel saat run ulang.
+Harga -> ak_harga/ak_harga_fix (kosong bila tidak tertulis). Tombol beli plugin = Link WhatsApp ke
+nomor_whatsapp situs (bila pengaturan plugin belum pernah disimpan).
+Halaman Katalog (template "Velocity Produk Katalog") masuk menu utama: butir form Produk/Katalog
+ditautkan ke sana (halaman buatan menu-form yang belum disunting jadi draf), atau butir "Katalog"
+baru disisipkan sebelum menu kontak. Ringkasan untuk laporan Telegram:
+/var/lib/velocity/katalog-produk/<domain>.json.
+
+Paket tour (keputusan user 2026-10-08), SESUDAH pengecekan katalog produk di atas (hasil katalog apa
+pun): pesan/data tambahan form menyebut paket tour/wisata/trip atau itinerary -> plugin
+velocity-tour-travel dari API ApiCo (v1.0.0) + paket dari dokumen klien atau 3 CONTOH
+(scripts/paket-tour, jalankan_ef). Tema yang sudah memakai paket-tour (velocity-tour1, dst.) dilewati
+karena diisi langkah "Paket tour". Log "tour: ...", ringkasan /var/lib/velocity/katalog-produk/<domain>-tour.json.
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import client_form  # noqa: E402
+import plugin_api  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
+
+SLUG = 'velocity-produk'
+JUMLAH_CONTOH = 6
+HASIL = Path('/var/lib/velocity/katalog-produk')
+# Butir menu form yang berarti halaman katalog: kata kunci di AWAL judul ("Produk Kami", "Store") —
+# "Sertifikasi Produk" (submenu layanan lmnprixma.com) bukan katalog.
+MENU_KATALOG = re.compile(r'^\s*(produk|products?|katalog|catalog(ue)?|daftar produk|daftar harga|price ?list|store|shop|toko)\b', re.I)
+# Pesan/data tambahan: kata "produk" saja terlalu umum ("produk kami berkualitas"), jadi harus
+# berpasangan dengan kata kerja/benda katalog.
+PESAN_KATALOG = re.compile(
+    r'katalog|catalog|price ?list|daftar harga|'
+    r'(daftar|data|list|detail|halaman|menu|foto|upload|unggah|input|masukkan|tampil|tampilkan)\W+(semua\W+|seluruh\W+)?produ[ck]',
+    re.I)
+# Tanda paket tour HANYA dari pesan/data tambahan form (keputusan user 2026-10-08).
+PESAN_TOUR = re.compile(r'paket\W+(tour|wisata|trip)|itinerar(y|i)', re.I)
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+toko = muat('toko_biasa', 'toko-biasa')
+finish = toko.finish
+
+
+def log(pesan):
+    print(f'katalog: {pesan}', flush=True)
+
+
+def pesan_form(form):
+    fields = form.get('fields') or {}
+    return ' '.join([client_form.pesan_tambahan(form.get('text') or ''), fields.get('Pesan tambahan', ''),
+                     fields.get('Data tambahan', '')])
+
+
+def alasan_tour(domain):
+    """Kata pemicu paket tour di pesan/data tambahan form ('' = tidak diminta)."""
+    m = PESAN_TOUR.search(pesan_form(client_form.read_client_form(folder_klien(domain))))
+    return m.group(0) if m else ''
+
+
+def alasan_katalog(domain):
+    """Daftar alasan situs butuh katalog (kosong = tidak diminta)."""
+    folder = folder_klien(domain)
+    alasan = []
+    for m in client_form.susunan_menu(folder):
+        for judul in [m['judul']] + [a['judul'] for a in m.get('anak') or []]:
+            if MENU_KATALOG.search(judul):
+                alasan.append(f'menu:{judul}')
+    form = client_form.read_client_form(folder)
+    fields = form.get('fields') or {}
+    if not alasan:
+        for judul in re.split(r'[,;\n]', fields.get('Susunan menu atas', '')):
+            if MENU_KATALOG.search(judul):
+                alasan.append(f'menu:{judul.strip()}')
+    m = PESAN_KATALOG.search(pesan_form(form))
+    if m:
+        alasan.append(f'pesan:{m.group(0)}')
+    produk, generik, _ = toko.susun_draf(folder)
+    foto = sum(len(p['gambar']) for p in produk) + len(generik)
+    if foto:
+        alasan.append(f'folder_produk:{foto}_foto')
+    return alasan
+
+
+# ---------- remote ----------
+
+def ssh_cmd(cfg):
+    return finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+
+
+def jalankan(cfg, skrip, timeout=600):
+    ssh = ssh_cmd(cfg)
+    return subprocess.run(ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=timeout)
+
+
+def kepala(cfg):
+    root = finish.docroot(cfg['domain'].lower(), cfg.get('da_user', ''))
+    return (f'set -u\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\nDOCROOT={shlex.quote(root)}\n'
+            'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+            '[[ -n "$WP_BIN" ]] || { echo "katalog: gagal:wp_cli_tidak_ada"; exit 10; }\n'
+            'wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }\n')
+
+
+CEK_PHP = r'''<?php
+// Tema/plugin lain yang sudah menyediakan katalog. CPT produk dari velocity-produk sendiri tidak dihitung.
+$vp = in_array('velocity-produk/velocity-produk.php', (array) get_option('active_plugins'), true);
+// paket-tour yang dipasang langkah tour E/F sendiri (opsi velocity_tour_ef) juga tidak dihitung.
+$tour_ef = (bool) get_option('velocity_tour_ef');
+foreach (['produk', 'store_product', 'paket-tour', 'property', 'mobil'] as $cpt) {
+    if (post_type_exists($cpt) && !($cpt === 'produk' && $vp) && !($cpt === 'paket-tour' && $tour_ef)) { echo "katalog_tema:$cpt\n"; }
+}
+echo 'tema:' . get_stylesheet() . "\n";
+echo 'velocity_produk:' . ($vp ? 'aktif' : 'tidak') . "\n";
+'''
+
+
+def cek_situs(cfg):
+    skrip = kepala(cfg) + ("T=$(mktemp /tmp/velocity-katalog-cek.XXXXXX.php)\ncat > \"$T\" <<'PHPEOF'\n"
+                           + CEK_PHP + "\nPHPEOF\nwp eval-file \"$T\" 2>&1 | grep -v '^Warning:'\nrm -f \"$T\"\n")
+    run = jalankan(cfg, skrip, timeout=180)
+    return run.stdout + run.stderr
+
+
+KATALOG_PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+if (!post_type_exists('produk') || !taxonomy_exists('kategori')) { echo "katalog: gagal:cpt_produk_tidak_ada\n"; return; }
+$dir = getenv('PRODUK_DIR');
+$data = json_decode(file_get_contents($dir . '/produk.json'), true) ?: [];
+
+// ---- produk ----
+$ada_asli = false;
+foreach ($data as $p) { if (empty($p['contoh'])) { $ada_asli = true; } }
+$q = ['post_type' => 'produk', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids'];
+$contoh_lama = get_posts($q + ['meta_key' => '_velocity_produk_contoh', 'meta_value' => '1']);
+if ($ada_asli && $contoh_lama) {
+    foreach ($contoh_lama as $id) {
+        // Hanya gambar yang diunggah langkah ini (_velocity_source produk:...).
+        foreach (array_merge([get_post_thumbnail_id($id)], (array) get_post_meta($id, 'gallery_images', true)) as $a) {
+            if ($a && strpos((string) get_post_meta((int) $a, '_velocity_source', true), 'produk:') === 0) { wp_delete_attachment((int) $a, true); }
+        }
+        wp_delete_post($id, true);
+    }
+    echo 'katalog: contoh_dihapus:' . count($contoh_lama) . "\n";
+    $contoh_lama = [];
+}
+$asli = get_posts(['numberposts' => 1, 'meta_query' => [['key' => '_velocity_produk_contoh', 'compare' => 'NOT EXISTS']]] + $q);
+if (!$ada_asli && $asli) {
+    echo "katalog: contoh_dilewati:sudah_ada_produk\n";
+} elseif (!$ada_asli && $contoh_lama) {
+    echo "katalog: contoh_sudah_ada\n";
+} else {
+    $baru = 0; $ada = 0;
+    foreach ($data as $p) {
+        $kunci = $p['kunci'];
+        if (get_posts(['numberposts' => 1, 'meta_key' => '_velocity_produk_kunci', 'meta_value' => $kunci] + $q)) { $ada++; continue; }
+        $id = wp_insert_post(['post_type' => 'produk', 'post_status' => 'publish', 'post_title' => $p['nama'],
+                              'comment_status' => 'closed',
+                              'post_content' => $p['deskripsi'] ? wpautop(esc_html($p['deskripsi'])) : ''], true);
+        if (is_wp_error($id)) { echo 'katalog: gagal_produk:' . $id->get_error_message() . "\n"; continue; }
+        update_post_meta($id, '_velocity_produk_kunci', $kunci);
+        if (!empty($p['contoh'])) { update_post_meta($id, '_velocity_produk_contoh', 1); }
+        if (!empty($p['harga'])) {
+            update_post_meta($id, 'ak_harga', (string) (int) $p['harga']);
+            update_post_meta($id, 'ak_harga_fix', (string) (int) $p['harga']);
+        }
+        if (!empty($p['kategori'])) {
+            $t = term_exists($p['kategori'], 'kategori') ?: wp_insert_term($p['kategori'], 'kategori');
+            if (!is_wp_error($t)) { wp_set_object_terms($id, [(int) $t['term_id']], 'kategori'); }
+        }
+        $lampiran = [];
+        foreach ($p['berkas'] as $i => $b) {
+            $tmp = wp_tempnam($b); copy($dir . '/' . $b, $tmp);
+            $a = media_handle_sideload(['name' => sanitize_file_name($p['slug'] . '-' . ($i + 1) . '.jpg'), 'tmp_name' => $tmp], $id, $p['nama']);
+            if (!is_wp_error($a)) { $lampiran[] = $a; update_post_meta($a, '_velocity_source', 'produk:' . $kunci); }
+        }
+        if ($lampiran) {
+            set_post_thumbnail($id, $lampiran[0]);
+            // Galeri single produk (slider + thumbnail) hanya berarti bila fotonya lebih dari satu.
+            if (count($lampiran) > 1) { update_post_meta($id, 'gallery_images', $lampiran); }
+        }
+        $baru++;
+    }
+    echo "katalog: dibuat:$baru sudah_ada:$ada\n";
+}
+
+// ---- tombol beli: Link WhatsApp ke nomor situs (pengaturan plugin yang belum pernah disimpan saja) ----
+$wa = preg_replace('/\D/', '', (string) get_option('nomor_whatsapp'));
+if ($wa === '') { $s = (array) get_option('velocity_situs', []); $wa = preg_replace('/\D/', '', (string) ($s['wa'] ?? ($s['telp'] ?? ''))); }
+if (get_option('vdproduk_tombol_beli') === false && $wa !== '') {
+    update_option('vdproduk_tombol_beli', 'wa');
+    update_option('vdproduk_nowa', $wa);
+    echo "katalog: tombol_beli:wa\n";
+} elseif ($wa === '') {
+    echo "katalog: tombol_beli:wa_kosong\n";
+}
+
+// ---- halaman Katalog ----
+$hal = get_posts(['post_type' => 'page', 'name' => 'katalog', 'post_status' => 'any', 'numberposts' => 1]);
+$kat = $hal ? $hal[0] : null;
+$tpl = 'velocityproduk-templates_katalog';
+if (!$kat) {
+    $id = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Katalog', 'post_name' => 'katalog',
+                          'comment_status' => 'closed', 'ping_status' => 'closed', 'page_template' => $tpl], true);
+    $kat = is_wp_error($id) ? null : get_post($id);
+} elseif (get_post_meta($kat->ID, '_wp_page_template', true) !== $tpl) {
+    // Halaman "katalog" buatan menu-form yang belum disunting (atau kosong) memakai template katalog.
+    if ($kat->post_content === '' || get_post_meta($kat->ID, '_velocity_menu_form', true) === md5($kat->post_content)) {
+        update_post_meta($kat->ID, '_wp_page_template', $tpl);
+    } else {
+        echo "katalog: halaman_katalog_disunting:{$kat->ID}\n";
+    }
+}
+if (!$kat) { echo "katalog: gagal:halaman_katalog\n"; return; }
+if ($kat->post_status !== 'publish') { wp_update_post(['ID' => $kat->ID, 'post_status' => 'publish']); }
+echo "katalog: halaman:{$kat->ID}\n";
+
+// ---- menu utama ----
+$lokasi = get_nav_menu_locations();
+$mid = (int) ($lokasi['primary'] ?? 0);
+if (!$mid) {
+    echo "katalog: menu_tidak_ada\n";
+} else {
+    $items = wp_get_nav_menu_items($mid) ?: [];
+    $arsip = get_post_type_archive_link('produk');
+    $sudah = false;
+    foreach ($items as $it) {
+        if (($it->object === 'page' && (int) $it->object_id === $kat->ID) || ($arsip && $it->type === 'custom' && untrailingslashit($it->url) === untrailingslashit($arsip))) { $sudah = true; }
+    }
+    $cocok = null;
+    foreach ($items as $it) {
+        if (!$sudah && preg_match('/^\s*(produk|products?|katalog|catalog(ue)?|daftar produk|daftar harga|price ?list|store|shop|toko)\b/i', $it->title)) { $cocok = $it; break; }
+    }
+    if ($sudah) {
+        echo "katalog: menu_sudah_ada\n";
+    } elseif ($cocok) {
+        $lama = $cocok->object === 'page' ? (int) $cocok->object_id : 0;
+        wp_update_nav_menu_item($mid, $cocok->ID, [
+            'menu-item-title' => $cocok->title, 'menu-item-object-id' => $kat->ID, 'menu-item-object' => 'page',
+            'menu-item-type' => 'post_type', 'menu-item-parent-id' => (int) $cocok->menu_item_parent,
+            'menu-item-position' => (int) $cocok->menu_order, 'menu-item-status' => 'publish']);
+        echo 'katalog: menu_ditautkan:' . $cocok->title . "\n";
+        // Halaman lama buatan menu-form (isi AI) yang belum disunting & tanpa anak diganti katalog → draf.
+        $p = $lama && $lama !== $kat->ID ? get_post($lama) : null;
+        if ($p && $p->post_status === 'publish' && get_post_meta($p->ID, '_velocity_menu_form', true) === md5($p->post_content)
+            && !get_children(['post_parent' => $p->ID, 'post_type' => 'page'])) {
+            wp_update_post(['ID' => $p->ID, 'post_status' => 'draft']);
+            update_post_meta($p->ID, '_velocity_katalog_pengganti', $kat->ID);
+            echo "katalog: halaman_lama_draf:{$p->ID}\n";
+        }
+    } else {
+        // Butir baru di tingkat atas, sebelum menu kontak (atau paling akhir).
+        $pos = 0;
+        foreach ($items as $it) {
+            if (!(int) $it->menu_item_parent && preg_match('/kontak|hubungi|contact/i', $it->title)) { $pos = (int) $it->menu_order; break; }
+        }
+        if ($pos) {
+            foreach ($items as $it) {
+                if ((int) $it->menu_order >= $pos) { wp_update_post(['ID' => $it->ID, 'menu_order' => (int) $it->menu_order + 1]); }
+            }
+        } else {
+            $pos = count($items) + 1;
+        }
+        wp_update_nav_menu_item($mid, 0, ['menu-item-title' => 'Katalog', 'menu-item-object-id' => $kat->ID, 'menu-item-object' => 'page',
+                                          'menu-item-type' => 'post_type', 'menu-item-position' => $pos, 'menu-item-status' => 'publish']);
+        echo "katalog: menu_ditambah:$pos\n";
+    }
+}
+flush_rewrite_rules(false);
+$semua = get_posts(['post_status' => 'publish'] + $q);
+$contoh = get_posts(['post_status' => 'publish', 'meta_key' => '_velocity_produk_contoh', 'meta_value' => '1'] + $q);
+echo 'katalog: total:' . count($semua) . ' contoh:' . count($contoh) . "\n";
+'''
+
+
+def pasang_dan_isi(cfg, stage):
+    """Kirim stage (zip plugin + foto + produk.json + skrip.php), pasang plugin, jalankan impor."""
+    global DIUBAH
+    DIUBAH = True
+    domain = cfg['domain'].lower()
+    remote = f'/tmp/velocity-katalog-{domain}'
+    (stage / 'skrip.php').write_text(KATALOG_PHP)
+    ssh = ssh_cmd(cfg)
+    tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+    up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote)} && mkdir -p {shlex.quote(remote)} && tar -xzf - -C {shlex.quote(remote)}'],
+                        stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+    tar.wait()
+    if up.returncode != 0:
+        log(f'gagal:kirim:{up.stderr.strip()[:200]}')
+        return ''
+    k = shlex.quote(remote)
+    skrip = kepala(cfg) + f'''K={k}
+trap 'rm -rf "$K"' EXIT
+if [[ ! -d "$DOCROOT/wp-content/plugins/{SLUG}" ]]; then
+  wp plugin install "$K/{SLUG}.zip" 2>&1 | grep -v '^Warning:' | tail -2
+fi
+wp plugin is-active {SLUG} 2>/dev/null || wp plugin activate {SLUG} 2>&1 | grep -v '^Warning:' | tail -1
+if wp plugin is-active {SLUG} 2>/dev/null; then
+  echo "katalog: plugin_aktif:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else
+  echo "katalog: gagal:plugin_tidak_aktif"; exit 12
+fi
+PRODUK_DIR="$K" wp eval-file "$K/skrip.php" --user=1 2>&1 | grep -v '^Warning:' || true
+'''
+    run = jalankan(cfg, skrip, timeout=1800)
+    keluar = run.stdout + run.stderr
+    for baris in keluar.splitlines():
+        if baris.strip():
+            print(baris.strip()[:200], flush=True)
+    return keluar
+
+
+def susun_stage(domain, cfg, stage):
+    """Produk (folder klien atau contoh) → foto terkompres di stage. Kembalikan (daftar, sumber)."""
+    video = [f for d in toko.folder_produk(folder_klien(domain)) for f in d.rglob('*') if f.is_file() and f.suffix.lower() in toko.VIDEO]
+    if video:
+        log(f'video_dilewati:{len(video)} ({", ".join(f.name for f in video[:5])}) — tidak jadi media produk; diunggah ke YouTube & tampil di Galeri (youtube-video)')
+    produk, sumber = toko.daftar_produk(domain)
+    if not produk:
+        produk, sumber = toko.produk_contoh(domain, cfg, jumlah=JUMLAH_CONTOH, jenis='katalog produk'), 'contoh'
+    kirim, awal, akhir = [], 0, 0
+    for p in produk:
+        kunci = hashlib.md5(('|'.join(sorted(p['gambar'])) or p['nama']).encode()).hexdigest()[:16]
+        berkas = []
+        for i, g in enumerate(p['gambar'][:6]):
+            nama = f'{kunci}-{i + 1}.jpg'
+            try:
+                awal += Path(g).stat().st_size
+                akhir += toko.kompres(g, stage / nama)
+                berkas.append(nama)
+            except Exception as e:
+                log(f'kompres_gagal:{Path(g).name}:{type(e).__name__}')
+        kirim.append({'kunci': kunci, 'nama': p['nama'], 'slug': toko.slug(p['nama']), 'harga': p.get('harga'),
+                      'deskripsi': p.get('deskripsi') or '', 'kategori': p.get('kategori') or '',
+                      'berkas': berkas, 'contoh': bool(p.get('contoh'))})
+    besar = [f for f in stage.glob('*.jpg') if f.stat().st_size >= toko.BATAS_BYTE]
+    log(f'produk: sumber={sumber} jumlah={len(kirim)} gambar={sum(len(x["berkas"]) for x in kirim)} '
+        f'{awal // 1024} KB -> {akhir // 1024} KB, >=100KB: {len(besar)}')
+    for x in kirim:
+        log(f'  {x["nama"][:60]} | harga={x["harga"] or "-"} | kategori={x["kategori"] or "-"} | gambar={len(x["berkas"])}')
+    (stage / 'produk.json').write_text(json.dumps(kirim, ensure_ascii=False))
+    return kirim, sumber
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if not args:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    coba = '--coba' in sys.argv
+    if not plugin_api.paket_ef(cfg.get('paket', '')):
+        log(f'dilewati:bukan_paket_e_f:{cfg.get("paket", "")}')
+        return 0
+    if not coba and '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    try:
+        kode = katalog(cfg, domain, coba)
+    except Exception as e:  # pengecekan tour tetap berjalan walau katalog produk galat
+        log(f'gagal:{type(e).__name__}:{str(e)[:150]}')
+        kode = 1
+    return max(kode, tour(args[0], domain, coba))
+
+
+def tour(manifest, domain, coba):
+    """Sesudah katalog produk: pesan/data tambahan menyebut paket tour -> velocity-tour-travel (API)."""
+    global DIUBAH
+    pemicu = alasan_tour(domain)
+    if not pemicu:
+        print('tour: dilewati:tidak_diminta', flush=True)
+        return 0
+    print(f'tour: diminta:pesan:{pemicu.replace(" ", "_")}', flush=True)
+    pt = muat('paket_tour', 'paket-tour')
+    if not coba:
+        DIUBAH = True
+    kode = pt.jalankan_ef(manifest, coba=coba)
+    if coba:
+        return kode
+    HASIL.mkdir(parents=True, exist_ok=True)
+    ringkas = pt.RINGKASAN.get('akhir') or {}
+    if kode == 0 and ringkas:
+        (HASIL / f'{domain}-tour.json').write_text(json.dumps(dict(ringkas, waktu=int(time.time()), pemicu=pemicu),
+                                                             ensure_ascii=False))
+        print(f"tour: selesai: paket={ringkas.get('total', 0)} contoh={ringkas.get('contoh', 0)} plugin={ringkas.get('versi', '')}", flush=True)
+    elif kode == 0:
+        print('tour: dilewati:' + (pt.RINGKASAN.get('lewat') or 'tanpa_perubahan'), flush=True)
+    else:
+        print('tour: gagal:lihat_baris_paket_tour', flush=True)
+    return kode
+
+
+def katalog(cfg, domain, coba):
+    alasan = alasan_katalog(domain)
+    if not alasan:
+        log('dilewati:tidak_diminta')
+        return 0
+    log('diminta:' + ','.join(a.replace(' ', '_') for a in alasan[:5]))
+    if not coba:
+        cek = cek_situs(cfg)
+        tema = re.findall(r'^katalog_tema:(\S+)', cek, re.M)
+        if tema:
+            log(f'dilewati:tema_punya_katalog:{",".join(tema)}')
+            return 0
+        if not re.search(r'^velocity_produk:', cek, re.M):
+            log(f'gagal:cek_situs:{cek.strip()[-200:]}')
+            return 1
+    stage = Path(tempfile.mkdtemp(prefix='velocity-katalog-'))
+    try:
+        kirim, sumber = susun_stage(domain, cfg, stage)
+        if coba:
+            return 0
+        zip_path, versi = plugin_api.ambil_paket(SLUG, log=log)
+        if not zip_path:
+            log('gagal:paket_plugin_tidak_tersedia')
+            return 1
+        shutil.copy2(zip_path, stage / f'{SLUG}.zip')
+        keluar = pasang_dan_isi(cfg, stage)
+        m = re.search(r'^katalog: total:(\d+) contoh:(\d+)', keluar, re.M)
+        if not m:
+            log('gagal:impor_tidak_selesai')
+            return 1
+        HASIL.mkdir(parents=True, exist_ok=True)
+        (HASIL / f'{domain}.json').write_text(json.dumps({
+            'waktu': int(time.time()), 'versi': versi, 'sumber': sumber, 'alasan': alasan,
+            'total': int(m.group(1)), 'contoh': int(m.group(2)),
+            'wa_kosong': 'tombol_beli:wa_kosong' in keluar}, ensure_ascii=False))
+        log(f'selesai: produk={m.group(1)} contoh={m.group(2)} plugin={versi}')
+        return 0
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    kode = 1
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

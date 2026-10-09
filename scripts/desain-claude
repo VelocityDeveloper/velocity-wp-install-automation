@@ -60,7 +60,8 @@ BERITA = ROOT / 'templates' / 'desain-claude' / 'berita.md'
 VB = ROOT / 'templates' / 'plugins' / 'velocity-blocks'
 KUNCI = Path('/var/lib/velocity/desain-claude.lock')
 AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
-CLAUDE = shutil.which('claude') or '/root/.local/bin/claude'
+# Lewat pembungkus claude-akun: pindah otomatis ke langganan Claude 2 bila Claude 1 kena/mendekati limit.
+CLAUDE = str(Path(__file__).resolve().parent / 'claude-akun')
 KUNCI_API = Path('/etc/velocity/secrets/anthropic_api_key')
 # Model agen (keputusan user 2026-09-18): Opus, tidak boleh lebih rendah. Nilai selain Opus
 # di DESAIN_CLAUDE_MODEL diabaikan, dan model kecil internal Claude Code (judul, ringkasan —

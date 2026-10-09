@@ -29,6 +29,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from folder_klien import folder_klien
 
 HERE = Path(__file__).resolve().parent
 GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
@@ -183,7 +184,7 @@ def isian_warna(domain):
     sys.path.insert(0, str(HERE))
     from client_form import read_client_form
     try:
-        fields = read_client_form(Path('/home/On Progress') / domain).get('fields') or {}
+        fields = read_client_form(folder_klien(domain)).get('fields') or {}
     except Exception:
         return ''
     nilai = next((str(v) for k, v in fields.items() if re.search(r'warna tema', k, re.I)), '')
@@ -275,7 +276,7 @@ def teks_pdf(pdf):
 
 def teks_klien(domain):
     """FORM ISIAN + dokumen lampiran klien sebagai teks — sejajar company profile."""
-    folder = Path('/home/On Progress') / domain
+    folder = folder_klien(domain)
     bagian = []
     try:
         from client_form import read_client_form
@@ -330,11 +331,11 @@ def sesuaikan_compro(isi, domain, log=print, sumber_klien=''):
 
 def buat_isi(gen, cfg, domain):
     client_data = {}
-    for folder in (Path(cfg['_manifest']).parent, gen.ON_PROGRESS / domain):
+    for folder in (Path(cfg['_manifest']).parent, folder_klien(domain)):
         if folder.is_dir():
             for k, v in gen.read_client_data(folder).items():
                 client_data.setdefault(k, v)
-    docs = gen.collect_client_docs(gen.ON_PROGRESS / domain)
+    docs = gen.collect_client_docs(folder_klien(domain))
     info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
     model = gen.get_model('isi_contoh')
     if not model:
@@ -415,7 +416,7 @@ def warna_sampel(domain):
     import importlib.util
     import shutil
     from collections import Counter
-    folder = Path('/home/On Progress') / domain
+    folder = folder_klien(domain)
     if not folder.is_dir():
         return '', ''
     gambar = [g for g in sorted(folder.rglob('*')) if g.suffix.lower() in ('.jpg', '.jpeg', '.png')
@@ -480,7 +481,7 @@ def rubrik_form(domain):
     sys.path.insert(0, str(HERE))
     from client_form import read_client_form
     try:
-        fields = read_client_form(Path('/home/On Progress') / domain).get('fields') or {}
+        fields = read_client_form(folder_klien(domain)).get('fields') or {}
     except Exception:
         return []
     hasil, terpakai = [], set()
@@ -504,11 +505,11 @@ def buat_isi_berita(gen, cfg, domain):
     kalimat identitas (slogan, tentang, pedoman redaksi) — tanpa nama awak
     redaksi, badan hukum, nomor verifikasi Dewan Pers, atau angka pembaca."""
     client_data = {}
-    for folder in (Path(cfg['_manifest']).parent, gen.ON_PROGRESS / domain):
+    for folder in (Path(cfg['_manifest']).parent, folder_klien(domain)):
         if folder.is_dir():
             for k, v in gen.read_client_data(folder).items():
                 client_data.setdefault(k, v)
-    docs = gen.collect_client_docs(gen.ON_PROGRESS / domain)
+    docs = gen.collect_client_docs(folder_klien(domain))
     info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
     model = gen.get_model('isi_contoh')
     if not model:

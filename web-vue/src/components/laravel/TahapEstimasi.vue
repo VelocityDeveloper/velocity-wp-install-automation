@@ -3,15 +3,22 @@
 import { ref, computed, watch } from 'vue'
 import LogLive from './LogLive.vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, jam, hariJam, JAM_SEHARI, jadwal } from '../../laravel.js'
+import { aksi, pesanGalat, namaSaya, jam, hariJam, JAM_SEHARI, jadwal, jalurLaravel as cekJalur } from '../../laravel.js'
 import { konfirmasi } from '../../konfirmasi.js'
 import { tanggalWaktu } from '../../api.js'
+import VersiBrief from './VersiBrief.vue'
 
 const props = defineProps({ d: { type: Object, required: true } })
 const emit = defineEmits(['ubah'])
 
 // Editor: kriteria disunting sebagai teks satu baris per kriteria
-const keEditor = (fs) => fs.map((f) => ({ judul: f.judul, deskripsi: f.deskripsi || '', kriteria: f.kriteria.map((k) => k.teks).join('\n'), jam_agen: f.jam_agen, jam_webmaster: f.jam_webmaster }))
+// Halaman (sel Matriks peran × halaman PRD) disunting sebagai "Halaman: Peran, Peran" satu baris per halaman
+const keEditor = (fs) => fs.map((f) => ({ judul: f.judul, deskripsi: f.deskripsi || '', kriteria: f.kriteria.map((k) => k.teks).join('\n'), jam_agen: f.jam_agen, jam_webmaster: f.jam_webmaster,
+  halaman: (f.halaman || []).map((h) => `${h.halaman}: ${h.peran.join(', ')}`).join('\n') }))
+const dariTeksHalaman = (t) => t.split('\n').map((b) => {
+  const i = b.lastIndexOf(':')
+  return i < 0 ? null : { halaman: b.slice(0, i).trim(), peran: b.slice(i + 1).split(',').map((x) => x.trim()).filter(Boolean) }
+}).filter((h) => h && h.halaman && h.peran.length)
 const fitur = ref(keEditor(props.d.fitur))
 const asal = ref(JSON.stringify(keEditor(props.d.fitur)))
 watch(() => props.d.fitur, (fs) => {
@@ -32,6 +39,8 @@ const berubah = computed(() => JSON.stringify(fitur.value) !== asal.value)
 const dikunci = computed(() => !!props.d.estimasi_kunci)
 // Selama Claude memecah ulang PRD, daftar lama disembunyikan (akan diganti; suntingan saat itu akan tertimpa)
 const memecah = computed(() => props.d.job?.jenis === 'estimasi')
+// Estimasi untuk semua platform; bukan Laravel + Vue = dikerjakan webmaster (jam agen 0), tanpa install & agen otomatis
+const jalurLaravel = computed(() => cekJalur(props.d))
 const terinstall = computed(() => ['jalan', 'ok'].includes(props.d.install?.status))
 const rencana = computed(() => jadwal(fitur.value, props.d.jadwal, tambahan.value))
 const jumlah = (xs, k) => xs.reduce((n, x) => n + Number(x[k] || 0), 0)
@@ -41,7 +50,22 @@ const total = computed(() => ({
 }))
 const terbuka = ref(new Set())
 const alih = (i) => { const s = new Set(terbuka.value); s.has(i) ? s.delete(i) : s.add(i); terbuka.value = s }
-function tambah() { fitur.value.push({ judul: '', deskripsi: '', kriteria: '', jam_agen: 1, jam_webmaster: 0.5 }); alih(fitur.value.length - 1) }
+function tambah() { fitur.value.push({ judul: '', deskripsi: '', kriteria: '', jam_agen: 0.15, jam_webmaster: 0.5, halaman: '' }); alih(fitur.value.length - 1) }
+
+// Kalibrasi: estimasi jam agen dibanding lama kerja agen yang nyata (semua project, L.kalibrasi_agen)
+const kal = computed(() => props.d.kalibrasi)
+const rataEstMenit = computed(() => (fitur.value.length ? jumlah(fitur.value, 'jam_agen') * 60 / fitur.value.length : 0))
+const terlaluBesar = computed(() => kal.value && rataEstMenit.value > kal.value.menit_median * 3)
+function sesuaikan() {
+  const r = kal.value?.rasio
+  if (!r) return
+  const skala = (x) => Math.max(0.05, Math.round(Number(x || 0) * r * 100) / 100)
+  for (const f of fitur.value) f.jam_agen = skala(f.jam_agen)
+  // Revisi UAT bawaan = ±25% jam fitur, ikut diskalakan; pekerjaan lain dibiarkan untuk dicek PM
+  for (const t of tambahan.value) if (/revisi/i.test(t.judul) && t.jam_agen) t.jam_agen = skala(t.jam_agen)
+  status.value = { kelas: 'baik', teks: 'Jam agen disesuaikan dengan data nyata — periksa lalu Simpan.' }
+}
+const cak = computed(() => props.d.cakupan)
 function hapus(i) { fitur.value.splice(i, 1); terbuka.value = new Set() }
 function geser(i, arah) { const j = i + arah; if (j < 0 || j >= fitur.value.length) return; const f = fitur.value; [f[i], f[j]] = [f[j], f[i]]; terbuka.value = new Set() }
 
@@ -52,7 +76,7 @@ async function lakukan(fn, ok) {
 }
 const kirimFitur = async () => {
   const body = {}
-  if (berubah.value) body.fitur = fitur.value.map((f) => ({ ...f, kriteria: f.kriteria.split('\n').map((x) => x.trim()).filter(Boolean) }))
+  if (berubah.value) body.fitur = fitur.value.map((f) => ({ ...f, kriteria: f.kriteria.split('\n').map((x) => x.trim()).filter(Boolean), halaman: dariTeksHalaman(f.halaman || '') }))
   if (berubahTambahan.value) body.tambahan = tambahan.value
   if (Object.keys(body).length) await aksi(props.d.slug, 'simpan', body)
 }
@@ -63,8 +87,8 @@ async function pecah() {
   lakukan(() => aksi(props.d.slug, 'estimasi'), 'Claude mulai memecah PRD (2–5 menit).')
 }
 async function kunci() {
-  if (!(await konfirmasi({ judul: 'Kunci estimasi?', tombol: 'Kunci', teks: `${fitur.value.length} fitur + ${tambahan.value.length} pekerjaan lain · agen ${jam(total.value.agen)} mesin · webmaster ${hariJam(total.value.wm)} · fitur selesai hari ke-${rencana.value.hariFitur}, serah terima hari kerja ke-${rencana.value.hariSelesai}. Sesudah dikunci, DESIGN.md, PRD, dan fitur tidak bisa diubah kecuali kunci dibuka lagi (sebelum install).` }))) return
-  lakukan(async () => { await kirimFitur(); await aksi(props.d.slug, 'kunci') }, 'Estimasi dikunci. Lanjut ke tab Install.')
+  if (!(await konfirmasi({ judul: 'Kunci estimasi?', tombol: 'Kunci', teks: `${fitur.value.length} fitur + ${tambahan.value.length} pekerjaan lain · ${jalurLaravel.value ? `agen ${jam(total.value.agen)} mesin · ` : ''}webmaster ${hariJam(total.value.wm)} · fitur selesai hari ke-${rencana.value.hariFitur}, serah terima hari kerja ke-${rencana.value.hariSelesai}. Sesudah dikunci, DESIGN.md, PRD, dan fitur tidak bisa diubah kecuali kunci dibuka lagi (sebelum install).` }))) return
+  lakukan(async () => { await kirimFitur(); await aksi(props.d.slug, 'kunci') }, jalurLaravel.value ? 'Estimasi dikunci. Lanjut ke tab Install.' : 'Estimasi dikunci.')
 }
 const buka = () => lakukan(() => aksi(props.d.slug, 'kunci', { buka: true }), 'Kunci dibuka.')
 </script>
@@ -75,16 +99,18 @@ const buka = () => lakukan(() => aksi(props.d.slug, 'kunci', { buka: true }), 'K
       <h2 id="h-est">Fitur & estimasi <span class="redup">(internal)</span></h2>
       <span v-if="memecah" class="pil waspada">sedang disusun</span>
       <div v-else class="ringkas">
+        <VersiBrief :d="d" jenis="estimasi" />
         <span><b>{{ fitur.length }}</b> fitur</span>
-        <span title="Jam kerja agen di mesin (07.00–22.00), bukan jam orang">agen <b>{{ jam(total.agen) }}</b> mesin</span>
+        <span v-if="jalurLaravel" title="Jam kerja agen di mesin (07.00–22.00), bukan jam orang">agen <b>{{ jam(total.agen) }}</b> mesin</span>
         <span :title="`1 hari = ${JAM_SEHARI} jam kerja webmaster`">webmaster <b>{{ hariJam(total.wm) }}</b></span>
       </div>
     </div>
     <div v-if="fitur.length && !memecah" class="jadwal">
       <div class="utama"><span class="redup">Perkiraan serah terima</span><b>hari kerja ke-{{ rencana.hariSelesai }}</b><small class="redup">± pukul {{ rencana.selesaiJam }} · termasuk pekerjaan di luar fitur</small></div>
-      <div><span class="redup">Semua fitur direview</span><b>hari ke-{{ rencana.hariFitur }}</b><small class="redup">agen selesai hari ke-{{ rencana.hariAgen }} ± {{ rencana.agenSelesai }} · jatah ±{{ jam(rencana.porsi) }}/hari</small></div>
-      <div><span class="redup">Webmaster</span><b>{{ hariJam(total.wm) }}</b><small class="redup">{{ JAM_SEHARI }} jam/hari, review paralel dengan agen</small></div>
-      <p class="redup">Mesin nyala 07.00–22.00, tapi kuota Claude dipakai bersama webmaster &amp; agen lain, jadi agen dijatah
+      <div v-if="jalurLaravel"><span class="redup">Semua fitur direview</span><b>hari ke-{{ rencana.hariFitur }}</b><small class="redup">agen selesai hari ke-{{ rencana.hariAgen }} ± {{ rencana.agenSelesai }} · jatah ±{{ jam(rencana.porsi) }}/hari</small></div>
+      <div v-else><span class="redup">Semua fitur selesai</span><b>hari ke-{{ rencana.hariFitur }}</b><small class="redup">± pukul {{ rencana.fiturJam }} · dikerjakan webmaster</small></div>
+      <div><span class="redup">Webmaster</span><b>{{ hariJam(total.wm) }}</b><small class="redup">{{ JAM_SEHARI }} jam/hari{{ jalurLaravel ? ', review paralel dengan agen' : ', tanpa agen otomatis' }}</small></div>
+      <p v-if="jalurLaravel" class="redup">Mesin nyala 07.00–22.00, tapi kuota Claude dipakai bersama webmaster &amp; agen lain, jadi agen dijatah
         maksimal {{ jam(rencana.perProject) }} per project per hari<template v-if="rencana.lain">; karena ada {{ rencana.lain }} project lain di tahap Agen,
         {{ jam(rencana.efektif) }} kapasitas harian dibagi → ±{{ jam(rencana.porsi) }} untuk project ini</template>.
         Tiap fitur yang selesai langsung bisa direview webmaster; pekerjaan di luar fitur (bawah) dikerjakan sesudahnya.</p>
@@ -92,7 +118,21 @@ const buka = () => lakukan(() => aksi(props.d.slug, 'kunci', { buka: true }), 'K
     <p v-if="memecah" class="redup bantu">Claude sedang memecah PRD jadi fitur, kriteria terima, jam, dan pekerjaan di luar fitur.
       Daftar tampil lagi otomatis setelah selesai (2–5 menit); versi sebelumnya tersimpan sebagai cadangan di server.</p>
     <p v-else-if="dikunci" class="pesan-status baik">Dikunci oleh {{ d.estimasi_kunci.oleh }} · {{ tanggalWaktu(d.estimasi_kunci.waktu) }}</p>
-    <p v-else class="redup bantu">Satu fitur = satu sesi agen (idealnya ≤ 2 jam agen). Kriteria terima = checklist yang nanti diuji agen dan dicentang webmaster — satu baris per kriteria, harus bisa diuji.</p>
+    <p v-else-if="!jalurLaravel" class="redup bantu">Platform {{ d.saran.pilihan.jalur === 'wordpress' ? 'WordPress' : 'pilihan PM' }}: semua fitur dikerjakan webmaster, jadi jam agen 0 dan jam webmaster = waktu mengerjakan sampai jadi. Install otomatis &amp; agen Claude hanya untuk Laravel + Vue. Kriteria terima = checklist yang dicentang webmaster, satu baris per kriteria.</p>
+    <p v-else class="redup bantu">Satu fitur = satu sesi agen. Kriteria terima = checklist yang nanti diuji agen dan dicentang webmaster — satu baris per kriteria, harus bisa diuji.</p>
+
+    <div v-if="fitur.length && !memecah && kal && jalurLaravel" class="kal" :class="{ waspada: terlaluBesar }">
+      <span>Data nyata agen: median <b>{{ kal.menit_median }} menit</b> per fitur, 90% ≤ {{ kal.menit_p90 }} menit ({{ kal.fitur }} fitur selesai, termasuk perbaikan &amp; revisi).
+        Estimasi ini rata-rata <b>{{ Math.round(rataEstMenit) }} menit</b> per fitur<template v-if="terlaluBesar"> — ±{{ Math.round(rataEstMenit / kal.menit_median) }}× lebih lama dari kenyataan, jadwal serah terima ikut molor</template>.</span>
+      <button v-if="terlaluBesar && !dikunci && kal.rasio" type="button" class="tombol waspada kecil" @click="sesuaikan">Sesuaikan jam agen dengan data nyata</button>
+    </div>
+    <div v-if="fitur.length && !memecah && cak?.kurang?.length" class="cakupan" role="alert">
+      <b>{{ cak.kurang.length }} dari {{ cak.sel }} akses di Matriks peran × halaman (PRD) belum masuk fitur mana pun</b>
+      <p class="redup">Celah seperti ini yang dulu berakhir jadi revisi "halaman … belum ada". Tambahkan ke kolom Halaman fitur yang cocok (atau buat fitur baru), lalu Simpan. Dihitung dari fitur yang sudah disimpan.</p>
+      <ul><li v-for="x in cak.kurang" :key="x">{{ x }}</li></ul>
+    </div>
+    <p v-else-if="fitur.length && !memecah && cak" class="pesan-status baik kecil">Cakupan matriks: semua {{ cak.sel }} akses peran × halaman masuk fitur.</p>
+    <p v-else-if="fitur.length && !memecah && !dikunci && d.prd.trim()" class="redup kecil">PRD belum punya bagian "Matriks peran × halaman", jadi cakupan halaman per peran tidak bisa dicek otomatis — susun ulang PRD di tab Brief untuk menambahkannya.</p>
 
     <div v-if="!memecah" class="aksi">
       <button v-if="!dikunci" type="button" class="tombol garis" :disabled="!d.prd.trim() || !!d.job || !namaSaya.trim()" @click="pecah">
@@ -107,13 +147,14 @@ const buka = () => lakukan(() => aksi(props.d.slug, 'kunci', { buka: true }), 'K
         <div class="f-baris">
           <span class="fid">F{{ String(i + 1).padStart(2, '0') }}</span>
           <input v-model="f.judul" class="f-judul" :readonly="dikunci" maxlength="120" placeholder="Judul fitur" :aria-label="`Judul fitur ${i + 1}`">
-          <label class="f-jam"><span>agen</span><input v-model.number="f.jam_agen" type="number" min="0" max="200" step="0.5" :readonly="dikunci"></label>
+          <label class="f-jam"><span>agen</span><input v-model.number="f.jam_agen" type="number" min="0" max="200" step="0.05" :readonly="dikunci"></label>
           <label class="f-jam"><span>webmaster</span><input v-model.number="f.jam_webmaster" type="number" min="0" max="200" step="0.5" :readonly="dikunci"></label>
           <button type="button" class="tombol garis kecil" :aria-expanded="terbuka.has(i)" @click="alih(i)">{{ terbuka.has(i) ? 'Tutup' : `Rincian · ${f.kriteria.split('\n').filter((x) => x.trim()).length} kriteria` }}</button>
         </div>
         <div v-if="terbuka.has(i)" class="f-rinci">
           <label class="isian"><span>Deskripsi untuk agen</span><textarea v-model="f.deskripsi" :readonly="dikunci" rows="4" /></label>
           <label class="isian"><span>Kriteria terima (satu per baris)</span><textarea v-model="f.kriteria" :readonly="dikunci" rows="6" /></label>
+          <label class="isian"><span>Halaman &amp; peran (satu per baris: <code>Halaman: Peran, Peran</code> — nama persis dari Matriks peran × halaman PRD)</span><textarea v-model="f.halaman" :readonly="dikunci" rows="3" placeholder="Materi: Admin, Guru" /></label>
           <div v-if="!dikunci" class="aksi">
             <button type="button" class="tombol garis kecil" :disabled="i === 0" @click="geser(i, -1)">↑ Naik</button>
             <button type="button" class="tombol garis kecil" :disabled="i === fitur.length - 1" @click="geser(i, 1)">↓ Turun</button>
@@ -175,6 +216,14 @@ const buka = () => lakukan(() => aksi(props.d.slug, 'kunci', { buka: true }), 'K
   .tb-baris .hp { display: block; font-size: 11px; color: var(--teks-3); }
 }
 .bantu { margin: -6px 0 12px; }
+.kal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--kartu-2); font-size: 13px; color: var(--teks-2); }
+.kal span { flex: 1 1 360px; }
+.kal b { color: var(--teks); }
+.kal.waspada { border: 1px solid rgba(232, 181, 74, .5); }
+.cakupan { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(255, 107, 107, .5); background: rgba(255, 107, 107, .06); font-size: 13px; }
+.cakupan b { color: var(--bahaya); }
+.cakupan p { margin: 4px 0 0; }
+.cakupan ul { margin: 6px 0 0; padding-left: 18px; columns: 2 240px; color: var(--teks-2); }
 .ringkas { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--teks-2); }
 .ringkas b { color: var(--teks); }
 .aksi { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
