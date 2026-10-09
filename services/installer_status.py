@@ -1318,10 +1318,11 @@ def generate_manifest(domain: str):
         pass
     # derive defaults; ssh target from server store (managed via /server/ panel), fallback static
     labels = domain.split('.')[0]
-    # DirectAdmin limit = 8 chars, prioritize username from notes if present
+    # Username dari catatan hosting diutamakan; kalau tidak ada, 7 huruf awal domain
+    # (keputusan user 2026-10-09).
     da_user = ''
     # Catatan hosting dari tim ada di folder Drive sebagai <domain>.txt dan memuat
-    # username DirectAdmin asli, yang tidak selalu sama dengan 8 huruf pertama
+    # username DirectAdmin asli, yang tidak selalu sama dengan huruf awal
     # domain (surya-media-berita.com -> suryame1).
     for nf in [folder_klien(domain) / f'{domain}.txt',
                src / 'notes-credentials.txt', src / 'notes.txt',
@@ -1339,8 +1340,8 @@ def generate_manifest(domain: str):
         except: pass
     if not da_user:
         # Username DirectAdmin hanya huruf & angka. Tanda hubung dari domain
-        # (surya-media-berita.com -> "surya-me") ikut ke db_name dan ditolak installer.
-        da_user = re.sub(r'[^a-z0-9]', '', labels.lower())[:8] or 'admin'
+        # (surya-media-berita.com -> "surya-m") ikut ke db_name dan ditolak installer.
+        da_user = re.sub(r'[^a-z0-9]', '', labels.lower())[:7] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
     # Staging (deskripsi CRM "Kerjakan diweb velocity dl"): akun vdco di Kiya,
