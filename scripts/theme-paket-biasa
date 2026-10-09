@@ -924,7 +924,11 @@ if (!empty($d['berita'])) {
     foreach ($tanpa_hit as $pid) { add_post_meta($pid, 'hit', 0, true); }
     if ($tanpa_hit) { echo 'tampilan: berita_hit_awal:' . count($tanpa_hit) . "\n"; }
 }
-if ($berita_depan) {
+// berita4 berberanda page-home.php (beranda statis) tetapi menunya sama dengan portal berita lain
+// (user 2026-10-09, info-luarbiasa.com): primary = Beranda + kategori, secondary = ikon home ala demo,
+// Tentang Kami, Redaksi, Pedoman Media Siber.
+$b4 = get_stylesheet() === 'velocity-berita4';
+if ($berita_depan || $b4) {
     // Menu: hanya menu buatan installer (halaman baku) yang disusun ulang.
     $baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan', 'redaksi',
              'pedoman media siber', 'privacy policy', 'kebijakan privasi'];
@@ -937,7 +941,7 @@ if ($berita_depan) {
         $obj = wp_get_nav_menu_object('Menu Berita');
         $mb = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Berita');
         if ($mb && !$obj) {
-            wp_update_nav_menu_item($mb, 0, ['menu-item-title' => 'Home', 'menu-item-url' => home_url('/'),
+            wp_update_nav_menu_item($mb, 0, ['menu-item-title' => $b4 ? 'Beranda' : 'Home', 'menu-item-url' => home_url('/'),
                 'menu-item-type' => 'custom', 'menu-item-status' => 'publish', 'menu-item-position' => 1]);
             $n = 2;
             foreach ($kat_menu as $k) {
@@ -981,6 +985,13 @@ if ($berita_depan) {
         $m2 = $obj ? (int) $obj->term_id : (int) wp_create_nav_menu('Menu Profil');
         $ada_id = array_map(fn($it) => (int) $it->object_id, array_filter(wp_get_nav_menu_items($m2) ?: [], fn($it) => $it->object === 'page'));
         $n = count(wp_get_nav_menu_items($m2) ?: []) + 1; $tambah = [];
+        // berita4: ikon rumah di depan seperti demo (Bootstrap Icons dari tema induk).
+        if ($b4 && $n === 1) {
+            wp_update_nav_menu_item($m2, 0, ['menu-item-title' => '<i class="bi bi-house-door fs-6"></i>', 'menu-item-attr-title' => 'Beranda',
+                'menu-item-url' => home_url('/'), 'menu-item-classes' => 'align-middle', 'menu-item-type' => 'custom',
+                'menu-item-status' => 'publish', 'menu-item-position' => $n++]);
+            $tambah[] = 'ikon_home';
+        }
         // Tentang Kami, Redaksi, Pedoman Media Siber + 4 kategori pokok khusus beritab1 (terbanyak artikel = urutan form klien);
         // dulu Galeri, Hubungi Kami, Kebijakan Privasi (user 2026-10-06, cybernasional24.com).
         foreach (['tentang-kami', 'redaksi', 'pedoman-media-siber'] as $slug) {
