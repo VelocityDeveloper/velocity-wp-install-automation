@@ -11,6 +11,7 @@ Sejak 10 Okt 2026: /sitemap.xml, /robots.txt, kode verifikasi Google Search Cons
 2. Tambal berkas starter kit `laravel new --vue`: rute, HandleInertiaRequests (prop `site`), provider Gate,
    app.blade.php (favicon, judul, meta description, verifikasi Google, noindex), app.ts (judul tab), tipe,
    menu Pengaturan, footer layout. public/robots.txt bawaan dibuang (diganti rute /robots.txt).
+   Route::redirect('settings') diganti closure (Wayfinder belum mengenal verb QUERY -> galat vue-tsc).
 3. Buat logo & favicon contoh dari inisial APP_NAME (.env): public/images/logo-contoh.png, favicon.ico,
    apple-touch-icon.png; favicon.svg Laravel dibuang.
 4. Rapikan dengan `vp check --fix` + Pint.
@@ -103,6 +104,10 @@ def gambar_contoh(app):
 
 def tambal_starter(app):
     tambal(app, 'routes/settings.php', [
+        # Route::redirect mendaftarkan semua verb termasuk QUERY (Laravel 13); Wayfinder 0.1.21 belum mengenal "query"
+        # sehingga RedirectController.ts gagal vue-tsc. Hapus tambalan ini bila laravel/wayfinder#324 sudah dirilis.
+        ("    Route::redirect('settings', '/settings/profile');\n",
+         "    Route::get('settings', fn () => to_route('profile.edit'));\n"),
         ('use App\\Http\\Controllers\\Settings\\ProfileController;',
          'use App\\Http\\Controllers\\Settings\\AppSettingController;\nuse App\\Http\\Controllers\\Settings\\ProfileController;'),
         (('re', r"(\n    Route::inertia\('settings/appearance'[^\n]*\n\}\);\n)"),

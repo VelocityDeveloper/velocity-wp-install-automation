@@ -52,7 +52,9 @@ di pesan commit.
     antar halaman/controller; jangan membuat komponen kembar yang beda sedikit — beri prop.
 - **Props Inertia**: kirim hanya kolom yang dipakai halaman (`only()`/Resource), jangan seluruh model.
 - **Frontend**: pakai komponen di `components/ui` dulu sebelum membuat sendiri; rute lewat Wayfinder
-  (`@/routes`, `@/actions`), bukan URL ditulis tangan.
+  (`@/routes`, `@/actions`), bukan URL ditulis tangan. Jangan pakai `Route::redirect`/`Route::permanentRedirect`/
+  `Route::any` (mendaftarkan verb QUERY yang belum dikenal Wayfinder → `vue-tsc` gagal); pengalihan pakai
+  `Route::get('a', fn () => to_route('b'))`.
 - **Unggahan**: whitelist `extensions` + `mimes`, simpan di disk privat dan sajikan lewat controller yang
   memeriksa hak akses. Jangan simpan berkas pengguna di `public/`.
   **Gambar yang diunggah (jpg/png/gif/bmp) WAJIB disimpan sebagai WebP**: konversi di satu layanan bersama
