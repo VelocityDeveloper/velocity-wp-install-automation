@@ -40,7 +40,11 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    (lengkapi sekalian; ini pengecualian dari poin 2).
 5. Antarmuka berbahasa Indonesia, gaya mengikuti DESIGN.md, rapi di desktop dan HP. Ikuti **Perilaku UI wajib**
    di CLAUDE.md (menu menutup otomatis saat diklik, tombol mode gelap di header kanan atas, tombol Simpan
-   sticky di form panjang, tombol kembali ke atas di samping WA mengambang di halaman publik).
+   sticky di form panjang, select panjang tidak menabrak, halaman masuk bervariasi (bukan form polos), field konten
+   pakai `RichTextEditor` (textarea hanya untuk teks polos), isi halaman publik diatur lewat `Setting`, hapus akun
+   sendiri hanya admin, WhatsApp mengambang dengan logo resmi (label disembunyikan di HP) + tombol kembali ke atas
+   di sampingnya di halaman publik). Gambar unggahan disimpan sebagai WebP (lihat **Unggahan** di CLAUDE.md); app dengan banyak
+   gambar kelolaan admin memakai **Pustaka media** (spatie/laravel-medialibrary + `Asset`, pola hotel-booking).
    Pengaturan > Aplikasi (nama, deskripsi, logo, favicon; prop `site`) dan footer "Design by Velocity Developer"
    dari installer WAJIB tetap ada dan berfungsi — saat mengganti layout/halaman depan/halaman masuk, pakai lagi
    `AppLogo`/`AppLogoIcon`, `site.name`, dan `AppFooter`. Saat membuat peran, batasi Gate `manage-app-settings` ke admin.

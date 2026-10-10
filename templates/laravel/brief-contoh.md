@@ -43,6 +43,11 @@ Platform: **{{PLATFORM}}**
 - Menu header WAJIB satu baris di layar 1280px (`white-space: nowrap`); bila tidak muat, kurangi item atau pindahkan
   ke dropdown "Lainnya". Nama/logo di header tidak boleh terlipat menabrak menu. Kartu/lencana melayang (hero)
   tidak boleh menutupi teks kartu lain.
+- Halaman depan WAJIB punya tombol WhatsApp mengambang di kanan bawah memakai logo WhatsApp resmi (SVG brand,
+  hijau #25D366; bukan ikon gelembung chat biasa), berlabel "Chat WhatsApp" di desktop dan hanya ikon bulat di HP
+  (<640px), plus tombol kembali ke atas di sampingnya (muncul setelah digulir). Semua ikon WhatsApp lain di
+  halaman juga memakai logo resmi itu.
+- Select/dropdown berteks panjang dipotong elipsis, tidak menabrak ikon panah atau elemen sebelahnya.
 - Ukuran wajar: masing-masing ±20–60 KB.
 
 ## Aturan anti-slop UI (skill antislop-ui, WAJIB)

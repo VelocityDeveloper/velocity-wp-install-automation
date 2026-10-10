@@ -55,6 +55,21 @@ di pesan commit.
   (`@/routes`, `@/actions`), bukan URL ditulis tangan.
 - **Unggahan**: whitelist `extensions` + `mimes`, simpan di disk privat dan sajikan lewat controller yang
   memeriksa hak akses. Jangan simpan berkas pengguna di `public/`.
+  **Gambar yang diunggah (jpg/png/gif/bmp) WAJIB disimpan sebagai WebP**: konversi di satu layanan bersama
+  (mis. `app/Support/ImageToWebp.php`, GD `imagewebp`, kualitas ±80, sisi terpanjang maks 1920px, transparansi
+  PNG tetap), berlaku untuk semua unggahan (logo, foto, galeri, gambar di editor). Pengecualian: SVG, favicon
+  `.ico`, dan berkas bukan gambar (PDF, dokumen) disimpan apa adanya.
+- **Pustaka media (bila app butuh banyak gambar)**: bila PRD punya banyak gambar yang dikelola admin (galeri, foto
+  produk/kamar/kegiatan, banner, gambar di isian editor, logo/favicon dipilih ulang), pakai pola pustaka media
+  seperti project `/home/hotel-booking`: paket `spatie/laravel-medialibrary` (^11) + model `Asset` (`HasMedia`,
+  koleksi `file` singleFile, kolom `title`/`alt`/`caption`/`uploaded_by`/`width`/`height`, `Asset::store()` untuk
+  simpan + konversi WebP, konversi `thumb`/`large`/`preview` WebP nonQueued, `toLibraryArray()` untuk prop).
+  Halaman admin Media (`/admin/media`: grid, unggah banyak, ubah judul/alt, hapus, info "dipakai di") lewat
+  `AssetController`; SATU komponen pemilih bersama (`MediaBrowser.vue` + field `AppImageField.vue`) dipakai di
+  semua form gambar dan di `RichTextEditor` (sisip gambar dari pustaka). Tabel lain menyimpan `asset_id`
+  (FK `nullOnDelete`), bukan path berkas; gambar contoh seeder ikut masuk pustaka (seeder lewat `Asset::store`).
+  Disk `public` (URL relatif `/storage`, jalankan `storage:link`) khusus gambar tampilan publik; berkas pribadi
+  pengguna tetap disk privat. App yang hanya punya 1–2 unggahan (mis. logo + foto profil) TIDAK perlu pustaka ini.
 - **Seeder**: setiap model wajib punya factory + seeder (`database/seeders/<Model>Seeder.php`) yang dipanggil
   `DatabaseSeeder` berurutan sesuai relasi, berisi data contoh realistis — `php artisan migrate:fresh --seed`
   harus mengisi semua tabel model. Seeder aman diulang (`firstOrCreate`/`updateOrCreate`). Data demo dipisah
@@ -86,6 +101,36 @@ di pesan commit.
   - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
     di bawah layar (`sticky bottom-0`, latar kartu, garis atas tipis) berisi Simpan (+ Batal bila ada),
     sehingga tidak perlu menggulir ke bawah untuk menyimpan. Buat sekali sebagai komponen bersama, pakai ulang.
+  - *Select tidak menabrak*: pilihan yang teksnya panjang tidak boleh meluber/menabrak ikon chevron atau field
+    sebelah. Trigger `SelectTrigger` diberi `w-full min-w-0`, teks nilai `truncate` (+ `title` berisi teks
+    lengkap); daftar opsi (`SelectContent`) dibatasi lebar layar dan opsi panjang terlipat rapi
+    (`whitespace-normal break-words`), bukan memotong layar. Berlaku juga untuk combobox/multiselect dan di HP.
+  - *Halaman masuk bervariasi*: halaman login/daftar/lupa sandi JANGAN dibiarkan polos (form kecil di latar
+    kosong). Pakai `AuthSplitLayout` atau kartu dengan panel visual: warna/gradasi dari token DESIGN.md, logo +
+    `site.name` + `site.description`, ilustrasi/pola SVG atau foto yang sesuai jenis usaha klien, tagline
+    singkat. Tiap project dibuat berbeda (sesuai DESIGN.md), tetap rapi di HP (panel visual diringkas di atas form).
+  - *Editor teks berformat*: field konten di dashboard (deskripsi, isi, konten, profil, syarat & ketentuan,
+    pengumuman, dll.) pakai SATU komponen bersama `RichTextEditor.vue` (Tiptap: `@tiptap/vue-3` +
+    `@tiptap/starter-kit`, + `@tiptap/extension-image` bila perlu gambar — unggahan gambarnya ikut jadi WebP),
+    bukan `<textarea>`. HTML disanitasi di server sebelum disimpan (kelas `App\Support\RichTextSanitizer`,
+    `symfony/html-sanitizer`: buang script, atribut `on*`, `style`, `javascript:`) lalu ditampilkan dengan
+    `v-html` + gaya tipografi. `<textarea>` hanya untuk teks polos: alamat, catatan/alasan singkat, meta
+    description, kode/embed, isian yang dikirim ke WA/SMS.
+  - *Halaman publik bisa diatur*: isi halaman publik yang wajar diubah klien (judul & teks hero, gambar/banner,
+    tentang kami, layanan unggulan, kontak, alamat, jam buka, peta, sosmed, nomor WhatsApp, teks footer) TIDAK
+    di-hardcode di Vue — jadikan kunci `Setting` dan form-nya di Pengaturan (kelompokkan, mis. tab "Halaman
+    Depan"/"Kontak"), nilai awal di `SettingSeeder`. Yang tetap boleh statis: struktur/tata letak dan label UI.
+  - *Hapus akun sendiri*: secara bawaan HANYA admin yang bisa menghapus akunnya sendiri. Peran lain: bagian
+    "Hapus akun" di Pengaturan > Profil disembunyikan DAN rute `profile.destroy` ditolak 403 (Gate
+    `delete-own-account`, cek di controller/Form Request, ada tesnya). Bila PRD meminta pengguna boleh
+    menghapus akun, buka lewat kunci `Setting` `allow_self_delete` (bawaan `'0'`).
+  - *WhatsApp mengambang*: halaman publik punya tombol WhatsApp mengambang di kanan bawah (nomor & pesan awal
+    dari `Setting`, mis. `whatsapp_number`/`whatsapp_message`, tautan `https://wa.me/<62…>?text=…` tab baru).
+    Di desktop berbentuk pil ikon + label (mis. "Chat WhatsApp"); di HP (<640px) label disembunyikan, tinggal
+    tombol bulat ikon. Tidak tampil bila nomor kosong. Satu komponen bersama, dipasang di layout publik.
+  - *Ikon WhatsApp = logo resmi*: SEMUA ikon WhatsApp (tombol mengambang, kontak, footer, tombol "Hubungi via
+    WA", tabel) memakai logo WhatsApp asli (SVG path brand, mis. dari Simple Icons, warna #25D366 atau putih di
+    atas hijau) lewat satu komponen `WhatsAppIcon.vue` — bukan ikon lucide `MessageCircle`/`Phone`.
   - *Kembali ke atas*: halaman publik punya tombol mengambang "kembali ke atas" (ikon panah atas, ukuran dan
     tinggi sejajar tombol WhatsApp mengambang, posisinya di sebelah kanan tombol WA), muncul setelah digulir
     ±400px, menggulir halus ke atas (`behavior: 'smooth'`, langsung bila `prefers-reduced-motion`).
