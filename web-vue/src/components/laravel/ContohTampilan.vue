@@ -2,7 +2,8 @@
 // Contoh tampilan untuk klien (permintaan user 2026-09-30): Claude membuat mockup HTML dari catatan, dokumen klien, dan
 // DESIGN/PRD bila sudah ada — platform WordPress: beranda saja; Laravel: landing + dashboard bergaya aplikasi Velocity
 // (SIA VD, templates/laravel/gaya-dashboard-vd.md) → pratinjau di sini, lalu diterbitkan ke
-// server preview nglorok.com (VPS Sumopod) supaya PM bisa mengirim tautannya ke klien.
+// server preview velocity.ai.id (PC kantor lewat Cloudflare Tunnel) supaya PM bisa mengirim tautannya ke klien.
+// Revisi (10 Okt, hemat token): aksi `contoh` {mode: 'revisi', halaman, arahan} → Claude menyunting HTML yang ada saja.
 // API: aksi `contoh` {arahan}, aksi `terbitkan_contoh`, GET /api/laravel/p/<id>/contoh/<berkas>.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import LogLive from './LogLive.vue'
@@ -28,15 +29,19 @@ const adaBahan = computed(() => !!props.d.catatan.trim() || props.catatanBerubah
 const bisa = computed(() => adaBahan.value && !props.d.job && !!namaSaya.value.trim())
 const halaman = tabUrl('contoh', 'index.html', { boleh: ['index.html', 'dashboard.html'] })
 const perangkat = tabUrl('perangkat', 'pc', { boleh: ['pc', 'hp'] })
-const arahan = ref(props.d.contoh?.arahan || '')
+// Sudah ada contoh → kotak arahan dipakai untuk revisi, jadi mulai kosong (arahan lama tidak diulang tanpa sengaja)
+const arahan = ref(props.d.contoh ? '' : props.d.contoh?.arahan || '')
 const bukaArahan = ref(false)
+const bisaRevisi = computed(() => !!c.value && !bedaPlatform.value)
+const targetRevisi = ref('ikut')   // 'ikut' = halaman yang sedang dilihat
+const halamanRevisi = computed(() => (targetRevisi.value === 'ikut' ? halaman.value : targetRevisi.value))
+const jumlahRevisi = computed(() => c.value?.revisi?.length || 0)
 const status = ref({ kelas: '', teks: '' })
 const menerbitkan = ref(false)
 const tersalin = ref(false)
 const src = computed(() => `/api/laravel/p/${props.d.slug}/contoh/${halaman.value}?v=${c.value?.waktu || 0}`)
 const terbit = computed(() => c.value?.terbit)
 const urlKlien = computed(() => (terbit.value?.ok ? terbit.value.url : ''))
-watch(() => c.value?.arahan, (v) => { if (!bukaArahan.value) arahan.value = v || '' })
 
 // Tampilan PC dirender selebar 1280px lalu diperkecil mengikuti lebar kartu
 const LEBAR_PC = 1280
@@ -52,10 +57,18 @@ watch(bingkai, (el) => {
 })
 onBeforeUnmount(() => ro?.disconnect())
 
+async function revisi() {
+  status.value = { kelas: '', teks: '' }
+  try {
+    await aksi(props.d.slug, 'contoh', { mode: 'revisi', halaman: wp.value ? 'index.html' : halamanRevisi.value, arahan: arahan.value })
+    arahan.value = ''
+    emit('ubah')
+  } catch (e) { status.value = { kelas: 'bahaya', teks: pesanGalat(e) } }
+}
 async function buat() {
   status.value = { kelas: '', teks: '' }
-  if (c.value && !(await konfirmasi({ judul: 'Buat ulang contoh tampilan?', tombol: 'Buat ulang', kelas: 'waspada',
-    teks: 'Claude membuat 2 halaman baru dari bahan terbaru (dan arahan Anda bila diisi). Tautan klien tetap sama dan ikut diperbarui; versi lama disimpan sebagai cadangan di server.' }))) return
+  if (c.value && !(await konfirmasi({ judul: 'Buat ulang dari nol?', tombol: 'Buat ulang', kelas: 'waspada',
+    teks: `Claude mendesain ${wp.value ? 'beranda' : 'landing page + dashboard'} baru dari bahan terbaru${arahan.value.trim() ? ' dan arahan Anda' : ''} — desain sekarang diganti seluruhnya. Pakai ini hanya bila brief berubah besar atau arah desain diganti; untuk perubahan bagian tertentu, "Revisi" jauh lebih hemat (±5–10× lebih murah). Tautan klien tetap sama; versi lama disimpan sebagai cadangan.` }))) return
   try {
     if (props.catatanBerubah) await props.simpanCatatan()
     await aksi(props.d.slug, 'contoh', { arahan: arahan.value })
@@ -91,7 +104,7 @@ async function salin() {
     <p v-if="bedaPlatform && !jalan" class="pesan-status waspada">Contoh ini dibuat untuk platform {{ c.platform === 'wordpress' ? 'WordPress' : 'Laravel' }}, padahal platform sekarang {{ wp ? 'WordPress' : 'Laravel' }}. Buat ulang agar sesuai.</p>
 
     <div v-if="jalan" class="panel" role="status">
-      <p class="redup">Claude sedang mendesain {{ wp ? 'beranda situs' : 'landing page + dashboard' }} (3–10 menit), lalu menerbitkannya ke nglorok.com.</p>
+      <p class="redup">{{ d.job?.revisi ? 'Claude sedang merevisi contoh tampilan (1–4 menit)' : `Claude sedang mendesain ${wp ? 'beranda situs' : 'landing page + dashboard'} (3–10 menit)` }}, lalu menerbitkannya ke velocity.ai.id.</p>
       <LogLive :id="d.slug" jenis="contoh" hidup tinggi="24vh" />
     </div>
 
@@ -103,10 +116,10 @@ async function salin() {
           <button type="button" class="tombol kecil" @click="salin"><Ikon nama="salin" :ukuran="16" /> {{ tersalin ? 'Tersalin' : 'Salin tautan' }}</button>
           <a class="tombol garis kecil" :href="urlKlien" target="_blank" rel="noopener"><Ikon nama="luar" :ukuran="16" /> Buka</a>
         </template>
-        <span v-else-if="!c.bisa_terbit" class="redup">Server preview nglorok.com belum diatur; contoh baru bisa dilihat di sini.</span>
+        <span v-else-if="!c.bisa_terbit" class="redup">Server preview velocity.ai.id belum diatur; contoh baru bisa dilihat di sini.</span>
         <span v-else class="bahaya-teks">Belum terbit{{ terbit?.galat ? `: ${terbit.galat}` : '' }}</span>
         <button v-if="c.bisa_terbit" type="button" class="tombol garis kecil" :disabled="menerbitkan || !!d.job || !namaSaya.trim()" @click="terbitkan">
-          {{ menerbitkan ? 'Menerbitkan…' : urlKlien ? 'Terbitkan ulang' : 'Terbitkan ke nglorok.com' }}
+          {{ menerbitkan ? 'Menerbitkan…' : urlKlien ? 'Terbitkan ulang' : 'Terbitkan ke velocity.ai.id' }}
         </button>
       </div>
 
@@ -136,16 +149,37 @@ async function salin() {
       </div>
     </template>
 
-    <details v-if="!jalan" class="arahan" :open="bukaArahan" @toggle="bukaArahan = $event.target.open">
-      <summary>Arahan untuk Claude <span class="redup">(opsional{{ c?.arahan ? ', terakhir dipakai' : '' }})</span></summary>
-      <textarea v-model="arahan" rows="3" maxlength="2000" :placeholder="wp ? 'Contoh: nuansa hangat, tonjolkan paket layanan & testimoni, tombol WhatsApp besar…' : 'Contoh: tonjolkan KPI per proyek di dashboard, landing lebih banyak ilustrasi lapangan…'" />
-    </details>
-    <div v-if="!jalan" class="aksi">
-      <button type="button" :class="c ? 'tombol garis' : 'tombol'" :disabled="!bisa" @click="buat">
-        <Ikon nama="claude" :ukuran="18" /> {{ c ? 'Buat ulang contoh tampilan' : 'Buat contoh tampilan' }}
-      </button>
-      <span v-if="!adaBahan" class="redup kecil">Isi catatan atau unggah dokumen klien dulu.</span>
+    <div v-if="!jalan && bisaRevisi" class="revisi">
+      <label for="arahan-revisi"><b>Revisi contoh</b> <span class="redup">· hanya bagian yang Anda sebut yang diubah, desain lain tetap{{ jumlahRevisi ? ` · sudah direvisi ${jumlahRevisi}×` : '' }}</span></label>
+      <textarea id="arahan-revisi" v-model="arahan" rows="3" maxlength="2000" :placeholder="wp ? 'Contoh: hero pakai foto produk, tombol WhatsApp lebih besar, tambah seksi testimoni setelah layanan…' : 'Contoh: kartu KPI tambah “Proyek terlambat”, grafik jadi per bulan, hero landing lebih ringkas…'" />
+      <p v-if="c.arahan" class="redup kecil">Arahan terakhir: {{ c.arahan }}</p>
+      <div class="aksi">
+        <label v-if="!wp && c.halaman.length > 1" class="pilih-hal">
+          <span class="redup kecil">Ubah</span>
+          <select v-model="targetRevisi">
+            <option value="ikut">Halaman yang dilihat ({{ halaman === 'dashboard.html' ? 'Dashboard' : 'Landing page' }})</option>
+            <option v-for="h in c.halaman" :key="h.nama" :value="h.nama">{{ h.label }} saja</option>
+            <option value="semua">Keduanya</option>
+          </select>
+        </label>
+        <button type="button" class="tombol" :disabled="!bisa || !arahan.trim()" @click="revisi">
+          <Ikon nama="claude" :ukuran="18" /> Revisi dengan arahan
+        </button>
+        <button type="button" class="tombol garis" :disabled="!bisa" @click="buat">Buat ulang dari nol</button>
+      </div>
     </div>
+    <template v-else-if="!jalan">
+      <details class="arahan" :open="bukaArahan" @toggle="bukaArahan = $event.target.open">
+        <summary>Arahan untuk Claude <span class="redup">(opsional)</span></summary>
+        <textarea v-model="arahan" rows="3" maxlength="2000" :placeholder="wp ? 'Contoh: nuansa hangat, tonjolkan paket layanan & testimoni, tombol WhatsApp besar…' : 'Contoh: tonjolkan KPI per proyek di dashboard, landing lebih banyak ilustrasi lapangan…'" />
+      </details>
+      <div class="aksi">
+        <button type="button" :class="c ? 'tombol garis' : 'tombol'" :disabled="!bisa" @click="buat">
+          <Ikon nama="claude" :ukuran="18" /> {{ c ? 'Buat ulang contoh tampilan' : 'Buat contoh tampilan' }}
+        </button>
+        <span v-if="!adaBahan" class="redup kecil">Isi catatan atau unggah dokumen klien dulu.</span>
+      </div>
+    </template>
     <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
   </section>
 </template>
@@ -171,6 +205,13 @@ async function salin() {
 .hasil-claude { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--kartu-2); }
 .hasil-claude ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; color: var(--teks-2); }
 .arahan { margin-top: 14px; }
+.revisi { margin-top: 14px; display: grid; gap: 8px; }
+.revisi > label { font-size: 13.5px; }
+.revisi textarea { width: 100%; font: inherit; font-size: 13.5px; }
+.revisi > p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.revisi .aksi { margin-top: 4px; }
+.pilih-hal { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pilih-hal select { min-width: 0; max-width: 260px; font: inherit; font-size: 13px; }
 .arahan summary { cursor: pointer; font-size: 13.5px; }
 .arahan textarea { margin-top: 8px; width: 100%; font: inherit; font-size: 13.5px; }
 .aksi { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }

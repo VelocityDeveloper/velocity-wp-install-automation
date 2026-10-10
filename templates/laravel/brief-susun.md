@@ -57,3 +57,8 @@ Contoh ini hanya acuan FORMAT dan jauh lebih panjang dari yang diminta — janga
 
 Isi `ringkasan_pm` dengan 3–6 poin untuk PM: keputusan/asumsi penting yang Anda ambil dan pertanyaan paling
 mendesak untuk klien.
+
+Isi `diagram_perlu_ulang`: relasi database (ERD) & flowchart disusun ulang dari PRD sesudah ini, dan itu mahal.
+Isi `false` HANYA bila ada `<prd_lama>` dan perubahan Anda tidak menyentuh peran, entitas/data yang disimpan
+(tabel, kolom, relasi), maupun alur proses/status (mis. hanya ubah teks, warna, urutan, prioritas, DESIGN.md,
+Pertanyaan terbuka). Selain itu `true`.

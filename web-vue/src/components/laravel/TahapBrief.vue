@@ -71,7 +71,7 @@ async function susunDiagram() {
 async function susun() {
   if ((props.d.prd || props.d.design) && !(await konfirmasi({
     judul: 'Susun ulang dengan Claude?', tombol: 'Susun ulang', kelas: 'waspada',
-    teks: 'Draf sekarang disimpan sebagai cadangan (.bak). Claude diminta mempertahankan suntingan Anda dan hanya memperbarui yang berubah karena catatan baru.',
+    teks: 'Draf sekarang disimpan sebagai cadangan (.bak). Claude diminta mempertahankan suntingan Anda dan hanya memperbarui yang berubah karena catatan baru. Relasi database & flowchart hanya disusun ulang bila peran, data, atau alur proses ikut berubah.',
   }))) return
   await lakukan(async () => {
     if (berubahCatatan.value) await aksi(props.d.slug, 'simpan', { catatan: catatan.value })

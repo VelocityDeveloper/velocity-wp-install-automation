@@ -54,10 +54,11 @@ SKEMA = {
         },
     },
     'susun': {
-        'type': 'object', 'required': ['prd_md', 'design_md', 'ringkasan_pm'],
+        'type': 'object', 'required': ['prd_md', 'design_md', 'ringkasan_pm', 'diagram_perlu_ulang'],
         'properties': {
             'prd_md': {'type': 'string'}, 'design_md': {'type': 'string'},
             'ringkasan_pm': {'type': 'array', 'items': {'type': 'string'}},
+            'diagram_perlu_ulang': {'type': 'boolean'},
         },
     },
     'diagram': {
@@ -490,11 +491,125 @@ def main():
         env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
     opus = DC.opus_terbaru(env)
     env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus, ANTHROPIC_SMALL_FAST_MODEL=opus)
+    prd_lama = L.baca_teks(slug, 'PRD.md').strip()
+    if jenis == 'contoh' and os.environ.get('CONTOH_MODE') == 'revisi':
+        return revisi_contoh(DC, env, opus, slug, p, os.environ.get('CONTOH_HALAMAN') or 'semua')
     kode = jalankan(DC, env, opus, slug, jenis, p)
     if kode == 0 and jenis == 'susun':
         log('')
-        kode = jalankan(DC, env, opus, slug, 'diagram', p)
+        # Hemat token: diagram disusun ulang hanya bila struktur PRD (peran, data, alur) berubah
+        alasan = lewati_diagram(slug, prd_lama)
+        if alasan:
+            log(f'Relasi database & flowchart TIDAK disusun ulang: {alasan}. Tombol "Susun ulang relasi & flowchart" tetap tersedia.')
+            L.catat(slug, 'Claude', f'melewati penyusunan ulang diagram ({alasan})')
+        else:
+            kode = jalankan(DC, env, opus, slug, 'diagram', p)
     return kode
+
+
+def lewati_diagram(slug, prd_lama):
+    """Alasan melewati diagram sesudah susun, atau '' bila diagram perlu disusun (ulang)."""
+    if not (L.baca_teks(slug, 'DATABASE.md').strip() and L.baca_teks(slug, 'FLOWCHART.md').strip()):
+        return ''
+    if L.baca_teks(slug, 'PRD.md').strip() == prd_lama:
+        return 'PRD tidak berubah'
+    if (L.baca_json(L.folder(slug) / 'proyek.json', {}) or {}).get('susun_diagram_ulang') is False:
+        return 'menurut Claude perubahan PRD tidak menyentuh peran, data, maupun alur proses'
+    return ''
+
+
+SKEMA_REVISI = {
+    'type': 'object', 'required': ['catatan', 'aset'],
+    'properties': {'catatan': {'type': 'array', 'items': {'type': 'string'}},
+                   'aset': {'type': 'array', 'items': {'type': 'string'}}},
+}
+
+
+def revisi_contoh(DC, env, opus, slug, p, halaman):
+    """Revisi contoh tampilan yang sudah ada: Claude menyunting HTML di salinan kerja dengan alat Edit (potongan kecil),
+    bukan membuat ulang kedua halaman dari nol — keluaran jauh lebih sedikit (permintaan user 10 Okt: hemat token)."""
+    asal = L.folder_contoh(slug)
+    arahan = (p.get('contoh_arahan') or '').strip()
+    target = [n for n in L.CONTOH_HALAMAN if (asal / n).is_file() and halaman in ('semua', n)]
+    if not arahan or not target:
+        log('GAGAL: revisi butuh contoh yang sudah ada dan arahan PM')
+        return 1
+    kerja = L.folder(slug) / 'contoh-kerja'
+    shutil.rmtree(kerja, ignore_errors=True)
+    shutil.copytree(asal, kerja)
+    (kerja / 'aset').mkdir(exist_ok=True)
+    aset = L.aset_contoh(slug)
+    for nama, tujuan in aset:
+        if not (kerja / tujuan).exists():
+            shutil.copy2(L.folder_dok(slug) / nama, kerja / tujuan)
+    sebelum = {n: (kerja / n).read_text() for n in target}
+    platform = 'WordPress (beranda situs)' if L.platform_contoh(slug) == 'wordpress' else 'Laravel + Vue (landing + dashboard)'
+    ganti = {'{{JUDUL}}': p.get('judul', ''), '{{KLIEN}}': p.get('klien') or '-', '{{PLATFORM}}': platform,
+             '{{ARAHAN}}': arahan, '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'),
+             '{{BERKAS}}': '\n'.join(f'- `{n}` ({L.CONTOH_HALAMAN[n]}, {len(sebelum[n]) // 1024} KB)' for n in target),
+             '{{ASET}}': '\n'.join(f'  - `{t}` = dokumen klien "{a}"' for a, t in aset) or '  - (tidak ada)'}
+    prompt = (TEMPLATE / 'brief-contoh-revisi.md').read_text()
+    for k, v in ganti.items():
+        prompt = prompt.replace(k, v)
+    log(f"Claude ({opus}) merevisi contoh tampilan: {', '.join(L.CONTOH_HALAMAN[n] for n in target)}.")
+    log(f'Arahan: {arahan[:300]}')
+    log('Mode revisi: hanya bagian yang diminta disunting (lebih cepat & hemat dari buat ulang). Biasanya 1–4 menit.')
+    mulai = time.time()
+    try:
+        run = subprocess.run([DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+                              '--tools', 'Read,Edit', '--permission-mode', 'acceptEdits', '--max-turns', '40',
+                              '--json-schema', json.dumps(SKEMA_REVISI)],
+                             input=prompt, capture_output=True, text=True, timeout=1200, env=env, cwd=str(kerja))
+        hasil = json.loads(run.stdout)
+    except subprocess.TimeoutExpired:
+        log('GAGAL: Claude tidak selesai dalam 20 menit')
+        return 1
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'GAGAL: {type(e).__name__}: {str(e)[:300]}')
+        return 1
+    catat_pemakaian(DC, slug, 'contoh_revisi', hasil)
+    data = hasil.get('structured_output')
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        log(f"GAGAL: {str(hasil.get('result') or 'tanpa keluaran JSON')[:400]}")
+        return 1
+    berubah = []
+    for n in target:
+        html = (kerja / n).read_text()
+        if '</html>' not in html.lower():
+            log(f'GAGAL: {n} rusak sesudah disunting (tanpa </html>); contoh lama tetap dipakai.')
+            return 1
+        if 'id="vd-pita"' not in html:
+            (kerja / n).write_text(rapikan_html(html))
+        if html != sebelum[n]:
+            berubah.append(n)
+    biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
+    if not berubah:
+        log(f'GAGAL: Claude tidak mengubah apa pun (setara API ${biaya}). {" ".join(data.get("catatan") or [])[:400]}')
+        return 1
+    # Gambar klien yang tak dirujuk halaman mana pun dibuang lagi
+    teks = ''.join((kerja / n).read_text() for n in L.CONTOH_HALAMAN if (kerja / n).is_file())
+    for g in (kerja / 'aset').iterdir():
+        if f'aset/{g.name}' not in teks:
+            g.unlink()
+    asal.rename(asal.with_name(f"contoh.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
+    kerja.rename(asal)
+    info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
+    catatan = [str(c) for c in data.get('catatan') or []]
+    info.update(catatan=catatan, waktu=L.sekarang(), arahan=arahan,
+                aset=sorted(x.name for x in (asal / 'aset').iterdir()),
+                revisi=(info.get('revisi') or []) + [{'waktu': L.sekarang(), 'halaman': berubah, 'arahan': arahan,
+                                                      'biaya_usd': biaya}])
+    L.tulis_json(L.folder(slug) / 'contoh.json', info)
+    log(f"SELESAI dalam {round(time.time() - mulai)} dtk (setara API ${biaya}). Diubah: "
+        f"{', '.join(L.CONTOH_HALAMAN[n] for n in berubah)}.")
+    for c in catatan:
+        log(f'  • {c}')
+    L.catat(slug, 'Claude', 'merevisi contoh tampilan (' + ', '.join(L.CONTOH_HALAMAN[n] for n in berubah) + ')')
+    if L.konfig_preview():
+        log('Menerbitkan ke server preview…')
+        t = L.terbitkan_contoh(slug)
+        log(f"Tayang: {t['url']}" if t['ok'] else f"GAGAL terbit: {t['galat']}")
+    return 0
 
 
 JUDUL_KERJA = {'rangkuman': 'merangkum kebutuhan klien jadi Rangkuman Website Konsep (Word)',
@@ -583,7 +698,8 @@ def jalankan(DC, env, opus, slug, jenis, p):
             cadangkan(slug, nama)
             L.tulis_teks(slug, nama, data[kunci].strip() + '\n')
         catatan_pm = [str(x) for x in data.get('ringkasan_pm') or []]
-        L.ubah_proyek(slug, lambda x: x.update(ringkasan_brief=catatan_pm))
+        L.ubah_proyek(slug, lambda x: x.update(ringkasan_brief=catatan_pm,
+                                               susun_diagram_ulang=bool(data.get('diagram_perlu_ulang', True))))
         log(f'SELESAI dalam {detik} dtk (setara API ${biaya}). PRD {len(data["prd_md"]):,} karakter, '
             f'DESIGN {len(data["design_md"]):,} karakter.')
         for c in catatan_pm:

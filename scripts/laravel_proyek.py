@@ -399,7 +399,10 @@ def jalankan(slug, jenis, perintah, env_tambahan=None, log=None):
             pr = subprocess.Popen(perintah, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                   env=env, cwd='/root', start_new_session=True)
         _proses[(slug, jenis)] = pr
-        ubah_proyek(slug, lambda p: p.update(job={'jenis': jenis, 'pid': pr.pid, 'mulai': sekarang()}))
+        job = {'jenis': jenis, 'pid': pr.pid, 'mulai': sekarang()}
+        if (env_tambahan or {}).get('CONTOH_MODE') == 'revisi':
+            job['revisi'] = True
+        ubah_proyek(slug, lambda p: p.update(job=job))
         return pr.pid, None
 
 
@@ -971,8 +974,22 @@ def mulai_brief(slug, payload, jenis):
     # Rangkuman & contoh tampilan hanya membaca bahan (tidak mengubah spesifikasi): tetap boleh sesudah estimasi dikunci
     if p.get('estimasi_kunci') and jenis not in ('rangkuman', 'contoh'):
         raise ValueError('sudah_dikunci')
+    env = None
     if jenis == 'contoh':
         arahan = str(payload.get('arahan') or '').strip()[:2000]
+        if payload.get('mode') == 'revisi':
+            # Revisi = sunting HTML yang ada (hemat token), bukan buat ulang dari nol
+            halaman = str(payload.get('halaman') or 'semua')
+            info = info_contoh(slug)
+            if not info:
+                raise ValueError('contoh_belum_ada')
+            if not arahan:
+                raise ValueError('arahan_kosong')
+            if halaman != 'semua' and halaman not in [h['nama'] for h in info['halaman']]:
+                raise ValueError('halaman_tidak_sah')
+            if info['platform'] != info['platform_kini']:
+                raise ValueError('contoh_beda_platform')
+            env = {'CONTOH_MODE': 'revisi', 'CONTOH_HALAMAN': halaman}
         ubah_proyek(slug, lambda x: x.update(contoh_arahan=arahan))
     if jenis in ('saran', 'susun', 'rangkuman', 'contoh') and not baca_teks(slug, 'catatan.md').strip() and not daftar_dok(slug):
         raise ValueError('catatan_kosong')
@@ -981,9 +998,12 @@ def mulai_brief(slug, payload, jenis):
         raise ValueError('platform_belum_dipilih')
     if jenis in ('estimasi', 'diagram') and not baca_teks(slug, 'PRD.md').strip():
         raise ValueError('prd_kosong')
-    pid, err = jalankan(slug, jenis, [str(BRIEF), slug, jenis])
+    pid, err = jalankan(slug, jenis, [str(BRIEF), slug, jenis], env_tambahan=env)
     if err:
         raise ValueError(err)
+    if env:
+        catat(slug, oleh, 'meminta Claude merevisi contoh tampilan')
+        return {'pid': pid}
     catat(slug, oleh, 'meminta Claude ' + {'saran': 'menyarankan platform (WordPress / Laravel+Vue / lainnya)',
                                            'susun': 'menyusun DESIGN.md, PRD.md, relasi database & flowchart',
                                            'diagram': 'menyusun relasi database & flowchart dari PRD',
