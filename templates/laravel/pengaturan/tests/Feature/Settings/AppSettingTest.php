@@ -90,6 +90,7 @@ test('invalid app settings are rejected with Indonesian messages', function (arr
     'logo pdf' => [['logo' => UploadedFile::fake()->create('logo.pdf', 10, 'application/pdf')], 'logo', 'Logo harus berformat JPG, PNG, atau WebP.'],
     'favicon jpg' => [['favicon' => UploadedFile::fake()->image('ikon.jpg')], 'favicon', 'Favicon harus berformat PNG atau ICO.'],
     'logo > 1 MB' => [['logo' => UploadedFile::fake()->image('logo.png')->size(2000)], 'logo', 'Ukuran logo maksimal 1 MB.'],
+    'kode google asal' => [['google_site_verification' => '<script>alert(1)</script>'], 'google_site_verification', 'Kode verifikasi Google tidak valid. Tempel tag meta dari Search Console atau isi content-nya saja.'],
 ]);
 
 test('other users cannot open or change app settings', function () {
@@ -108,4 +109,66 @@ test('setting seeder keeps a name changed in settings', function () {
     $this->seed(SettingSeeder::class);
 
     expect(Setting::appName())->toBe('Nama Baru');
+});
+
+test('sitemap lists public pages only and robots points to it', function () {
+    $this->get(route('sitemap'))
+        ->assertOk()
+        ->assertHeader('Content-Type', 'application/xml; charset=UTF-8')
+        ->assertSee('<loc>'.url('/').'</loc>', false)
+        ->assertDontSee('/settings', false)
+        ->assertDontSee('/dashboard', false)
+        ->assertDontSee('/login', false)
+        ->assertDontSee('/gambar-aplikasi', false)
+        ->assertDontSee('/_', false)
+        ->assertDontSee('/.well-known', false);
+
+    $this->get('/robots.txt')
+        ->assertOk()
+        ->assertSee('Sitemap: '.route('sitemap'), false);
+
+    expect(public_path('robots.txt'))->not->toBeFile();
+});
+
+test('admin saves a Google verification tag and can close the app to search engines', function () {
+    $this->actingAs($this->admin)
+        ->get(route('app-settings.edit'))
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('seo.search_engine_indexing', true)
+            ->where('seo.google_site_verification', null)
+            ->where('seo.sitemap_url', route('sitemap')));
+
+    $this->post(route('app-settings.update'), [
+        'app_name' => 'Aplikasi Contoh',
+        'search_engine_indexing' => true,
+        'google_site_verification' => ' <meta name="google-site-verification" content="AbC-123_xyz" /> ',
+    ])->assertSessionHasNoErrors();
+
+    expect(Setting::googleSiteVerification())->toBe('AbC-123_xyz');
+    $this->get(route('home'))
+        ->assertSee('<meta name="google-site-verification" content="AbC-123_xyz">', false)
+        ->assertDontSee('noindex', false);
+
+    $this->post(route('app-settings.update'), [
+        'app_name' => 'Aplikasi Contoh',
+        'search_engine_indexing' => false,
+        'google_site_verification' => '',
+    ])->assertSessionHasNoErrors();
+
+    expect(Setting::googleSiteVerification())->toBeNull();
+    $this->get(route('home'))->assertSee('<meta name="robots" content="noindex, nofollow">', false);
+    $this->get(route('sitemap'))->assertNotFound();
+    $this->get('/robots.txt')->assertSee("Disallow: /\n", false)->assertDontSee('Sitemap:', false);
+});
+
+test('saving without search engine fields keeps their values', function () {
+    Setting::put('search_engine_indexing', '0');
+    Setting::put('google_site_verification', 'kode-lama');
+
+    $this->actingAs($this->admin)
+        ->post(route('app-settings.update'), ['app_name' => 'Aplikasi Contoh'])
+        ->assertSessionHasNoErrors();
+
+    expect(Setting::searchIndexingEnabled())->toBeFalse()
+        ->and(Setting::googleSiteVerification())->toBe('kode-lama');
 });

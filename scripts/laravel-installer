@@ -128,9 +128,10 @@ sed -i "s|'timezone' => 'UTC',|'timezone' => env('APP_TIMEZONE', 'Asia/Jakarta')
 grep -q "env('APP_TIMEZONE'" config/app.php
 
 # ---------------------------------------------------------------------------
-langkah 4 "Pengaturan aplikasi (nama, deskripsi, logo, favicon) + footer Velocity"
+langkah 4 "Pengaturan aplikasi (nama, deskripsi, logo, favicon, sitemap, Search Console) + footer Velocity"
 # WAJIB di setiap aplikasi (user 1 Okt 2026): Pengaturan > Aplikasi untuk unggah logo & favicon, nama & deskripsi
 # aplikasi; logo & favicon contoh dari inisial APP_NAME; footer "Design by Velocity Developer" di semua layout.
+# 10 Okt 2026: /sitemap.xml + /robots.txt + kode verifikasi Google Search Console (diisi sesudah deploy produksi).
 # Berkas di templates/laravel/pengaturan/, tambalan starter kit di scripts/laravel-pengaturan.
 "$REPO_DIR/scripts/laravel-pengaturan" "$DIR"
 npm run build   # ulang: VITE_APP_NAME ikut APP_NAME, rute Wayfinder pengaturan

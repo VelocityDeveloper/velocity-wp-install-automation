@@ -83,6 +83,14 @@ di pesan commit.
   Logo/nama aplikasi di mana pun ambil dari `site` (`AppLogo`/`AppLogoIcon`), bukan teks/ikon ditulis tangan.
   Hak kelola = Gate `manage-app-settings` (`AppSettingServiceProvider`): sesudah peran dibuat, pastikan hanya admin.
   Pengaturan tambahan dari PRD (mis. alamat, kontak, warna) ditambahkan ke halaman & model yang sama.
+- **Sitemap & Google Search Console (wajib, dari installer — jangan dihapus)**: `/sitemap.xml` dan `/robots.txt`
+  (`SitemapController`) dibentuk otomatis dari rute GET publik tanpa parameter (rute ber-middleware `auth`/`guest`/
+  `verified` tidak ikut). Konten publik ber-slug (artikel, produk, halaman, dll.) WAJIB ditambahkan di
+  `SitemapController::contentUrls()` (`loc` + `lastmod`). Jangan membuat `public/robots.txt` (menutupi rute).
+  Pengaturan > Aplikasi bagian "Mesin pencari": sakelar `search_engine_indexing` (`'0'` = app internal → robots
+  `Disallow: /`, sitemap 404, meta noindex) dan `google_site_verification` (isi `content` tag meta, tampil di
+  `<head>`). Aplikasi internal yang seluruhnya wajib login: matikan sakelar di `SettingSeeder`. Kode verifikasi
+  ditempel dan sitemap dikirim ke Search Console SESUDAH deploy produksi, bukan saat pengembangan.
 - **Model `Setting` = satu-satunya tempat pengaturan aplikasi (wajib)**: tabel `settings` berkolom `key` (string 64,
   primary) dan `value` (text, nullable). SEMUA pengaturan tingkat aplikasi yang bisa diubah admin — identitas,
   kontak, alamat, sosmed, warna, teks halaman depan, sakelar fitur, dll. — disimpan sebagai baris kunci–nilai di
@@ -90,7 +98,7 @@ di pesan commit.
   Jangan membuat tabel/model pengaturan lain (`app_settings`, `school_settings`, …), kolom pengaturan di tabel lain,
   atau menyimpannya di `.env`/`config`. Kunci `snake_case`; berkas unggahan disimpan sebagai path di kunci
   `<nama>_path` (pola `Setting::IMAGES`/`replaceImage`). Kunci bawaan: `app_name`, `app_description`, `logo_path`,
-  `favicon_path`. Nilai awal kunci baru diisi di `SettingSeeder`; nilai bukan teks disimpan sebagai string
+  `favicon_path`, `search_engine_indexing`, `google_site_verification`. Nilai awal kunci baru diisi di `SettingSeeder`; nilai bukan teks disimpan sebagai string
   (bool `'1'`/`'0'`, angka, JSON) dan dikonversi di method kecil di model `Setting` (seperti `appName()`).
 - **Perilaku UI wajib (semua app)**:
   - *Menu navigasi*: klik item menu → laci/menu langsung menutup sendiri lalu halaman tujuan tampil, dengan

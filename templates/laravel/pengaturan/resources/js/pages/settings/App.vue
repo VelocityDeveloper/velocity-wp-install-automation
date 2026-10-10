@@ -6,13 +6,19 @@ import AppImageField from '@/components/AppImageField.vue';
 import Heading from '@/components/Heading.vue';
 import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
 
-defineProps<{
+const props = defineProps<{
     maxKilobytes: { logo: number; favicon: number };
     uploaded: { logo: boolean; favicon: boolean };
+    seo: {
+        search_engine_indexing: boolean;
+        google_site_verification: string | null;
+        sitemap_url: string;
+    };
 }>();
 
 defineOptions({
@@ -40,6 +46,8 @@ const form = useForm<{
     favicon: File | null;
     remove_logo: boolean;
     remove_favicon: boolean;
+    search_engine_indexing: boolean;
+    google_site_verification: string;
 }>({
     app_name: site.value.name,
     app_description: site.value.description ?? '',
@@ -47,13 +55,19 @@ const form = useForm<{
     favicon: null,
     remove_logo: false,
     remove_favicon: false,
+    search_engine_indexing: props.seo.search_engine_indexing,
+    google_site_verification: props.seo.google_site_verification ?? '',
 });
 
 function submit(): void {
     form.submit(AppSettingController.update(), {
         preserveScroll: true,
-        onSuccess: () =>
-            form.reset('logo', 'favicon', 'remove_logo', 'remove_favicon'),
+        onSuccess: () => {
+            form.reset('logo', 'favicon', 'remove_logo', 'remove_favicon');
+            // Tag meta yang ditempel disimpan sebagai isi content-nya saja.
+            form.google_site_verification =
+                props.seo.google_site_verification ?? '';
+        },
     });
 }
 </script>
@@ -123,6 +137,54 @@ function submit(): void {
             :uploaded="uploaded.favicon"
             :error="form.errors.favicon"
         />
+
+        <Heading
+            variant="small"
+            title="Mesin pencari"
+            description="Sitemap dan verifikasi Google Search Console. Isi sesudah aplikasi tayang di domain produksi."
+        />
+
+        <div class="flex items-start gap-3">
+            <Checkbox
+                id="search_engine_indexing"
+                v-model="form.search_engine_indexing"
+            />
+            <div class="grid gap-1">
+                <Label for="search_engine_indexing">
+                    Izinkan mesin pencari menampilkan aplikasi ini
+                </Label>
+                <p class="text-sm text-muted-foreground">
+                    Matikan untuk aplikasi internal yang wajib login: robots.txt
+                    menolak semua halaman dan sitemap ditutup.
+                </p>
+            </div>
+        </div>
+
+        <div v-if="form.search_engine_indexing" class="grid gap-2">
+            <Label for="sitemap_url">Alamat sitemap</Label>
+            <Input id="sitemap_url" :model-value="seo.sitemap_url" readonly />
+            <p class="text-sm text-muted-foreground">
+                Kirim alamat ini di Google Search Console &gt; Sitemaps.
+                Isinya diperbarui otomatis.
+            </p>
+        </div>
+
+        <div class="grid gap-2">
+            <Label for="google_site_verification">
+                Kode verifikasi Google Search Console
+            </Label>
+            <Input
+                id="google_site_verification"
+                v-model="form.google_site_verification"
+                maxlength="300"
+                placeholder='&lt;meta name="google-site-verification" content="..." /&gt;'
+            />
+            <p class="text-sm text-muted-foreground">
+                Pilih metode verifikasi "Tag HTML" di Search Console, lalu
+                tempel tag meta utuh atau isi content-nya saja.
+            </p>
+            <InputError :message="form.errors.google_site_verification" />
+        </div>
 
         <div>
             <Button

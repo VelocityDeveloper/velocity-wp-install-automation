@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 /**
- * Pengaturan aplikasi berbentuk kunci–nilai: nama, deskripsi, logo, dan favicon (Pengaturan > Aplikasi).
+ * Pengaturan aplikasi berbentuk kunci–nilai: nama, deskripsi, logo, favicon, dan mesin pencari (Pengaturan > Aplikasi).
  * Gambar unggahan disimpan di disk privat dan disajikan lewat AppImageController; tanpa unggahan dipakai
  * logo & favicon contoh di public/. Nilai di-cache karena dibaca di setiap permintaan Inertia.
  *
@@ -81,6 +81,22 @@ class Setting extends Model
     public static function appDescription(): ?string
     {
         return self::value('app_description') ?: null;
+    }
+
+    /**
+     * Sakelar "Izinkan mesin pencari": '0' untuk aplikasi internal (robots Disallow + noindex, sitemap 404).
+     */
+    public static function searchIndexingEnabled(): bool
+    {
+        return self::value('search_engine_indexing', '1') !== '0';
+    }
+
+    /**
+     * Isi `content` tag meta verifikasi Google Search Console (diisi sesudah deploy produksi).
+     */
+    public static function googleSiteVerification(): ?string
+    {
+        return self::value('google_site_verification') ?: null;
     }
 
     public static function imagePath(string $image): ?string

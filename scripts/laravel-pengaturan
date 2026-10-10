@@ -3,12 +3,14 @@
 
 Wajib di setiap aplikasi installer (permintaan user 1 Okt 2026): nama aplikasi, deskripsi aplikasi,
 unggah logo, unggah favicon, logo & favicon contoh, dan footer "Design by Velocity Developer".
+Sejak 10 Okt 2026: /sitemap.xml, /robots.txt, kode verifikasi Google Search Console, sakelar mesin pencari.
 
   laravel-pengaturan <folder-app>
 
 1. Salin templates/laravel/pengaturan/** (kecuali README.md) ke folder app (menimpa AppLogo, AppLogoIcon, Welcome).
 2. Tambal berkas starter kit `laravel new --vue`: rute, HandleInertiaRequests (prop `site`), provider Gate,
-   app.blade.php (favicon, judul, meta description), app.ts (judul tab), tipe, menu Pengaturan, footer layout.
+   app.blade.php (favicon, judul, meta description, verifikasi Google, noindex), app.ts (judul tab), tipe,
+   menu Pengaturan, footer layout. public/robots.txt bawaan dibuang (diganti rute /robots.txt).
 3. Buat logo & favicon contoh dari inisial APP_NAME (.env): public/images/logo-contoh.png, favicon.ico,
    apple-touch-icon.png; favicon.svg Laravel dibuang.
 4. Rapikan dengan `vp check --fix` + Pint.
@@ -94,6 +96,8 @@ def gambar_contoh(app):
     kotak(256, 56).save(app / 'public/favicon.ico', sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
     kotak(180, 40).convert('RGB').save(app / 'public/apple-touch-icon.png')
     (app / 'public/favicon.svg').unlink(missing_ok=True)
+    # robots.txt statis menutupi rute /robots.txt (server web menyajikan berkas lebih dulu)
+    (app / 'public/robots.txt').unlink(missing_ok=True)
     print(f'  logo & favicon contoh: inisial {teks}')
 
 
@@ -110,13 +114,17 @@ def tambal_starter(app):
     ])
     tambal(app, 'routes/web.php', [
         ('use Illuminate\\Support\\Facades\\Route;',
-         'use App\\Http\\Controllers\\AppImageController;\nuse App\\Models\\Setting;\nuse Illuminate\\Support\\Facades\\Route;'),
+         'use App\\Http\\Controllers\\AppImageController;\nuse App\\Http\\Controllers\\SitemapController;\n'
+         'use App\\Models\\Setting;\nuse Illuminate\\Support\\Facades\\Route;'),
         ("Route::inertia('/', 'Welcome')->name('home');\n",
          "Route::inertia('/', 'Welcome')->name('home');\n\n"
          "// Logo & favicon unggahan (Pengaturan > Aplikasi); terbuka untuk tamu.\n"
          "Route::get('gambar-aplikasi/{image}', [AppImageController::class, 'show'])\n"
          "    ->whereIn('image', Setting::IMAGES)\n"
-         "    ->name('app-images.show');\n"),
+         "    ->name('app-images.show');\n\n"
+         "// Google Search Console: sitemap & robots dari rute publik (sakelar di Pengaturan > Aplikasi).\n"
+         "Route::get('sitemap.xml', [SitemapController::class, 'sitemap'])->name('sitemap');\n"
+         "Route::get('robots.txt', [SitemapController::class, 'robots'])->name('robots');\n"),
     ])
     tambal(app, 'app/Http/Middleware/HandleInertiaRequests.php', [
         ('use Illuminate\\Http\\Request;', 'use App\\Models\\Setting;\nuse Illuminate\\Http\\Request;'),
@@ -135,7 +143,13 @@ def tambal_starter(app):
          '        <link rel="apple-touch-icon" href="/apple-touch-icon.png">\n'
          '        @if ($description = \\App\\Models\\Setting::appDescription())\n'
          '            <meta name="description" content="{{ $description }}">\n'
-         '        @endif\n'),
+         '        @endif\n'
+         '        @if ($googleVerification = \\App\\Models\\Setting::googleSiteVerification())\n'
+         '            <meta name="google-site-verification" content="{{ $googleVerification }}">\n'
+         '        @endif\n'
+         '        @unless (\\App\\Models\\Setting::searchIndexingEnabled())\n'
+         '            <meta name="robots" content="noindex, nofollow">\n'
+         '        @endunless\n'),
         ("<title>{{ config('app.name', 'Laravel') }}</title>", '<title>{{ \\App\\Models\\Setting::appName() }}</title>'),
     ])
     tambal(app, 'resources/js/app.ts', [

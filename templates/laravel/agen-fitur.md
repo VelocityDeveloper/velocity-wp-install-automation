@@ -51,6 +51,9 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    Pengaturan aplikasi baru (alamat, kontak, sosmed, warna, sakelar fitur, dll.) WAJIB jadi kunci di model `Setting`
    (`Setting::value`/`Setting::put`, nilai awal di `SettingSeeder`, form di Pengaturan > Aplikasi) — jangan membuat
    tabel/model/kolom pengaturan lain dan jangan menaruhnya di `.env`/`config`.
+   `/sitemap.xml` + `/robots.txt` (`SitemapController`) dan bagian "Mesin pencari" di Pengaturan > Aplikasi dari installer
+   WAJIB tetap ada; fitur yang membuat halaman publik ber-slug (artikel, produk, dll.) menambahkan URL-nya di
+   `SitemapController::contentUrls()`. App internal wajib login → `search_engine_indexing` `'0'` di `SettingSeeder`.
 6. Sebelum selesai jalankan dan pastikan lolos:
    - `php artisan test --compact`
    - `php artisan migrate:fresh --seed` di SQLite sementara, mis.
