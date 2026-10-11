@@ -231,7 +231,7 @@
         aktif: c => dan(tanpaDry(c), c.tokoBiasa || c.market) },
       // Paket biasa (child theme klasik, 2026-09-17): isi contoh terstruktur (scripts/paket-g-konten)
       // sebelum konten AI — layanannya jadi kategori artikel dan isi beranda/Layanan.
-      { id: 'isiKlasik', kol: 10, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil',
+      { id: 'isiKlasik', kol: 10, jalur: 3, nama: 'Isi contoh', ket0: 'hero, layanan, profil; portal berita: rubrik dari form, atau berkas Rubrik/Kategori/Kanal klien (dibaca AI, nama dicek ada di berkas, maks 12)',
         mulai: /\] Isi contoh \(tema klasik\)/, selesai: /konten: (isi contoh dibuat|memakai isi contoh|isi tersimpan|gagal)/,
         gagal: /konten: gagal/, ketHasil: t => { const m = /konten: isi contoh dibuat \(([^)]*)\)/.exec(t); return m ? m[1] : null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },

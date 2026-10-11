@@ -483,7 +483,7 @@ def rubrik_form(domain):
     try:
         fields = read_client_form(folder_klien(domain)).get('fields') or {}
     except Exception:
-        return []
+        fields = {}
     hasil, terpakai = [], set()
     for kunci, nilai in fields.items():
         if not re.search(r'berisi\s+(berita|artikel|info)', str(nilai), re.I):
@@ -496,6 +496,71 @@ def rubrik_form(domain):
         keterangan = re.sub(r'^\s*berisi\s+', '', str(nilai), flags=re.I).strip().rstrip('.')
         hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan[:1].upper() + keterangan[1:] + '.', 160)})
     return hasil[:10]
+
+
+# Berkas daftar rubrik terpisah di folder klien (liputara.com Rubrik.docx, user 2026-10-11): kolom
+# "kategori berita" di form kosong, rubrik ditulis di berkas sendiri dan dulu hanya jadi bahan AI
+# (yang mengabaikannya: isi contoh tanpa rubrik, semua artikel "Blog"). Isi berkas klien beragam
+# (daftar bernomor, sub-rubrik daerah, rubrik + deskripsi), jadi AI yang mengurai daftarnya dan
+# kode hanya menerima nama yang memang tertulis di berkas.
+BERKAS_RUBRIK = re.compile(r'rubrik|kategori|kanal', re.I)
+BERKAS_LEWATI = re.compile(r'^revisi|sebelum|\blama\b|\bold\b', re.I)
+
+
+def rubrik_berkas(gen, domain, model):
+    sys.path.insert(0, str(HERE))
+    from client_docs import DOC_EXTS, _doc_lines
+    from client_form import adalah_form
+    folder = folder_klien(domain)
+    if not folder.is_dir():
+        return []
+    berkas = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in DOC_EXTS
+                    and BERKAS_RUBRIK.search(p.stem) and not adalah_form(p)
+                    and not any(BERKAS_LEWATI.search(b) for b in p.relative_to(folder).parts))
+    isi = '\n'.join(f'== {p.name}\n' + '\n'.join(' '.join(str(l).split()) for l in _doc_lines(p)) for p in berkas)
+    if len(isi.strip()) < 10:
+        return []
+    permintaan = f"""Berkas berikut dikirim klien portal berita {domain}: daftar rubrik/kategori berita.
+
+{isi[:8000]}
+
+Ambil daftar rubrik UTAMA sesuai urutan di berkas.
+- "judul": nama rubrik PERSIS seperti tertulis (boleh merapikan huruf besar-kecil), tanpa nomor/poin/deskripsi.
+- Butir di bawah satu rubrik (mis. nama kota di bawah "Daerah", "Opini Publik" di bawah "Opini") masuk "sub", bukan rubrik sendiri.
+- Bila rubrik ditulis dengan penjelasan ("Ekonomi: seputar pasar..."), penjelasannya masuk "teks".
+- Lewati judul daftar ("Rubrik Berita", "Kategori"), karakter rusak, dan teks yang bukan nama rubrik.
+
+Kembalikan JSON persis: {{"rubrik":[{{"judul":"","teks":"","sub":[""]}}]}}"""
+    data = {}
+    for _ in range(2):
+        jawab = gen.ai_call('You extract structured lists from Indonesian documents. Output ONLY one valid JSON object.',
+                            permintaan, model)
+        try:
+            data = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1])
+            break
+        except (AttributeError, ValueError):
+            continue
+    datar = lambda t: re.sub(r'[^a-z0-9]', '', str(t).lower())
+    sumber = datar(isi)
+    hasil, terpakai, dibuang = [], set(), []
+    for r in data.get('rubrik') or []:
+        judul = teks(r.get('judul'), 40) if isinstance(r, dict) else ''
+        slug = slug_dari(judul)
+        if not judul or slug in terpakai:
+            continue
+        if datar(judul) not in sumber:
+            dibuang.append(judul)
+            continue
+        terpakai.add(slug)
+        sub = [teks(x, 40) for x in r.get('sub') or [] if datar(x) and datar(x) in sumber]
+        keterangan = teks(r.get('teks'), 120) or f'Berita seputar {judul.lower()}'
+        if sub:
+            keterangan = keterangan.rstrip('.') + ', meliputi ' + ', '.join(sub[:8])
+        hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan.rstrip('.') + '.', 160)})
+    print(f"rubrik_berkas: {', '.join(p.name for p in berkas)} -> {len(hasil)} rubrik"
+          + (f" (dibuang, tak tertulis di berkas: {', '.join(dibuang)})" if dibuang else ''))
+    # Daftar rubrik klien diikuti utuh sampai 12; menu primary tema berita tetap membatasi 8 butir.
+    return hasil[:12]
 
 
 def buat_isi_berita(gen, cfg, domain):
@@ -514,7 +579,7 @@ def buat_isi_berita(gen, cfg, domain):
     model = gen.get_model('isi_contoh')
     if not model:
         raise RuntimeError('model AI belum diatur')
-    rubrik = rubrik_form(domain)
+    rubrik = rubrik_form(domain) or rubrik_berkas(gen, domain, model)
     nama_form = cfg.get('site_title') or domain.split('.')[0]
     permintaan = f"""Isi awal portal berita dari data klien berikut.
 - Nama media (dari form): {nama_form}
@@ -573,7 +638,7 @@ Kembalikan JSON persis:
         'hero_judul': nama, 'hero_teks': teks(data.get('hero_teks'), 220), 'hero_poin': [],
         'tentang': teks(data.get('tentang'), 600),
         'redaksi': [teks(x, 600) for x in (data.get('redaksi') or []) if teks(x, 600)][:4],
-        'rubrik': rubrik[:10],
+        'rubrik': rubrik[:12],
         'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
         'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
         'judul_seksi': {'terbaru': 'Berita Terbaru', 'pemesanan': 'Kirim Pesan ke Redaksi'},
