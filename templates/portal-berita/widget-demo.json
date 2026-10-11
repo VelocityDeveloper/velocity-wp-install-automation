@@ -1190,10 +1190,6 @@
      "ukuran": "300x250"
     },
     {
-     "jenis": "iklan",
-     "ukuran": "320x350"
-    },
-    {
      "jenis": "widget",
      "base": "tabs_berita_2_widget",
      "opsi": {
@@ -1210,6 +1206,24 @@
       "kategori": "",
       "jumlah": "4"
      }
+    },
+    {
+     "jenis": "widget",
+     "base": "posts_berita_2_widget",
+     "opsi": {
+      "title": "{kat_nama}",
+      "style": "2",
+      "urutkan": "recent",
+      "kategori": "{kat_id}",
+      "jumlah": "3"
+     },
+     "kategori_ke": [
+      7,
+      3,
+      1
+     ],
+     "kunci_kategori": "kategori",
+     "format_kategori": "id"
     }
    ],
    "bottom-sidebar1": [
@@ -1223,7 +1237,11 @@
       "kategori": "{kat_id}",
       "jumlah": "3"
      },
-     "kategori_ke": 1,
+     "kategori_ke": [
+      6,
+      2,
+      1
+     ],
      "kunci_kategori": "kategori",
      "format_kategori": "id"
     }
@@ -1250,7 +1268,9 @@
    "footer-widget1": [
     {
      "jenis": "tentang",
-     "judul": "Tentang Kami"
+     "judul": "Tentang Kami",
+     "ringkas": true,
+     "sosmed": "customizer"
     }
    ],
    "footer-widget2": [
@@ -1264,23 +1284,12 @@
    ],
    "footer-widget3": [
     {
-     "jenis": "core",
-     "base": "search",
-     "opsi": {
-      "title": "Pencarian"
-     }
-    },
-    {
-     "jenis": "core",
-     "base": "tag_cloud",
-     "opsi": {
-      "title": "Tags",
-      "count": 0,
-      "taxonomy": "post_tag"
-     }
+     "jenis": "statistik",
+     "judul": "Pengunjung"
     }
    ]
   },
-  "catatan": "Area milik child: main-sidebar, bottom-sidebar1..3 (baris 3 kolom di bawah konten beranda & layout-archive-like, loop sampai 4 tapi hanya 3 terdaftar), footer-widget1..3 TANPA tanda hubung. Posts_Berita_2_Widget: kunci title/style/urutkan/kategori/jumlah; style '1'..'8' (demo: 7 = grid kartu 2 kolom, 2 = daftar thumbnail kiri); kategori = term_id (ID). Widget bottom-sidebar1 di demo berjudul 'Hiburan' = nama kategori demo -> title '{kat_nama}' + kategori_ke 1 (placeholder di opsi harus diganti installer). Tabs_Berita_2_Widget hanya punya kunci 'title' (demo kosong; tab POPULAR/COMMENTS/TAGS tetap). tag_cloud butuh tag agar tidak kosong. Iklan beranda bawah (iklan_home_bawah_1/2) dari Customizer, bukan widget."
+  "catatan": "Area milik child: main-sidebar, bottom-sidebar1..3 (baris 3 kolom di bawah konten beranda & layout-archive-like, loop sampai 4 tapi hanya 3 terdaftar), footer-widget1..3 TANPA tanda hubung. Posts_Berita_2_Widget: kunci title/style/urutkan/kategori/jumlah; style '1'..'8' (demo: 7 = grid kartu 2 kolom, 2 = daftar thumbnail kiri); kategori = term_id (ID). Widget bottom-sidebar1 di demo berjudul 'Hiburan' = nama kategori demo -> title '{kat_nama}' + kategori_ke 1 (placeholder di opsi harus diganti installer). Tabs_Berita_2_Widget hanya punya kunci 'title' (demo kosong; tab POPULAR/COMMENTS/TAGS tetap). tag_cloud butuh tag agar tidak kosong. Iklan beranda bawah (iklan_home_bawah_1/2) dari Customizer, bukan widget. Susunan mengikuti liputara.com (user 2026-10-11): main-sidebar iklan 300x250 + Tabs + Latest Post + kategori ke-7; bottom-sidebar1 kategori ke-6 (blok beranda Customizer memakai kategori 1-4); kategori_ke berupa daftar = cadangan bila kategori klien lebih sedikit. footer-widget1 = Tentang Kami ringkas (kalimat awal halaman Tentang Kami) + [velocity-sosmed] (ikon dari Customizer Sosial Media, sama dengan header). latar = background_website_color instalasi baru (putih polos terlalu terang).",
+  "latar": "#eaeaea"
  }
 }

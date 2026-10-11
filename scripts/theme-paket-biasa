@@ -187,6 +187,16 @@ def widget_demo(tema):
     return {a: [i for i in daftar if not i.get('lewati')] for a, daftar in areas.items()}
 
 
+def latar_demo(tema):
+    """Warna latar situs (background_website_color) bawaan tema berita di widget-demo.json, '' bila tidak ada."""
+    try:
+        semua = json.loads((HERE.parent / 'templates' / 'portal-berita' / 'widget-demo.json').read_text())
+    except (OSError, ValueError):
+        return ''
+    warna = str((semua.get(tema) or {}).get('latar') or '')
+    return warna if re.match(r'^#[0-9a-fA-F]{6}$', warna) else ''
+
+
 def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
     """Banner "Ruang Iklan" di atas gradasi warna utama; teks menyesuaikan bentuk slot."""
     from PIL import ImageFont
@@ -1256,7 +1266,11 @@ if ($demo_w) {
                 if ($s !== '' && strpos($dom, $s) !== false && (!$k || strlen($s) > strlen($k->slug))) { $k = $c; }
             }
             if (!($k = $k ?: ($kat_w[0] ?? null))) { return null; }
-        } elseif (!empty($it['kategori_ke']) && !($k = $kat_w[(int) $it['kategori_ke'] - 1] ?? null)) { return null; }
+        } elseif (!empty($it['kategori_ke'])) {
+            // Daftar [7, 3, 1] = kategori ke-7, bila klien tak punya sebanyak itu ke-3, lalu ke-1 (berita2, 2026-10-11).
+            foreach ((array) $it['kategori_ke'] as $ke) { if ($k = $kat_w[(int) $ke - 1] ?? null) { break; } }
+            if (!$k) { return null; }
+        }
         $isi = fn($s) => is_string($s) && $k ? strtr($s, ['{kat_id}' => $k->term_id, '{kat_slug}' => $k->slug, '{kat_nama}' => $k->name]) : $s;
         $opsi = array_map($isi, (array) ($it['opsi'] ?? []));
         switch ($it['jenis'] ?? '') {
@@ -1285,7 +1299,30 @@ if ($demo_w) {
                                  : preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $W['footer_tentang'][1]);
                     return $buat_html($judul, $html);
                 }
-                return $buat_html($judul, $W['footer_tentang'][1]);
+                // "ringkas": kalimat awal halaman Tentang Kami (maks ±180 karakter), "sosmed": "customizer" = ikon dari
+                // Customizer > Sosial Media lewat [velocity-sosmed] (mu-plugin site-finish), sama dengan ikon header
+                // (berita2, liputara.com 2026-10-11). Tanpa halaman/mu-plugin: teks & ikon ringkas bawaan.
+                $html = $W['footer_tentang'][1];
+                if (!empty($it['ringkas'])) {
+                    $tk = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);
+                    $teks = $tk ? preg_replace('#<h[1-6][^>]*>.*?</h[1-6]>#is', '', strip_shortcodes(excerpt_remove_blocks($tk[0]->post_content))) : '';
+                    $par = array_values(array_filter(array_map(fn($x) => trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($x))),
+                                                                preg_split('#</p>|<br\s*/?>|\n\s*\n#i', $teks))));
+                    $ringkas = '';
+                    preg_match_all('/.+?[.!?]+["”’]?(?=\s+[A-Z0-9"“]|\s*$)/us', $par[0] ?? '', $kalimat);
+                    foreach ($kalimat[0] as $kal) {
+                        if ($ringkas !== '' && mb_strlen($ringkas . ' ' . $kal) > 180) { break; }
+                        $ringkas = trim("$ringkas " . trim($kal));
+                    }
+                    $ringkas = $ringkas !== '' ? $ringkas : (string) ($par[0] ?? ''); // paragraf tanpa tanda titik
+                    if ($ringkas !== '' && mb_strlen($ringkas) <= 260) {
+                        $html = '<p>' . esc_html($ringkas) . '</p>' . (preg_match('#<ul class="vk-sosmed">.*?</ul>#s', $html, $m) ? $m[0] : '');
+                    }
+                }
+                if (($it['sosmed'] ?? '') === 'customizer' && shortcode_exists('velocity-sosmed')) {
+                    $html = preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $html) . '[velocity-sosmed]';
+                }
+                return $buat_html($judul, $html);
             case 'statistik': return $teks_w($it['judul'] ?? 'Pengunjung', '[velocity-statistics style="list"]', true);
             case 'text': return $teks_w($isi($it['judul'] ?? ''), $isi($it['isi'] ?? ''));
             case 'widget':
@@ -1310,6 +1347,15 @@ if ($demo_w) {
         $sb[$area] = $baru; $ubah[] = $area; $semua = array_merge($semua, $baru);
         echo "tampilan: widget_demo_berita:$area:" . count($baru) . "\n";
     }
+}
+// Warna latar bawaan tema berita (widget-demo.json "latar", berita2 #eaeaea — user 2026-10-11 liputara.com: putih
+// polos terlalu terang). Instalasi baru saja, sekali, dan hanya bila latar masih putih bawaan.
+if (!empty($d['situs_baru']) && !empty($d['latar_demo']) && empty($st['latar_demo'])) {
+    $latar = strtolower((string) get_theme_mod('background_website_color', ''));
+    if (in_array($latar, ['', '#ffffff', '#fff'], true)) {
+        set_theme_mod('background_website_color', $d['latar_demo']); echo "tampilan: latar_tema:{$d['latar_demo']}\n";
+    } else { echo "tampilan: latar_tema_dibiarkan:$latar\n"; }
+    $st['latar_demo'] = gmdate('c');
 }
 if ($utama && in_array($utama, $ubah, true)) {
     // Sidebar utama sudah disusun seperti demo tema berita.
@@ -2104,6 +2150,7 @@ def main():
         print(f"tampilan: warna_banner={warna_banner or 'bawaan'}:{'tema' if warna_tema else 'form' if warna_banner else '-'}")
         ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}
         data['widget_demo'] = widget_demo(tema)
+        data['latar_demo'] = latar_demo(tema)
         ukuran |= {i['ukuran'] for daftar in data['widget_demo'].values() for i in daftar if i.get('jenis') == 'iklan'}
         if data['widget_demo']:
             print(f"tampilan: widget_demo={tema} area={','.join(data['widget_demo'])}")

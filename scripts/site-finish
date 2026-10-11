@@ -719,6 +719,15 @@ chown --reference="$DOCROOT/wp-content" "$MU/velocity-galeri-popup.php" 2>/dev/n
 chmod 644 "$MU/velocity-galeri-popup.php"
 php -l "$MU/velocity-galeri-popup.php" >/dev/null 2>&1 && echo "galeri_popup_set" >&2 || { rm -f "$MU/velocity-galeri-popup.php"; echo "galeri_popup_gagal:php_lint" >&2; }
 
+# Ikon sosial media dari Customizer tema: shortcode [velocity-sosmed] untuk widget Tentang Kami footer
+# tema berita (liputara.com, user 2026-10-11). Sumber: templates/mu-plugins/velocity-sosmed.php.
+cat > "$MU/velocity-sosmed.php" <<'PHP'
+@@SOSMED@@
+PHP
+chown --reference="$DOCROOT/wp-content" "$MU/velocity-sosmed.php" 2>/dev/null || true
+chmod 644 "$MU/velocity-sosmed.php"
+php -l "$MU/velocity-sosmed.php" >/dev/null 2>&1 && echo "sosmed_shortcode_set" >&2 || { rm -f "$MU/velocity-sosmed.php"; echo "sosmed_shortcode_gagal:php_lint" >&2; }
+
 # Halaman depan & Posts page tema klasik (permintaan user 2026-10-06, sanggaumineralabadi.com):
 # Front page = Beranda dengan template "Home Template", Posts page = Berita berisi arsip artikel.
 # Child theme seperti velocity-property1 memakai index.php sebagai "Home Template" tanpa home.php,
@@ -775,6 +784,7 @@ echo "finish_done" >&2
 '''
 REMOTE = REMOTE.replace('@@GALERI_POPUP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-galeri-popup.php').read_text().rstrip('\n'))
 REMOTE = REMOTE.replace('@@BLOG_ARSIP@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-blog-arsip.php').read_text().rstrip('\n'))
+REMOTE = REMOTE.replace('@@SOSMED@@', (HERE.parent / 'templates' / 'mu-plugins' / 'velocity-sosmed.php').read_text().rstrip('\n'))
 
 
 def _ip_kantor_terkini():
