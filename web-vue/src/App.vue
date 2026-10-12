@@ -30,7 +30,11 @@ const backupBerikut = computed(() => {
 
 const NAV = [
   { ke: '/', label: 'Dashboard', ikon: 'dashboard' },
-  { ke: '/server', label: 'Server', ikon: 'server' },
+  { grup: 'server', label: 'Server', ikon: 'server', anak: [
+    { ke: '/server', label: 'Daftar Server', ikon: 'server', tepat: true },
+    { ke: '/server/monitoring', label: 'Monitoring', ikon: 'pantau' },
+    { ke: '/server/proteksi', label: 'Proteksi', ikon: 'perisai' },
+  ] },
   { ke: '/security', label: 'Security', ikon: 'perisai' },
   { grup: 'installer', label: 'Installer', ikon: 'installer', anak: [
     { ke: '/installer/wordpress', label: 'WordPress', ikon: 'wordpress' },
@@ -53,7 +57,8 @@ const NAV = [
     { ke: '/report', label: 'Report', ikon: 'laporan' },
   ] },
 ]
-const aktif = (ke) => (ke === '/' ? route.path === '/' : route.path.startsWith(ke))
+// tepat: hanya path itu sendiri (induk seperti /server tidak ikut aktif di /server/monitoring)
+const aktif = (ke, tepat) => (ke === '/' || tepat ? route.path === ke : route.path.startsWith(ke))
 // Grup terbuka bila dibuka manual atau salah satu anaknya sedang aktif
 const grupBuka = ref({})
 const grupTerbuka = (n) => grupBuka.value[n.grup] ?? n.anak.some((a) => aktif(a.ke))
@@ -108,7 +113,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
               <Ikon nama="bawah" :ukuran="16" class="panah" :class="{ putar: grupTerbuka(n) }" />
             </button>
             <div v-show="grupTerbuka(n)" :id="`sub-${n.grup}`" class="nav-sub">
-              <RouterLink v-for="a in n.anak" :key="a.ke" :to="a.ke" class="nav-item" :class="{ aktif: aktif(a.ke) }">
+              <RouterLink v-for="a in n.anak" :key="a.ke" :to="a.ke" class="nav-item" :class="{ aktif: aktif(a.ke, a.tepat) }">
                 <Ikon :nama="a.ikon" :ukuran="16" /><span>{{ a.label }}</span>
               </RouterLink>
             </div>

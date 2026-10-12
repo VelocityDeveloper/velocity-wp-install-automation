@@ -8,11 +8,20 @@ const props = defineProps({
   seri: { type: Array, required: true }, // [{ kunci, label, warna }]
   formatWaktu: { type: Function, required: true },
   tinggi: { type: Number, default: 260 },
+  // Skala selain persen: maks = puncak sumbu (bawaan 100), format = teks nilai (bawaan "12%")
+  maks: { type: Number, default: 100 },
+  format: { type: Function, default: (v) => `${Math.round(v)}%` },
+  // Label sumbu kiri (bawaan = format); satuan panjang cukup ditulis di judul grafik
+  formatSumbu: { type: Function, default: null },
+  // Garis acuan putus-putus, mis. { nilai: 56, label: '56 core' } di grafik load
+  acuan: { type: Object, default: null },
+  ruangLabel: { type: Number, default: 64 },
 })
 
 const wadah = ref(null)
 const lebar = ref(800)
-const PAD = { kiri: 40, kanan: 64, atas: 16, bawah: 28 }
+// Ruang kanan untuk label langsung; satuan panjang (Mbps, req/s) butuh lebih lebar
+const PAD = { kiri: 48, kanan: props.ruangLabel, atas: 16, bawah: 28 }
 let ro = null
 onMounted(() => {
   ro = new ResizeObserver(([e]) => { lebar.value = Math.max(300, Math.round(e.contentRect.width)) })
@@ -22,12 +31,22 @@ onBeforeUnmount(() => ro?.disconnect())
 
 const n = computed(() => props.titik.length)
 const x = (i) => PAD.kiri + (lebar.value - PAD.kiri - PAD.kanan) * (n.value < 2 ? 0.5 : i / (n.value - 1))
-const y = (v) => PAD.atas + (props.tinggi - PAD.atas - PAD.bawah) * (1 - Math.max(0, Math.min(100, Number(v) || 0)) / 100)
+const y = (v) => PAD.atas + (props.tinggi - PAD.atas - PAD.bawah) * (1 - Math.max(0, Math.min(props.maks, Number(v) || 0)) / props.maks)
 
-// Kurva halus (monotone-ish) agar mirip referensi, tanpa melewati batas 0–100
-const jalur = (kunci) => {
-  const p = props.titik.map((q, i) => [x(i), y(q[kunci])])
-  if (!p.length) return ''
+// Kurva halus (monotone-ish) agar mirip referensi, tanpa melewati batas 0–100.
+// Nilai null/undefined = data kosong (mis. server tak terjangkau): garis & isi putus di situ.
+const ada = (v) => v != null && v !== ''
+const segmen = (kunci) => {
+  const hasil = []
+  let kini = null
+  props.titik.forEach((q, i) => {
+    if (!ada(q[kunci])) { kini = null; return }
+    if (!kini) hasil.push((kini = []))
+    kini.push([x(i), y(q[kunci])])
+  })
+  return hasil
+}
+const kurva = (p) => {
   let d = `M${p[0][0].toFixed(1)} ${p[0][1].toFixed(1)}`
   for (let i = 1; i < p.length; i++) {
     const [x0, y0] = p[i - 1], [x1, y1] = p[i], cx = (x0 + x1) / 2
@@ -35,9 +54,15 @@ const jalur = (kunci) => {
   }
   return d
 }
-const area = (kunci) => n.value ? `${jalur(kunci)} L${x(n.value - 1).toFixed(1)} ${y(0)} L${x(0).toFixed(1)} ${y(0)} Z` : ''
+const jalur = (kunci) => segmen(kunci).map(kurva).join(' ')
+const area = (kunci) => segmen(kunci).map((p) => `${kurva(p)} L${p[p.length - 1][0].toFixed(1)} ${y(0)} L${p[0][0].toFixed(1)} ${y(0)} Z`).join(' ')
+const titikTunggal = (kunci) => segmen(kunci).filter((p) => p.length === 1).map((p) => p[0])
+const nilaiAkhir = (kunci) => {
+  for (let i = n.value - 1; i >= 0; i--) if (ada(props.titik[i][kunci])) return props.titik[i][kunci]
+  return null
+}
 
-const kisi = [0, 25, 50, 75, 100]
+const kisi = computed(() => [0, 0.25, 0.5, 0.75, 1].map((f) => f * props.maks))
 const labelSumbu = computed(() => {
   if (!n.value) return []
   // Grafik sempit (HP): label tengah dibuang supaya tidak bertumpuk dengan label ujung
@@ -49,8 +74,7 @@ const labelSumbu = computed(() => {
 // Label langsung di ujung kanan; digeser bila dua label bertumpuk
 const labelUjung = computed(() => {
   if (!n.value) return []
-  const akhir = props.titik[n.value - 1]
-  const l = props.seri.map((s) => ({ ...s, y: y(akhir[s.kunci]), nilai: Math.round(akhir[s.kunci]) }))
+  const l = props.seri.filter((s) => nilaiAkhir(s.kunci) != null).map((s) => ({ ...s, y: y(nilaiAkhir(s.kunci)), nilai: nilaiAkhir(s.kunci) }))
   l.sort((a, b) => a.y - b.y)
   for (let i = 1; i < l.length; i++) if (l[i].y - l[i - 1].y < 16) l[i].y = l[i - 1].y + 16
   return l
@@ -80,8 +104,7 @@ const tip = computed(() => {
 })
 const ringkas = computed(() => {
   if (!n.value) return 'Belum ada data'
-  const akhir = props.titik[n.value - 1]
-  return props.seri.map((s) => `${s.label} terakhir ${Math.round(akhir[s.kunci])}%`).join(', ')
+  return props.seri.map((s) => `${s.label} terakhir ${nilaiAkhir(s.kunci) == null ? 'tidak ada data' : props.format(nilaiAkhir(s.kunci))}`).join(', ')
 })
 const id = `g${Math.random().toString(36).slice(2, 8)}`
 </script>
@@ -103,27 +126,31 @@ const id = `g${Math.random().toString(36).slice(2, 8)}`
       <g class="kisi">
         <template v-for="v in kisi" :key="v">
           <line :x1="PAD.kiri" :x2="lebar - PAD.kanan" :y1="y(v)" :y2="y(v)" />
-          <text :x="PAD.kiri - 8" :y="y(v) + 4" text-anchor="end">{{ v }}%</text>
+          <text :x="PAD.kiri - 8" :y="y(v) + 4" text-anchor="end">{{ (formatSumbu || format)(v) }}</text>
         </template>
         <text v-for="(l, i) in labelSumbu" :key="i" :x="l.x" :y="tinggi - 8" :text-anchor="l.anchor">{{ l.teks }}</text>
+      </g>
+      <g v-if="acuan && acuan.nilai <= maks" class="acuan">
+        <line :x1="PAD.kiri" :x2="lebar - PAD.kanan" :y1="y(acuan.nilai)" :y2="y(acuan.nilai)" />
+        <text :x="PAD.kiri + 6" :y="y(acuan.nilai) - 5">{{ acuan.label }}</text>
       </g>
       <g v-for="s in seri" :key="s.kunci">
         <path :d="area(s.kunci)" :fill="`url(#${id}-${s.kunci})`" />
         <path :d="jalur(s.kunci)" fill="none" :stroke="s.warna" stroke-width="5" opacity=".45" :filter="`url(#${id}-pendar)`" />
         <path :d="jalur(s.kunci)" fill="none" :stroke="s.warna" stroke-width="2" stroke-linecap="round" />
-        <circle v-if="n === 1" :cx="x(0)" :cy="y(titik[0][s.kunci])" r="4" :fill="s.warna" />
+        <circle v-for="(p, i) in titikTunggal(s.kunci)" :key="i" :cx="p[0]" :cy="p[1]" r="4" :fill="s.warna" />
       </g>
       <g class="ujung">
-        <text v-for="l in labelUjung" :key="l.kunci" :x="lebar - PAD.kanan + 8" :y="l.y + 4">{{ l.label }} {{ l.nilai }}%</text>
+        <text v-for="l in labelUjung" :key="l.kunci" :x="lebar - PAD.kanan + 8" :y="l.y + 4">{{ l.label }} {{ format(l.nilai) }}</text>
       </g>
       <g v-if="tip">
         <line class="silang" :x1="tip.x" :x2="tip.x" :y1="PAD.atas" :y2="tinggi - PAD.bawah" />
-        <circle v-for="s in seri" :key="s.kunci" :cx="tip.x" :cy="y(tip.q[s.kunci])" r="5" :fill="s.warna" style="stroke: var(--kartu)" stroke-width="2" />
+        <circle v-for="s in seri.filter((s) => ada(tip.q[s.kunci]))" :key="s.kunci" :cx="tip.x" :cy="y(tip.q[s.kunci])" r="5" :fill="s.warna" style="stroke: var(--kartu)" stroke-width="2" />
       </g>
     </svg>
     <div v-if="tip" class="tip" :style="tip.kanan ? { right: `${100 - tip.kiri + 1.5}%` } : { left: `${tip.kiri + 1.5}%` }" aria-hidden="true">
       <b>{{ formatWaktu(tip.q.t, true) }}</b>
-      <span v-for="s in seri" :key="s.kunci"><i :style="{ background: s.warna }" />{{ s.label }} <strong>{{ Math.round(tip.q[s.kunci]) }}%</strong></span>
+      <span v-for="s in seri" :key="s.kunci"><i :style="{ background: s.warna }" />{{ s.label }} <strong>{{ ada(tip.q[s.kunci]) ? format(tip.q[s.kunci]) : 'tidak ada data' }}</strong></span>
     </div>
   </div>
 </template>
@@ -135,6 +162,8 @@ svg:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 4px;
 .kisi line { stroke: var(--kisi); stroke-width: 1; }
 .kisi text, .ujung text { fill: var(--teks-3); font-size: 11px; }
 .ujung text { fill: var(--teks-2); font-weight: 600; }
+.acuan line { stroke: var(--teks-3); stroke-width: 1; stroke-dasharray: 5 4; }
+.acuan text { fill: var(--teks-3); font-size: 11px; }
 .silang { stroke: var(--silang); stroke-width: 1; stroke-dasharray: 3 3; }
 .tip {
   position: absolute; top: 8px; pointer-events: none; display: grid; gap: 3px; min-width: 150px;

@@ -1,0 +1,9 @@
+# Klien HTTP generik dari skrip — hanya DICATAT (bisa saja callback payment gateway/integrasi sah).
+python-requests
+python-urllib
+go-http-client
+libwww-perl
+aiohttp
+okhttp
+java/
+httpclient

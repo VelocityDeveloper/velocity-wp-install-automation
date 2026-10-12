@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Rakit Velocity WAF (ruleset ModSecurity pengganti cPGuard/Malware.Expert) dari waf/velocity-waf.conf.in.
+
+Pemakaian:
+  velocity-waf-build --keluar DIR [--mode deteksi|blokir] [--dir /etc/velocity-waf]
+                     [--tanpa-seo] [--tanpa-ai] [--ai-pencarian blokir|catat] [--xmlrpc 10] [--login 10]
+
+Hasil di DIR: velocity-waf.conf + berkas data (bot-*.txt, klien-skrip.txt, ip-putih.txt) + VERSI.
+Mode deteksi: semua aturan hanya mencatat ("ModSecurity: Warning", request tetap lolos) — dipakai selama cPGuard
+masih jalan paralel. Mode blokir: request ditolak (429 bot, 403 eksploit, 406 rate limit). Aturan injeksi (77006xx)
+dan klien skrip selalu hanya dicatat.
+"""
+import argparse
+import re
+import hashlib
+import shutil
+import sys
+import time
+from pathlib import Path
+
+AKAR = Path(__file__).resolve().parent.parent / 'waf'
+DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt']
+
+
+def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, ai_pencarian='catat', xmlrpc=10, login=10):
+    teks = (AKAR / 'velocity-waf.conf.in').read_text()
+    aksi = (lambda kode: f'deny,status:{kode}') if mode == 'blokir' else (lambda kode: 'pass')
+    versi = hashlib.sha1((teks + ''.join((AKAR / d).read_text() for d in DATA)).encode()).hexdigest()[:10]
+    ganti = {
+        '@MODE@': mode, '@DIR@': direktori, '@VERSI@': f'{versi} ({time.strftime("%Y-%m-%d")})',
+        '@AKSI429@': aksi(429), '@AKSI403@': aksi(403), '@AKSI406@': aksi(406),
+        '@AKSIAICARI@': aksi(429) if ai_pencarian == 'blokir' else 'pass',
+        '@XMLRPC_MAKS@': str(int(xmlrpc)), '@LOGIN_MAKS@': str(int(login)),
+        '@SEO@': '' if seo else '# (crawler SEO tidak diblokir) ', '@AI@': '' if ai else '# (crawler AI tidak diblokir) ',
+    }
+    for k, v in ganti.items():
+        teks = teks.replace(k, v)
+    sisa = re.findall(r'@[A-Z_0-9]+@', teks)
+    if sisa:
+        raise SystemExit(f'token belum diganti: {sisa[:3]}')
+    return teks, versi
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--keluar', required=True)
+    ap.add_argument('--mode', choices=['deteksi', 'blokir'], default='deteksi')
+    ap.add_argument('--dir', default='/etc/velocity-waf', help='lokasi berkas data di server')
+    ap.add_argument('--tanpa-seo', action='store_true')
+    ap.add_argument('--tanpa-ai', action='store_true')
+    ap.add_argument('--ai-pencarian', choices=['blokir', 'catat'], default='catat')
+    ap.add_argument('--xmlrpc', type=int, default=10, help='maks. POST xmlrpc.php per IP per 60 dtk')
+    ap.add_argument('--login', type=int, default=10, help='maks. POST wp-login.php per IP per 5 mnt')
+    a = ap.parse_args()
+    teks, versi = rakit(a.mode, a.dir, not a.tanpa_seo, not a.tanpa_ai, a.ai_pencarian, a.xmlrpc, a.login)
+    keluar = Path(a.keluar)
+    keluar.mkdir(parents=True, exist_ok=True)
+    (keluar / 'velocity-waf.conf').write_text(teks)
+    for d in DATA:
+        shutil.copyfile(AKAR / d, keluar / d)
+    (keluar / 'VERSI').write_text(f'{versi} {a.mode}\n')
+    print(f'velocity-waf {versi} mode={a.mode} → {keluar}')
+
+
+if __name__ == '__main__':
+    sys.exit(main())

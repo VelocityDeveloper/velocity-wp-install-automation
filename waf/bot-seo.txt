@@ -1,0 +1,14 @@
+# Crawler SEO komersial (bukan mesin pencari) — sama dengan perilaku cPGuard: diblokir (429).
+# Hapus baris bila ada klien yang memakai Ahrefs/Semrush/Majestic untuk situsnya.
+ahrefsbot
+semrushbot
+mj12bot
+dotbot
+linkdexbot
+blexbot
+dataforseobot
+serpstatbot
+barkrowler
+seokicks
+megaindex
+# PetalBot (Petal Search, Huawei) = mesin pencari → TIDAK diblokir (cPGuard juga tidak memblokirnya).

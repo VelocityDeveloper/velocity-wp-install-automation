@@ -1,0 +1,13 @@
+# Crawler pelatihan AI & scraper besar — sama dengan perilaku cPGuard: diblokir (429).
+# ChatGPT-User / OAI-SearchBot (dipakai pencarian ChatGPT) SENGAJA tidak ada di sini — lihat bot-ai-pencarian.txt.
+gptbot
+ccbot
+bytespider
+meta-externalagent
+claudebot
+anthropic-ai
+amazonbot
+diffbot
+imagesiftbot
+omgili
+timpibot

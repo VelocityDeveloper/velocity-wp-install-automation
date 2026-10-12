@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Isi riwayat grafik /server/monitoring ke belakang dari arsip sysstat (sar) tiap server.
+
+Sekali jalan (bukan timer): membaca /var/log/sa/saDD (±30 hari, interval ±10 mnt) lewat
+`sadf -d` di server (HANYA BACA), lalu menyisipkan titik yang lebih tua dari titik pertama
+milik server itu di /var/lib/velocity/server-usage/riwayat.jsonl. Disk tidak ada di sar → kosong.
+Aman diulang: titik yang sudah tercakup tidak ditambah lagi.
+"""
+import json
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'services'))
+import installer_status as ist  # noqa: E402
+
+BERKAS = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
+
+# Dijalankan di server (Python 3.6-kompatibel). Cetak satu JSON per titik: t (UTC epoch), cpu, ram, swap, load,
+# net_in/net_out (Mbps kartu jaringan utama = dev rute default).
+REMOTE = r'''
+import glob, json, os, subprocess, time
+total = 0
+for b in open('/proc/meminfo'):
+    if b.startswith('MemTotal:'):
+        total = int(b.split()[1])
+core = os.cpu_count()
+try:
+    dev = subprocess.run(['ip', '-o', 'route', 'get', '1.1.1.1'], stdout=subprocess.PIPE, universal_newlines=True).stdout.split(' dev ')[1].split()[0]
+except Exception:
+    dev = None
+batas = time.time() - 31 * 86400
+data = {}
+def sadf(berkas, opsi):
+    r = subprocess.run(['sadf', '-d', '-U', berkas, '--'] + opsi, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
+    kepala = None
+    for b in r.stdout.split('\n'):
+        if b.startswith('#'):
+            kepala = b[2:].split(';')
+            continue
+        p = b.split(';')
+        if kepala and len(p) == len(kepala):
+            yield dict(zip(kepala, p))
+def ram(d):
+    if not total:
+        return None
+    if 'kbavail' in d:
+        bebas = float(d['kbavail'])
+    elif 'kbcached' in d:  # sysstat 10 (CentOS 7) belum punya kbavail
+        bebas = float(d['kbmemfree']) + float(d['kbbuffers']) + float(d['kbcached'])
+    else:
+        return None
+    return {'ram': round(max(0.0, 100 * (1 - bebas / total)), 1)}
+for berkas in sorted(glob.glob('/var/log/sa/sa[0-9][0-9]')):
+    if os.path.getmtime(berkas) < batas:
+        continue
+    for opsi, isi in ((['-u'], lambda d: {'cpu': round(100 - float(d['%idle']), 1)} if d.get('CPU') == '-1' else None),
+                      (['-r'], ram),
+                      (['-S'], lambda d: {'swap': float(d['%swpused'])} if '%swpused' in d else None),
+                      (['-q'], lambda d: {'load': float(d['ldavg-1'])} if 'ldavg-1' in d else None),
+                      (['-n', 'DEV'], lambda d: {'net_in': round(float(d['rxkB/s']) * 8192 / 1e6, 2), 'net_out': round(float(d['txkB/s']) * 8192 / 1e6, 2)}
+                       if dev and d.get('IFACE') == dev and 'rxkB/s' in d else None)):
+        try:
+            for d in sadf(berkas, opsi):
+                v = isi(d)
+                if v:
+                    data.setdefault(int(float(d['timestamp'])), {}).update(v)
+        except Exception:
+            pass
+for t in sorted(data):
+    if t >= batas and 'cpu' in data[t]:
+        print(json.dumps(dict(t=t, core=core, **data[t])))
+'''
+
+
+def ambil(srv, key):
+    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
+           'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -']
+    r = subprocess.run(cmd, input=REMOTE, capture_output=True, text=True, timeout=600, check=False)
+    titik = []
+    for b in r.stdout.splitlines():
+        try:
+            titik.append(json.loads(b))
+        except ValueError:
+            continue
+    return titik, (r.stderr or '').strip()[-200:]
+
+
+def main():
+    key = ist.ssh_key_file()
+    servers = []
+    for item in ist.load_servers():
+        if isinstance(item, dict):
+            srv, err = ist.clean_server(item)
+            if not err:
+                servers.append(srv)
+    hasil = {}
+
+    def kerja(s):
+        hasil[s['host']] = ambil(s, key)
+    utas = [threading.Thread(target=kerja, args=(s,), daemon=True) for s in servers]
+    for t in utas:
+        t.start()
+    for t in utas:
+        t.join(620)
+
+    lama = BERKAS.read_text().splitlines() if BERKAS.exists() else []
+    pertama = {}
+    for b in lama:
+        try:
+            d = json.loads(b)
+        except ValueError:
+            continue
+        pertama[d['host']] = min(pertama.get(d['host'], d['t']), d['t'])
+    baru = []
+    for s in servers:
+        titik, galat = hasil.get(s['host'], ([], 'timeout'))
+        awal = pertama.get(s['host'], float('inf'))
+        tambah = [dict(t=q['t'], host=s['host'], name=s['name'], cpu=q.get('cpu'), ram=q.get('ram'), swap=q.get('swap'),
+                       disk=None, load=q.get('load'), core=q.get('core'),
+                       net_in=q.get('net_in'), net_out=q.get('net_out'), sumber='sar')
+                  for q in titik if q['t'] < awal - 60]
+        baru += tambah
+        print(f"{s['name']}: {len(titik)} titik sar, ditambah {len(tambah)}" + (f' · {galat}' if galat and not titik else ''))
+    if not baru:
+        return
+    semua = [json.dumps(b, separators=(',', ':')) for b in baru] + lama
+    semua.sort(key=lambda b: json.loads(b)['t'])
+    tmp = BERKAS.with_suffix('.tmp')
+    tmp.write_text('\n'.join(semua) + '\n')
+    tmp.replace(BERKAS)
+
+
+if __name__ == '__main__':
+    main()

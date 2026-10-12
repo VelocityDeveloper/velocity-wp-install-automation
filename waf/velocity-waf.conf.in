@@ -1,0 +1,88 @@
+# Velocity WAF — ruleset ModSecurity pengganti aturan cPGuard/Malware.Expert di server hosting.
+# DIBUAT OTOMATIS oleh scripts/velocity-waf-build dari waf/velocity-waf.conf.in — jangan disunting di server.
+# Mode: @MODE@   (deteksi = hanya dicatat sebagai "ModSecurity: Warning"; blokir = request ditolak)
+# Versi: @VERSI@
+#
+# ID 7700000–7709999, tag 'velocity-waf'. Berkas data di @DIR@/. Pengecualian IP: ip-putih.txt.
+# Log: error log LiteSpeed (dibaca halaman Server > Proteksi > WAF), audit log tidak dipakai (noauditlog).
+
+# ---- 0. IP tepercaya: lewati semua aturan Velocity ----
+SecRule REMOTE_ADDR "@ipMatchFromFile @DIR@/ip-putih.txt" \
+    "id:7700001,phase:1,pass,nolog,t:none,ctl:ruleRemoveByTag=velocity-waf"
+
+# ---- 1. Bot & crawler (User-Agent) ----
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
+    "id:7700101,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scanner/bot jahat'"
+@SEO@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-seo.txt" \
+@SEO@    "id:7700102,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler SEO'"
+@AI@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai.txt" \
+@AI@    "id:7700103,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI'"
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
+    "id:7700104,phase:1,t:none,t:lowercase,@AKSIAICARI@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Bot AI pencarian'"
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/klien-skrip.txt" \
+    "id:7700105,phase:1,t:none,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Klien HTTP skrip (dicatat)'"
+
+# PHP tanpa User-Agent (probe webshell/brute force otomatis; cron WordPress & curl/wget tetap mengirim UA)
+SecRule REQUEST_FILENAME "@rx \.php$" \
+    "id:7700110,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses PHP tanpa User-Agent',chain"
+    SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"
+SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" \
+    "id:7700111,phase:1,t:none,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses PHP dengan User-Agent kosong',chain"
+    SecRule REQUEST_FILENAME "@rx \.php$" "t:none,t:lowercase"
+
+# ---- 2. Berkas sensitif & probe ----
+SecRule REQUEST_FILENAME "@rx (?:^|/)\.(?:env(?:\.[\w.-]*)?|git|svn|hg|bzr|aws|ssh|docker|npmrc|bash_history|htpasswd|ds_store)(?:/|$)" \
+    "id:7700201,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses berkas tersembunyi/rahasia (.env, .git, dll.)'"
+SecRule REQUEST_FILENAME "@rx /wp-config\.(?:php[\w.~-]+|php|bak|old|orig|save|txt|swp|zip)$" \
+    "id:7700202,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses langsung wp-config / salinannya'"
+SecRule REQUEST_FILENAME "@rx (?:\.(?:sql|sql\.gz|sql\.zip|mysql|bak|old|swp|save)|/(?:phpinfo|php_info)\.php|/vendor/phpunit/.*eval-stdin\.php|/(?:adminer|phpminiadmin)\.php|/wp-content/debug\.log)$" \
+    "id:7700203,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses dump database/berkas cadangan/alat debug'"
+
+# PHP dijalankan dari folder unggahan / berkas PHP tersembunyi (ciri webshell)
+SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
+    "id:7700210,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/uploads'"
+SecRule REQUEST_FILENAME "@rx /\.[^/]+\.php\d?$" \
+    "id:7700211,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Berkas PHP tersembunyi'"
+# URL berisi /wp-content/uploads/ ≥3 kali (scraper rusak membaca srcset)
+SecRule REQUEST_URI "@rx (?:/wp-content/uploads/.*?){3,}" \
+    "id:7700212,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - URL berisi banyak /wp-content/uploads/ (scraper rusak)'"
+
+# ---- 3. Traversal, wrapper PHP, null byte ----
+SecRule REQUEST_URI_RAW "@rx %00" \
+    "id:7700301,phase:1,t:none,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Null byte di URL'"
+SecRule REQUEST_URI|ARGS "@rx (?:\.\./){2,}|/etc/(?:passwd|shadow|group)\b|(?:php|phar|zip|expect|glob|file)://" \
+    "id:7700302,phase:2,t:none,t:urlDecodeUni,t:replaceComments,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Path traversal / wrapper PHP',chain"
+    SecRule REQUEST_FILENAME "!@beginsWith /wp-admin/" "t:none,t:lowercase"
+
+# ---- 4. Enumerasi user WordPress (tanpa login) ----
+SecRule ARGS_GET:author "@rx ^\d+$" \
+    "id:7700401,phase:1,t:none,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Enumerasi user WordPress (?author=)',chain"
+    SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in/ "@eq 0" "t:none"
+
+# ---- 5. Rate limit per IP: xmlrpc.php & wp-login.php (brute force) ----
+SecAction "id:7700500,phase:1,pass,nolog,t:none,initcol:ip=%{REMOTE_ADDR}"
+# Blokir hanya di berkas yang disalahgunakan (bukan seluruh situs): banyak pengunjung sah berbagi IP (CGNAT seluler)
+SecRule IP:VW_XMLRPC_BLOK "@eq 1" \
+    "id:7700501,phase:1,t:none,@AKSI406@,log,noauditlog,tag:'velocity-waf',tag:'ddos',msg:'Velocity WAF - Rate limit xmlrpc.php (brute force)',chain"
+    SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "t:none,t:lowercase"
+SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" \
+    "id:7700502,phase:1,pass,nolog,t:none,t:lowercase,chain"
+    SecRule REQUEST_METHOD "@streq POST" "t:none,setvar:ip.vw_xmlrpc=+1,expirevar:ip.vw_xmlrpc=60"
+SecRule IP:VW_XMLRPC "@gt @XMLRPC_MAKS@" \
+    "id:7700503,phase:1,pass,nolog,t:none,setvar:ip.vw_xmlrpc_blok=1,expirevar:ip.vw_xmlrpc_blok=600"
+SecRule IP:VW_LOGIN_BLOK "@eq 1" \
+    "id:7700511,phase:1,t:none,@AKSI406@,log,noauditlog,tag:'velocity-waf',tag:'ddos',msg:'Velocity WAF - Rate limit wp-login.php (brute force)',chain"
+    SecRule REQUEST_FILENAME "@endsWith /wp-login.php" "t:none,t:lowercase"
+SecRule REQUEST_FILENAME "@endsWith /wp-login.php" \
+    "id:7700512,phase:1,pass,nolog,t:none,t:lowercase,chain"
+    SecRule REQUEST_METHOD "@streq POST" "t:none,setvar:ip.vw_login=+1,expirevar:ip.vw_login=300"
+SecRule IP:VW_LOGIN "@gt @LOGIN_MAKS@" \
+    "id:7700513,phase:1,pass,nolog,t:none,setvar:ip.vw_login_blok=1,expirevar:ip.vw_login_blok=900"
+
+# ---- 6. Injeksi (HANYA DICATAT di kedua mode; dinilai dulu sebelum dipakai memblokir) ----
+SecRule ARGS|REQUEST_URI "@rx \bunion\b[\s/*()]+(?:all[\s/*()]+)?select\b|\binformation_schema\b|\bsleep\s*\(\s*\d|\bbenchmark\s*\(|\bwaitfor\s+delay\b|\b(?:extractvalue|updatexml)\s*\(" \
+    "id:7700601,phase:2,t:none,t:urlDecodeUni,t:replaceComments,t:compressWhitespace,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Indikasi SQL injection (dicatat)',chain"
+    SecRule REQUEST_FILENAME "!@beginsWith /wp-admin/" "t:none,t:lowercase"
+SecRule ARGS_GET|REQUEST_URI "@rx <script[\s>/]|javascript:|\bon(?:error|load|mouseover|focus)\s*=" \
+    "id:7700602,phase:2,t:none,t:urlDecodeUni,t:htmlEntityDecode,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Indikasi XSS (dicatat)',chain"
+    SecRule REQUEST_FILENAME "!@beginsWith /wp-admin/" "t:none,t:lowercase"

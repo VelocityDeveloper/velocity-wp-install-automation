@@ -1,0 +1,8 @@
+# IP/CIDR tepercaya — semua aturan Velocity WAF dilewati. Satu per baris.
+# Kantor Velocity (IP publik yang terlihat server saat SSH dari dashboard)
+202.59.194.129
+# Jetpack / WordPress.com (memakai xmlrpc.php)
+192.0.64.0/18
+# localhost
+127.0.0.1
+::1

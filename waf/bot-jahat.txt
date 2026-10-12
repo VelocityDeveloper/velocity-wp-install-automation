@@ -1,0 +1,59 @@
+# Scanner kerentanan & bot jahat — diblokir (429). Satu pola per baris, huruf kecil, dicocokkan sebagai potongan User-Agent.
+# Dari daftar cPGuard badbots.txt + scanner yang umum; TANPA curl/wget (cron klien sering memakainya).
+sqlmap
+nikto
+wpscan
+nuclei
+masscan
+zgrab
+nmap scripting engine
+acunetix
+netsparker
+dirbuster
+gobuster
+fuzz faster u fool
+jorgee
+zmeu
+morfeus
+censysinspect
+l9explore
+l9tcpid
+expanse
+internet-measurement
+anonymizer
+attributor
+bandit
+batchftp
+bigfoot
+black.hole
+bork-edition
+datacha0s
+deepnet explorer
+desktopsmiley
+digext
+feedfinder
+gamingharbor
+heritrix
+indy library
+jakarta
+juicyaccess
+larbin
+missigua
+mrsputnik
+panscient
+planetwork
+snapbot
+twengabot
+twitturly
+viewzi
+webcapture
+yebolbot
+rssingbot
+scanbot
+betabot
+seoscanners.net
+ltx71
+inboundlinks.win
+sitebot
+moreover
+feedfetcher

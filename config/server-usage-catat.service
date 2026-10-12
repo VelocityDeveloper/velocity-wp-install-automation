@@ -1,0 +1,7 @@
+[Unit]
+Description=Catat pemakaian resource server hosting untuk grafik /server/monitoring
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/server-usage-catat
+TimeoutStartSec=90

@@ -10,6 +10,8 @@ const props = defineProps({
   formatTanggal: { type: Function, required: true },
   judul: { type: String, default: 'Token per hari menurut jenis penggunaan' }, // untuk aria-label
   labelNilai: { type: Array, default: () => [] }, // tanggal yang diberi label angka di atas batang
+  satuan: { type: String, default: 'token' }, // untuk ringkasan pembaca layar
+  satuanBatang: { type: String, default: 'hari' },
 })
 
 const wadah = ref(null)
@@ -99,7 +101,7 @@ const tip = computed(() => {
 const ringkas = computed(() => {
   if (!n.value) return 'Belum ada data'
   const tertinggi = props.hari.reduce((a, h) => (jumlah(h) > jumlah(a) ? h : a), props.hari[0])
-  return `${n.value} hari, tertinggi ${props.formatTanggal(tertinggi.tgl)} ${props.format(jumlah(tertinggi))} token`
+  return `${n.value} ${props.satuanBatang}, tertinggi ${props.formatTanggal(tertinggi.tgl)} ${props.format(jumlah(tertinggi))} ${props.satuan}`
 })
 </script>
 

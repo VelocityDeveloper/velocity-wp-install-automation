@@ -465,6 +465,302 @@ def server_resource(paksa=False):
         return data
 
 
+# Monitoring sistem & keamanan tiap server (GET /api/servers/monitor). Kolektor
+# scripts/server_monitor_agent.py dikirim lewat stdin `ssh ... python3 -` (hanya baca, tanpa
+# memasang apa pun di server); hasil JSON per server, cache 60 dtk.
+MONITOR_TTL = 60
+MONITOR_AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_monitor_agent.py'
+_monitor_cache = {'at': 0, 'value': None}
+_monitor_lock = threading.Lock()
+
+
+def _monitor_satu(srv, key, kode):
+    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
+           'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -']
+    hasil = {'host': srv['host'], 'name': srv['name']}
+    mulai = time.time()
+    try:
+        r = subprocess.run(cmd, input=kode, capture_output=True, text=True, timeout=60, check=False)
+    except subprocess.TimeoutExpired:
+        return {**hasil, 'ok': False, 'error': 'timeout'}
+    hasil['ms'] = int((time.time() - mulai) * 1000)
+    try:
+        data = json.loads((r.stdout or '').strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        pesan = (r.stderr or '').strip().splitlines()
+        return {**hasil, 'ok': False, 'error': (pesan[-1] if pesan else f'exit_{r.returncode}')[:200]}
+    return {**hasil, 'ok': True, **data}
+
+
+def server_monitor(paksa=False):
+    with _monitor_lock:
+        now = time.time()
+        if not paksa and _monitor_cache['value'] and now - _monitor_cache['at'] < MONITOR_TTL:
+            return _monitor_cache['value']
+        key = ssh_key_file()
+        if not key:
+            return {'error': 'kunci_ssh_installer_tidak_ada'}
+        try:
+            kode = MONITOR_AGEN.read_text()
+        except OSError:
+            return {'error': 'kolektor_tidak_ada'}
+        servers = []
+        for item in load_servers():
+            if isinstance(item, dict):
+                srv, err = clean_server(item)
+                if not err:
+                    servers.append(srv)
+        hasil = [None] * len(servers)
+
+        def kerja(i):
+            hasil[i] = _monitor_satu(servers[i], key, kode)
+        utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
+        for t in utas:
+            t.start()
+        for t in utas:
+            t.join(65)
+        data = {'servers': [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
+                            for h, s in zip(hasil, servers)],
+                'diambil': int(now)}
+        _monitor_cache.update(at=now, value=data)
+        return data
+
+
+# Proteksi: kelola CSF/LFD tiap server dari halaman /server/proteksi. Kode scripts/server_firewall_agent.py
+# dikirim lewat stdin `ssh ... python3 -` + satu baris perintah (base64 JSON). Aksi ubah dicatat di
+# FIREWALL_RIWAYAT (siapa, kapan, server, hasil). Pengaman IP kantor/server/LAN ada di agen.
+FIREWALL_TTL = 60
+FIREWALL_AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_firewall_agent.py'
+FIREWALL_RIWAYAT = Path('/var/lib/velocity/server-firewall/riwayat.jsonl')
+FIREWALL_AKSI_UBAH = ('blokir', 'lepas', 'izinkan', 'cabut_izin', 'atur')
+FIREWALL_TTL_BOLEH = (0, 3600, 6 * 3600, 86400, 7 * 86400, 30 * 86400)
+_firewall_cache = {'at': 0, 'value': None}
+_firewall_lock = threading.Lock()
+_firewall_tulis = threading.Lock()
+
+
+def _daftar_server():
+    out = []
+    for item in load_servers():
+        if isinstance(item, dict):
+            srv, err = clean_server(item)
+            if not err:
+                out.append(srv)
+    return out
+
+
+def _firewall_satu(srv, key, kode, perintah, batas=60):
+    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
+           'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -']
+    sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
+    hasil = {'host': srv['host'], 'name': srv['name']}
+    try:
+        r = subprocess.run(cmd, input=f"{kode}\njalankan('{sandi}')\n", capture_output=True, text=True,
+                           timeout=batas, check=False)
+    except subprocess.TimeoutExpired:
+        return {**hasil, 'ok': False, 'error': 'timeout'}
+    try:
+        data = json.loads((r.stdout or '').strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        pesan = (r.stderr or '').strip().splitlines()
+        return {**hasil, 'ok': False, 'error': (pesan[-1] if pesan else f'exit_{r.returncode}')[:200]}
+    if perintah['aksi'] in ('ringkas', 'cek'):
+        return {**hasil, 'ok': True, **data}
+    return {**hasil, **data}
+
+
+def _firewall_semua(servers, perintah, batas=60):
+    key = ssh_key_file()
+    if not key:
+        return None, 'kunci_ssh_installer_tidak_ada'
+    try:
+        kode = FIREWALL_AGEN.read_text()
+    except OSError:
+        return None, 'agen_firewall_tidak_ada'
+    hasil = [None] * len(servers)
+
+    def kerja(i):
+        hasil[i] = _firewall_satu(servers[i], key, kode, perintah, batas)
+    utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
+    for t in utas:
+        t.start()
+    for t in utas:
+        t.join(batas + 5)
+    return [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
+            for h, s in zip(hasil, servers)], None
+
+
+def server_firewall(paksa=False):
+    with _firewall_lock:
+        now = time.time()
+        if not paksa and _firewall_cache['value'] and now - _firewall_cache['at'] < FIREWALL_TTL:
+            return _firewall_cache['value']
+        hasil, err = _firewall_semua(_daftar_server(), {'aksi': 'ringkas'})
+        if err:
+            return {'error': err}
+        data = {'servers': hasil, 'diambil': int(now)}
+        _firewall_cache.update(at=now, value=data)
+        return data
+
+
+def _ip_firewall(teks):
+    """IP/CIDR → bentuk baku (alamat tunggal tanpa /32), None bila tidak sah."""
+    try:
+        net = ipaddress.ip_network((teks or '').strip(), strict=False)
+    except ValueError:
+        return None
+    return str(net.network_address) if net.num_addresses == 1 else str(net)
+
+
+def firewall_cek(ip):
+    ip = _ip_firewall(ip)
+    if not ip:
+        return {'error': 'ip_tidak_sah'}
+    hasil, err = _firewall_semua(_daftar_server(), {'aksi': 'cek', 'ip': ip})
+    return {'error': err} if err else {'ip': ip, 'servers': hasil}
+
+
+def firewall_aksi(payload):
+    aksi = payload.get('aksi')
+    if aksi not in FIREWALL_AKSI_UBAH:
+        return {'error': 'aksi_tidak_dikenal'}, 400
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
+    if not oleh:
+        return {'error': 'invalid_oleh'}, 400
+    servers = _daftar_server()
+    target = payload.get('server')
+    if target != 'semua' or aksi == 'atur':
+        servers = [s for s in servers if s['host'] == target]
+        if not servers:
+            return {'error': 'server_tidak_dikenal'}, 400
+    perintah = {'aksi': aksi, 'oleh': oleh}
+    if aksi == 'atur':
+        setelan = payload.get('setelan')
+        if not isinstance(setelan, dict) or not setelan:
+            return {'error': 'setelan_kosong'}, 400
+        perintah['setelan'] = {str(k): str(v) for k, v in setelan.items()}
+    else:
+        ip = _ip_firewall(payload.get('ip'))
+        if not ip:
+            return {'error': 'ip_tidak_sah'}, 400
+        perintah['ip'] = ip
+        perintah['ket'] = str(payload.get('ket') or '')[:120]
+        if aksi == 'blokir':
+            try:
+                ttl = int(payload.get('ttl') or 0)
+            except (TypeError, ValueError):
+                ttl = -1
+            if ttl not in FIREWALL_TTL_BOLEH:
+                return {'error': 'ttl_tidak_sah'}, 400
+            perintah['ttl'] = ttl
+    hasil, err = _firewall_semua(servers, perintah, 150 if aksi == 'atur' else 60)
+    if err:
+        return {'error': err}, 500
+    now = int(time.time())
+    baris = [json.dumps({'t': now, 'oleh': oleh, 'aksi': aksi, 'ip': perintah.get('ip'), 'ket': perintah.get('ket'),
+                         'ttl': perintah.get('ttl'), 'setelan': perintah.get('setelan'), 'server': h['name'],
+                         'host': h['host'], 'ok': bool(h.get('ok')), 'error': h.get('error')},
+                        separators=(',', ':')) for h in hasil]
+    with _firewall_tulis:
+        FIREWALL_RIWAYAT.parent.mkdir(parents=True, exist_ok=True)
+        with FIREWALL_RIWAYAT.open('a') as f:
+            f.write('\n'.join(baris) + '\n')
+    _firewall_cache.update(at=0)  # ringkasan & log berikutnya diambil ulang
+    _firewall_log_cache.clear()
+    return {'aksi': aksi, 'servers': hasil}, 200
+
+
+_firewall_log_cache = {}
+
+
+def firewall_log(host, hari, jenis='log'):
+    """Log firewall (jenis 'log' = lfd) atau WAF ('waf' = ModSecurity) satu server (host) atau semua; cache 60 dtk."""
+    try:
+        hari = max(1, min(14, int(hari)))
+    except (TypeError, ValueError):
+        hari = 1
+    kunci = (jenis, host, hari)
+    lama = _firewall_log_cache.get(kunci)
+    if lama and time.time() - lama[0] < FIREWALL_TTL:
+        return lama[1]
+    servers = _daftar_server()
+    if host != 'semua':
+        servers = [s for s in servers if s['host'] == host]
+        if not servers:
+            return {'error': 'server_tidak_dikenal'}
+    hasil, err = _firewall_semua(servers, {'aksi': jenis, 'hari': hari, 'maks': (1500 if host != 'semua' else 400) if jenis == 'log' else (800 if host != 'semua' else 250)}, 120)
+    if err:
+        return {'error': err}
+    data = {'hari': hari, 'servers': hasil, 'diambil': int(time.time())}
+    _firewall_log_cache[kunci] = (time.time(), data)
+    return data
+
+
+def firewall_riwayat(batas=300):
+    try:
+        baris = FIREWALL_RIWAYAT.read_text().splitlines()[-batas:]
+    except OSError:
+        return {'riwayat': []}
+    out = []
+    for b in reversed(baris):
+        try:
+            out.append(json.loads(b))
+        except ValueError:
+            continue
+    return {'riwayat': out}
+
+
+# Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h).
+# Data dicatat scripts/server-usage-catat (timer 5 mnt); dirata-rata per ember agar ±300 titik per server.
+USAGE_RIWAYAT = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
+RENTANG_USAGE = {'24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200)}
+USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out')
+
+
+def server_riwayat(rentang):
+    detik, ember = RENTANG_USAGE.get(rentang, RENTANG_USAGE['24j'])
+    batas = time.time() - detik
+    per_server = {}
+    try:
+        f = USAGE_RIWAYAT.open()
+    except OSError:
+        return {'rentang': rentang, 'ember': ember, 'servers': []}
+    with f:
+        for baris in f:
+            try:
+                b = json.loads(baris)
+            except ValueError:
+                continue
+            if b.get('t', 0) < batas:
+                continue
+            srv = per_server.setdefault(b['host'], {'host': b['host'], 'name': b.get('name'), 'core': None, 'ember': {}})
+            srv['name'] = b.get('name') or srv['name']
+            k = int(b['t'] // ember * ember)
+            # Rata-rata per kolom hanya dari nilai yang ada (titik sar tak punya disk; server tanpa swap = null)
+            e = srv['ember'].setdefault(k, {'n': 0, **{c: [0.0, 0] for c in USAGE_KOLOM}})
+            if b.get('ok') is False or b.get('cpu') is None:
+                continue
+            srv['core'] = b.get('core') or srv['core']
+            e['n'] += 1
+            for c in USAGE_KOLOM:
+                if b.get(c) is not None:
+                    e[c][0] += float(b[c])
+                    e[c][1] += 1
+    hasil = []
+    for srv in per_server.values():
+        titik = []
+        for k in sorted(srv['ember']):
+            e = srv['ember'][k]
+            if e['n']:
+                titik.append({'t': k, **{c: (round(e[c][0] / e[c][1], 1) if e[c][1] else None) for c in USAGE_KOLOM}})
+            else:
+                titik.append({'t': k})
+        hasil.append({'host': srv['host'], 'name': srv['name'], 'core': srv['core'], 'titik': titik})
+    return {'rentang': rentang, 'ember': ember, 'servers': hasil}
+
+
 _local_ip_cache = {'at': 0, 'value': []}
 LOCAL_IP_TTL = 300
 
@@ -2151,6 +2447,32 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(server_resource('segar' in parse_qs(parsed.query)))
             return
+        if path == '/api/servers/riwayat':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_riwayat((parse_qs(parsed.query).get('rentang') or ['24j'])[0]))
+            return
+        if path in ('/api/servers/firewall', '/api/servers/firewall/cek', '/api/servers/firewall/riwayat', '/api/servers/firewall/log', '/api/servers/firewall/waf'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            q = parse_qs(parsed.query)
+            if path == '/api/servers/firewall':
+                self._send_json(server_firewall('segar' in q))
+            elif path == '/api/servers/firewall/cek':
+                self._send_json(firewall_cek((q.get('ip') or [''])[0]))
+            elif path in ('/api/servers/firewall/log', '/api/servers/firewall/waf'):
+                self._send_json(firewall_log((q.get('server') or ['semua'])[0], (q.get('hari') or ['1'])[0], path.rsplit('/', 1)[1]))
+            else:
+                self._send_json(firewall_riwayat())
+            return
+        if path == '/api/servers/monitor':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_monitor('segar' in parse_qs(parsed.query)))
+            return
         if path == '/api/laravel' or path.startswith('/api/laravel/'):
             if not _is_local_net(ip):
                 self._send_json({'error': 'forbidden'}, 403)
@@ -2294,6 +2616,7 @@ class Handler(BaseHTTPRequestHandler):
         allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/installer/claim',
                           '/api/installer/release', '/api/packages/sync',
                           '/api/servers', '/api/servers/delete', '/api/servers/default', '/api/servers/test',
+                          '/api/servers/firewall/aksi',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
         is_allowed = path in allowed_static or path.startswith('/api/ai/models/') or path.startswith('/api/laravel/')
@@ -2361,6 +2684,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/api/servers/test':
                 self._send_json(server_test(payload))
+                return
+            if path == '/api/servers/firewall/aksi':
+                # Mengubah firewall server produksi: Origin wajib sama dengan Host (bukan dipicu halaman lain)
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = firewall_aksi(payload)
+                self._send_json(obj, kode)
                 return
             aksi = {'/api/servers': 'simpan', '/api/servers/delete': 'hapus',
                     '/api/servers/default': 'default'}[path]

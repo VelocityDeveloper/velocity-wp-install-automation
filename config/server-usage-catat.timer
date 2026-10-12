@@ -1,0 +1,9 @@
+[Unit]
+Description=Catat pemakaian server hosting tiap 5 menit
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*:0/5
+
+[Install]
+WantedBy=timers.target
