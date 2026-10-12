@@ -305,10 +305,11 @@
       // Child theme tour: plugin velocity-tour-travel + post paket-tour dari dokumen klien (scripts/paket-tour).
       // Simpul yang sama memuat scripts/listing-property (tema property2: listing, warna, sidebar kanan,
       // VD Gallery; mysahabatwisata.com 2026-10-01), berjalan tepat sesudah paket-tour, lalu
-      // scripts/marketplace-biasa --beranda (velocity-marketplace-child, 2026-10-04).
-      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing / marketplace', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri · marketplace: slider ≥2 & blok kiri (banner), kategori, menu Produk',
+      // scripts/marketplace-biasa --beranda (velocity-marketplace-child, 2026-10-04), lalu scripts/velocity-iklan
+      // (velocity-mp-child: plugin Velocity Iklan + pendaftaran Subscriber, 2026-10-12).
+      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing / marketplace', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri · marketplace: slider ≥2 & blok kiri (banner), kategori, menu Produk · mp: plugin Velocity Iklan',
         mulai: /\] Paket tour$/, selesai: /(paket_tour|listing_property): (selesai|dilewati)/,
-        gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)|listing_property: (gagal|ai_gagal|cpt_tidak|cek_tema_gagal)/,
+        gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)|listing_property: (gagal|ai_gagal|cpt_tidak|cek_tema_gagal)|iklan: gagal/,
         ketHasil: t => {
           const m = /paket_tour: paket baru=(\d+) diperbarui=(\d+)/.exec(t);
           if (m) return (+m[1] + +m[2]) + ' paket tour';
@@ -316,9 +317,11 @@
           if (l) return l[1] + ' listing' + (/listing_property: listing=\d+ contoh=1/.test(t) ? ' contoh' : '')
             + (/listing_property: vdgallery:/.test(t) ? ' + VD Gallery' : '');
           if (/listing_property: selesai/.test(t)) return 'property2 disesuaikan';
+          const ik = /iklan: plugin_aktif:(\S+)/.exec(t);
+          if (ik) return 'Velocity Iklan ' + ik[1];
           const mp = /marketplace: selesai:(\S+)/.exec(t);
           if (mp) return 'beranda marketplace: ' + mp[1].replace(/,/g, ', ').replace(/_/g, ' ');
-          if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2/marketplace)';
+          if (/(paket_tour|listing_property): dilewati/.test(t)) return 'dilewati (bukan tema tour/property2/marketplace/mp)';
           return null; },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       // Paket E/F minta katalog (menu Produk/Katalog, pesan tambahan, folder produk) & tema tanpa katalog:

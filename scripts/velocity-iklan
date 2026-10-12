@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Plugin Velocity Iklan untuk child theme velocity-mp-child (permintaan user 2026-10-12).
+
+Pemakaian: velocity-iklan <manifest>
+           --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
+
+velocity-mp-child (demo mp.velocitydeveloper.com, iklan baris gaya OLX) wajib berpasangan dengan
+plugin Velocity Iklan (child-theme-data-setup.md repo tema): CPT `iklan`, taksonomi Kategori &
+Lokasi Iklan, form pasang iklan, halaman Akun Saya (`akun-saya`) & Pencarian Iklan (`cari-iklan`)
+yang dibuat plugin sendiri. Tanpa plugin, menu akun & form cari di header tema mengarah ke 404.
+
+Langkah (hanya bila tema aktif velocity-mp-child; tema lain & situs ter-deploy dilewati):
+  - zip dari API plugin Velocity (slug velocity-iklan, ApiCo id 90), ditembolok di
+    /var/lib/velocity/packages/velocity-iklan-<versi>.zip. Plugin yang sudah ada tidak ditimpa.
+  - aktifkan; halaman akun-saya & cari-iklan dibuat plugin pada hook init
+  - Settings › General: Anyone can register + New User Default Role = Subscriber (pengunjung
+    mendaftar lalu pasang iklan lewat Akun Saya › Pasang Iklan)
+Log "iklan: ...".
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import importlib.machinery  # noqa: E402
+import importlib.util  # noqa: E402
+import plugin_api  # noqa: E402
+
+SLUG = 'velocity-iklan'
+TEMA = 'velocity-mp-child'
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+finish = muat('site_finish', 'site-finish')
+
+
+def log(pesan):
+    print(f'iklan: {pesan}', flush=True)
+
+
+def jalankan(cfg, skrip, waktu=600):
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    kepala = ('set -u\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\n'
+              'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+              '[[ -n "$WP_BIN" ]] || { echo "gagal:wp_cli_tidak_ada"; exit 10; }\n'
+              f'DOCROOT={shlex.quote(finish.docroot(cfg["domain"].lower(), cfg.get("da_user", "")))}\n'
+              'wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }\n')
+    run = subprocess.run(ssh + ['bash', '-s'], input=kepala + skrip, capture_output=True, text=True, timeout=waktu)
+    keluaran = run.stdout + '\n' + run.stderr
+    for baris in keluaran.splitlines():
+        if baris.strip() and not baris.startswith('Warning:'):
+            log(baris.strip()[:200])
+    return keluaran
+
+
+def tema_aktif(cfg):
+    keluaran = jalankan(cfg, 'echo "tema:$(wp option get stylesheet 2>/dev/null)"\n', waktu=120)
+    m = re.search(r'^tema:(\S*)', keluaran, re.M)
+    return m.group(1) if m else ''
+
+
+def pasang(cfg):
+    global DIUBAH
+    zip_path, versi = plugin_api.ambil_paket(SLUG, log=log)
+    if not zip_path:
+        log('gagal:paket_tidak_tersedia')
+        return 1
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    remote = f'/tmp/pkg-{SLUG}.zip'
+    DIUBAH = True
+    with open(zip_path, 'rb') as f:
+        up = subprocess.run(ssh + [f'cat > {shlex.quote(remote)} && chmod 644 {shlex.quote(remote)}'],
+                            stdin=f, capture_output=True, text=True, timeout=180)
+    if up.returncode != 0:
+        log(f'gagal:kirim:{up.stderr.strip()[-160:]}')
+        return 1
+    skrip = f'''
+ZIP={shlex.quote(remote)}
+if [[ -d "$DOCROOT/wp-content/plugins/{SLUG}" ]]; then
+  echo "plugin_dipertahankan:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else
+  wp plugin install "$ZIP" 2>&1 | grep -v '^Warning:' | tail -1
+fi
+rm -f "$ZIP"
+wp plugin is-active {SLUG} >/dev/null 2>&1 || wp plugin activate {SLUG} 2>&1 | grep -v '^Warning:' | tail -1
+if wp plugin is-active {SLUG} >/dev/null 2>&1; then echo "plugin_aktif:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else echo "gagal:plugin_tidak_aktif"; exit 12; fi
+wp option update users_can_register 1 >/dev/null 2>&1
+wp option update default_role subscriber >/dev/null 2>&1
+echo "pendaftaran:$(wp option get users_can_register 2>/dev/null):$(wp option get default_role 2>/dev/null)"
+wp rewrite flush >/dev/null 2>&1
+for s in akun-saya cari-iklan; do
+  echo "halaman:$s:$(wp post list --post_type=page --name=$s --post_status=publish --field=ID 2>/dev/null | head -1)"
+done
+'''
+    keluaran = jalankan(cfg, skrip)
+    # Kode keluar bisa 0 walau WP-CLI gagal diam-diam: yang dipercaya penanda di keluaran.
+    if not re.search(r'^plugin_aktif:', keluaran, re.M):
+        return 1
+    kosong = re.findall(r'^halaman:([a-z-]+):$', keluaran, re.M)
+    if kosong:
+        log(f'peringatan:halaman_belum_ada:{",".join(kosong)}')
+    if not re.search(r'^pendaftaran:1:subscriber$', keluaran, re.M):
+        log('peringatan:pendaftaran_belum_terbuka')
+    log('selesai')
+    return 0
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    if '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    tema = tema_aktif(cfg)
+    if tema != TEMA:
+        log(f'dilewati:tema_{tema or "tak_terbaca"}')
+        return 0
+    return pasang(cfg)
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

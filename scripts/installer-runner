@@ -268,6 +268,10 @@ tampilan_klasik() {
   # Paket Marketplace Biasa (2026-10-04): beranda velocity-marketplace-child (template, slider, kategori,
   # Tentang Kami, menu Produk, batas logo) — sesudah produk & menu form. Satu simpul bagan dengan Paket tour.
   /usr/bin/python3 "$SCRIPTS/marketplace-biasa" --beranda "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Child theme velocity-mp-child (iklan baris gaya OLX, permintaan user 2026-10-12): plugin Velocity
+  # Iklan dari API ApiCo + pendaftaran pengunjung (Subscriber). Tema lain & situs ter-deploy dilewati
+  # skripnya sendiri. Satu simpul bagan dengan Paket tour.
+  /usr/bin/python3 "$SCRIPTS/velocity-iklan" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Paket E/F (keputusan user 2026-10-06): klien minta katalog/data produk (menu Produk/Katalog, pesan
   # tambahan, atau folder produk) dan child theme tidak punya katalog -> plugin velocity-produk dari API
   # ApiCo + produk klien/6 CONTOH + halaman Katalog di menu. Tanpa Meta Box/velocity-paket. Sesudah
