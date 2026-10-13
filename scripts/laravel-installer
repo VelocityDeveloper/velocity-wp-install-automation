@@ -132,6 +132,7 @@ langkah 4 "Pengaturan aplikasi (nama, deskripsi, logo, favicon, sitemap, Search 
 # WAJIB di setiap aplikasi (user 1 Okt 2026): Pengaturan > Aplikasi untuk unggah logo & favicon, nama & deskripsi
 # aplikasi; logo & favicon contoh dari inisial APP_NAME; footer "Design by Velocity Developer" di semua layout.
 # 10 Okt 2026: /sitemap.xml + /robots.txt + kode verifikasi Google Search Console (diisi sesudah deploy produksi).
+# 13 Okt 2026: hapus akun sendiri & Pengaturan > Tampilan dibuang, tombol mode gelap di header, header sticky di HP.
 # Berkas di templates/laravel/pengaturan/, tambalan starter kit di scripts/laravel-pengaturan.
 "$REPO_DIR/scripts/laravel-pengaturan" "$DIR"
 npm run build   # ulang: VITE_APP_NAME ikut APP_NAME, rute Wayfinder pengaturan

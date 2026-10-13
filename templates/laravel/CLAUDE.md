@@ -106,8 +106,12 @@ di pesan commit.
   - *Menu navigasi*: klik item menu → laci/menu langsung menutup sendiri lalu halaman tujuan tampil, dengan
     transisi halus ±200ms (ease-out, tanpa hentakan). Di HP pakai `setOpenMobile(false)` dari `useSidebar()`
     saat item diklik; menu halaman publik (hamburger) juga menutup otomatis saat pindah halaman.
-  - *Mode gelap*: tombol ikon matahari/bulan (komposabel `useAppearance` starter kit) ada di header, pojok
-    kanan atas — di header dashboard dan di header halaman publik. Bukan di sidebar atau menu pengguna.
+  - *Mode gelap*: tombol ikon matahari/bulan `AppearanceToggle.vue` (dipasang installer di `AppSidebarHeader`
+    dan `AppHeader`) ada di header, pojok kanan atas — di header dashboard dan di header halaman publik. Bukan
+    di sidebar atau menu pengguna. Menu Pengaturan > Tampilan sengaja dibuang installer; jangan dibuat lagi.
+  - *Header dashboard sticky di HP*: di layar kecil (<768px) header dashboard menempel di atas saat digulir
+    (`max-md:sticky max-md:top-0 max-md:z-30 max-md:bg-background`, sudah dipasang installer). Layout/header
+    dashboard baru wajib mempertahankannya.
   - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
     di bawah layar (`sticky bottom-0`, latar kartu, garis atas tipis) berisi Simpan (+ Batal bila ada),
     sehingga tidak perlu menggulir ke bawah untuk menyimpan. Buat sekali sebagai komponen bersama, pakai ulang.
@@ -130,10 +134,13 @@ di pesan commit.
     tentang kami, layanan unggulan, kontak, alamat, jam buka, peta, sosmed, nomor WhatsApp, teks footer) TIDAK
     di-hardcode di Vue — jadikan kunci `Setting` dan form-nya di Pengaturan (kelompokkan, mis. tab "Halaman
     Depan"/"Kontak"), nilai awal di `SettingSeeder`. Yang tetap boleh statis: struktur/tata letak dan label UI.
-  - *Hapus akun sendiri*: secara bawaan HANYA admin yang bisa menghapus akunnya sendiri. Peran lain: bagian
-    "Hapus akun" di Pengaturan > Profil disembunyikan DAN rute `profile.destroy` ditolak 403 (Gate
-    `delete-own-account`, cek di controller/Form Request, ada tesnya). Bila PRD meminta pengguna boleh
-    menghapus akun, buka lewat kunci `Setting` `allow_self_delete` (bawaan `'0'`).
+  - *Tidak bisa hapus akun sendiri*: secara bawaan TIDAK ADA pengguna yang bisa menghapus akunnya sendiri,
+    termasuk admin utama — installer sudah membuang rute `profile.destroy`, `DeleteUser.vue`, dan
+    `ProfileDeleteRequest`; jangan dibuat lagi. Sistem harus selalu punya minimal satu super admin: di
+    manajemen pengguna admin tidak bisa menghapus, menonaktifkan, atau menurunkan peran akunnya sendiri, dan
+    super admin terakhir tidak bisa dihapus/dinonaktifkan/diturunkan perannya oleh siapa pun (cek di server
+    + tombol disembunyikan, ada tesnya). Bila PRD meminta pengguna non-admin boleh menghapus akun, buka lewat
+    kunci `Setting` `allow_self_delete` (bawaan `'0'`), tetap tidak berlaku untuk super admin terakhir.
   - *WhatsApp mengambang*: halaman publik punya tombol WhatsApp mengambang di kanan bawah (nomor & pesan awal
     dari `Setting`, mis. `whatsapp_number`/`whatsapp_message`, tautan `https://wa.me/<62…>?text=…` tab baru).
     Di desktop berbentuk pil ikon + label (mis. "Chat WhatsApp"); di HP (<640px) label disembunyikan, tinggal
