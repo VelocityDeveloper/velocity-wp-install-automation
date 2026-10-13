@@ -112,6 +112,10 @@ di pesan commit.
   - *Header dashboard sticky di HP*: di layar kecil (<768px) header dashboard menempel di atas saat digulir
     (`max-md:sticky max-md:top-0 max-md:z-30 max-md:bg-background`, sudah dipasang installer). Layout/header
     dashboard baru wajib mempertahankannya.
+  - *Tombol "Lihat situs"*: app yang punya situs publik (halaman depan/katalog/profil untuk tamu) wajib punya
+    tombol "Lihat situs" di header dashboard, di samping tombol mode gelap — `LihatSitusButton.vue` (dipasang
+    installer, buka halaman publik `home()` di tab baru; di HP tinggal ikon). App tanpa situs publik (halaman
+    depan langsung ke login) membuang tombol ini dari `AppSidebarHeader`/`AppHeader`.
   - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
     di bawah layar (`sticky bottom-0`, latar kartu, garis atas tipis) berisi Simpan (+ Batal bila ada),
     sehingga tidak perlu menggulir ke bawah untuk menyimpan. Buat sekali sebagai komponen bersama, pakai ulang.

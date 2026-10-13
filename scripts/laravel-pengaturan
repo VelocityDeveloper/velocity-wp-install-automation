@@ -13,7 +13,8 @@ Sejak 10 Okt 2026: /sitemap.xml, /robots.txt, kode verifikasi Google Search Cons
    menu Pengaturan, footer layout. public/robots.txt bawaan dibuang (diganti rute /robots.txt).
    Route::redirect('settings') diganti closure (Wayfinder belum mengenal verb QUERY -> galat vue-tsc).
    Sejak 13 Okt 2026: hapus akun sendiri dibuang (minimal satu super admin), Pengaturan > Tampilan dibuang
-   (tombol mode gelap AppearanceToggle di header), header dashboard sticky di layar kecil.
+   (tombol mode gelap AppearanceToggle di header), header dashboard sticky di layar kecil, tombol
+   "Lihat situs" (LihatSitusButton, halaman publik di tab baru) di header dashboard.
 3. Buat logo & favicon contoh dari inisial APP_NAME (.env): public/images/logo-contoh.png, favicon.ico,
    apple-touch-icon.png; favicon.svg Laravel dibuang.
 4. Rapikan dengan `vp check --fix` + Pint.
@@ -228,12 +229,16 @@ def tambal_akun_tampilan(app):
                 'resources/js/pages/settings/Appearance.vue', 'resources/js/components/AppearanceTabs.vue'):
         (app / rel).unlink()
         print(f'  hapus {rel}')
-    toggle_import = "import AppearanceToggle from '@/components/AppearanceToggle.vue';\n"
+    # 13 Okt 2026: tombol "Lihat situs" (halaman publik, tab baru) di sebelah tombol mode gelap
+    toggle_import = ("import AppearanceToggle from '@/components/AppearanceToggle.vue';\n"
+                     "import LihatSitusButton from '@/components/LihatSitusButton.vue';\n")
     tambal(app, 'resources/js/components/AppSidebarHeader.vue', [
         ("import Breadcrumbs from '@/components/Breadcrumbs.vue';\n", toggle_import + "import Breadcrumbs from '@/components/Breadcrumbs.vue';\n"),
         ('class="flex h-16 shrink-0 items-center gap-2 border-b ',
          'class="flex h-16 shrink-0 items-center gap-2 border-b max-md:sticky max-md:top-0 max-md:z-30 max-md:bg-background '),
-        ('        </div>\n    </header>', '        </div>\n        <AppearanceToggle class="ml-auto" />\n    </header>'),
+        ('        </div>\n    </header>',
+         '        </div>\n        <div class="ml-auto flex items-center gap-1">\n'
+         '            <LihatSitusButton />\n            <AppearanceToggle />\n        </div>\n    </header>'),
     ])
     tambal(app, 'resources/js/components/AppHeader.vue', [
         ("import AppLogoIcon from '@/components/AppLogoIcon.vue';\n", "import AppLogoIcon from '@/components/AppLogoIcon.vue';\n" + toggle_import),
@@ -241,7 +246,9 @@ def tambal_akun_tampilan(app):
         ('<template>\n    <div>\n        <div class="border-b border-sidebar-border/80">',
          '<template>\n    <div class="max-md:sticky max-md:top-0 max-md:z-30 max-md:bg-background">\n'
          '        <div class="border-b border-sidebar-border/80">'),
-        ('\n                    <DropdownMenu>\n', '\n                    <AppearanceToggle class="mr-1" />\n\n                    <DropdownMenu>\n'),
+        ('\n                    <DropdownMenu>\n',
+         '\n                    <LihatSitusButton class="mr-1" />\n                    <AppearanceToggle class="mr-1" />\n\n'
+         '                    <DropdownMenu>\n'),
     ])
     tambal(app, 'tests/Feature/Settings/ProfileUpdateTest.php', [
         (('re', r'    public function test_user_can_delete_their_account\(\).*\n    \}\n(?=\}\n)'),

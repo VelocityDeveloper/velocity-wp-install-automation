@@ -40,7 +40,8 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    (lengkapi sekalian; ini pengecualian dari poin 2).
 5. Antarmuka berbahasa Indonesia, gaya mengikuti DESIGN.md, rapi di desktop dan HP. Ikuti **Perilaku UI wajib**
    di CLAUDE.md (menu menutup otomatis saat diklik, tombol mode gelap di header kanan atas tanpa menu
-   Pengaturan > Tampilan, header dashboard sticky di HP, tombol Simpan
+   Pengaturan > Tampilan, header dashboard sticky di HP, tombol "Lihat situs" di header dashboard bila app punya
+   situs publik, tombol Simpan
    sticky di form panjang, select panjang tidak menabrak, halaman masuk bervariasi (bukan form polos), field konten
    pakai `RichTextEditor` (textarea hanya untuk teks polos), isi halaman publik diatur lewat `Setting`, tidak ada
    yang bisa menghapus akunnya sendiri dan minimal satu super admin selalu tersisa, WhatsApp mengambang dengan logo resmi (label disembunyikan di HP) + tombol kembali ke atas
