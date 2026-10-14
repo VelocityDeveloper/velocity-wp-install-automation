@@ -359,6 +359,14 @@ def cari_login(ip, port):
                     return m.group(1), m.group(2)
         except OSError:
             continue
+    # rsyslog membuang baris saat rate-limit (14 Okt 07:22, login Adityathok hilang) → cari di journal
+    import subprocess
+    out = subprocess.run(["journalctl", "-q", "-o", "cat", "-t", "sshd-session", "-g", f"from {re.escape(ip)} port {port} "],
+                         capture_output=True, text=True).stdout
+    for ln in reversed(out.splitlines()):
+        m = pola.search(ln)
+        if m:
+            return m.group(1), m.group(2)
     return None, None
 
 

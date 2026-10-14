@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Alat kerja Claude saat membuat/merevisi contoh tampilan (laravel-brief contoh). Satu-satunya perintah shell
+yang boleh dijalankan agen; selalu bekerja di folder kerja = direktori saat ini (<proyek>/contoh-kerja).
+
+  contoh-alat foto "<kata kunci bahasa Inggris>" [jumlah]   foto Pexels -> aset/foto-N.jpg (<=100 KB, kredit di aset/KREDIT.txt)
+  contoh-alat potret <index.html|dashboard.html>[#rute] [--hp]   screenshot halaman penuh (desktop 1366 / HP 390) + cek
+  contoh-alat ref <url> [--hp]                         screenshot situs referensi klien
+  contoh-alat potong <png> <y> <tinggi>                potong screenshot panjang supaya bisa dilihat dengan Read
+
+Alasan (14 Okt 2026): contoh hasil installer kalah dari buatan sesi Claude langsung karena tanpa foto asli dan
+tanpa pernah dilihat di browser. Alat ini memberi keduanya tanpa membuka shell bebas.
+"""
+import importlib.machinery
+import importlib.util
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+KERJA = Path.cwd()
+POTRET = KERJA / '.potret'
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def foto(kunci, jumlah=1):
+    F = muat('paket_g_foto', HERE / 'paket-g-foto')
+    px = F.Pexels()
+    if not px.aktif:
+        print('foto: kunci Pexels tidak ada; pakai visual HTML/CSS/SVG')
+        return 1
+    aset = KERJA / 'aset'
+    aset.mkdir(exist_ok=True)
+    ada = {p.name for p in aset.glob('foto-*.jpg')}
+    kredit = aset / 'KREDIT.txt'
+    sudah = kredit.read_text() if kredit.is_file() else ''
+    n, dapat = len(ada), 0
+    for r in px.cari(kunci):
+        if dapat >= jumlah:
+            break
+        if not r.get('url') or r['foreign_landing_url'] in sudah:
+            continue
+        n += 1
+        tujuan = aset / f'foto-{n}.jpg'
+        try:
+            F.unduh(r['url'], tujuan)
+            F.kecilkan_jpeg(tujuan)
+        except Exception as e:
+            tujuan.unlink(missing_ok=True)
+            n -= 1
+            print(f'lewati ({type(e).__name__})')
+            continue
+        baris = f"aset/{tujuan.name} | {r['title']} | {r['creator']} | {r['foreign_landing_url']}\n"
+        with open(kredit, 'a') as f:
+            f.write(baris)
+        sudah += baris
+        dapat += 1
+        print(f"aset/{tujuan.name} — {r['title'] or '(tanpa keterangan)'} ({r['width']}x{r['height']}, {tujuan.stat().st_size // 1024} KB)")
+    if not dapat:
+        print('tidak ada foto; coba kata kunci lain (bahasa Inggris, 2–4 kata)')
+    return 0 if dapat else 1
+
+
+def jepret(url, nama, hp):
+    POTRET.mkdir(exist_ok=True)
+    tujuan = POTRET / f"{nama}{'-hp' if hp else ''}.png"
+    run = subprocess.run(['node', str(HERE / 'potret-halaman'), url, str(tujuan), '--cek'] + (['--hp'] if hp else []),
+                         capture_output=True, text=True, timeout=200)
+    print(run.stdout.strip()[-1500:])
+    if not tujuan.is_file():
+        return 1
+    from PIL import Image
+    with Image.open(tujuan) as g:
+        print(f'{tujuan.relative_to(KERJA)} {g.width}x{g.height} — lihat per potongan: potong <png> <y> <tinggi> (tinggi ≤ 1600)')
+    return 0
+
+
+def potret(sasaran, hp):
+    berkas, _, rute = sasaran.partition('#')
+    p = (KERJA / berkas).resolve()
+    if p.parent != KERJA.resolve() or p.suffix != '.html' or not p.is_file():
+        print('potret: hanya berkas .html di folder kerja')
+        return 2
+    return jepret(p.as_uri() + (f'#{rute}' if rute else ''), re.sub(r'[^a-z0-9]+', '-', sasaran.lower()).strip('-'), hp)
+
+
+def ref(url, hp):
+    if not re.match(r'^https?://', url):
+        print('ref: butuh URL lengkap')
+        return 2
+    return jepret(url, 'ref-' + re.sub(r'[^a-z0-9]+', '-', url.lower().split('//', 1)[-1]).strip('-')[:60], hp)
+
+
+def potong(berkas, y, tinggi):
+    from PIL import Image
+    p = (KERJA / berkas).resolve()
+    if p.parent != POTRET.resolve():
+        print('potong: hanya screenshot di .potret/')
+        return 2
+    with Image.open(p) as g:
+        y = max(0, min(int(y), g.height - 1))
+        tinggi = max(50, min(int(tinggi), 2400))
+        bagian = g.crop((0, y, g.width, min(g.height, y + tinggi)))
+        if bagian.width > 1400:
+            bagian = bagian.resize((1400, round(bagian.height * 1400 / bagian.width)))
+        tujuan = POTRET / f'{p.stem}-y{y}-{tinggi}.png'
+        bagian.convert('RGB').save(tujuan)
+        print(f'{tujuan.relative_to(KERJA)} (dari {g.width}x{g.height}, y={y}..{min(g.height, y + tinggi)})')
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    hp = '--hp' in a
+    a = [x for x in a if x != '--hp']
+    try:
+        if len(a) in (2, 3) and a[0] == 'foto':
+            return foto(a[1], max(1, min(int(a[2]) if len(a) == 3 else 1, 8)))
+        if len(a) == 2 and a[0] == 'potret':
+            return potret(a[1], hp)
+        if len(a) == 2 and a[0] == 'ref':
+            return ref(a[1], hp)
+        if len(a) == 4 and a[0] == 'potong':
+            return potong(a[1], a[2], a[3])
+    except ValueError:
+        pass
+    print(__doc__)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

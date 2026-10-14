@@ -83,6 +83,16 @@ def muat(nama, path):
     return modul
 
 
+def ip_lan():
+    """IP LAN saat ini (rute default), hanya untuk teks log; cek kesehatan tetap lewat 127.0.0.1."""
+    try:
+        r = subprocess.run(['ip', '-4', 'route', 'get', '1.1.1.1'], capture_output=True, text=True, timeout=5)
+        m = re.search(r'\bsrc (\S+)', r.stdout)
+        return m.group(1) if m else '127.0.0.1'
+    except (OSError, subprocess.SubprocessError):
+        return '127.0.0.1'
+
+
 def log(pesan):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {pesan}", flush=True)
 
@@ -570,7 +580,7 @@ def main():
     # Fitur yang tertinggal "jalan" dari run yang mati mendadak (mesin mati) diantrekan lagi dan ditandai terputus
     L.ubah_fitur(slug, lambda fs: [x.update(status='antre', terputus=True) for x in fs if x.get('status') == 'jalan'])
     L.ubah_proyek(slug, lambda x: x.setdefault('agen', {}).update(status='jalan', mulai=L.sekarang(), fitur=None))
-    log(f'Agen mulai untuk {p["judul"]} ({app_dir}, dev http://192.168.88.211:{port}); '
+    log(f'Agen mulai untuk {p["judul"]} ({app_dir}, dev http://{ip_lan()}:{port}); '
         f'jatah hari ini {L.jatah_agen_harian(slug):.1f} jam, terpakai {L.menit_agen_hari_ini(L.baca_json(L.folder(slug) / "fitur.json", [])):.0f} menit')
     akhir = 'selesai'
     while True:

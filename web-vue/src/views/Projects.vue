@@ -171,7 +171,7 @@ async function simpanEdit() {
             <table v-if="b.akun.length" class="akun">
               <tbody>
                 <tr v-for="(a, i) in b.akun" :key="i">
-                  <th scope="row">{{ a.peran || '-' }}</th>
+                  <th scope="row" :class="{ panjang: (a.peran || '').length > 40 }">{{ a.peran || '-' }}</th>
                   <td>
                     <button type="button" class="salin" :title="`Salin ${a.user}`" @click="salin(a.user, `${p.id}-${b.kunci}-${i}-u`)">
                       <code>{{ a.user }}</code><Ikon :nama="tersalin === `${p.id}-${b.kunci}-${i}-u` ? 'centang' : 'salin'" :ukuran="14" />
@@ -262,6 +262,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .login-kepala .tombol { margin-left: auto; }
 .akun { justify-self: start; width: max-content; max-width: 100%; border-collapse: collapse; font-size: 13px; }
 .akun th { text-align: left; font-weight: 600; color: var(--teks-3); font-size: 12px; padding: 3px 10px 3px 0; white-space: nowrap; width: 1%; }
+/* Peran panjang (jabatan + fungsi akun) dibungkus agar tabel tak melebar */
+.akun th.panjang { white-space: normal; min-width: 220px; max-width: 420px; width: auto; line-height: 1.4; }
 .akun td { padding: 3px 8px 3px 0; }
 .salin { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 0; background: var(--kartu); color: var(--teks-3); padding: 4px 8px; border-radius: 7px; cursor: pointer; text-align: left; }
 .salin code { overflow-wrap: anywhere; }

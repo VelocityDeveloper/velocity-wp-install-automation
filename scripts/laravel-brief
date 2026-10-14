@@ -3,7 +3,7 @@
 
   laravel-brief <project-NNN> saran     catatan.md + dokumen/ -> saran.json (perbandingan WordPress / Laravel+Vue / lainnya, sebelum PRD)
   laravel-brief <project-NNN> rangkuman catatan.md + dokumen/ -> rangkuman.json + rangkuman.docx (template SIMONTAK)
-  laravel-brief <project-NNN> contoh    bahan + DESIGN/PRD -> contoh/index.html (+ dashboard.html bila Laravel), terbit ke nglorok.com
+  laravel-brief <project-NNN> contoh    bahan + DESIGN/PRD -> contoh/index.html (+ dashboard.html bila Laravel), terbit ke velocity.ai.id
   laravel-brief <project-NNN> susun     catatan.md + dokumen/ -> DESIGN.md + PRD.md (draf untuk disunting PM)
   laravel-brief <project-NNN> diagram   PRD.md -> DATABASE.md (ERD Mermaid) + FLOWCHART.md (alur proses Mermaid)
   laravel-brief <project-NNN> estimasi  PRD.md + DESIGN.md + DATABASE.md -> fitur.json (fitur, kriteria terima, jam internal)
@@ -30,6 +30,7 @@ sys.path.insert(0, str(HERE))
 import laravel_proyek as L  # noqa: E402
 
 TEMPLATE = HERE.parent / 'templates' / 'laravel'
+ALAT_CONTOH = HERE / 'contoh-alat'
 
 SKEMA = {
     'saran': {
@@ -85,12 +86,9 @@ SKEMA = {
         },
     },
     'contoh': {
-        'type': 'object', 'required': ['nama_aplikasi', 'landing_html', 'dashboard_html', 'aset', 'catatan'],
-        'properties': {
-            'nama_aplikasi': {'type': 'string'}, 'landing_html': {'type': 'string'}, 'dashboard_html': {'type': 'string'},
-            'aset': {'type': 'array', 'items': {'type': 'string'}},
-            'catatan': {'type': 'array', 'items': {'type': 'string'}},
-        },
+        # HTML ditulis agen langsung ke folder kerja (Write), bukan lewat JSON — lihat buat_contoh()
+        'type': 'object', 'required': ['nama_aplikasi', 'catatan'],
+        'properties': {'nama_aplikasi': {'type': 'string'}, 'catatan': {'type': 'array', 'items': {'type': 'string'}}},
     },
     'estimasi': {
         'type': 'object', 'required': ['fitur', 'tambahan'],
@@ -131,17 +129,19 @@ def cadangkan(slug, nama):
         shutil.copy2(p, p.with_name(f"{nama}.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
 
 
-HALAMAN_WP = """### Beranda situs (`landing_html`)
+HALAMAN_WP = """### Beranda situs (`index.html`)
 Beranda situs WordPress buatan Velocity: header (logo/nama usaha + menu: Beranda, Tentang Kami, Layanan/Produk,
 Galeri, Artikel, Kontak — sesuaikan bahan + tombol WhatsApp/Hubungi Kami), hero kuat (judul, subjudul, CTA ke
-WhatsApp/kontak, visual HTML/CSS/SVG atau foto klien), lalu 5–7 seksi khas situs usaha yang relevan dengan bahan
+WhatsApp/kontak, foto klien atau foto Pexels yang relevan), lalu 5–7 seksi khas situs usaha yang relevan dengan bahan
 (keunggulan, layanan/produk berupa kartu dengan harga "mulai dari" bila ada, tentang kami singkat, galeri/portofolio,
 testimoni, alur pemesanan, artikel terbaru, FAQ, ajakan menghubungi + peta/alamat "(isi nanti)"), footer lengkap
 (kontak, menu, sosial media, hak cipta) dan tombol WhatsApp mengambang. Tautan menu = jangkar (#layanan dsb.).
 Semua tombol ajakan menuju `#kontak` (atau https://wa.me/ tanpa nomor bila nomor tidak ada di bahan).
-`dashboard_html` = string kosong "" (situs WordPress tidak memakai dashboard)."""
+Jangan membuat `dashboard.html` (situs WordPress tidak memakai dashboard). Bila bahan menyebut proses yang
+menjadi inti jualan (mis. lihat contoh produk, simulasi pesan, panel admin), boleh dibuat sebagai tampilan
+tambahan di berkas yang sama (rute `#...`) supaya klien bisa mencobanya."""
 
-HALAMAN_LARAVEL = """### Landing page (`landing_html`)
+HALAMAN_LARAVEL = """### Landing page (`index.html`)
 Halaman depan publik yang menjual sistem ini ke penggunanya: header (logo/nama + menu jangkar + tombol "Masuk"),
 hero kuat (judul, subjudul, CTA, visual berupa potongan dashboard/kartu KPI yang dibangun dengan HTML/CSS/SVG,
 bergaya sama dengan dashboard di bawah), lalu 4–6 seksi yang relevan (fitur utama, alur kerja/tahapan, peran
@@ -149,10 +149,12 @@ pengguna, statistik/manfaat, FAQ atau ajakan), dan footer. Bila aplikasinya inte
 dibuat sebagai halaman depan informatif + tombol Masuk. Semua tombol "Masuk"/"Login"/"Coba Dashboard" menuju
 `dashboard.html`.
 
-### Dashboard (`dashboard_html`)
+### Dashboard (`dashboard.html`)
 Tampilan utama peran terpenting (mis. admin/manajemen) sesudah login, berisi SEMUA menu utama dari bahan di
 sidebar (menu aktif = Dashboard), kartu statistik, tabel data terbaru dengan badge status, dan panel ringkasan.
-Logo/nama di sidebar menuju `index.html`. Menu lain boleh `href="#"`.
+Logo/nama di sidebar menuju `index.html`. Menu yang paling penting untuk alur utama di PRD (2–4 menu) dibuat
+bisa diklik sebagai tampilan rute `#...` di berkas yang sama (daftar + formulir/detail berisi data contoh); menu lain
+boleh `href="#"`.
 
 {{GAYA_DASHBOARD}}"""
 
@@ -363,7 +365,7 @@ def prompt_untuk(slug, jenis, p):
             ganti.update({
                 '{{JUMLAH_HALAMAN}}': '1 halaman, yaitu **beranda (landing page) situs WordPress**',
                 '{{PLATFORM}}': 'WordPress (situs company profile / toko / layanan, bukan aplikasi ber-login)',
-                '{{HALAMAN}}': HALAMAN_WP, '{{KELUARAN_DASHBOARD}}': 'string kosong "" (situs WordPress tanpa dashboard).',
+                '{{HALAMAN}}': HALAMAN_WP, '{{BERKAS_KELUARAN}}': '`index.html`',
             })
         else:
             ganti.update({
@@ -371,14 +373,14 @@ def prompt_untuk(slug, jenis, p):
                                       'sesudah login)',
                 '{{PLATFORM}}': 'Aplikasi custom Laravel + Vue (Inertia, shadcn-vue)',
                 '{{HALAMAN}}': HALAMAN_LARAVEL.replace('{{GAYA_DASHBOARD}}', (TEMPLATE / 'gaya-dashboard-vd.md').read_text()),
-                '{{KELUARAN_DASHBOARD}}': 'isi berkas HTML lengkap dashboard.',
+                '{{BERKAS_KELUARAN}}': '`index.html` dan `dashboard.html`',
             })
         ganti.update({
             '{{CATATAN}}': catatan,
             '{{SPESIFIKASI}}': ('Spesifikasi yang sudah disusun PM (utamakan ini bila berbeda dengan catatan):\n\n'
                                 + '\n\n'.join(spek)) if spek else '(Belum ada DESIGN.md/PRD.md: simpulkan dari bahan di atas.)',
             '{{ARAHAN}}': f'## Arahan tambahan dari PM (WAJIB diikuti)\n\n{arahan}' if arahan else '',
-            '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'),
+            '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'), '{{ALAT}}': str(ALAT_CONTOH),
             '{{ANTISLOP_UI}}': (TEMPLATE / 'antislop-ui.md').read_text().strip(),
             '{{ASET}}': '\n'.join(f'  - `{tujuan}` = dokumen klien "{asal}"' for asal, tujuan in aset)
                         or '  - (tidak ada gambar klien; pakai logo teks/SVG buatan sendiri)',
@@ -431,28 +433,110 @@ def rapikan_html(html):
     return html + '\n'
 
 
-def simpan_contoh(slug, data, opus, dari):
+def agen_contoh(DC, env, kerja, prompt, skema, giliran, menit, dok=None):
+    """Claude bekerja di folder kerja contoh: Read/Write/Edit + Bash hanya contoh-alat (foto Pexels, screenshot)."""
+    perintah = [DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+                '--tools', 'Read,Write,Edit,Bash', '--permission-mode', 'acceptEdits',
+                '--allowedTools', f'Bash({ALAT_CONTOH}:*)', '--max-turns', str(giliran),
+                '--json-schema', json.dumps(skema)]
+    if dok:
+        perintah += ['--add-dir', str(dok)]
+    try:
+        run = subprocess.run(perintah, input=prompt, capture_output=True, text=True, timeout=menit * 60, env=env,
+                             cwd=str(kerja))
+        return json.loads(run.stdout)
+    except subprocess.TimeoutExpired:
+        log(f'GAGAL: Claude tidak selesai dalam {menit} menit')
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'GAGAL: {type(e).__name__}: {str(e)[:300]}')
+    return None
+
+
+def siapkan_kerja(slug, salin_lama):
+    kerja = L.folder(slug) / 'contoh-kerja'
+    shutil.rmtree(kerja, ignore_errors=True)
+    if salin_lama:
+        shutil.copytree(L.folder_contoh(slug), kerja)
+    (kerja / 'aset').mkdir(parents=True, exist_ok=True)
+    for nama, tujuan in L.aset_contoh(slug):
+        if not (kerja / tujuan).exists():
+            shutil.copy2(L.folder_dok(slug) / nama, kerja / tujuan)
+    return kerja
+
+
+def rapikan_kerja(kerja):
+    """Buang screenshot kerja & gambar yang tak dirujuk halaman mana pun; kredit foto ikut disaring."""
+    shutil.rmtree(kerja / '.potret', ignore_errors=True)
+    teks = ''.join((kerja / n).read_text() for n in L.CONTOH_HALAMAN if (kerja / n).is_file())
+    for g in (kerja / 'aset').iterdir():
+        if g.name != 'KREDIT.txt' and f'aset/{g.name}' not in teks:
+            g.unlink()
+    kredit = kerja / 'aset' / 'KREDIT.txt'
+    if kredit.is_file():
+        baris = [b for b in kredit.read_text().splitlines() if (kerja / b.split(' | ')[0]).is_file()]
+        kredit.write_text(''.join(b + '\n' for b in baris)) if baris else kredit.unlink()
+
+
+def buat_contoh(DC, env, opus, slug, p, prompt, dari):
+    """Contoh tampilan dibuat agen (bukan HTML di dalam JSON sekali jadi): ambil foto Pexels, tulis berkas, lalu
+    lihat sendiri hasilnya di browser desktop + HP dan perbaiki. 14 Okt 2026: hasil JSON sekali jadi kalah jauh
+    dari buatan sesi Claude langsung (tanpa foto, tak pernah dicek di browser)."""
+    kerja = siapkan_kerja(slug, False)
+    platform = L.platform_contoh(slug)
+    prompt += f"\n\n(Dokumen klien di atas ada di folder `{L.folder_dok(slug)}`; baca dengan path lengkap.)"
+    log(f"Claude ({opus}) {JUDUL_KERJA['contoh']} — mode agen: foto Pexels + cek tampilan desktop/HP.")
+    log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 6–15 menit.')
+    mulai = time.time()
+    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA['contoh'], 90, 40, L.folder_dok(slug))
+    if hasil is None:
+        return 1
+    catat_pemakaian(DC, slug, 'contoh', hasil)
+    data = hasil.get('structured_output')
+    if not isinstance(data, dict) or hasil.get('is_error'):
+        log(f"GAGAL: {str(hasil.get('result') or 'tanpa keluaran JSON')[:400]}")
+        return 1
+    if platform == 'wordpress':
+        (kerja / 'dashboard.html').unlink(missing_ok=True)
+    wajib = ['index.html'] + (['dashboard.html'] if platform == 'laravel' else [])
+    for n in wajib:
+        f = kerja / n
+        if not f.is_file() or '</html>' not in f.read_text().lower():
+            log(f'GAGAL: {n} tidak ada atau rusak (tanpa </html>); contoh lama tetap dipakai.')
+            return 1
+    for n in L.CONTOH_HALAMAN:
+        if (kerja / n).is_file() and 'id="vd-pita"' not in (kerja / n).read_text():
+            (kerja / n).write_text(rapikan_html((kerja / n).read_text()))
+    for x in kerja.iterdir():  # hanya halaman + aset/ yang terbit
+        if x.name not in L.CONTOH_HALAMAN and x.name not in ('aset', '.potret'):
+            shutil.rmtree(x) if x.is_dir() else x.unlink()
+    rapikan_kerja(kerja)
     d = L.folder_contoh(slug)
     if d.is_dir():
-        lama = d.with_name(f"contoh.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak")
-        d.rename(lama)
-    (d / 'aset').mkdir(parents=True)
-    platform = L.platform_contoh(slug)
-    for nama, kunci in (('index.html', 'landing_html'), ('dashboard.html', 'dashboard_html')):
-        # WordPress: hanya beranda; dashboard dibuang walau Claude tetap mengisinya
-        if data.get(kunci, '').strip() and (nama == 'index.html' or platform == 'laravel'):
-            (d / nama).write_text(rapikan_html(data[kunci]))
-    dipakai = set(data.get('aset') or [])
-    teks = data['landing_html'] + data['dashboard_html']
-    for asal, tujuan in L.aset_contoh(slug):
-        if tujuan in dipakai or tujuan in teks:
-            shutil.copy2(L.folder_dok(slug) / asal, d / tujuan)
+        d.rename(d.with_name(f"contoh.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
+    kerja.rename(d)
+    catatan = [str(c) for c in data.get('catatan') or []]
     L.tulis_json(L.folder(slug) / 'contoh.json', {
-        'nama_aplikasi': data['nama_aplikasi'], 'platform': platform, 'catatan': [str(c) for c in data.get('catatan') or []],
+        'nama_aplikasi': data['nama_aplikasi'], 'platform': platform, 'catatan': catatan,
         'aset': sorted(x.name for x in (d / 'aset').iterdir()), 'waktu': L.sekarang(), 'model': opus,
         'arahan': (L.baca_json(L.folder(slug) / 'proyek.json', {}) or {}).get('contoh_arahan') or '',
         'brief_versi': dari,
     })
+    biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
+    ukuran = ', '.join(f"{L.CONTOH_HALAMAN[n]} {(d / n).stat().st_size // 1024} KB" for n in L.CONTOH_HALAMAN if (d / n).is_file())
+    foto = len(list((d / 'aset').glob('foto-*.jpg')))
+    log(f"SELESAI dalam {round(time.time() - mulai)} dtk, {hasil.get('num_turns')} langkah (setara API ${biaya}). "
+        f"{data['nama_aplikasi']}: {ukuran}, {foto} foto Pexels.")
+    for c in catatan:
+        log(f'  • {c}')
+    L.catat(slug, 'Claude', 'membuat contoh tampilan ' + ('landing page + dashboard' if platform == 'laravel'
+                                                          else 'beranda situs WordPress'))
+    if L.konfig_preview():
+        log('Menerbitkan ke server preview…')
+        t = L.terbitkan_contoh(slug)
+        log(f"Tayang: {t['url']}" if t['ok'] else f"GAGAL terbit: {t['galat']}")
+    else:
+        log(f'Server preview belum diatur ({L.CONTOH_ENV}); contoh hanya bisa dilihat di dashboard.')
+    return 0
 
 
 def catat_pemakaian(DC, slug, jenis, hasil):
@@ -534,18 +618,12 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
     if not arahan or not target:
         log('GAGAL: revisi butuh contoh yang sudah ada dan arahan PM')
         return 1
-    kerja = L.folder(slug) / 'contoh-kerja'
-    shutil.rmtree(kerja, ignore_errors=True)
-    shutil.copytree(asal, kerja)
-    (kerja / 'aset').mkdir(exist_ok=True)
+    kerja = siapkan_kerja(slug, True)
     aset = L.aset_contoh(slug)
-    for nama, tujuan in aset:
-        if not (kerja / tujuan).exists():
-            shutil.copy2(L.folder_dok(slug) / nama, kerja / tujuan)
     sebelum = {n: (kerja / n).read_text() for n in target}
     platform = 'WordPress (beranda situs)' if L.platform_contoh(slug) == 'wordpress' else 'Laravel + Vue (landing + dashboard)'
     ganti = {'{{JUDUL}}': p.get('judul', ''), '{{KLIEN}}': p.get('klien') or '-', '{{PLATFORM}}': platform,
-             '{{ARAHAN}}': arahan, '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'),
+             '{{ARAHAN}}': arahan, '{{TANGGAL}}': datetime.now().strftime('%d-%m-%Y'), '{{ALAT}}': str(ALAT_CONTOH),
              '{{BERKAS}}': '\n'.join(f'- `{n}` ({L.CONTOH_HALAMAN[n]}, {len(sebelum[n]) // 1024} KB)' for n in target),
              '{{ASET}}': '\n'.join(f'  - `{t}` = dokumen klien "{a}"' for a, t in aset) or '  - (tidak ada)'}
     prompt = (TEMPLATE / 'brief-contoh-revisi.md').read_text()
@@ -553,19 +631,10 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
         prompt = prompt.replace(k, v)
     log(f"Claude ({opus}) merevisi contoh tampilan: {', '.join(L.CONTOH_HALAMAN[n] for n in target)}.")
     log(f'Arahan: {arahan[:300]}')
-    log('Mode revisi: hanya bagian yang diminta disunting (lebih cepat & hemat dari buat ulang). Biasanya 1–4 menit.')
+    log('Mode revisi: hanya bagian yang diminta disunting, lalu dicek di browser. Biasanya 2–6 menit.')
     mulai = time.time()
-    try:
-        run = subprocess.run([DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
-                              '--tools', 'Read,Edit', '--permission-mode', 'acceptEdits', '--max-turns', '40',
-                              '--json-schema', json.dumps(SKEMA_REVISI)],
-                             input=prompt, capture_output=True, text=True, timeout=1200, env=env, cwd=str(kerja))
-        hasil = json.loads(run.stdout)
-    except subprocess.TimeoutExpired:
-        log('GAGAL: Claude tidak selesai dalam 20 menit')
-        return 1
-    except (OSError, subprocess.SubprocessError, ValueError) as e:
-        log(f'GAGAL: {type(e).__name__}: {str(e)[:300]}')
+    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA_REVISI, 50, 25)
+    if hasil is None:
         return 1
     catat_pemakaian(DC, slug, 'contoh_revisi', hasil)
     data = hasil.get('structured_output')
@@ -586,11 +655,7 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
     if not berubah:
         log(f'GAGAL: Claude tidak mengubah apa pun (setara API ${biaya}). {" ".join(data.get("catatan") or [])[:400]}')
         return 1
-    # Gambar klien yang tak dirujuk halaman mana pun dibuang lagi
-    teks = ''.join((kerja / n).read_text() for n in L.CONTOH_HALAMAN if (kerja / n).is_file())
-    for g in (kerja / 'aset').iterdir():
-        if f'aset/{g.name}' not in teks:
-            g.unlink()
+    rapikan_kerja(kerja)
     asal.rename(asal.with_name(f"contoh.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak"))
     kerja.rename(asal)
     info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
@@ -625,11 +690,13 @@ def jalankan(DC, env, opus, slug, jenis, p):
     dari = L.versi_brief(L.baca_json(L.folder(slug) / 'proyek.json', {}))
     prompt = prompt_untuk(slug, jenis, p)
     log(f'Bahan: brief v{dari}.')
+    if jenis == 'contoh':
+        return buat_contoh(DC, env, opus, slug, p, prompt, dari)
     log(f"Claude ({opus}) {JUDUL_KERJA[jenis]}…")
     log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 2–6 menit.')
     # Gambar / PDF hasil scan dibaca Claude sendiri: alat Read saja, folder kerja = folder dokumen
     # (Read di luar folder kerja ditolak otomatis pada mode -p)
-    visual = L.bahan_dok(slug)[1] if jenis in ('saran', 'susun', 'rangkuman', 'contoh') else []
+    visual = L.bahan_dok(slug)[1] if jenis in ('saran', 'susun', 'rangkuman') else []
     if visual:
         log(f'{len(visual)} dokumen gambar/scan dibaca Claude langsung: {", ".join(visual)}')
     mulai = time.time()
@@ -655,22 +722,7 @@ def jalankan(DC, env, opus, slug, jenis, p):
     detik = round(time.time() - mulai)
     biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
 
-    if jenis == 'contoh':
-        simpan_contoh(slug, data, opus, dari)
-        dash = f", dashboard {len(data['dashboard_html']) // 1024} KB" if L.platform_contoh(slug) == 'laravel' else ' (WordPress: beranda saja)'
-        log(f"SELESAI dalam {detik} dtk (setara API ${biaya}). {data['nama_aplikasi']}: landing "
-            f"{len(data['landing_html']) // 1024} KB{dash}.")
-        for c in data.get('catatan') or []:
-            log(f'  • {c}')
-        L.catat(slug, 'Claude', 'membuat contoh tampilan ' + ('landing page + dashboard' if L.platform_contoh(slug) == 'laravel'
-                                                              else 'beranda situs WordPress'))
-        if L.konfig_preview():
-            log('Menerbitkan ke server preview…')
-            t = L.terbitkan_contoh(slug)
-            log(f"Tayang: {t['url']}" if t['ok'] else f"GAGAL terbit: {t['galat']}")
-        else:
-            log(f'Server preview belum diatur ({L.CONTOH_ENV}); contoh hanya bisa dilihat di dashboard.')
-    elif jenis == 'rangkuman':
+    if jenis == 'rangkuman':
         import rangkuman_docx
         data.update(waktu=L.sekarang(), model=opus, brief_versi=dari)
         cadangkan(slug, 'rangkuman.json')

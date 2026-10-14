@@ -28,8 +28,34 @@ const durasi = (a, b) => {
   return s < 60 ? `${s} dtk` : s < 3600 ? `${Math.round(s / 60)} mnt` : `${(s / 3600).toFixed(1)} jam`
 }
 
-// Jadwal kirim tiap server diatur di DirectAdmin server itu; yang diketahui dicatat di sini
-const JADWAL = { wulan: 'Tiap hari 00:00 · Sen/Rab/Sab ke folder hari, lainnya ke Harian' }
+// Jadwal kirim dibaca langsung dari backup_crons.list DirectAdmin tiap server (d.da, cache 5 mnt)
+const da = (s) => d.value?.da?.[s.server]
+const salahTujuan = computed(() => Object.entries(d.value?.da || {}).flatMap(([server, x]) =>
+  (x.jadwal || []).filter((j) => !j.ke_pc).map((j) => ({ server, ...j }))))
+// Backup yang sedang berjalan di server DA + berkas yang sedang diterima PC Backup (persen per berkas)
+const berjalan = computed(() => Object.entries(d.value?.da || {}).filter(([, x]) => x.berjalan).map(([server, x]) => {
+  const b = x.berjalan
+  const s = pc.value?.server?.find((v) => v.server === server)
+  const masuk = b.terkirim ?? (s?.sedang_masuk?.berkas?.endsWith(b.berkas) ? s.sedang_masuk.ukuran : null)
+  return { server, ...b, terkirim: masuk, persenBerkas: masuk != null && b.ukuran ? Math.min(100, Math.round((masuk / b.ukuran) * 100)) : null,
+    persenUser: b.user_ke ? Math.round(((b.user_ke - 1) / b.user_total) * 100) : null, selesai: s?.sesi_terakhir?.ok, gagal: x.gagal_unggah?.length || 0 }
+}))
+// Perkiraan selesai: jam (hari ini tanpa tanggal) + sisa waktu
+const jamSelesai = (t) => {
+  if (!t) return null
+  const w = new Date(t * 1000)
+  const jam = w.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+  return w.toDateString() === new Date().toDateString() ? jam : `${w.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} ${jam}`
+}
+const sisaWaktu = (t) => (t ? durasi(Math.floor(Date.now() / 1000), t) : '')
+const laju = (b) => (b ? `${ukuranBerkas(b)}/dtk` : '')
+const tujuan = (j) => (j.tujuan === 'ftp' ? `${j.ftp_ip}${j.ftp_path || ''}` : `lokal ${j.ftp_path || ''}`)
+// append_to_path=dayofweek: DA menambah nama hari (Inggris) di belakang ftp_path
+const HARI_DA = { Sen: 'Monday', Sel: 'Tuesday', Rab: 'Wednesday', Kam: 'Thursday', Jum: 'Friday', Sab: 'Saturday', Min: 'Sunday' }
+const folderJadwal = (j) => {
+  const p = (j.ftp_path || '/').replace(/\/$/, '')
+  return j.append === 'dayofweek' ? j.hari.map((h) => `${p}/${HARI_DA[h] || h}`).join(', ') : p || '/'
+}
 const LAYANAN = { vsftpd: 'FTPS', tailscaled: 'Tailscale', 'zfs-zed': 'ZFS', 'backup-snapshot.timer': 'Snapshot', ufw: 'Firewall' }
 const layananMati = computed(() => Object.entries(pc.value?.layanan || {}).filter(([, v]) => v !== 'active').map(([k]) => LAYANAN[k] || k))
 
@@ -66,6 +92,11 @@ function statusKirim(s) {
         <template v-if="pc">Data di bawah dari pengecekan terakhir yang berhasil ({{ waktuLalu(pc.waktu) }}).</template>
       </p>
       <p v-else-if="layananMati.length" class="peringatan" role="alert">Layanan tidak berjalan di PC Backup: {{ layananMati.join(', ') }}.</p>
+      <p v-if="salahTujuan.length" class="peringatan" role="alert">
+        Jadwal backup belum mengarah ke PC Backup ({{ d.ip_pc }}):
+        <template v-for="(j, i) in salahTujuan" :key="j.server + j.id">{{ i ? '; ' : ' ' }}<span class="kapital">{{ j.server }}</span> #{{ j.id }} ({{ j.hari.join('/') }}) ke {{ tujuan(j) }}</template>.
+        Ubah di DirectAdmin ▸ Admin Backup/Transfer.
+      </p>
 
       <section class="ringkas" aria-label="Ringkasan">
         <div class="kartu stat">
@@ -94,49 +125,78 @@ function statusKirim(s) {
         </div>
       </section>
 
-      <section class="kartu">
+      <section v-for="b in berjalan" :key="b.server" class="kartu berjalan" aria-live="polite">
         <div class="kartu-judul">
-          <h2>Backup per server</h2>
-          <span class="redup">Diperbarui {{ waktuLalu(d.diperbarui) }}</span>
+          <h2><span class="denyut" aria-hidden="true" />Backup berjalan · <span class="kapital">{{ b.server }}</span></h2>
+          <span class="redup">Mulai {{ b.mulai ? tanggalWaktu(b.mulai) : '-' }}<template v-if="b.mulai"> · {{ durasi(b.mulai, Math.floor(Date.now() / 1000)) }}</template></span>
         </div>
-        <div class="tabel-wadah">
-          <table class="tabel">
-            <thead>
-              <tr><th>Server</th><th>Kiriman terakhir</th><th>Set backup</th><th>Ukuran</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="s in pc?.server || []" :key="s.server">
-                <td>
-                  <strong class="kapital">{{ s.server }}</strong>
-                  <span class="kecil">FTP {{ s.user || 'belum ada user' }}</span>
-                  <span v-if="JADWAL[s.server]" class="kecil">{{ JADWAL[s.server] }}</span>
-                </td>
-                <td>
-                  <span class="pil" :class="statusKirim(s)[0]">{{ statusKirim(s)[1] }}</span>
-                  <template v-if="s.sesi_terakhir">
-                    <span class="kecil">{{ tanggalWaktu(s.sesi_terakhir.mulai) }} · {{ durasi(s.sesi_terakhir.mulai, s.sesi_terakhir.selesai) }}</span>
-                    <span class="kecil">{{ s.sesi_terakhir.ok }} berkas · {{ ukuranBerkas(s.sesi_terakhir.bytes) }}</span>
-                  </template>
-                  <span v-for="g in s.gagal_terbaru.slice(-2)" :key="g.t + g.berkas" class="kecil galat">Gagal {{ tanggalWaktu(g.t) }}: {{ g.berkas }}</span>
-                </td>
-                <td>
-                  <span v-if="!s.set.length" class="redup">-</span>
-                  <span v-for="x in s.set" :key="x.nama" class="kecil set">
-                    <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}/${x.nama}` } }">{{ x.nama }}</RouterLink>
-                    {{ x.berkas ? `${x.berkas} berkas · ${ukuranBerkas(x.ukuran)} · ${tanggalWaktu(x.terbaru)}` : 'kosong' }}
-                  </span>
-                </td>
-                <td>
-                  {{ s.dataset ? ukuranBerkas(s.dataset.terpakai) : '-' }}
-                  <span v-if="s.dataset?.snapshot" class="kecil">termasuk snapshot {{ ukuranBerkas(s.dataset.snapshot) }}</span>
-                  <RouterLink class="kecil" :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}` } }">Buka folder</RouterLink>
-                </td>
-              </tr>
-              <tr v-if="pc && !pc.server?.length"><td colspan="4" class="redup">Belum ada server yang dibackup.</td></tr>
-            </tbody>
-          </table>
+        <p class="perkiraan">
+          <span class="redup">Perkiraan selesai</span>
+          <strong>{{ b.eta_total ? `±${jamSelesai(b.eta_total)}` : 'Menghitung…' }}</strong>
+          <span v-if="b.eta_total" class="redup">{{ sisaWaktu(b.eta_total) }} lagi<template v-if="b.laju_efektif"> · rata-rata {{ laju(b.laju_efektif) }}</template></span>
+        </p>
+        <div class="kemajuan">
+          <div>
+            <span class="redup">User {{ b.user_ke ?? '-' }} dari {{ b.user_total }}<template v-if="b.user"> · {{ b.user }}</template></span>
+            <div class="meter jalan" role="meter" :aria-valuenow="b.persenUser || 0" aria-valuemin="0" aria-valuemax="100" aria-label="Kemajuan per user"><i :style="{ width: (b.persenUser || 0) + '%' }" /></div>
+            <span class="kecil">{{ b.selesai ?? 0 }} berkas terkirim ke PC Backup<template v-if="b.gagal"> · <span class="galat">{{ b.gagal }} gagal</span></template></span>
+          </div>
+          <div>
+            <span class="redup">{{ b.tahap === 'mengunggah' ? 'Mengunggah' : 'Mengemas' }} {{ b.berkas || '-' }}</span>
+            <div class="meter jalan" role="meter" :aria-valuenow="b.persenBerkas || 0" aria-valuemin="0" aria-valuemax="100" aria-label="Kemajuan berkas"><i :style="{ width: (b.persenBerkas || 0) + '%' }" /></div>
+            <span class="kecil">
+              <template v-if="b.terkirim != null">{{ ukuranBerkas(b.terkirim) }} dari {{ ukuranBerkas(b.ukuran) }} ({{ b.persenBerkas }}%)</template>
+              <template v-else>{{ ukuranBerkas(b.ukuran) }}{{ b.tahap === 'mengemas' ? ' sejauh ini' : '' }}</template>
+              <template v-if="b.tujuan"> · ke {{ b.tujuan === d.ip_pc ? 'PC Backup' : b.tujuan }}</template>
+            </span>
+            <span v-if="b.eta_berkas" class="kecil">Berkas ini selesai ±{{ jamSelesai(b.eta_berkas) }} ({{ sisaWaktu(b.eta_berkas) }} lagi) · {{ laju(b.laju) }}</span>
+          </div>
         </div>
       </section>
+
+      <section v-for="s in pc?.server || []" :key="s.server" class="kartu">
+        <div class="kartu-judul">
+          <h2><span class="kapital">{{ s.server }}</span> <span class="pil" :class="statusKirim(s)[0]">{{ statusKirim(s)[1] }}</span></h2>
+          <span class="redup">
+            FTP {{ s.user || 'belum ada user' }}<template v-if="s.dataset"> · {{ ukuranBerkas(s.dataset.terpakai) }}</template>
+            · <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}` } }">Buka folder</RouterLink>
+          </span>
+        </div>
+        <div class="blok-server">
+          <div>
+            <h3>Jadwal</h3>
+            <ul class="daftar">
+              <li v-for="j in da(s)?.jadwal || []" :key="j.id">
+                <span>{{ j.hari.join(', ') }} · {{ j.jam }}</span>
+                <span :class="j.ke_pc ? 'redup' : 'galat'">{{ j.ke_pc ? folderJadwal(j) : `ke ${tujuan(j)}` }}</span>
+              </li>
+            </ul>
+            <p v-if="da(s)?.galat" class="kecil galat">Jadwal DA tak terbaca: {{ da(s).galat }}</p>
+          </div>
+          <div>
+            <h3>Kiriman terakhir</h3>
+            <ul v-if="s.sesi_terakhir" class="daftar">
+              <li><span>{{ tanggalWaktu(s.sesi_terakhir.mulai) }}</span><span class="redup">{{ durasi(s.sesi_terakhir.mulai, s.sesi_terakhir.selesai) }}</span></li>
+              <li><span>{{ s.sesi_terakhir.ok }} berkas</span><span class="redup">{{ ukuranBerkas(s.sesi_terakhir.bytes) }}</span></li>
+            </ul>
+            <p v-else class="redup">Belum ada kiriman.</p>
+            <p v-if="s.gagal_terbaru.length" class="kecil galat">Gagal terakhir {{ tanggalWaktu(s.gagal_terbaru.at(-1).t) }}: {{ s.gagal_terbaru.at(-1).berkas }}</p>
+            <p v-if="da(s)?.gagal_unggah?.length" class="kecil galat">{{ da(s).gagal_unggah.length }} gagal unggah di backup DA terakhir</p>
+          </div>
+          <div>
+            <h3>Set backup</h3>
+            <ul class="daftar">
+              <li v-for="x in s.set" :key="x.nama">
+                <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}/${x.nama}` } }">{{ x.nama }}</RouterLink>
+                <span class="redup" :title="x.terbaru ? `Terbaru ${tanggalWaktu(x.terbaru)}` : ''">{{ x.berkas ? `${x.berkas} berkas · ${ukuranBerkas(x.ukuran)}` : 'kosong' }}</span>
+              </li>
+            </ul>
+            <p v-if="!s.set.length" class="redup">Belum ada set.</p>
+          </div>
+        </div>
+      </section>
+      <p v-if="pc && !pc.server?.length" class="redup">Belum ada server yang dibackup.</p>
+      <p class="redup diperbarui">Diperbarui {{ waktuLalu(d.diperbarui) }}</p>
     </template>
   </div>
 </template>
@@ -158,7 +218,29 @@ function statusKirim(s) {
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }
 .titik.baik { background: var(--baik); }
 .titik.bahaya { background: var(--bahaya); }
-.set { display: block; }
-a.kecil, .set a { color: var(--aksen-terang); }
+.kartu-judul h2 { display: flex; align-items: center; gap: 10px; }
+.kartu-judul a { color: var(--aksen-terang); }
+.blok-server { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 18px 28px; }
+.blok-server > div { min-width: 0; }
+.blok-server h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--teks-3); text-transform: uppercase; letter-spacing: .04em; }
+.blok-server p { margin: 6px 0 0; }
+.daftar { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+.daftar li { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--garis); }
+.daftar li:last-child { border-bottom: 0; padding-bottom: 0; }
+.daftar li > :last-child { text-align: right; overflow-wrap: anywhere; }
+.daftar a { color: var(--aksen-terang); }
+.kecil { font-size: 12px; }
+.diperbarui { margin: -6px 0 0; text-align: right; }
+.berjalan { border-color: var(--aksen); }
+.kemajuan { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 18px; }
+.meter.jalan { height: 8px; }
+.meter.jalan i { min-width: 8px; background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .22) 0 8px, transparent 8px 16px), linear-gradient(90deg, var(--aksen), var(--aksen-terang)); background-size: 22.6px 22.6px, 100% 100%; animation: garis 1s linear infinite; }
+.denyut { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; background: var(--baik); vertical-align: middle; animation: denyut 1.6s ease-out infinite; }
+@keyframes garis { to { background-position: 22.6px 0, 0 0; } }
+@keyframes denyut { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--baik) 60%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+@media (prefers-reduced-motion: reduce) { .meter.jalan i, .denyut { animation: none; } }
+.perkiraan { margin: 0 0 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.perkiraan strong { font-size: 24px; }
+.kemajuan > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .peringatan { margin: 0; padding: 12px 14px; border-radius: var(--radius-kecil); border: 1px solid var(--waspada); background: rgba(232, 181, 74, .1); color: var(--teks); font-size: 14px; }
 </style>

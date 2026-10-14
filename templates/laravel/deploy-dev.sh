@@ -1,5 +1,5 @@
 #!/bin/bash
-# Perbarui dev {{JUDUL}} di Local PC: {{URL}}
+# Perbarui dev {{JUDUL}} di Local PC (port {{PORT}}; alamat LAN dibaca ulang tiap jalan, awalnya {{URL}})
 # /home/{{SLUG}} = salinan kerja. Bersih → tarik commit terbaru dari GitHub; ada perubahan belum di-commit →
 # tidak pull, hanya build supaya perubahan bisa dicoba.
 set -euo pipefail
@@ -14,10 +14,15 @@ git log --oneline -1
 composer install --no-interaction
 npm ci --no-audit --no-fund
 npm run build
+# IP LAN kantor bisa berubah (192.168.88.211 → 192.168.30.14, 5 Okt): APP_URL yang berupa IP disesuaikan otomatis.
+IP_LAN=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}')
+if [ -n "$IP_LAN" ] && grep -Eq '^APP_URL=http://[0-9.]+:{{PORT}}$' .env && ! grep -q "^APP_URL=http://$IP_LAN:{{PORT}}$" .env; then
+  sed -i "s|^APP_URL=.*|APP_URL=http://$IP_LAN:{{PORT}}|" .env && echo "APP_URL -> http://$IP_LAN:{{PORT}}"
+fi
 php artisan migrate --force
 php artisan optimize:clear
 # Layanan berjalan sebagai user {{PENGGUNA}}; berkas yang dibuat perintah root di atas dikembalikan kepemilikannya.
 chown -R {{PENGGUNA}}:{{PENGGUNA}} storage bootstrap/cache
 systemctl restart {{SLUG}}-dev {{SLUG}}-queue
 sleep 3
-curl -s -o /dev/null -w "dev HTTP %{http_code}\n" {{URL}}/login
+curl -s -m 15 -o /dev/null -w "dev HTTP %{http_code}\n" http://127.0.0.1:{{PORT}}/login

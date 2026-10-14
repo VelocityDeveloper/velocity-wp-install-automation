@@ -1396,7 +1396,7 @@ def info_contoh(slug):
 
 def path_contoh(slug, nama):
     """Berkas mockup untuk pratinjau di dashboard (index.html, dashboard.html, aset/gambar-N.ext) atau None."""
-    if nama not in CONTOH_HALAMAN and not re.fullmatch(r'aset/gambar-\d{1,2}\.(png|jpe?g|webp|gif)', nama or ''):
+    if nama not in CONTOH_HALAMAN and not re.fullmatch(r'aset/(gambar|foto)-\d{1,2}\.(png|jpe?g|webp|gif)', nama or ''):
         return None
     p = folder_contoh(slug) / nama
     return p if p.is_file() else None

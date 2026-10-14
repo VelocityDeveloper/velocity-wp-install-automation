@@ -21,7 +21,15 @@ PROJECTS_FILE=$REPO_DIR/config/local-projects.json
 # Semua project -> velocitycustomer (laravel_proyek.org_github); org utama hanya bila diminta lewat env
 GITHUB_ORG=${GITHUB_ORG:-velocitycustomer}
 [[ $GITHUB_ORG =~ ^(velocitycustomer|Velocity-Developer)$ ]] || { echo "GITHUB_ORG tidak dikenal: $GITHUB_ORG"; exit 1; }
-LAN_IP=192.168.88.211
+# IP LAN dibaca saat jalan (dulu hardcode 192.168.88.211 → project-017 macet saat IP kantor berubah).
+# Bisa dipaksa lewat env LAN_IP. Cek kesehatan selalu lewat 127.0.0.1 supaya tak bergantung IP LAN.
+ip_lan() {
+  local ip
+  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}')
+  [[ $ip =~ ^(10|172|192)\. ]] || ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2!~/^(tailscale|docker|br-|veth|virbr)/{split($4,a,"/"); print a[1]; exit}')
+  echo "${ip:-127.0.0.1}"
+}
+LAN_IP=${LAN_IP:-$(ip_lan)}
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
 
 : "${SLUG:?SLUG wajib}" "${JUDUL:?JUDUL wajib}" "${PORT:?PORT wajib}"
@@ -263,22 +271,23 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now "$SLUG-dev" "$SLUG-queue"
+# Sengaja tidak di-enable: server dev tidak ikut boot, dinyalakan manual dari /installer/laravel?bagian=server.
+systemctl start "$SLUG-dev" "$SLUG-queue"
 if systemctl is-active -q firewalld; then
   firewall-cmd -q --permanent --add-port="$PORT/tcp" && firewall-cmd -q --reload
 fi
 for i in $(seq 1 20); do
-  KODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/login" || true)
+  KODE=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/login" || true)
   [ "$KODE" = 200 ] && break; sleep 1
 done
-echo "GET $URL/login -> HTTP $KODE"
+echo "GET http://127.0.0.1:$PORT/login -> HTTP $KODE (LAN: $URL)"
 [ "$KODE" = 200 ]
 
 # ---------------------------------------------------------------------------
 langkah 9 "Skrip deploy-dev.sh & deploy-prod.sh"
 mkdir -p "/root/$SLUG"
 sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{URL}}|$URL|g" -e "s|{{PENGGUNA}}|$PENGGUNA|g" \
-    -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" "$REPO_DIR/templates/laravel/deploy-dev.sh" > "/root/$SLUG/deploy-dev.sh"
+    -e "s|{{PORT}}|$PORT|g" -e "s|{{GITHUB}}|$GITHUB_ORG/$SLUG|g" "$REPO_DIR/templates/laravel/deploy-dev.sh" > "/root/$SLUG/deploy-dev.sh"
 sed -e "s|{{JUDUL}}|$JUDUL|g" -e "s|{{SLUG}}|$SLUG|g" -e "s|{{DOMAIN}}|${DOMAIN}|g" \
     "$REPO_DIR/templates/laravel/deploy-prod.sh" > "/root/$SLUG/deploy-prod.sh"
 [ -e "/root/$SLUG/prod.env" ] || sed -e "s|{{DOMAIN}}|${DOMAIN}|g" "$REPO_DIR/templates/laravel/prod.env" > "/root/$SLUG/prod.env"

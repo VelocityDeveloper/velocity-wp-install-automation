@@ -257,7 +257,8 @@
         "website-konsep-simontak-rsud-dev",
         "website-konsep-simontak-rsud-queue"
       ],
-      "catatan": "Dibuat installer Laravel 2026-10-12. Update: /root/website-konsep-simontak-rsud/deploy-dev.sh"
+      "catatan": "Dibuat installer Laravel 2026-10-12. Update: /root/website-konsep-simontak-rsud/deploy-dev.sh",
+      "produksi": "https://simontak.com"
     },
     {
       "id": "sabaktrade",

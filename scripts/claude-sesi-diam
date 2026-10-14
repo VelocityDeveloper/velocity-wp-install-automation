@@ -1,22 +1,55 @@
 #!/usr/bin/env python3
 """Hentikan sesi Claude yang lama menganggur supaya RAM PC lokal tidak habis.
 
-Dipanggil claude-sesi-diam.timer tiap jam. Setiap jalan mencatat waktu CPU
-tiap proses Claude; proses yang CPU-nya naik >= --ambang-cpu detik sejak
-pengecekan sebelumnya dianggap aktif. Pada jam --jam-hentikan, proses yang
-menganggur >= --batas-jam jam dihentikan (SIGTERM).
+Dipanggil claude-sesi-diam.timer tiap 15 menit. Sesi remote (ccd-cli
+--resume=<id>) dinilai dari timestamp terakhir di transkrip
+~/.claude/projects/*/<id>.jsonl — tetap benar walau PC reboot dan aplikasi
+membuka ulang semua sesi. Sesi tanpa transkrip (claude CLI) memakai waktu CPU:
+naik >= --ambang-cpu detik sejak pengecekan sebelumnya = aktif.
+Sesi yang menganggur >= --batas-jam jam dihentikan (SIGTERM). --jam-hentikan
+membatasi penghentian ke satu jam tertentu (default: setiap jalan).
 
 Tidak disentuh: bot Telegram (claude-tg, di-restart terpisah) dan job
 otomatis `claude -p`, yang selesai sendiri.
 """
 import argparse
+import glob
 import json
 import os
 import signal
 import time
+from datetime import datetime
 
 STATE = "/var/lib/claude-sesi-diam/state.json"
 TICK = os.sysconf("SC_CLK_TCK")
+with open("/proc/stat") as _f:
+    BOOT = next(int(b.split()[1]) for b in _f if b.startswith("btime"))
+
+
+def aktivitas_transkrip(argv):
+    """Epoch timestamp terakhir di transkrip sesi remote, atau None."""
+    sid = next((x.split("=", 1)[1] for x in argv if x.startswith("--resume=")), None)
+    if not sid:
+        return None
+    berkas = glob.glob(f"/root/.claude/projects/*/{sid}.jsonl")
+    if not berkas:
+        return None
+    try:
+        with open(berkas[0], "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144))
+            ekor = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None
+    terakhir = None
+    for baris in ekor:
+        try:
+            ts = json.loads(baris).get("timestamp")
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError, TypeError):
+            continue
+        terakhir = t if terakhir is None else max(terakhir, t)
+    return terakhir
 
 
 def sesi_claude():
@@ -40,14 +73,21 @@ def sesi_claude():
         # utime=14, stime=15, starttime=22 (1-based) → indeks 11, 12, 19 setelah ")".
         cpu = (int(kolom[11]) + int(kolom[12])) / TICK
         kunci = f"{pid}:{kolom[19]}"
-        yield int(pid), kunci, cpu, ("remote " if remote else "") + " ".join(argv[:3])[:80]
+        transkrip = aktivitas_transkrip(argv) if remote else None
+        if transkrip is not None:
+            # Sesi yang baru dibuka di aplikasi dihitung aktif sejak dibuka,
+            # kecuali yang dibuka ulang otomatis saat PC menyala.
+            mulai = BOOT + int(kolom[19]) / TICK
+            if mulai - BOOT > 900:
+                transkrip = max(transkrip, mulai)
+        yield int(pid), kunci, cpu, transkrip, ("remote " if remote else "") + " ".join(argv[:3])[:80]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batas-jam", type=float, default=6)
     ap.add_argument("--ambang-cpu", type=float, default=30, help="detik CPU per pengecekan agar dianggap aktif")
-    ap.add_argument("--jam-hentikan", type=int, default=3)
+    ap.add_argument("--jam-hentikan", type=int, default=None, help="hanya hentikan pada jam ini (default: setiap jalan)")
     ap.add_argument("--hentikan-sekarang", action="store_true")
     ap.add_argument("--uji", action="store_true", help="tampilkan saja, jangan hentikan/simpan")
     a = ap.parse_args()
@@ -59,14 +99,16 @@ def main():
         lama = {}
 
     sekarang = time.time()
-    hentikan = a.hentikan_sekarang or time.localtime().tm_hour == a.jam_hentikan
+    hentikan = a.hentikan_sekarang or a.jam_hentikan is None or time.localtime().tm_hour == a.jam_hentikan
     baru = {}
-    for pid, kunci, cpu, ringkas in sesi_claude():
+    for pid, kunci, cpu, transkrip, ringkas in sesi_claude():
         s = lama.get(kunci)
         if s is None or cpu - s["cpu"] >= a.ambang_cpu:
             s = {"cpu": cpu, "sejak": sekarang}
         else:
             s = {"cpu": cpu, "sejak": s["sejak"]}
+        if transkrip is not None:
+            s["sejak"] = transkrip
         diam = (sekarang - s["sejak"]) / 3600
         if hentikan and diam >= a.batas_jam:
             print(f"hentikan pid={pid} diam={diam:.1f}j {ringkas}")

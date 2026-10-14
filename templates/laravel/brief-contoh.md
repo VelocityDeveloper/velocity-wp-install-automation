@@ -34,11 +34,18 @@ Platform: **{{PLATFORM}}**
 - CSS ditulis sendiri di `<style>` (boleh variabel CSS). JANGAN pakai Tailwind CDN atau framework CSS.
 - Pustaka luar HANYA: Google Fonts (`fonts.googleapis.com`), Chart.js
   `https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js`. Ikon = SVG inline (gaya garis 1,75px).
-- Gambar: tidak ada gambar dari internet. Visual = HTML/CSS/SVG (ilustrasi, pola, gradasi). Gambar klien yang boleh
-  dipakai (mis. logo, foto produk) ada di daftar di bawah; rujuk dengan path persis seperti tertulis, dan sebutkan
-  di `aset`.
+- Gambar: jangan menautkan (hotlink) gambar dari internet. Gambar klien yang boleh dipakai (mis. logo, foto produk)
+  ada di daftar di bawah; rujuk dengan path persis seperti tertulis:
 {{ASET}}
-- JavaScript secukupnya (Chart.js, buka/tutup menu HP, tab). Tanpa fetch/API. Tanpa `localStorage`.
+- Foto suasana/produk/orang yang tidak dikirim klien: ambil dari Pexels dengan
+  `{{ALAT}} foto "<kata kunci bahasa Inggris>" [jumlah]` (hasil `aset/foto-N.jpg` + keterangan isi fotonya).
+  Usaha yang menjual hal visual (makanan, properti, wisata, pernikahan, fesyen, produk fisik, jasa lapangan) WAJIB
+  memakai foto asli di hero & kartu produk/galeri; jangan menggambar orang/produk dengan CSS/SVG. Kata kunci spesifik
+  dan cocok untuk Indonesia (mis. "indonesian muslim wedding couple", "batik fabric"); foto yang keterangannya tidak
+  cocok jangan dipakai. Aplikasi/dashboard murni cukup HTML/CSS/SVG. Maksimal ±12 foto.
+- JavaScript secukupnya (Chart.js, menu HP, tab, rute `#...` antartampilan, simulasi alur utama). Tanpa fetch/API.
+  `localStorage` boleh untuk simulasi (mis. data yang ditambah di formulir tetap ada saat dimuat ulang), dibungkus
+  try/catch, dan halaman tetap tampil benar tanpa itu.
 - Responsif 360px–1440px, tanpa gulir horizontal halaman. Kontras teks cukup. Tanpa emoji sebagai ikon.
 - Menu header WAJIB satu baris di layar 1280px (`white-space: nowrap`); bila tidak muat, kurangi item atau pindahkan
   ke dropdown "Lainnya". Nama/logo di header tidak boleh terlipat menabrak menu. Kartu/lencana melayang (hero)
@@ -48,7 +55,7 @@ Platform: **{{PLATFORM}}**
   (<640px), plus tombol kembali ke atas di sampingnya (muncul setelah digulir). Semua ikon WhatsApp lain di
   halaman juga memakai logo resmi itu.
 - Select/dropdown berteks panjang dipotong elipsis, tidak menabrak ikon panah atau elemen sebelahnya.
-- Ukuran wajar: masing-masing ±20–60 KB.
+- Ukuran wajar: HTML masing-masing ±30–90 KB (di luar foto).
 
 ## Aturan anti-slop UI (skill antislop-ui, WAJIB)
 
@@ -74,9 +81,20 @@ inti yang tidak disertakan; abaikan nomornya, ikuti isi Fix-nya. Penyesuaian unt
 {{ANTISLOP_UI}}
 </antislop_ui>
 
+## Cara kerja (folder kerja = direktori saat ini)
+
+1. Bila bahan menyebut situs referensi/pembanding (URL), lihat dulu: `{{ALAT}} ref <url>` (+ `--hp`), lalu Read
+   screenshot-nya (potong yang panjang dengan `{{ALAT}} potong <png> <y> <tinggi>`). Tiru struktur & alurnya, bukan
+   merek/teksnya.
+2. Ambil foto yang dibutuhkan dengan `{{ALAT}} foto`.
+3. Tulis {{BERKAS_KELUARAN}} dengan Write (satu kali utuh per berkas).
+4. Periksa di browser: `{{ALAT}} potret index.html` dan `{{ALAT}} potret index.html --hp` (juga `dashboard.html` dan
+   rute `#...` yang Anda buat, mis. `{{ALAT}} potret 'index.html#admin'`). Read screenshot per potongan. Baris `cek:`
+   wajib `scroll_horizontal:false` dan `gambar_rusak` kosong. Cari teks terpotong/bertabrakan, kontras rendah, seksi
+   kosong/jomplang, menu HP. Perbaiki dengan Edit, lalu potret ulang bagian itu. Maksimal 3 putaran.
+5. Jangan membuat berkas lain selain yang disebut di atas dan isi `aset/`.
+
 ## Keluaran JSON
 - `nama_aplikasi`: nama situs/sistem yang ditampilkan.
-- `landing_html`: isi berkas HTML lengkap halaman depan.
-- `dashboard_html`: {{KELUARAN_DASHBOARD}}
-- `aset`: path gambar klien yang dipakai (subset daftar di atas), boleh kosong.
-- `catatan`: 2–5 poin singkat untuk PM (asumsi yang diambil, hal yang sebaiknya dikonfirmasi ke klien).
+- `catatan`: 2–5 poin singkat untuk PM (asumsi yang diambil, tampilan/rute tambahan yang bisa dicoba klien, hal yang
+  sebaiknya dikonfirmasi ke klien).

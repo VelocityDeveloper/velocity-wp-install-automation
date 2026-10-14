@@ -80,6 +80,7 @@ const LAYANAN = [
   { ke: '/paket', label: 'Package Manager', ket: 'Tema & plugin dari API Velocity.', ikon: 'paket' },
   { ke: '/ai', label: 'Manage Model', ket: 'Model AI untuk generate konten.', ikon: 'ai' },
   { url: '/n8n/', label: 'n8n', ket: 'Otomasi workflow dan integrasi aplikasi.', ikon: 'n8n' },
+  { url: 'http://192.168.20.40/phpmyadmin/', label: 'phpMyAdmin', ket: 'Kelola database MySQL/MariaDB (LAN/Tailscale).', ikon: 'database' },
   { url: '/files/', label: 'File Manager', ket: 'Penyimpanan dan berbagi file kantor.', ikon: 'berkas' },
   { url: '/newvdnet/', label: 'New VDNet', ket: 'CRM Velocity (dev :3005/:8005), belum untuk tim.', ikon: 'crm', dev: true },
 ]
