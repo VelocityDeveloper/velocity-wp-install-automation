@@ -62,7 +62,8 @@ Semua paket toko online (custom maupun biasa), sesudah VD Store terpasang, `scri
   — hanya bila masih kosong, kunci isian PM tidak ditimpa; log `ongkir_api_key:diisi`;
 - mengisi asal pengiriman (`shipping_origin_province/city/subdistrict`): ID manifest
   `shipping_origin_*_id` bila ada, selain itu dicari lewat API dari isian form "asal pengiriman"
-  (cadangan: alamat toko). Pencocokan per kata utuh provinsi → kota → kecamatan; kecamatan tak disebut
+  (cadangan: alamat toko — juga dicoba bila isian form tak ketemu, mis. hanya "Jakarta"; log
+  `origin:coba_alamat_toko`). Pencocokan per kata utuh provinsi → kota → kecamatan; kecamatan tak disebut
   → perkiraan (kecamatan bernama kota / pertama, log `origin:perkiraan`). Asal yang sudah terisi tidak
   ditimpa. Log: `origin:api_lookup:<kec> / <kota> / <prov>`, `origin:tidak_ditemukan:<teks>`.
 

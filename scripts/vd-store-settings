@@ -12,7 +12,7 @@ tidak membuat halaman ganda.
 
 VD Ongkir (keputusan user 2026-09-24): sesudah VD Store terpasang, rajaongkir_api_key diisi kunci
 VD Ongkir dari /etc/velocity/secrets/vd_ongkir_api_key (hanya bila masih kosong, isian PM tidak ditimpa),
-lalu asal pengiriman dicari lewat API ongkir dari isian form "asal pengiriman" (cadangan: alamat toko).
+lalu asal pengiriman dicari lewat API ongkir dari isian form "asal pengiriman" (cadangan: alamat toko, juga bila isian form tak ketemu).
 Asal yang sudah terisi tidak ditimpa.
 
 Rekening (keputusan user 2026-09-24): nomor rekening kosong selalu diisi 123456789 a/n Rekening
@@ -175,16 +175,20 @@ else {
   $skor=function($n,$tok)use($kata){ $w=$kata($n); if(!$w)return 0; foreach($w as $x){ if(!in_array($x,$tok,true))return 0; } return count($w); };
   $terbaik=function($rows,$tok)use($skor,$nama){ $b=null;$bs=0; foreach($rows as $x){ $k=$skor($nama($x),$tok); if($k>$bs){$bs=$k;$b=$x;} } return [$b,$bs]; };
   $buang=function($n,$tok)use($kata){ foreach($kata($n) as $x){ $i=array_search($x,$tok,true); if($i!==false) array_splice($tok,$i,1); } return $tok; };
-  $tok=$kata($d["origin_text"]); $provs=$get($base."/destination/province");
+  // Asal form terlalu umum (mis. "Jakarta" = provinsi saja, pojoksembako.com 2026-10-14) -> ulangi dengan alamat toko.
+  $teks=array_values(array_unique(array_filter([trim((string)$d["origin_text"]),trim((string)($d["address"]??$s["store_address"]??""))])));
+  $hasil=null; $provs=$get($base."/destination/province");
+  foreach($teks as $ti=>$tx){ if($hasil)break; if($ti) echo "origin:coba_alamat_toko\n"; $semua=null;
+  $tok=$kata($tx);
   list($p,)=$terbaik($provs,$tok); $tokP=$p?$buang($nama($p),$tok):$tok;
   // Provinsi tak disebut: cari kotanya di semua provinsi (sekali jalan saat instalasi).
   $pc=null;$c=null;$cs=0; foreach(($p?[$p]:$provs) as $pp){ $pid=(string)($pp["id"]??$pp["province_id"]??""); $cities=$get($base."/destination/city/".$pid); list($x,$k)=$terbaik($cities,$tokP); if($k>$cs){$cs=$k;$c=$x;$pc=$pp;} if($p&&!$c) $semua=$cities; }
-  $hasil=null;
   if ($c) { $cid=(string)($c["id"]??$c["city_id"]??""); $ds=$get($base."/destination/district/".$cid); list($dist,)=$terbaik($ds,$buang($nama($c),$tokP)); if(!$dist) list($dist,)=$terbaik($ds,$tokP);
     // Kecamatan tak disebut: perkiraan = kecamatan bernama kota (mis. TEGAL BARAT) atau yang pertama; PM mengecek.
     if(!$dist&&$ds){ $kk=$kata($nama($c)); foreach($ds as $x){ if(array_intersect($kk,$kata($nama($x)))){$dist=$x;break;} } $dist=$dist?:$ds[0]; echo "origin:perkiraan:kecamatan_tidak_disebut\n"; }
     if($dist) $hasil=[$pc,$c,$dist]; }
   elseif ($p) { $bs=0; foreach(($semua??[]) as $cc){ $ds=$get($base."/destination/district/".(string)($cc["id"]??$cc["city_id"]??"")); list($x,$k)=$terbaik($ds,$tokP); if($k>$bs){$bs=$k;$hasil=[$p,$cc,$x];} } }
+  }
   if ($hasil) { list($hp,$hc,$hd)=$hasil; $s["shipping_origin_province"]=(string)($hp["id"]??$hp["province_id"]??""); $s["shipping_origin_city"]=(string)($hc["id"]??$hc["city_id"]??""); $s["shipping_origin_subdistrict"]=(string)($hd["id"]??$hd["subdistrict_id"]??"");
     echo "origin:api_lookup:".$nama($hd)." / ".$nama($hc)." / ".$nama($hp)."\n"; }
   else { echo "origin:tidak_ditemukan:".$d["origin_text"]."\n"; }
