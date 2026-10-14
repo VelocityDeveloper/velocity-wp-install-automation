@@ -248,7 +248,7 @@
           return `${dok} dokumen dibaca` + (hilang ? ` · materi terlewat: ${hilang[1]} baris` : '')
             + (luput ? ` · tak terbaca: ${luput[2]}` : '');
         } },
-      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas / kop PDF dipastikan Claude, tanpa logo = logo contoh), warna tema (form; kosong → warna logo asli, Paket F/Biasa; link ikut), favicon, WhatsApp (Portal Berita Biasa: tanpa tombol mengambang), peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, beranda = Home Template + Berita = arsip artikel (mu-plugin velocity-blog-arsip, instalasi baru), whitelist IP kantor, komentar dimatikan, SEO dasar (berita: judul + deskripsi + keywords dari rubrik)', mulai: /\] Finishing: aset/,
+      { id: 'finishing', kol: 12, jalur: 1, nama: 'Finishing', ket0: 'logo (gambar lepas / kop PDF dipastikan Claude, tanpa logo = logo contoh), warna tema (form; kosong → warna logo asli, Paket F/Biasa; link ikut), favicon, WhatsApp (Portal Berita Biasa: tanpa tombol mengambang), peta, galeri VD Gallery (tanpa foto KTP/syarat domain), galeri popup, beranda = Home Template + Berita = arsip artikel (mu-plugin velocity-blog-arsip, juga tema tanpa Home Template mis. toko12, instalasi baru), whitelist IP kantor, komentar dimatikan, SEO dasar (berita: judul + deskripsi + keywords dari rubrik)', mulai: /\] Finishing: aset/,
         selesai: /finish_done/, aktif: tanpaDry },
       { id: 'baru', kol: 13, jalur: 1, cek: true, nama: 'WordPress baru?', mulai: /finish_done/, aktif: tanpaDry,
         ket: c => (c.installBaru === null ? 'menunggu' : c.installBaru ? 'ya' : 'tidak') },
