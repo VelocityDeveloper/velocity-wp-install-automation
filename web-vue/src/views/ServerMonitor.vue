@@ -8,6 +8,7 @@ import Info from '../components/Info.vue'
 import GrafikGaris from '../components/GrafikGaris.vue'
 import { minta, pakaiPolling, ukuranBerkas, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
+import { jenisServer, pcKantor } from '../jenisServer.js'
 
 const monitor = pakaiPolling('/api/servers/monitor', 60000)
 const segarkan = ref(false)
@@ -18,15 +19,20 @@ async function muatSegar() {
   finally { segarkan.value = false }
 }
 const servers = computed(() => monitor.data.value?.servers || [])
+// Tanpa ?s= → server pertama (Farnaz) yang terbuka
 const pilih = tabUrl('s', '')
+const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 
 // Grafik usage: riwayat dicatat scripts/server-usage-catat tiap 5 mnt (GET /api/servers/riwayat)
 const RENTANG = [{ k: '24j', label: '24 jam' }, { k: '7h', label: '7 hari' }, { k: '30h', label: '30 hari' }]
 const rentang = tabUrl('r', '24j', { boleh: RENTANG.map((r) => r.k) })
-const riwayat = pakaiPolling(() => `/api/servers/riwayat?rentang=${rentang.value}`, 300000)
+// Hanya riwayat server yang dibuka; server= kosong → server pertama (sama dengan tab bawaan)
+const riwayat = pakaiPolling(() => `/api/servers/riwayat?rentang=${rentang.value}&server=${encodeURIComponent(terpilih.value?.name || pilih.value)}`, 300000)
 watch(rentang, () => riwayat.muatUlang())
+watch(() => terpilih.value?.name, (nama) => {
+  if (nama && riwayat.data.value && !(riwayat.data.value.servers || []).some((r) => r.name === nama)) riwayat.muatUlang()
+})
 // Warna CPU/RAM sama dengan Beranda; Disk/Swap lolos validator dataviz (latar gelap #151a33 & terang #fff)
-const SERI_PAKAI = [{ kunci: 'cpu', label: 'CPU', warna: '#5b8cff' }, { kunci: 'ram', label: 'RAM', warna: '#26a88e' }]
 // Grafik detail per server. Pasangan warna lolos validator dataviz (#151a33 & #fff):
 // RAM/Swap = teal/oranye, Masuk/Keluar = biru/oranye; grafik satu seri memakai biru, Disk ungu.
 const angkaPendek = (v) => (Math.abs(v) < 10 ? Math.round(v * 10) / 10 : Math.round(v)).toLocaleString('id-ID')
@@ -47,10 +53,12 @@ function maksRapi(v) {
   return [1, 2, 4, 6, 8, 10].map((k) => k * p).find((k) => k >= v * 1.05) || 10 * p
 }
 const nilaiAkhir = (titik, kunci) => { for (let i = titik.length - 1; i >= 0; i--) if (titik[i][kunci] != null) return titik[i][kunci]; return null }
-function grafikServer(host) {
+// Request/detik hanya dari LiteSpeed (server hosting); PC Backup juga tanpa web server → koneksi web disembunyikan
+const GRAFIK_DISEMBUNYIKAN = { lokal: ['req'], backup: ['req', 'conn'] }
+function grafikServer(host, jenis) {
   const titik = titikServer(host)
   const core = (riwayat.data.value?.servers || []).find((r) => r.host === host)?.core
-  return GRAFIK.map((gr) => {
+  return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id)).map((gr) => {
     // Seri tanpa data sama sekali (mis. Swap di server tanpa swap) tidak digambar
     const seri = gr.seri.filter((sr) => titik.some((q) => q[sr.kunci] != null))
     const tinggi = Math.max(0, ...seri.map((sr) => puncak(titik, sr.kunci)), gr.acuanCore && core ? core : 0)
@@ -76,7 +84,6 @@ const rata = (titik, kunci) => {
   const v = titik.filter((q) => q[kunci] != null).map((q) => q[kunci])
   return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : 0
 }
-const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || null)
 
 // Kelompok layanan: satu kelompok dianggap jalan bila salah satu unitnya aktif (litespeed/lsws, mariadb/mysqld…)
 const KELOMPOK = [
@@ -85,10 +92,16 @@ const KELOMPOK = [
   { label: 'Database', unit: ['mariadb', 'mysqld'], penting: true },
   { label: 'Email keluar (Exim)', unit: ['exim'], penting: true },
   { label: 'Email masuk (Dovecot)', unit: ['dovecot'], penting: true },
-  { label: 'FTP', unit: ['pure-ftpd', 'proftpd'], penting: true },
+  { label: 'FTP', unit: ['pure-ftpd', 'proftpd', 'vsftpd'], penting: true },
   { label: 'DNS (named)', unit: ['named'], penting: true },
-  { label: 'SSH', unit: ['sshd'], penting: true },
-  { label: 'Cron', unit: ['crond'], penting: true },
+  { label: 'SSH', unit: ['sshd', 'ssh'], penting: true },
+  { label: 'Cron', unit: ['crond', 'cron'], penting: true },
+  { label: 'Tailscale', unit: ['tailscaled'], pentingPc: ['lokal', 'backup'] },
+  { label: 'ZFS (zed)', unit: ['zfs-zed'], pentingPc: ['backup'] },
+  { label: 'Cloudflare Tunnel', unit: ['cloudflared'], pentingPc: ['lokal'] },
+  { label: 'Dashboard & installer', unit: ['installer-status'], pentingPc: ['lokal'] },
+  { label: 'Login dashboard', unit: ['dash-login'], pentingPc: ['lokal'] },
+  { label: 'PHP-FPM', unit: ['php-fpm'] },
   { label: 'LFD (deteksi brute force)', unit: ['lfd'], penting: true },
   { label: 'Anti-spam (rspamd)', unit: ['rspamd'] },
   { label: 'fail2ban', unit: ['fail2ban'] },
@@ -101,7 +114,7 @@ function kelompokLayanan(s) {
   return KELOMPOK.filter((k) => k.unit.some((u) => u in st)).map((k) => {
     const unit = k.unit.filter((u) => u in st)
     const aktif = unit.filter((u) => st[u] === 'active')
-    return { ...k, unit, aktif: aktif.length > 0, nama_aktif: aktif[0] || unit[0], status: aktif.length ? 'active' : st[unit[0]] }
+    return { ...k, penting: k.penting || !!k.pentingPc?.includes(s.jenis), unit, aktif: aktif.length > 0, nama_aktif: aktif[0] || unit[0], status: aktif.length ? 'active' : st[unit[0]] }
   })
 }
 
@@ -128,7 +141,19 @@ function periksa(s) {
   if (sis.swap?.persen >= 80) tambah('waspada', `Swap ${sis.swap.persen}%`, 'memori sering ditukar ke disk')
   if (sis.iowait >= 20) tambah('waspada', `I/O wait ${sis.iowait}%`, 'disk jadi penghambat')
   const fw = s.firewall
-  if (!fw) tambah('bahaya', 'Firewall CSF tidak ada', '/etc/csf/csf.conf tidak ditemukan')
+  const backup = s.jenis === 'backup'
+  const pc = pcKantor(s)
+  if (s.jenis === 'lokal') {
+    // PC Lokal: dashboard kantor, firewall-nya firewalld (bukan CSF), tanpa DirectAdmin
+    if (s.keamanan?.firewalld !== 'running') tambah('waspada', 'Firewall firewalld mati', 'semua port dashboard terbuka di LAN')
+  } else if (backup) {
+    // PC Backup: bukan server hosting, firewall-nya ufw dan isinya pool ZFS
+    if (s.keamanan?.ufw !== 'active') tambah('waspada', 'Firewall ufw mati', 'FTP/SSH terbuka untuk semua jaringan')
+    for (const pl of s.penyimpanan?.pool || []) {
+      if (pl.health !== 'ONLINE') tambah('bahaya', `Pool ZFS ${pl.nama} ${pl.health}`, 'cek zpool status, disk bermasalah')
+    }
+    if (!s.penyimpanan) tambah('bahaya', 'Pool ZFS tidak terbaca', 'zpool list gagal atau pool belum diimpor')
+  } else if (!fw) tambah('bahaya', 'Firewall CSF tidak ada', '/etc/csf/csf.conf tidak ditemukan')
   else {
     if (fw.TESTING === '1') tambah('bahaya', 'CSF mode TESTING', 'aturan firewall dihapus otomatis tiap 5 menit')
     if (fw.LF_DAEMON !== '1') tambah('bahaya', 'LFD nonaktif di csf.conf', 'LF_DAEMON bukan 1, brute force tidak diblokir')
@@ -136,7 +161,7 @@ function periksa(s) {
   }
   const k = s.keamanan || {}
   if (k.ssh_permitrootlogin === 'yes' && k.ssh_passwordauthentication === 'yes') tambah('waspada', 'Root SSH boleh pakai sandi', `port ${k.ssh_port}, sebaiknya kunci SSH saja`)
-  if (k.modsecurity === 'yes' && (!k.modsecurity_ruleset || k.modsecurity_ruleset === 'no')) tambah('waspada', 'ModSecurity tanpa ruleset', 'WAF aktif tapi belum ada aturan (komodo/owasp)')
+  if (pc) { /* bukan server hosting: tanpa ModSecurity */ } else if (k.modsecurity === 'yes' && (!k.modsecurity_ruleset || k.modsecurity_ruleset === 'no')) tambah('waspada', 'ModSecurity tanpa ruleset', 'WAF aktif tapi belum ada aturan (komodo/owasp)')
   else if (k.modsecurity !== 'yes') tambah('waspada', 'ModSecurity mati', 'tidak ada WAF di web server')
   if (k.perlu_reboot) tambah('waspada', 'Perlu reboot', 'kernel/library baru belum dipakai')
   const h = s.hosting || {}
@@ -174,7 +199,6 @@ const ringkas = computed(() => {
 
 const tingkatPersen = (p) => (p >= 90 ? 'bahaya' : p >= 75 ? 'waspada' : '')
 const lamaNyala = (u) => (u >= 86400 ? `${Math.floor(u / 86400)} hari` : `${Math.floor(u / 3600)} jam`)
-const diskUtama = (s) => (s.sistem?.disks || []).reduce((a, d) => (!a || d.persen > a.persen ? d : a), null)
 const PEMICU = {
   LF_SSHD: 'SSH', LF_FTPD: 'FTP', LF_SMTPAUTH: 'SMTP auth', LF_POP3D: 'POP3', LF_IMAPD: 'IMAP', LF_DIRECTADMIN: 'DirectAdmin',
   LF_MODSEC: 'ModSecurity', LF_CPANEL: 'Panel', LF_HTACCESS: 'htaccess', LF_DISTATTACK: 'Serangan terdistribusi', LF_DISTFTP: 'FTP terdistribusi',
@@ -185,6 +209,22 @@ const pemicu = (k) => PEMICU[k] || k.replace(/^LF_/, '')
 function modulKeamanan(s) {
   const k = s.keamanan || {}, fw = s.firewall, cpg = s.cpguard
   const m = []
+  if (s.jenis === 'lokal') {
+    const f2b = (s.layanan || []).find((l) => l.nama === 'fail2ban')
+    m.push({ judul: 'Firewall firewalld', teks: k.firewalld || 'tidak terpasang', st: k.firewalld === 'running' ? 'baik' : 'waspada', ikon: 'perisai' })
+    m.push({ judul: 'Blokir brute force (fail2ban)', teks: f2b ? f2b.status : 'tidak terpasang', st: f2b?.status === 'active' ? 'baik' : 'waspada', ikon: 'kunci' })
+    m.push({ judul: 'SSH', teks: `port ${k.ssh_port || '?'} · root ${k.ssh_permitrootlogin || '?'} · sandi ${k.ssh_passwordauthentication || '?'}`, st: k.ssh_passwordauthentication === 'yes' ? 'waspada' : 'baik', ikon: 'server' })
+    m.push({ judul: 'Kernel & paket', teks: k.perlu_reboot ? 'perlu reboot agar pembaruan dipakai' : k.perlu_reboot === false ? 'tidak perlu reboot' : 'status tidak diketahui', st: k.perlu_reboot ? 'waspada' : 'baik', ikon: 'ulang' })
+    m.push({ judul: 'SELinux', teks: k.selinux || 'tidak diketahui', st: 'info', ikon: 'kunci' })
+    return m
+  }
+  if (s.jenis === 'backup') {
+    m.push({ judul: 'Firewall ufw', teks: k.ufw || 'tidak terpasang', st: k.ufw === 'active' ? 'baik' : 'waspada', ikon: 'perisai' })
+    const sandiBackup = k.ssh_passwordauthentication === 'yes'
+    m.push({ judul: 'SSH', teks: `port ${k.ssh_port || '?'} · root ${k.ssh_permitrootlogin || '?'} · sandi ${k.ssh_passwordauthentication || '?'}`, st: sandiBackup ? 'waspada' : 'baik', ikon: 'server' })
+    m.push({ judul: 'Kernel & paket', teks: k.perlu_reboot ? 'perlu reboot agar pembaruan dipakai' : k.perlu_reboot === false ? 'tidak perlu reboot' : 'status tidak diketahui', st: k.perlu_reboot ? 'waspada' : 'baik', ikon: 'ulang' })
+    return m
+  }
   m.push(fw
     ? { judul: 'Firewall CSF', teks: `v${fw.versi || '?'} · ${fw.TESTING === '1' ? 'mode TESTING' : 'mode produksi'} · ${angka(fw.allow)} IP diizinkan`, st: fw.TESTING === '1' ? 'bahaya' : 'baik', ikon: 'perisai' }
     : { judul: 'Firewall CSF', teks: 'tidak terpasang', st: 'bahaya', ikon: 'perisai' })
@@ -212,7 +252,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
     <header class="kepala-halaman">
       <div>
         <h1>Monitoring Server</h1>
-        <p class="redup">Kesehatan sistem, layanan, firewall, dan keamanan tiap server hosting. Dibaca langsung lewat SSH, tanpa cPGuard.</p>
+        <p class="redup">Kesehatan sistem, layanan, firewall, dan keamanan tiap server hosting dan PC kantor (bertag). Dibaca langsung lewat SSH, tanpa cPGuard.</p>
       </div>
       <div class="kepala-aksi">
         <span v-if="monitor.data.value?.diambil" class="redup">Diperbarui {{ waktuLalu(monitor.data.value.diambil) }}</span>
@@ -227,23 +267,11 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
         <div v-for="i in 4" :key="i" class="kartu tile"><span class="sk sk-ikon" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks pendek" /></div></div>
       </div>
       <div class="sk-menu"><span v-for="i in 6" :key="i" class="sk sk-pil" /></div>
-      <template v-if="!pilih">
-        <section class="kartu">
-          <span class="sk sk-judul" />
-          <div v-for="i in 5" :key="i" class="sk-baris"><span class="sk" /><span class="sk" /><span class="sk" /><span class="sk" /><span class="sk" /><span class="sk" /></div>
-        </section>
-        <section class="kartu">
-          <span class="sk sk-judul" />
-          <div class="grafik-kecil"><div v-for="i in 4" :key="i" class="grafik-item"><span class="sk sk-teks" /><span class="sk sk-grafik kecil" /></div></div>
-        </section>
-      </template>
-      <template v-else>
-        <section class="kartu sk-banner"><span class="sk sk-ikon besar" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks panjang" /><span class="sk sk-teks panjang" /></div><span class="sk sk-cincin" /></section>
-        <section class="kartu">
-          <span class="sk sk-judul" />
-          <div class="grafik-grid"><div v-for="i in 4" :key="i" class="grafik-item"><span class="sk sk-teks" /><span class="sk sk-grafik" /></div></div>
-        </section>
-      </template>
+      <section class="kartu sk-banner"><span class="sk sk-ikon besar" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks panjang" /><span class="sk sk-teks panjang" /></div><span class="sk sk-cincin" /></section>
+      <section class="kartu">
+        <span class="sk sk-judul" />
+        <div class="grafik-grid"><div v-for="i in 4" :key="i" class="grafik-item"><span class="sk sk-teks" /><span class="sk sk-grafik" /></div></div>
+      </section>
     </div>
     <p v-else-if="monitor.galat.value && !monitor.data.value" class="pesan-status bahaya">Gagal memuat: {{ monitor.galat.value.message }}</p>
     <p v-else-if="monitor.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ monitor.data.value.error }}</p>
@@ -269,78 +297,19 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
       </div>
 
       <nav class="sub-menu" aria-label="Pilih server">
-        <button type="button" :class="{ aktif: !terpilih }" :aria-current="!terpilih ? 'page' : undefined" @click="pilih = ''"><Ikon nama="dashboard" :ukuran="16" /> Semua server</button>
         <button v-for="h in hasil" :key="h.s.host" type="button" :class="{ aktif: terpilih === h.s }" :aria-current="terpilih === h.s ? 'page' : undefined" @click="pilih = h.s.name">
           <span class="titik" :class="h.tingkat" aria-hidden="true" /> {{ h.s.name }}
+          <span class="lencana" :class="jenisServer(h.s.jenis).kelas" :title="jenisServer(h.s.jenis).ket">{{ jenisServer(h.s.jenis).label }}</span>
           <span v-if="h.periksa.filter((p) => p.tingkat === 'bahaya').length" class="hitung">{{ h.periksa.filter((p) => p.tingkat === 'bahaya').length }}</span>
         </button>
       </nav>
 
-      <!-- ================= Semua server ================= -->
-      <template v-if="!terpilih">
-        <section class="kartu" aria-labelledby="judul-semua">
-          <div class="kartu-judul"><h2 id="judul-semua"><Ikon nama="server" :ukuran="16" /> Ringkasan semua server</h2><span class="redup">klik nama server untuk detail</span></div>
-          <div class="tabel-wadah">
-            <table class="tabel">
-              <thead><tr>
-                <th scope="col">Server</th><th scope="col">Status</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Disk</th>
-                <th scope="col" class="kanan">Load</th><th scope="col" class="kanan">Akun</th><th scope="col" class="kanan">Blokir 24j</th><th scope="col">Temuan</th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="h in hasil" :key="h.s.host">
-                  <td><button type="button" class="tautan-server" @click="pilih = h.s.name"><b>{{ h.s.name }}</b></button><small class="redup blok">{{ h.s.sistem?.hostname || h.s.host }}</small></td>
-                  <td><span class="pil" :class="h.tingkat">{{ LABEL_TINGKAT[h.tingkat] }}</span><small class="redup blok">skor {{ h.skor }}</small></td>
-                  <template v-if="h.s.ok">
-                    <td class="sel-meter"><b>{{ h.s.sistem?.cpu }}%</b><div class="meter" :class="tingkatPersen(h.s.sistem?.cpu)"><i :style="{ width: `${h.s.sistem?.cpu}%` }" /></div></td>
-                    <td class="sel-meter"><b>{{ h.s.sistem?.ram?.persen }}%</b><div class="meter" :class="tingkatPersen(h.s.sistem?.ram?.persen)"><i :style="{ width: `${h.s.sistem?.ram?.persen}%` }" /></div></td>
-                    <td class="sel-meter"><template v-if="diskUtama(h.s)"><b>{{ diskUtama(h.s).persen }}%</b><div class="meter" :class="tingkatPersen(diskUtama(h.s).persen)"><i :style="{ width: `${diskUtama(h.s).persen}%` }" /></div><small class="redup">sisa {{ ukuranBerkas(diskUtama(h.s).free) }}</small></template></td>
-                    <td class="kanan">{{ h.s.sistem?.load?.[1]?.toFixed(2) }}<small class="redup blok">{{ h.s.sistem?.cpu_core }} core</small></td>
-                    <td class="kanan">{{ angka(h.s.hosting?.akun) }}</td>
-                    <td class="kanan">{{ angka(h.s.firewall?.blokir_24j) }}</td>
-                  </template>
-                  <td v-else colspan="6" class="teks-bahaya">{{ h.s.error }}</td>
-                  <td class="temuan">
-                    <span v-for="p in h.periksa.filter((x) => x.tingkat !== 'info').slice(0, 3)" :key="p.judul" class="lencana" :class="p.tingkat === 'bahaya' ? 'merah' : 'kuning'">{{ p.judul }}</span>
-                    <span v-if="h.periksa.filter((x) => x.tingkat !== 'info').length > 3" class="lencana abu">+{{ h.periksa.filter((x) => x.tingkat !== 'info').length - 3 }}</span>
-                    <span v-if="!h.periksa.filter((x) => x.tingkat !== 'info').length" class="lencana hijau">Aman</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="kartu" aria-labelledby="judul-grafik-semua">
-          <div class="kartu-judul">
-            <h2 id="judul-grafik-semua"><Ikon nama="token" :ukuran="16" /> Pemakaian CPU & RAM</h2>
-            <div class="tab" role="tablist" aria-label="Rentang grafik">
-                <button v-for="r in RENTANG" :key="r.k" type="button" role="tab" :aria-selected="rentang === r.k" :class="{ aktif: rentang === r.k }" @click="rentang = r.k">{{ r.label }}</button>
-              </div>
-          </div>
-          <ul class="legenda"><li v-for="sr in SERI_PAKAI" :key="sr.kunci"><span class="kotak" :style="{ background: sr.warna }" /> {{ sr.label }}</li></ul>
-          <div v-if="riwayat.memuat.value && !riwayat.data.value" class="grafik-kecil" aria-busy="true">
-            <div v-for="h in hasil" :key="h.s.host" class="grafik-item"><span class="sk sk-teks" /><span class="sk sk-grafik kecil" /></div>
-          </div>
-          <p v-else-if="!(riwayat.data.value?.servers || []).length" class="redup">Riwayat belum ada. Pencatatan berjalan tiap 5 menit; grafik terisi sesudah beberapa titik.</p>
-          <div v-else class="grafik-kecil">
-            <div v-for="h in hasil" :key="h.s.host" class="grafik-item">
-              <div class="grafik-kepala">
-                <button type="button" class="tautan-server" @click="pilih = h.s.name"><b>{{ h.s.name }}</b></button>
-                <span class="redup">rata CPU {{ rata(titikServer(h.s.host), 'cpu') }}% · puncak {{ Math.round(puncak(titikServer(h.s.host), 'cpu')) }}%</span>
-              </div>
-              <GrafikGaris v-if="titikServer(h.s.host).length" :titik="titikServer(h.s.host)" :seri="SERI_PAKAI" :format-waktu="formatWaktu" :tinggi="150" />
-              <p v-else class="redup">Belum ada data.</p>
-            </div>
-          </div>
-        </section>
-      </template>
-
       <!-- ================= Detail satu server ================= -->
-      <template v-else-if="pilihan">
+      <template v-if="pilihan">
         <section class="kartu status-proteksi" :class="pilihan.tingkat" aria-labelledby="judul-status">
           <div class="perisai-besar" aria-hidden="true"><Ikon nama="server" :ukuran="40" /></div>
           <div class="status-teks">
-            <span class="label-kecil">{{ terpilih.name }} · {{ terpilih.sistem?.hostname || terpilih.host }}</span>
+            <span class="label-kecil">{{ terpilih.name }} · {{ terpilih.sistem?.hostname || terpilih.host }} <span class="lencana" :class="jenisServer(terpilih.jenis).kelas">{{ jenisServer(terpilih.jenis).label }}</span></span>
             <h2 id="judul-status">{{ LABEL_TINGKAT[pilihan.tingkat] }}</h2>
             <p class="redup">{{ terpilih.sistem?.os }} · kernel {{ terpilih.sistem?.kernel }} · nyala {{ lamaNyala(terpilih.sistem?.uptime || 0) }} · SSH {{ angka(terpilih.ms) }} ms</p>
             <ul v-if="pilihan.periksa.length" class="masalah">
@@ -368,7 +337,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
               <div v-for="gr in GRAFIK" :key="gr.id" class="grafik-item"><div class="grafik-kepala"><b>{{ gr.judul }}</b></div><span class="sk sk-grafik" /></div>
             </div>
             <div v-else-if="titikServer(terpilih.host).length" class="grafik-grid">
-              <div v-for="gr in grafikServer(terpilih.host)" :key="gr.id" class="grafik-item">
+              <div v-for="gr in grafikServer(terpilih.host, terpilih.jenis)" :key="gr.id" class="grafik-item">
                 <div class="grafik-kepala"><b>{{ gr.judul }}</b><span v-if="gr.ket" class="redup">{{ gr.ket }}</span></div>
                 <template v-if="gr.ada">
                   <ul v-if="gr.seri.length > 1" class="legenda"><li v-for="sr in gr.seri" :key="sr.kunci"><span class="kotak" :style="{ background: sr.warna }" /> {{ sr.label }}</li></ul>
@@ -494,7 +463,34 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
               </div>
               <small class="redup">100% = satu core penuh. Server ini punya {{ terpilih.sistem.cpu_core }} core.</small>
             </section>
-            <section class="kartu" aria-labelledby="judul-hosting">
+            <section v-if="terpilih.jenis === 'backup'" class="kartu" aria-labelledby="judul-simpan">
+              <div class="kartu-judul"><h2 id="judul-simpan"><Ikon nama="server" :ukuran="16" /> Penyimpanan backup</h2><span class="redup">ZFS</span></div>
+              <p v-if="!terpilih.penyimpanan" class="redup">Pool ZFS tidak terbaca.</p>
+              <template v-else>
+                <div v-for="pl in terpilih.penyimpanan.pool" :key="pl.nama" class="res">
+                  <div class="res-kepala"><span>Pool {{ pl.nama }} · {{ pl.health }}</span><b>{{ pl.persen }}%</b></div>
+                  <div class="meter" :class="tingkatPersen(pl.persen)"><i :style="{ width: `${pl.persen}%` }" /></div>
+                  <small class="redup">Terpakai {{ ukuranBerkas(pl.used) }} · sisa {{ ukuranBerkas(pl.free) }} dari {{ ukuranBerkas(pl.total) }}</small>
+                </div>
+                <dl class="angka-dl">
+                  <div><dt>Snapshot</dt><dd>{{ angka(terpilih.penyimpanan.snapshot) }}</dd></div>
+                  <div><dt>Snapshot terakhir</dt><dd>{{ terpilih.penyimpanan.snapshot_terakhir ? waktuLalu(terpilih.penyimpanan.snapshot_terakhir.waktu) : 'belum ada' }}</dd></div>
+                </dl>
+              </template>
+            </section>
+            <section v-else-if="terpilih.jenis === 'lokal'" class="kartu" aria-labelledby="judul-web-lokal">
+              <div class="kartu-judul"><h2 id="judul-web-lokal"><Ikon nama="dashboard" :ukuran="16" /> Web lokal</h2><span class="redup">nginx · dashboard & server dev</span></div>
+              <dl class="angka-dl">
+                <div><dt>Koneksi web aktif</dt><dd>{{ angka(terpilih.hosting?.koneksi_web) }}</dd></div>
+              </dl>
+              <template v-if="terpilih.hosting?.koneksi_ip_teratas?.length">
+                <p class="label-negara redup">IP dengan koneksi web terbanyak</p>
+                <ul class="daftar-chip">
+                  <li v-for="[ip, n] in terpilih.hosting.koneksi_ip_teratas" :key="ip" class="chip-negara"><code>{{ ip }}</code> {{ n }}</li>
+                </ul>
+              </template>
+            </section>
+            <section v-else class="kartu" aria-labelledby="judul-hosting">
               <div class="kartu-judul"><h2 id="judul-hosting"><Ikon nama="email" :ukuran="16" /> Hosting</h2></div>
               <dl class="angka-dl">
                 <div><dt>Akun · domain</dt><dd>{{ angka(terpilih.hosting?.akun) }} · {{ angka(terpilih.hosting?.domain) }}</dd></div>
@@ -533,11 +529,13 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .tile-ikon.kuning { color: var(--waspada); background: color-mix(in srgb, var(--waspada) 15%, transparent); }
 .tile-ikon.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 15%, transparent); }
 .tile-ikon.hijau { color: var(--baik); background: color-mix(in srgb, var(--baik) 15%, transparent); }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
+.sub-menu { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); }
 .sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
   font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
 .sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
 .sub-menu button.aktif { background: var(--aksen); color: #fff; }
+.sub-menu .lencana { font-size: 10px; padding: 0 6px; }
+.sub-menu button.aktif .lencana { color: #fff; background: rgba(255, 255, 255, .2); }
 .sub-menu .hitung { min-width: 20px; padding: 1px 6px; border-radius: 999px; font-size: 11.5px; background: var(--bahaya); color: #fff; text-align: center; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }
 .titik.baik { background: var(--baik); }
@@ -546,13 +544,6 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .titik.biru { background: var(--aksen-terang); }
 .sub-menu button.aktif .titik { box-shadow: 0 0 0 2px #fff; }
 /* Tabel ringkasan */
-.tautan-server { border: 0; padding: 0; background: none; font: inherit; color: var(--aksen-terang); cursor: pointer; }
-.tautan-server:hover { text-decoration: underline; }
-.sel-meter { min-width: 90px; }
-.sel-meter .meter { margin-top: 4px; }
-.sel-meter small { font-size: 11.5px; }
-.temuan { min-width: 180px; }
-.temuan .lencana { margin: 2px 4px 2px 0; }
 .blok { display: block; font-size: 11.5px; }
 .kanan { text-align: right; white-space: nowrap; }
 .teks-bahaya { color: var(--bahaya); }
@@ -617,19 +608,15 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .sk-menu { display: flex; gap: 8px; padding: 8px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow: hidden; }
 .sk-pil { flex: none; height: 30px; width: 96px; border-radius: 9px; }
 .sk-judul { height: 14px; width: 200px; max-width: 60%; margin-bottom: 18px; }
-.sk-baris { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr 2fr; gap: 16px; padding: 14px 0; border-top: 1px solid var(--garis); }
-.sk-baris .sk { height: 12px; }
 .sk-banner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 20px; align-items: center; }
 .sk-cincin { width: 104px; height: 104px; border-radius: 50%; }
 .sk-grafik { height: 170px; margin: 8px 0 12px; border-radius: 10px; }
-.sk-grafik.kecil { height: 150px; }
 @keyframes sk-kilau { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
 .grafik-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 14px; }
 .ringkas-grafik { display: block; margin: 2px 0 0; font-size: 12px; }
 .ringkas-grafik:last-child { margin-bottom: 8px; }
 .kosong { margin: 10px 0 14px; font-size: 13px; }
-.grafik-kecil { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(460px, 100%), 1fr)); gap: 14px; }
 .grafik-item { min-width: 0; padding: 12px 14px 6px; border-radius: 12px; background: var(--kartu-2); }
 .grafik-kepala { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin-bottom: 6px; font-size: 13.5px; }
 .grafik-kepala span { font-size: 12.5px; }
@@ -654,8 +641,6 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 }
 @media (max-width: 560px) {
   .ringkas { grid-template-columns: 1fr; }
-  .sk-baris { grid-template-columns: 1.4fr 1fr 1fr; }
-  .sk-baris .sk:nth-child(n + 4) { display: none; }
   .sk-banner { grid-template-columns: auto minmax(0, 1fr); }
   .sk-cincin { display: none; }
   .status-proteksi { grid-template-columns: auto minmax(0, 1fr); }

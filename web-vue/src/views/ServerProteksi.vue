@@ -3,8 +3,12 @@
 // dan setelan deteksi brute force. Data: GET /api/servers/firewall (installer_status.py → scripts/server_firewall_agent.py
 // lewat SSH, cache 60 dtk), cek IP: GET /api/servers/firewall/cek, aksi: POST /api/servers/firewall/aksi (dicatat di riwayat).
 // IP kantor, IP server sendiri, LAN, dan IP whitelist ditolak agen saat diblokir.
+// PC kantor (tag PC Lokal/PC Backup) tanpa CSF: agen memakai firewalld/ufw + fail2ban; tab WAF & Setelan disembunyikan,
+// "Semua server" di dialog = server hosting saja.
 import { ref, reactive, computed, watch } from 'vue'
 import Ikon from '../components/Ikon.vue'
+import PelakuAkun from '../components/PelakuAkun.vue'
+import { namaAkun } from '../akun.js'
 import Info from '../components/Info.vue'
 import Dialog from '../components/Dialog.vue'
 import LogFirewall from '../components/LogFirewall.vue'
@@ -12,6 +16,7 @@ import LogWaf from '../components/LogWaf.vue'
 import { konfirmasi } from '../konfirmasi.js'
 import { minta, kirim, pakaiPolling, tanggalWaktu, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
+import { jenisServer, pcKantor } from '../jenisServer.js'
 
 const fw = pakaiPolling('/api/servers/firewall', 120000)
 const riwayat = pakaiPolling('/api/servers/firewall/riwayat', 120000)
@@ -24,18 +29,27 @@ async function muatSegar() {
   riwayat.muatUlang()
 }
 const servers = computed(() => fw.data.value?.servers || [])
+// Tanpa ?s= → server pertama (Farnaz) yang terbuka
 const pilih = tabUrl('s', '')
-const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || null)
+const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['blokir', 'sementara', 'whitelist', 'log', 'waf', 'setelan', 'riwayat']
+const TAB_KHUSUS_CSF = ['waf', 'setelan']
 const tab = tabUrl('tab', 'blokir', { boleh: TAB })
+watch(terpilih, (s) => { if (pcKantor(s) && TAB_KHUSUS_CSF.includes(tab.value)) tab.value = 'blokir' }, { immediate: true })
+const hosting = computed(() => servers.value.filter((s) => !pcKantor(s)))
+// Firewall terbaca: CSF (server hosting) atau firewalld/ufw (PC kantor)
+const adaFw = (s) => !!(s?.csf || s?.firewall)
+const namaFw = (s) => (s?.csf ? 'csf' : s?.firewall || '-')
+// ufw tidak punya blokir berbatas waktu
+const tanpaTtl = (host) => servers.value.find((s) => s.host === host)?.firewall === 'ufw'
 
 // Nama pelaku dicatat di riwayat aksi (dashboard tanpa akun per orang)
-const oleh = ref('')
-try { oleh.value = localStorage.getItem('proteksi-oleh') || '' } catch { /* penyimpanan diblokir */ }
-watch(oleh, (v) => { try { localStorage.setItem('proteksi-oleh', v) } catch { /* abaikan */ } })
+// Pelaku di riwayat = akun yang masuk ke dash.velocity.ai.id (backend menggantinya dari cookie sesi)
+const oleh = namaAkun
 
 const PESAN = {
-  invalid_oleh: 'Isi "Nama Anda" di kanan atas dulu — setiap perubahan firewall dicatat atas nama Anda.',
+  invalid_oleh: 'Masuk dulu lewat tombol "Masuk dengan VD.net" di kanan atas — setiap perubahan firewall dicatat atas nama akun Anda.',
+  login_diperlukan: 'Sesi login habis atau belum masuk. Klik "Masuk dengan VD.net" di kanan atas.',
   ip_tidak_sah: 'Alamat IP / CIDR tidak sah.',
   ip_kantor: 'Itu IP kantor (dashboard ini tersambung lewat IP tersebut) — tidak boleh diblokir.',
   ip_server: 'Itu IP milik server sendiri — tidak boleh diblokir.',
@@ -46,6 +60,8 @@ const PESAN = {
   nilai_tidak_sah: 'Ada nilai setelan di luar batas yang diizinkan.',
   setelan_tidak_dikenal: 'Setelan itu tidak bisa diubah dari dashboard.',
   csf_restart_gagal: 'csf -r gagal — csf.conf dikembalikan ke salinan sebelumnya.',
+  ttl_tidak_didukung: 'ufw tidak mendukung blokir sementara — pilih Permanen.',
+  hanya_csf: 'Hanya tersedia di server ber-CSF.',
   server_tidak_dikenal: 'Server tidak dikenal; muat ulang halaman.',
   forbidden: 'Ditolak: hanya bisa diubah dari halaman dashboard ini.',
   timeout: 'Server tidak menjawab (timeout).',
@@ -85,11 +101,13 @@ async function aksi(body, berhasil) {
 }
 
 // ---- Ringkasan ----
-const aktif = (s) => s.ok && s.csf && s.layanan?.csf === 'active' && s.layanan?.lfd === 'active' && s.setelan?.TESTING !== '1'
+const aktif = (s) => s.ok && (s.csf
+  ? s.layanan?.csf === 'active' && s.layanan?.lfd === 'active' && s.setelan?.TESTING !== '1'
+  : !!s.firewall && s.layanan?.[s.firewall] === 'active')
 const batasDeny = (s) => Number(s.setelan?.DENY_IP_LIMIT || 0)
 const penuh = (s) => batasDeny(s) && s.deny.length >= batasDeny(s)
 const total = computed(() => {
-  const ok = servers.value.filter((s) => s.ok && s.csf)
+  const ok = servers.value.filter((s) => s.ok && adaFw(s))
   return {
     deny: ok.reduce((a, s) => a + s.deny.length, 0),
     sementara: ok.reduce((a, s) => a + s.sementara.length, 0),
@@ -102,7 +120,13 @@ const total = computed(() => {
 function peringatan(s) {
   const out = []
   if (!s.ok) return [{ tingkat: 'bahaya', teks: `Tidak bisa dibaca: ${pesanGalat(s.error)}` }]
-  if (!s.csf) return [{ tingkat: 'bahaya', teks: 'CSF tidak terpasang' }]
+  if (!adaFw(s)) return [{ tingkat: 'bahaya', teks: pcKantor(s) ? 'firewalld/ufw tidak ditemukan' : 'CSF tidak terpasang' }]
+  if (!s.csf) {
+    if (s.layanan?.[s.firewall] !== 'active') out.push({ tingkat: 'bahaya', teks: `${s.firewall} ${s.layanan?.[s.firewall] || 'mati'}` })
+    if (s.layanan?.fail2ban && s.layanan.fail2ban !== 'active') out.push({ tingkat: 'waspada', teks: `fail2ban ${s.layanan.fail2ban}` })
+    if (!s.layanan?.fail2ban) out.push({ tingkat: 'info', teks: 'Tanpa fail2ban: brute force SSH tidak diblokir otomatis' })
+    return out
+  }
   if (s.setelan?.TESTING === '1') out.push({ tingkat: 'bahaya', teks: 'CSF masih mode TESTING — aturan dibuang tiap 5 menit' })
   for (const u of ['csf', 'lfd']) if (s.layanan?.[u] !== 'active') out.push({ tingkat: 'bahaya', teks: `${u.toUpperCase()} ${s.layanan?.[u] || 'mati'}` })
   if (penuh(s)) out.push({ tingkat: 'waspada', teks: `Daftar blokir penuh (${s.deny.length}/${batasDeny(s)}): setiap blokir baru menghapus blokir terlama` })
@@ -135,7 +159,7 @@ function statusCek(c) {
 // Status IP di satu server dari data ringkas (untuk tombol Lepas/Blokir di log)
 function statusIp(ip, host) {
   const s = servers.value.find((x) => x.host === host)
-  if (!s?.ok || !s.csf) return null
+  if (!s?.ok || !adaFw(s)) return null
   if (s.deny.some((d) => d.ip === ip)) return 'deny'
   if (s.sementara.some((d) => d.ip === ip)) return 'sementara'
   if (s.allow.some((d) => d.ip === ip)) return 'allow'
@@ -165,8 +189,10 @@ const DURASI = [
 ]
 const dialog = reactive({ buka: false, jenis: 'blokir', ip: '', host: '', ttl: 86400, ket: '' })
 function bukaDialog(jenis, ip = '', host = '') {
-  Object.assign(dialog, { buka: true, jenis, ip, host: host || terpilih.value?.host || 'semua', ttl: 86400, ket: '' })
+  const h = host || terpilih.value?.host || 'semua'
+  Object.assign(dialog, { buka: true, jenis, ip, host: h, ttl: tanpaTtl(h) ? 0 : 86400, ket: '' })
 }
+watch(() => dialog.host, (h) => { if (tanpaTtl(h)) dialog.ttl = 0 })
 const judulDialog = computed(() => `${dialog.jenis === 'blokir' ? 'Blokir' : 'Whitelist'} IP`)
 async function kirimDialog() {
   const di = dialog.host === 'semua' ? 'semua server' : namaServer(dialog.host)
@@ -179,8 +205,8 @@ async function kirimDialog() {
 }
 
 // ---- Detail server ----
-const SUMBER = { cpguard: 'cPGuard', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual' }
-const KELAS_SUMBER = { cpguard: 'ungu', lfd: 'biru', dashboard: 'hijau', manual: 'abu' }
+const SUMBER = { cpguard: 'cPGuard', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban' }
+const KELAS_SUMBER = { cpguard: 'ungu', lfd: 'biru', dashboard: 'hijau', manual: 'abu', fail2ban: 'biru' }
 const negaraDari = (ket) => (ket || '').match(/\(([A-Z]{2})\/([^/)]*)/)
 const alasanRingkas = (ket) => (ket || '').replace(/^(lfd: |BFM: |velocity: )/, '').replace(/\s*\([A-Z]{2}\/[^)]*\)/, '').trim() || '-'
 const cariDeny = ref('')
@@ -220,8 +246,8 @@ const ringkasRiwayat = (r) => (r.aksi === 'atur'
 // ---- Setelan CSF/LFD ----
 const KELOMPOK_SETELAN = [
   { judul: 'Daftar blokir', ket: 'Bila penuh, blokir permanen terlama dihapus otomatis untuk memberi tempat yang baru.', isi: [
-    { k: 'DENY_IP_LIMIT', label: 'Maks. blokir permanen', satuan: 'IP', min: 50, maks: 5000 },
-    { k: 'DENY_TEMP_IP_LIMIT', label: 'Maks. blokir sementara', satuan: 'IP', min: 50, maks: 2000 },
+    { k: 'DENY_IP_LIMIT', label: 'Maks. blokir permanen', satuan: 'IP', min: 50, maks: 20000 },
+    { k: 'DENY_TEMP_IP_LIMIT', label: 'Maks. blokir sementara', satuan: 'IP', min: 50, maks: 10000, ket: 'Naikkan bila lama blokir di bawah diganti sementara' },
   ] },
   { judul: 'Deteksi login gagal (LFD)', ket: 'Jumlah gagal login sebelum IP diblokir, dihitung dalam jangka di bawah. 0 = deteksi mati.', isi: [
     { k: 'LF_SSHD', label: 'SSH', satuan: 'kali', min: 0, maks: 100 },
@@ -234,10 +260,20 @@ const KELOMPOK_SETELAN = [
     { k: 'LF_MODSEC', label: 'Pelanggaran ModSecurity', satuan: 'kali', min: 0, maks: 100 },
     { k: 'LF_INTERVAL', label: 'Jangka hitung', satuan: 'detik', min: 300, maks: 86400 },
   ] },
-  { judul: 'Blokir permanen', ket: 'IP yang berkali-kali kena blokir sementara dinaikkan jadi permanen.', isi: [
+  { judul: 'Lama blokir login gagal', ket: 'Blokir sementara lepas sendiri saat habis, jadi IP bekas penyerang (cloud/CGNAT) tidak terkunci selamanya. Blokir dari cPGuard tidak ikut diatur di sini.', isi: [
+    { k: 'LF_SSHD_PERM', label: 'SSH', lama: true },
+    { k: 'LF_DIRECTADMIN_PERM', label: 'Login DirectAdmin', lama: true },
+    { k: 'LF_FTPD_PERM', label: 'FTP', lama: true },
+    { k: 'LF_SMTPAUTH_PERM', label: 'SMTP (kirim email)', lama: true },
+    { k: 'LF_POP3D_PERM', label: 'POP3', lama: true },
+    { k: 'LF_IMAPD_PERM', label: 'IMAP', lama: true },
+    { k: 'LF_HTACCESS_PERM', label: 'Password .htaccess', lama: true },
+    { k: 'LF_MODSEC_PERM', label: 'Pelanggaran ModSecurity', lama: true },
+  ] },
+  { judul: 'Penyerang berulang → permanen', ket: 'IP yang berkali-kali kena blokir sementara dalam jangka di bawah dinaikkan jadi permanen.', isi: [
     { k: 'LF_PERMBLOCK', label: 'Naikkan ke permanen', pilihan: [['1', 'Aktif'], ['0', 'Mati']] },
     { k: 'LF_PERMBLOCK_COUNT', label: 'Setelah diblokir sementara', satuan: 'kali', min: 1, maks: 20 },
-    { k: 'LF_SSHD_PERM', label: 'Blokir SSH', satuan: '0/1/detik', min: 0, maks: 604800, ket: '1 = permanen, angka lain = lama blokir (detik)' },
+    { k: 'LF_PERMBLOCK_INTERVAL', label: 'Dalam jangka', satuan: 'detik', min: 3600, maks: 604800, ket: '86400 = 1 hari' },
   ] },
   { judul: 'Batas koneksi per IP', ket: 'Blokir IP yang membuka terlalu banyak koneksi sekaligus (banjir koneksi). 0 = mati.', isi: [
     { k: 'CT_LIMIT', label: 'Maks. koneksi per IP', satuan: 'koneksi', min: 0, maks: 1000, ket: 'Sarankan ≥ 300 bila dinyalakan (situs ramai/NAT kantor)' },
@@ -248,6 +284,14 @@ const KELOMPOK_SETELAN = [
     { k: 'CC_DENY', label: 'Kode negara', teks: true, placeholder: 'mis. CN,RU (kosong = tidak ada)' },
   ] },
 ]
+// Lama blokir pemicu LFD (*_PERM): 1 = permanen, selain itu detik. Nilai di luar daftar tetap ditampilkan.
+const LAMA_BLOKIR = [['1', 'Permanen'], ['3600', '1 jam'], ['21600', '6 jam'], ['86400', '1 hari'], ['259200', '3 hari'], ['604800', '7 hari'], ['2592000', '30 hari']]
+function pilihanLama(k) {
+  const v = String(terpilih.value?.setelan?.[k] ?? '')
+  return !v || LAMA_BLOKIR.some(([n]) => n === v) ? LAMA_BLOKIR : [...LAMA_BLOKIR, [v, `${v} detik`]]
+}
+// Kunci yang tidak ada di csf.conf server itu (versi CSF berbeda) tidak ditampilkan
+const isianAda = (g) => g.isi.filter((f) => f.k in (terpilih.value?.setelan || {}))
 const form = reactive({})
 const formHost = ref('')
 function isiForm() {
@@ -288,10 +332,10 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
     <header class="kepala-halaman">
       <div>
         <h1>Proteksi Server</h1>
-        <p class="redup">Firewall CSF & deteksi brute force (LFD) di semua server hosting: blokir, lepas, whitelist IP, dan atur ambang blokir.</p>
+        <p class="redup">Firewall CSF & deteksi brute force (LFD) di server hosting, serta firewalld/ufw di PC kantor (bertag): blokir, lepas, whitelist IP, dan atur ambang blokir.</p>
       </div>
       <div class="kepala-aksi">
-        <label class="nama-saya"><span class="redup">Nama Anda</span><input id="nama-proteksi" v-model.lazy="oleh" maxlength="40" placeholder="untuk riwayat aksi" autocomplete="name"></label>
+        <div class="nama-saya"><span class="redup">Dicatat sebagai</span><PelakuAkun id="nama-proteksi" /></div>
         <button type="button" class="tombol kecil" :disabled="segarkan || (fw.memuat.value && !fw.data.value)" @click="muatSegar"><Ikon nama="ulang" :ukuran="16" /> {{ segarkan ? 'Membaca…' : 'Muat ulang' }}</button>
       </div>
     </header>
@@ -359,7 +403,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
               <thead><tr><th scope="col">Server</th><th scope="col">Status</th><th scope="col">Keterangan</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
               <tbody>
                 <tr v-for="c in cekHasil.servers" :key="c.host">
-                  <td><b>{{ c.name }}</b></td>
+                  <td class="nowrap"><b>{{ c.name }}</b> <span class="lencana" :class="jenisServer(c.jenis).kelas">{{ jenisServer(c.jenis).label }}</span></td>
                   <td class="nowrap">
                     <span class="lencana" :class="statusCek(c).kelas">{{ statusCek(c).label }}</span>
                     <span v-if="c.ip_kantor" class="lencana biru">KANTOR</span>
@@ -391,78 +435,15 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
       <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
 
       <nav class="sub-menu" aria-label="Pilih server">
-        <button type="button" :class="{ aktif: !terpilih }" :aria-current="!terpilih ? 'page' : undefined" @click="pilih = ''"><Ikon nama="dashboard" :ukuran="16" /> Semua server</button>
         <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
           <span class="titik" :class="tingkat(s)" aria-hidden="true" /> {{ s.name }}
+          <span class="lencana" :class="jenisServer(s.jenis).kelas" :title="jenisServer(s.jenis).ket">{{ jenisServer(s.jenis).label }}</span>
         </button>
       </nav>
 
-      <!-- ================= Semua server ================= -->
-      <template v-if="!terpilih">
-        <section class="kartu" aria-labelledby="judul-semua">
-          <div class="kartu-judul"><h2 id="judul-semua"><Ikon nama="perisai" :ukuran="16" /> Firewall per server</h2><span class="redup">CSF + LFD</span></div>
-          <div class="tabel-wadah">
-            <table class="tabel">
-              <thead><tr><th scope="col">Server</th><th scope="col">CSF / LFD</th><th scope="col">Blokir permanen</th><th scope="col" class="kanan">Sementara</th><th scope="col" class="kanan">Whitelist</th><th scope="col">Login gagal → blokir</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
-              <tbody>
-                <tr v-for="s in servers" :key="s.host">
-                  <td>
-                    <b>{{ s.name }}</b><small class="redup blok">{{ s.host }}</small>
-                    <span v-for="p in peringatan(s).filter((x) => x.tingkat !== 'info')" :key="p.teks" class="blok peringatan" :class="p.tingkat">{{ p.teks }}</span>
-                  </td>
-                  <template v-if="s.ok && s.csf">
-                    <td class="nowrap">
-                      <span class="titik" :class="s.layanan.csf === 'active' ? 'baik' : 'bahaya'" /> csf {{ s.versi }}
-                      <span class="blok"><span class="titik" :class="s.layanan.lfd === 'active' ? 'baik' : 'bahaya'" /> lfd {{ s.layanan.lfd }}</span>
-                    </td>
-                    <td class="kolom-meter">
-                      <span class="meter-teks">{{ angka(s.deny.length) }} / {{ angka(batasDeny(s)) }}</span>
-                      <span class="meter" :class="{ penuh: penuh(s) }"><span :style="{ width: `${Math.min(100, (s.deny.length / (batasDeny(s) || 1)) * 100)}%` }" /></span>
-                    </td>
-                    <td class="kanan">{{ angka(s.sementara.length) }}</td>
-                    <td class="kanan">{{ angka(s.allow.filter((a) => !a.include && !a.aturan).length) }}</td>
-                    <td class="kecil-teks">SSH {{ s.setelan.LF_SSHD }} · DA {{ s.setelan.LF_DIRECTADMIN }} · SMTP {{ s.setelan.LF_SMTPAUTH }} · FTP {{ s.setelan.LF_FTPD }}<span class="redup blok">dalam {{ Math.round(Number(s.setelan.LF_INTERVAL || 0) / 60) }} menit</span></td>
-                  </template>
-                  <td v-else colspan="5" class="redup">{{ peringatan(s)[0]?.teks }}</td>
-                  <td class="kanan"><button type="button" class="tombol garis kecil" @click="pilih = s.name">Kelola</button></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="redup kaki">Saat ini cPGuard masih berjalan paralel dan membuat sebagian besar blokir (sumber "BFM"). Blokir dari halaman ini diberi keterangan <code>velocity:</code> + nama Anda.</p>
-        </section>
-
-        <section class="kartu" aria-labelledby="judul-log">
-          <div class="kartu-judul"><h2 id="judul-log"><Ikon nama="dokumen" :ukuran="16" /> Log firewall
-            <Info label="Tentang log firewall"><p>Kejadian dari lfd.log tiap server (blokir brute force, login SSH, beban tinggi, relay email berlebih, file mencurigakan) digabung dengan blokir cPGuard/dashboard dari csf.deny. Klik IP untuk mengeceknya di semua server.</p></Info>
-          </h2><span class="redup">semua server</span></div>
-          <LogFirewall server="semua" :status="statusIp" :proses="proses" @blokir="(ip, host) => bukaDialog('blokir', ip, host)" @lepas="lepas" @cek="cekDariLog" />
-        </section>
-
-        <section class="kartu" aria-labelledby="judul-waf">
-          <div class="kartu-judul"><h2 id="judul-waf"><Ikon nama="perisai" :ukuran="16" /> Log WAF
-            <Info label="Tentang log WAF"><p>Request web yang diblokir ModSecurity di LiteSpeed (aturan cPGuard & Malware.Expert): bot/crawler (HTTP 429), eksploit & probe (403), dan rate limit/DDoS (406, mis. brute force xmlrpc.php). Dibaca langsung dari log LiteSpeed, jadi tetap jalan walau cPGuard dicopot.</p></Info>
-          </h2><span class="redup">semua server</span></div>
-          <LogWaf server="semua" :status="statusIp" :proses="proses" @blokir="(ip, host) => bukaDialog('blokir', ip, host)" @lepas="lepas" @cek="cekDariLog" />
-        </section>
-
-        <section class="kartu" aria-labelledby="judul-riwayat">
-          <div class="kartu-judul"><h2 id="judul-riwayat"><Ikon nama="jam" :ukuran="16" /> Riwayat aksi</h2><span class="redup">dari halaman ini</span></div>
-          <p v-if="riwayat.memuat.value && !riwayat.data.value" class="redup">Memuat…</p>
-          <p v-else-if="!riwayatServer.length" class="redup">Belum ada aksi firewall dari dashboard.</p>
-          <ol v-else class="kejadian">
-            <li v-for="(r, i) in riwayatServer.slice(0, 30)" :key="i">
-              <span class="titik" :class="r.ok ? (AKSI_LABEL[r.aksi]?.[0] || 'abu') : 'bahaya'" aria-hidden="true" />
-              <div><b>{{ AKSI_LABEL[r.aksi]?.[1] || r.aksi }}</b> · {{ r.server }} · {{ ringkasRiwayat(r) }} <span class="redup">oleh {{ r.oleh }}</span> <span v-if="!r.ok" class="lencana merah">GAGAL: {{ pesanGalat(r.error) }}</span></div>
-              <time class="redup" :datetime="new Date(r.t * 1000).toISOString()">{{ tanggalWaktu(r.t) }}</time>
-            </li>
-          </ol>
-        </section>
-      </template>
-
       <!-- ================= Detail satu server ================= -->
-      <template v-else>
-        <section v-if="!terpilih.ok || !terpilih.csf" class="kartu">
+      <template v-if="terpilih">
+        <section v-if="!terpilih.ok || !adaFw(terpilih)" class="kartu">
           <p class="pesan-status bahaya">{{ peringatan(terpilih)[0]?.teks }}</p>
         </section>
         <template v-else>
@@ -472,7 +453,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 
           <section class="kartu" aria-labelledby="judul-detail">
             <div class="kartu-judul">
-              <h2 id="judul-detail"><Ikon nama="perisai" :ukuran="16" /> {{ terpilih.name }} <small class="redup">csf {{ terpilih.versi }} · IP kantor terdeteksi {{ terpilih.ip_kantor || '-' }}</small></h2>
+              <h2 id="judul-detail"><Ikon nama="perisai" :ukuran="16" /> {{ terpilih.name }} <span class="lencana" :class="jenisServer(terpilih.jenis).kelas">{{ jenisServer(terpilih.jenis).label }}</span> <small class="redup">{{ namaFw(terpilih) }} {{ terpilih.versi }}<template v-if="terpilih.zona"> · zona {{ terpilih.zona }}</template> · IP kantor terdeteksi {{ terpilih.ip_kantor || '-' }}</small></h2>
               <div class="tab" role="tablist" aria-label="Bagian firewall">
                 <button v-for="t in [
                   { k: 'blokir', label: 'Diblokir', n: terpilih.deny.length },
@@ -482,7 +463,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
                   { k: 'waf', label: 'WAF' },
                   { k: 'setelan', label: 'Setelan' },
                   { k: 'riwayat', label: 'Riwayat', n: riwayatServer.length },
-                ]" :key="t.k" type="button" role="tab" :aria-selected="tab === t.k" :class="{ aktif: tab === t.k }" @click="tab = t.k">
+                ].filter((t) => terpilih.csf || !TAB_KHUSUS_CSF.includes(t.k))" :key="t.k" type="button" role="tab" :aria-selected="tab === t.k" :class="{ aktif: tab === t.k }" @click="tab = t.k">
                   {{ t.label }} <span v-if="t.n !== undefined" class="hitung">{{ t.n }}</span>
                 </button>
               </div>
@@ -559,13 +540,13 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
                 </table>
               </div>
               <p v-if="aturanLain.length" class="redup kaki">
-                Juga di csf.allow (tidak diubah dari sini):
+                {{ terpilih.csf ? 'Juga di csf.allow' : `Aturan ${terpilih.firewall} lain` }} (tidak diubah dari sini):
                 <template v-for="(a, i) in aturanLain" :key="a.ip"><code>{{ a.ip }}</code><template v-if="a.include"> ({{ a.isi }} IP)</template><template v-if="i < aturanLain.length - 1">, </template></template>.
               </p>
             </template>
 
             <!-- Log firewall server ini -->
-            <LogFirewall v-else-if="tab === 'log'" :server="terpilih.host" :status="statusIp" :proses="proses"
+            <LogFirewall v-else-if="tab === 'log'" :server="terpilih.host" :status="statusIp" :proses="proses" :pc="pcKantor(terpilih)"
               @blokir="(ip, host) => bukaDialog('blokir', ip, host)" @lepas="lepas" @cek="cekDariLog" />
 
             <LogWaf v-else-if="tab === 'waf'" :server="terpilih.host" :status="statusIp" :proses="proses"
@@ -573,13 +554,13 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 
             <!-- Setelan -->
             <form v-else-if="tab === 'setelan'" class="setelan" @submit.prevent="simpanSetelan">
-              <fieldset v-for="g in KELOMPOK_SETELAN" :key="g.judul">
+              <fieldset v-for="g in KELOMPOK_SETELAN.filter((g) => isianAda(g).length)" :key="g.judul">
                 <legend>{{ g.judul }}</legend>
                 <p class="redup">{{ g.ket }}</p>
                 <div class="isian-grid">
-                  <label v-for="f in g.isi" :key="f.k" class="isian" :class="{ diubah: f.k in berubah, lebar: f.teks }">
+                  <label v-for="f in isianAda(g)" :key="f.k" class="isian" :class="{ diubah: f.k in berubah, lebar: f.teks }">
                     <span>{{ f.label }}</span>
-                    <select v-if="f.pilihan" v-model="form[f.k]"><option v-for="[v, l] in f.pilihan" :key="v" :value="v">{{ l }}</option></select>
+                    <select v-if="f.pilihan || f.lama" v-model="form[f.k]"><option v-for="[v, l] in (f.lama ? pilihanLama(f.k) : f.pilihan)" :key="v" :value="v">{{ l }}</option></select>
                     <input v-else-if="f.teks" v-model="form[f.k]" :placeholder="f.placeholder" pattern="^([A-Za-z]{2}(\s*,\s*[A-Za-z]{2})*)?$" autocomplete="off" spellcheck="false">
                     <input v-else v-model="form[f.k]" type="number" :min="f.min" :max="f.maks" step="1" required>
                     <small>{{ f.k }}<template v-if="f.satuan"> · {{ f.satuan }}</template><template v-if="f.min !== undefined"> ({{ f.min }}–{{ angka(f.maks) }})</template><template v-if="f.ket"> · {{ f.ket }}</template></small>
@@ -614,20 +595,28 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
         <label class="isian"><span>IP atau CIDR</span><input v-model="dialog.ip" required autofocus placeholder="mis. 185.65.135.185" autocomplete="off" spellcheck="false"></label>
         <label class="isian"><span>Server</span>
           <select v-model="dialog.host">
-            <option value="semua">Semua server ({{ servers.length }})</option>
-            <option v-for="s in servers" :key="s.host" :value="s.host">{{ s.name }}</option>
+            <option value="semua">Semua server hosting ({{ hosting.length }})</option>
+            <optgroup label="Server hosting">
+              <option v-for="s in hosting" :key="s.host" :value="s.host">{{ s.name }}</option>
+            </optgroup>
+            <optgroup label="PC kantor">
+              <option v-for="s in servers.filter(pcKantor)" :key="s.host" :value="s.host">{{ s.name }} ({{ jenisServer(s.jenis).label }} · {{ s.firewall || 'firewall' }})</option>
+            </optgroup>
           </select>
         </label>
         <div v-if="dialog.jenis === 'blokir'" class="isian">
           <span>Durasi</span>
           <div class="pil-durasi" role="radiogroup" aria-label="Durasi blokir">
-            <label v-for="d in DURASI" :key="d.nilai" :class="{ aktif: dialog.ttl === d.nilai }"><input v-model="dialog.ttl" type="radio" :value="d.nilai" class="sr"> {{ d.label }}</label>
+            <label v-for="d in DURASI" :key="d.nilai" :class="{ aktif: dialog.ttl === d.nilai, mati: d.nilai && tanpaTtl(dialog.host) }"><input v-model="dialog.ttl" type="radio" :value="d.nilai" class="sr" :disabled="d.nilai && tanpaTtl(dialog.host)"> {{ d.label }}</label>
           </div>
-          <small v-if="dialog.ttl === 0">Permanen masuk csf.deny (maks. {{ terpilih ? batasDeny(terpilih) : 200 }} IP; bila penuh, yang terlama terhapus). Untuk penyerang sesaat, blokir sementara lebih awet.</small>
+          <small v-if="tanpaTtl(dialog.host)">ufw hanya mendukung blokir permanen; lepas manual lewat tab Diblokir.</small>
+          <small v-else-if="pcKantor(servers.find((s) => s.host === dialog.host))">{{ dialog.ttl === 0 ? 'Permanen = rich rule firewalld (tetap ada sesudah restart).' : 'Sementara = rich rule firewalld berbatas waktu (hilang bila firewalld di-restart).' }}</small>
+          <small v-else-if="dialog.ttl === 0">Permanen masuk csf.deny (maks. {{ terpilih ? batasDeny(terpilih) : 200 }} IP; bila penuh, yang terlama terhapus). Untuk penyerang sesaat, blokir sementara lebih awet.</small>
         </div>
         <label class="isian"><span>{{ dialog.jenis === 'blokir' ? 'Alasan' : 'Keterangan' }}</span><input v-model="dialog.ket" maxlength="120" :placeholder="dialog.jenis === 'blokir' ? 'mis. brute force wp-login klien X' : 'mis. IP kantor klien X / server backup'"></label>
-        <p v-if="dialog.jenis === 'izinkan'" class="redup">IP whitelist tidak pernah diblokir LFD maupun cPGuard di server itu — pakai hanya untuk IP tepercaya.</p>
-        <p v-if="!oleh.trim()" class="pesan-status bahaya">Isi "Nama Anda" di kanan atas dulu.</p>
+        <p v-if="dialog.jenis === 'izinkan' && pcKantor(servers.find((x) => x.host === dialog.host))" class="redup">Whitelist di PC kantor membuka SEMUA port untuk IP ini — pakai hanya untuk IP tepercaya.</p>
+        <p v-else-if="dialog.jenis === 'izinkan'" class="redup">IP whitelist tidak pernah diblokir LFD maupun cPGuard di server itu — pakai hanya untuk IP tepercaya.</p>
+        <p v-if="!oleh.trim()" class="pesan-status bahaya">Masuk dulu lewat tombol "Masuk dengan VD.net" di kanan atas.</p>
         <div class="dialog-aksi">
           <button type="button" class="tombol garis" @click="dialog.buka = false">Batal</button>
           <button type="submit" class="tombol" :class="{ bahaya: dialog.jenis === 'blokir' }" :disabled="proses || !dialog.ip.trim() || !oleh.trim()">{{ proses ? 'Menerapkan…' : dialog.jenis === 'blokir' ? 'Blokir' : 'Tambah ke whitelist' }}</button>
@@ -642,7 +631,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 .halaman > * { min-width: 0; }
 .kepala-aksi { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .nama-saya { display: grid; gap: 4px; font-size: 12px; }
-.nama-saya input { min-width: 190px; }
+
 .ringkas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .kartu-judul { flex-wrap: wrap; gap: 10px; }
 .kartu-judul h2 { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -662,11 +651,13 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 .hasil-cek { margin-top: 14px; display: grid; gap: 8px; }
 .hasil-kepala { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .hasil-kepala p { margin: 0; font-size: 14px; }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
+.sub-menu { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); }
 .sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
   font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
 .sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
 .sub-menu button.aktif { background: var(--aksen); color: #fff; }
+.sub-menu .lencana { font-size: 10px; padding: 0 6px; }
+.sub-menu button.aktif .lencana { color: #fff; background: rgba(255, 255, 255, .2); }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik, .titik.hijau { background: var(--baik); }
 .titik.waspada, .titik.kuning { background: var(--waspada); }
@@ -675,15 +666,6 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 .titik.ungu { background: var(--ungu); }
 .lencana.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 14%, transparent); }
 .lencana + .lencana { margin-left: 4px; }
-.peringatan { font-size: 12px; margin-top: 3px; }
-.peringatan.bahaya { color: var(--bahaya); }
-.peringatan.waspada { color: var(--waspada); }
-.kolom-meter { min-width: 130px; }
-.meter-teks { display: block; font-size: 13px; margin-bottom: 5px; }
-.meter { display: block; height: 6px; border-radius: 99px; background: var(--kartu-2); overflow: hidden; }
-.meter span { display: block; height: 100%; border-radius: 99px; background: var(--aksen-terang); }
-.meter.penuh span { background: var(--waspada); }
-.kecil-teks { font-size: 13px; }
 .daftar-peringatan { list-style: none; margin: 0; padding: 12px 16px; display: grid; gap: 6px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); font-size: 13.5px; }
 .daftar-peringatan li { display: flex; gap: 10px; align-items: center; }
 .daftar-peringatan li.bahaya { color: var(--bahaya); }
@@ -720,6 +702,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 .pil-durasi { display: flex; flex-wrap: wrap; gap: 6px; }
 .pil-durasi label { border: 1px solid var(--garis); border-radius: 9px; padding: 7px 12px; font-size: 13px; cursor: pointer; color: var(--teks-2); }
 .pil-durasi label.aktif { background: var(--aksen-lembut); border-color: var(--aksen-terang); color: var(--aksen-terang); font-weight: 600; }
+.pil-durasi label.mati { opacity: .4; cursor: not-allowed; }
 .pil-durasi label:focus-within { outline: 2px solid var(--aksen-terang); outline-offset: 2px; }
 .dialog-aksi { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .nowrap { white-space: nowrap; }
@@ -753,7 +736,7 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 @media (max-width: 560px) {
   .ringkas { grid-template-columns: 1fr; }
   .form-cek { grid-template-columns: 1fr; }
-  .nama-saya, .nama-saya input { width: 100%; }
+  .nama-saya { width: 100%; }
   .kepala-aksi { width: 100%; }
   .sk-baris { grid-template-columns: 1fr 1fr 1fr; }
   .kejadian li { grid-template-columns: 8px minmax(0, 1fr); }

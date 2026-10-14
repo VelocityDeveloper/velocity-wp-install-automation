@@ -104,7 +104,7 @@ const hitungKata = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0)
     <textarea v-model="catatan" class="catatan" :disabled="dikunci" :rows="catatan.trim() ? 8 : 12" placeholder="Contoh: Klien toko bangunan, ingin aplikasi kasir + stok 2 cabang. Kasir input penjualan, admin gudang kelola stok & mutasi antar cabang, owner lihat laporan harian…" />
     <div class="aksi">
       <button type="button" class="tombol garis" :disabled="!berubahCatatan || dikunci || !namaSaya.trim()" @click="simpanCatatan">Simpan catatan</button>
-      <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Isi "Nama Anda" dulu →</button>
+      <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Masuk dulu →</button>
       <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
     </div>
     <fieldset class="konten">

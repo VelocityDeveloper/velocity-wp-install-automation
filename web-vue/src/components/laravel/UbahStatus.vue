@@ -36,7 +36,7 @@ async function simpan() {
       <textarea v-if="st.nilai !== 'aktif'" v-model="st.alasan" rows="2" maxlength="500" aria-label="Alasan (opsional)"
         :placeholder="st.nilai === 'selesai' ? 'Catatan (opsional) — mis. sudah serah terima ke klien' : 'Alasan (opsional) — mis. klien memilih vendor lain'" />
       <p v-if="p.job && st.nilai !== 'aktif'" class="pesan-status waspada">Masih ada proses berjalan; tunggu selesai dulu.</p>
-      <p v-if="!namaSaya.trim()" class="pesan-status waspada">Isi "Nama Anda" dulu.</p>
+      <p v-if="!namaSaya.trim()" class="pesan-status waspada">Masuk dulu lewat "Masuk dengan VD.net".</p>
       <p v-if="st.galat" class="pesan-status bahaya">{{ st.galat }}</p>
       <div class="aksi-dialog">
         <button type="button" class="tombol garis" @click="emit('tutup')">Tutup</button>

@@ -1,5 +1,7 @@
 # Scanner kerentanan & bot jahat — diblokir (429). Satu pola per baris, huruf kecil, dicocokkan sebagai potongan User-Agent.
 # Dari daftar cPGuard badbots.txt + scanner yang umum; TANPA curl/wget (cron klien sering memakainya).
+# UA uji milik velocity-waf-pasang / dashboard (cek aturan aktif tanpa memicu cPGuard)
+velocity-waf-uji
 sqlmap
 nikto
 wpscan

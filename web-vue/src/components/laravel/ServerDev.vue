@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { kirim, ukuranBerkas, waktuLalu } from '../../api.js'
 import { konfirmasi } from '../../konfirmasi.js'
-import { namaSaya, pesanGalat, KONDISI_SERVER as KONDISI } from '../../laravel.js'
+import { namaSaya, pesanGalat, KONDISI_SERVER as KONDISI, alamatDev } from '../../laravel.js'
 
 const props = defineProps({ data: Object, galat: Object })
 const emit = defineEmits(['ubah'])
@@ -29,7 +29,7 @@ const nanti = (t) => {
   if (d < 3600) return `${Math.max(1, Math.floor(d / 60))} menit lagi`
   return `${Math.floor(d / 3600)} jam lagi`
 }
-const alamat = (s) => `http://${location.hostname}:${s.port}/`
+const alamat = (s) => alamatDev(s.port, props.data?.lan_ip)
 
 const sibuk = ref('')
 const pesan = ref({ kelas: '', teks: '' })
@@ -63,7 +63,7 @@ async function jalankan(s, aksi) {
         · {{ hitung('mati') }} mati · RAM {{ ukuranBerkas(totalMemori) }}
       </p>
     </div>
-    <p class="redup ket">Server yang tidak dibuka dan kodenya tidak diubah selama 24 jam dimatikan otomatis supaya RAM PC tidak habis. Nyalakan lagi di sini kapan saja.</p>
+    <p class="redup ket">Server yang tidak dibuka dan kodenya tidak diubah selama 24 jam dimatikan otomatis supaya RAM PC tidak habis. Nyalakan lagi di sini kapan saja. Sesudah PC restart semua server dev mati (kecuali vdnet-production), nyalakan manual saat dipakai.</p>
     <p v-if="galat && !data" class="pesan-status bahaya">Gagal memuat status server: {{ galat.message }}</p>
     <p v-else-if="!data" class="redup">Memuat…</p>
     <ul v-else-if="tampil.length" class="daftar-server">

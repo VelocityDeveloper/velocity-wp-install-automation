@@ -104,7 +104,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
         <p class="redup">Dari diskusi klien sampai aplikasi jadi: PM menyusun brief, agen Claude mengerjakan, webmaster memeriksa.</p>
       </div>
       <div class="nama-saya">
-        <label for="nama-saya" class="redup">Nama Anda</label>
+        <span class="redup">Dicatat sebagai</span>
         <PilihNama :tim="data?.tim" />
       </div>
     </header>
@@ -162,7 +162,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
           <small>Saat diskusi awal folder biasanya belum ada — bisa dihubungkan nanti sebelum install.</small>
         </div>
         <div v-if="!namaSaya.trim()" class="isian">
-          <label for="nama-baru"><span class="label">Nama Anda</span></label>
+          <span class="label">Dicatat sebagai</span>
           <PilihNama id="nama-baru" :tim="data?.tim" />
         </div>
         <div class="aksi">

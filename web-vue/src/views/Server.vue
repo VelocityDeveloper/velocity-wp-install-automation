@@ -1,5 +1,6 @@
 <script setup>
 // Server: daftar server tujuan installer (/api/servers, data /var/lib/velocity/servers.json)
+// + PC kantor (PC Lokal, PC Backup; /var/lib/velocity/servers-monitor.json, hanya dipantau) bertag pembeda
 // + kapasitas disk & resource tiap server (/api/servers/resource, SSH, cache 60 dtk)
 // + kontrol daya Local PC (dipindah dari beranda agar tidak terpencet).
 import { ref, reactive, computed, onMounted } from 'vue'
@@ -7,6 +8,7 @@ import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
 import { minta, kirim, pakaiPolling, ukuranBerkas, waktuLalu } from '../api.js'
 import { konfirmasi } from '../konfirmasi.js'
+import { jenisServer } from '../jenisServer.js'
 
 const PESAN = {
   nama_wajib: 'Nama server wajib diisi.',
@@ -26,6 +28,13 @@ function pesan(kode) {
 }
 
 const servers = ref([])
+const pc = ref([])
+const simpananPc = ref('')
+// Satu daftar untuk ditampilkan: server hosting dulu (urutan = default installer), lalu PC kantor
+const daftar = computed(() => [
+  ...servers.value.map((s, i) => ({ ...s, jenis: 'hosting', i, kunci: i })),
+  ...pc.value.map((s) => ({ ...s, kunci: `pc:${s.host}` })),
+])
 const hanyaBaca = ref(false)
 const simpanan = ref('')
 const memuat = ref(true)
@@ -35,8 +44,10 @@ const hasilTes = reactive({})
 
 function terapkan(d) {
   servers.value = d.servers || []
+  pc.value = d.pc || []
   hanyaBaca.value = !!d.readonly
   if (d.store) simpanan.value = d.store
+  if (d.store_pc) simpananPc.value = d.store_pc
 }
 async function muat() {
   try { terapkan(await minta('/api/servers')); galatMuat.value = '' }
@@ -47,10 +58,11 @@ onMounted(muat)
 const beriStatus = (teks, galat) => Object.assign(statusDaftar, { teks, kelas: galat ? 'bahaya' : 'baik' })
 const bersihkanTes = () => Object.keys(hasilTes).forEach((k) => delete hasilTes[k])
 
-async function tesSsh(i) {
-  hasilTes[i] = 'jalan'
-  try { hasilTes[i] = await kirim('/api/servers/test', { index: i }) }
-  catch (e) { hasilTes[i] = { ok: false, error: pesan(e.message) } }
+async function tesSsh(s) {
+  const k = s.kunci
+  hasilTes[k] = 'jalan'
+  try { hasilTes[k] = await kirim('/api/servers/test', s.jenis === 'hosting' ? { index: s.i } : { pc: true, host: s.host }) }
+  catch (e) { hasilTes[k] = { ok: false, error: pesan(e.message) } }
 }
 async function jadikanDefault(i) {
   const s = servers.value[i]
@@ -77,14 +89,16 @@ async function muatSegar() {
 const resPerHost = computed(() => Object.fromEntries((resource.data.value?.servers || []).map((r) => [r.host, r])))
 const tingkat = (p) => (p >= 90 ? 'bahaya' : p >= 75 ? 'waspada' : '')
 const lamaNyala = (u) => (u >= 86400 ? `${Math.floor(u / 86400)} hari` : `${Math.floor(u / 3600)} jam`)
+// Ringkasan kapasitas = server hosting saja (disk 1 TB PC Backup tidak ikut menggelembungkan "sisa disk")
+const resHosting = computed(() => (resource.data.value?.servers || []).filter((r) => !r.jenis || r.jenis === 'hosting'))
 const ringkasan = computed(() => {
-  const semua = (resource.data.value?.servers || []).filter((r) => r.ok)
+  const semua = resHosting.value.filter((r) => r.ok)
   const disk = semua.flatMap((r) => r.disks || [])
   const total = disk.reduce((a, d) => a + d.total, 0)
   const pakai = disk.reduce((a, d) => a + d.used, 0)
   const sisa = disk.reduce((a, d) => a + d.free, 0)
   return {
-    online: semua.length, jumlah: resource.data.value?.servers?.length || 0,
+    online: semua.length, jumlah: resHosting.value.length,
     total, pakai, sisa, persen: pakai + sisa ? Math.round((pakai * 1000) / (pakai + sisa)) / 10 : 0,
     core: semua.reduce((a, r) => a + (r.cpu_core || 0), 0),
     ram: semua.reduce((a, r) => a + (r.ram?.total || 0), 0),
@@ -159,13 +173,13 @@ async function jalankanDaya() {
     <header class="kepala-halaman">
       <div>
         <h1>Server</h1>
-        <p class="redup">Server tujuan installer, kapasitas disk, pemakaian resource, dan kontrol daya Local PC.</p>
+        <p class="redup">Server hosting tujuan installer dan PC kantor (PC Lokal, PC Backup): kapasitas disk, pemakaian resource, dan kontrol daya Local PC.</p>
       </div>
     </header>
 
     <section class="kartu" aria-labelledby="judul-ringkas">
       <div class="kartu-judul">
-        <h2 id="judul-ringkas">Kapasitas semua server</h2>
+        <h2 id="judul-ringkas">Kapasitas server hosting</h2>
         <span class="redup">
           <template v-if="resource.data.value?.diambil">Diperbarui {{ waktuLalu(resource.data.value.diambil) }} · </template>
           <button type="button" class="tombol garis kecil" :disabled="segarkan" @click="muatSegar">{{ segarkan ? 'Mengambil…' : 'Segarkan' }}</button>
@@ -180,7 +194,7 @@ async function jalankanDaya() {
           <div class="meter" :class="tingkat(ringkasan.persen)" role="meter" :aria-valuenow="ringkasan.persen" aria-valuemin="0" aria-valuemax="100" aria-label="Disk terpakai semua server"><i :style="{ width: `${ringkasan.persen}%` }" /></div>
           <small class="redup">{{ ukuranBerkas(ringkasan.pakai) }} dari {{ ukuranBerkas(ringkasan.total) }}</small>
         </div>
-        <div class="tile"><span class="redup">Sisa disk</span><strong>{{ ukuranBerkas(ringkasan.sisa) }}</strong><small class="redup">gabungan semua server</small></div>
+        <div class="tile"><span class="redup">Sisa disk</span><strong>{{ ukuranBerkas(ringkasan.sisa) }}</strong><small class="redup">gabungan server hosting</small></div>
         <div class="tile"><span class="redup">Total CPU · RAM</span><strong>{{ ringkasan.core }} core</strong><small class="redup">RAM {{ ukuranBerkas(ringkasan.ram) }}</small></div>
         <div class="tile"><span class="redup">Server tersambung</span><strong :class="{ 'teks-bahaya': ringkasan.online < ringkasan.jumlah }">{{ ringkasan.online }} / {{ ringkasan.jumlah }}</strong><small class="redup">cek SSH tiap 1 menit</small></div>
       </div>
@@ -191,19 +205,21 @@ async function jalankanDaya() {
         <h2 id="judul-daftar">Server terdaftar</h2>
         <span class="redup">{{ simpanan }}</span>
       </div>
-      <p class="redup">Server <b>default</b> (urutan pertama) jadi tujuan manifest baru. Jumlah situs dihitung dari target_host manifest; server yang masih dipakai tidak bisa dihapus.</p>
+      <p class="redup">Server <b>default</b> (urutan pertama) jadi tujuan manifest baru. Jumlah situs dihitung dari target_host manifest; server yang masih dipakai tidak bisa dihapus.
+        Mesin bertag <span class="lencana ungu">PC Lokal</span> / <span class="lencana teal">PC Backup</span> hanya dipantau (Monitoring & Proteksi), bukan tujuan installer; datanya di <code>{{ simpananPc || 'servers-monitor.json' }}</code>.</p>
       <p v-if="memuat" class="redup">Memuat server…</p>
       <p v-else-if="galatMuat" class="pesan-status bahaya">Gagal memuat server: {{ galatMuat }}</p>
-      <p v-else-if="!servers.length" class="redup">Belum ada server. Tambahkan lewat formulir di bawah.</p>
+      <p v-else-if="!daftar.length" class="redup">Belum ada server. Tambahkan lewat formulir di bawah.</p>
       <div v-else class="daftar-server">
-        <article v-for="(s, i) in servers" :key="s.host" class="server-item" :class="{ utama: s.default }">
+        <article v-for="s in daftar" :key="s.kunci" class="server-item" :class="{ utama: s.default }">
           <div class="info">
             <div class="nama">
               <b>{{ s.name }}</b>
+              <span class="lencana" :class="jenisServer(s.jenis).kelas" :title="jenisServer(s.jenis).ket">{{ jenisServer(s.jenis).label }}</span>
               <span v-if="s.default" class="lencana biru" title="Tujuan manifest baru">DEFAULT</span>
               <span v-if="s.domains" class="lencana abu" title="Manifest situs yang memakai server ini">{{ s.domains }} situs</span>
             </div>
-            <code class="alamat">{{ s.user }}@{{ s.host }}:{{ s.port }}</code>
+            <code class="alamat">{{ s.jenis === 'lokal' ? 'mesin ini (tanpa SSH)' : `${s.user}@${s.host}:${s.port}` }}</code>
             <p v-if="s.notes" class="redup catatan">{{ s.notes }}</p>
             <template v-if="resPerHost[s.host]">
               <p v-if="!resPerHost[s.host].ok" class="pesan-status bahaya">✗ Resource tidak terbaca: {{ resPerHost[s.host].error }}</p>
@@ -234,18 +250,18 @@ async function jalankanDaya() {
                 </div>
               </div>
             </template>
-            <p v-if="hasilTes[i] === 'jalan'" class="pesan-status">Tes SSH berjalan…</p>
-            <p v-else-if="hasilTes[i]" class="pesan-status" :class="hasilTes[i].ok ? 'baik' : 'bahaya'">
-              <template v-if="hasilTes[i].ok">✓ SSH tersambung · {{ hasilTes[i].hostname }} · DirectAdmin {{ hasilTes[i].directadmin ? 'ada' : 'tidak ada' }} · {{ hasilTes[i].ms }} ms</template>
-              <template v-else>✗ SSH gagal: {{ hasilTes[i].error }}</template>
+            <p v-if="hasilTes[s.kunci] === 'jalan'" class="pesan-status">Tes {{ s.jenis === 'lokal' ? 'koneksi' : 'SSH' }} berjalan…</p>
+            <p v-else-if="hasilTes[s.kunci]" class="pesan-status" :class="hasilTes[s.kunci].ok ? 'baik' : 'bahaya'">
+              <template v-if="hasilTes[s.kunci].ok">✓ {{ s.jenis === 'lokal' ? 'Terbaca' : 'SSH tersambung' }} · {{ hasilTes[s.kunci].hostname }}<template v-if="s.jenis === 'hosting'"> · DirectAdmin {{ hasilTes[s.kunci].directadmin ? 'ada' : 'tidak ada' }}</template> · {{ hasilTes[s.kunci].ms }} ms</template>
+              <template v-else>✗ SSH gagal: {{ hasilTes[s.kunci].error }}</template>
             </p>
           </div>
           <div class="aksi">
-            <button type="button" class="tombol garis kecil" :disabled="hasilTes[i] === 'jalan'" @click="tesSsh(i)">Tes SSH</button>
-            <template v-if="!hanyaBaca">
-              <button type="button" class="tombol garis kecil" @click="bukaEdit(i)">Edit</button>
-              <button v-if="!s.default" type="button" class="tombol garis kecil" @click="jadikanDefault(i)">Jadikan default</button>
-              <button v-if="!s.domains && servers.length > 1" type="button" class="tombol bahaya kecil" @click="hapus(i)">Hapus</button>
+            <button type="button" class="tombol garis kecil" :disabled="hasilTes[s.kunci] === 'jalan'" @click="tesSsh(s)">{{ s.jenis === 'lokal' ? 'Tes' : 'Tes SSH' }}</button>
+            <template v-if="!hanyaBaca && s.jenis === 'hosting'">
+              <button type="button" class="tombol garis kecil" @click="bukaEdit(s.i)">Edit</button>
+              <button v-if="!s.default" type="button" class="tombol garis kecil" @click="jadikanDefault(s.i)">Jadikan default</button>
+              <button v-if="!s.domains && servers.length > 1" type="button" class="tombol bahaya kecil" @click="hapus(s.i)">Hapus</button>
             </template>
           </div>
         </article>
@@ -254,7 +270,7 @@ async function jalankanDaya() {
     </section>
 
     <section class="kartu" aria-labelledby="judul-tambah">
-      <div class="kartu-judul"><h2 id="judul-tambah">Tambah server</h2></div>
+      <div class="kartu-judul"><h2 id="judul-tambah">Tambah server hosting</h2></div>
       <form class="formulir" @submit.prevent="tambah">
         <label class="isian"><span>Nama server</span><input v-model="baru.name" required maxlength="80" placeholder="mis. Farnaz" :disabled="hanyaBaca"></label>
         <label class="isian"><span>Host / IP</span><input v-model="baru.host" required maxlength="253" placeholder="103.x.x.x atau hostname" :disabled="hanyaBaca"></label>

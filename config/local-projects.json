@@ -126,7 +126,7 @@
     {
       "id": "expedisi-vd",
       "nama": "Velocity Cargo (expedisi-vd)",
-      "jenis": "klien",
+      "jenis": "internal",
       "stack": "Laravel · Blade publik + Inertia/Vue admin",
       "port": 8100,
       "folder": "/home/expedisi-vd",
@@ -203,8 +203,8 @@
         "hotel-booking-queue",
         "hotel-booking-scheduler"
       ],
-      "catatan": "Demo booking hotel (ala WP Hotel Booking) untuk g6.velocitydeveloper.com. Dibuat 2026-10-06. Update: /root/hotel-booking/deploy-dev.sh",
-      "produksi": "https://g6.velocitydeveloper.com"
+      "produksi": "https://g6.velocitydeveloper.com",
+      "catatan": "Demo booking hotel (ala WP Hotel Booking) untuk g6.velocitydeveloper.com. Dibuat 2026-10-06. Update: /root/hotel-booking/deploy-dev.sh LIVE 9 Okt 2026 di g6.velocitydeveloper.com (server Wajar, DA user g6); WP lama di /wp."
     },
     {
       "id": "lp-astro-velocity-biz",
@@ -218,6 +218,60 @@
       ],
       "catatan": "Repo Velocity-Developer/lp-astro-velocity-biz. Naik versi package.json di master = CI deploy FTP ke produksi. Dibuat 2026-10-09.",
       "produksi": "https://velocitydeveloper.biz"
+    },
+    {
+      "id": "organisasi-vd",
+      "nama": "Organisasi PPVD",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8180,
+      "folder": "/home/organisasi-vd",
+      "layanan": [
+        "organisasi-vd-dev",
+        "organisasi-vd-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-09. Update: /root/organisasi-vd/deploy-dev.sh",
+      "produksi": "https://organisasi.velocitydeveloper.com"
+    },
+    {
+      "id": "livechat-vd",
+      "nama": "Live Chat VD",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8200,
+      "folder": "/home/livechat-vd",
+      "layanan": [
+        "livechat-vd-dev",
+        "livechat-vd-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-12. Update: /root/livechat-vd/deploy-dev.sh"
+    },
+    {
+      "id": "website-konsep-simontak-rsud",
+      "nama": "website konsep simontak rsud",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8210,
+      "folder": "/home/website-konsep-simontak-rsud",
+      "layanan": [
+        "website-konsep-simontak-rsud-dev",
+        "website-konsep-simontak-rsud-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-12. Update: /root/website-konsep-simontak-rsud/deploy-dev.sh"
+    },
+    {
+      "id": "sabaktrade",
+      "nama": "web marketplace",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8150,
+      "folder": "/home/sabaktrade",
+      "layanan": [
+        "sabaktrade-dev",
+        "sabaktrade-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-13. Update: /root/sabaktrade/deploy-dev.sh",
+      "produksi": "https://sabaktrade.com"
     }
   ]
 }

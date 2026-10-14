@@ -10,6 +10,7 @@ const props = defineProps({
   server: { type: String, default: 'semua' },       // host atau 'semua'
   status: { type: Function, required: true },        // (ip, host) → 'deny' | 'sementara' | 'allow' | null
   proses: Boolean,
+  pc: Boolean,                                        // PC kantor: log SSH journal + fail2ban, bukan lfd
 })
 const emit = defineEmits(['blokir', 'lepas', 'cek'])
 
@@ -32,7 +33,7 @@ const PEMICU = {
   PS_LIMIT: 'Port scan', LF_DISTATTACK: 'Serangan terdistribusi', LF_DISTFTP: 'FTP terdistribusi', LF_WEBMIN: 'Webmin',
   wordpress: 'WordPress', mod_security: 'ModSecurity', exim: 'Exim', dovecot: 'Dovecot', pureftpd: 'FTP', sshd: 'SSH', directadmin: 'DirectAdmin',
 }
-const SUMBER = { lfd: 'LFD', cpguard: 'cPGuard', dashboard: 'Dashboard', manual: 'Manual' }
+const SUMBER = { lfd: 'LFD', cpguard: 'cPGuard', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban', ssh: 'SSH' }
 
 const acara = computed(() => (log.data.value?.servers || []).flatMap((s) => (s.acara || []).map((e) => ({ ...e, host: s.host, name: s.name })))
   .sort((a, b) => b.t - a.t))
@@ -53,11 +54,10 @@ const tersaring = computed(() => {
 })
 
 // Grafik blokir per jam (24 jam) / per hari (7 hari), ditumpuk menurut sumber. Warna lolos validator dataviz.
-const SERI = [
-  { kunci: 'lfd', label: 'LFD', warna: '#5b8cff' },
-  { kunci: 'cpguard', label: 'cPGuard', warna: '#cc7a33' },
-  { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' },
-]
+// PC kantor: seri pertama = fail2ban (pengganti LFD), tanpa cPGuard
+const SERI = computed(() => (props.pc
+  ? [{ kunci: 'lfd', label: 'fail2ban', warna: '#5b8cff' }, { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' }]
+  : [{ kunci: 'lfd', label: 'LFD', warna: '#5b8cff' }, { kunci: 'cpguard', label: 'cPGuard', warna: '#cc7a33' }, { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' }]))
 const ember = computed(() => {
   const per = hari.value === 1 ? 3600 : 86400
   const now = Math.floor(Date.now() / 1000)
@@ -68,7 +68,7 @@ const ember = computed(() => {
   for (const e of acara.value) {
     if (e.jenis !== 'blokir') continue
     const b = peta[awal(e.t)]
-    if (b) b.nilai[e.sumber === 'lfd' || e.sumber === 'cpguard' ? e.sumber : 'lain'] += 1
+    if (b) b.nilai[e.sumber === 'lfd' || e.sumber === 'fail2ban' ? 'lfd' : e.sumber === 'cpguard' ? 'cpguard' : 'lain'] += 1
   }
   return kunci.map((k) => peta[k])
 })
@@ -158,7 +158,8 @@ const pesanRingkas = (e) => e.pesan.replace(/^(lfd: |BFM: |velocity: )/, '').rep
         </table>
       </div>
       <button v-if="tersaring.length > batas" type="button" class="tombol garis kecil lagi" @click="batas += 100">Tampilkan 100 lagi ({{ angka(tersaring.length - batas) }} tersisa)</button>
-      <p class="redup catatan">Dari /var/log/lfd.log tiap server + blokir cPGuard/dashboard di csf.deny{{ server === 'semua' ? ' · maks. 400 kejadian terbaru per server' : '' }}.</p>
+      <p v-if="pc" class="redup catatan">Dari journal SSH + /var/log/fail2ban.log + blokir dari dashboard. Login SSH dari LAN/Tailscale hanya dihitung.</p>
+      <p v-else class="redup catatan">Dari /var/log/lfd.log tiap server + blokir cPGuard/dashboard di csf.deny{{ server === 'semua' ? ' · maks. 400 kejadian terbaru per server' : '' }}.</p>
     </template>
   </div>
 </template>

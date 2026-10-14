@@ -38,7 +38,7 @@ async function hapus() {
           <input v-model="st.ketik" type="text" autocomplete="off" spellcheck="false" :placeholder="p.slug">
         </label>
         <p v-if="p.job" class="pesan-status waspada">Masih ada proses berjalan; tunggu selesai dulu.</p>
-        <p v-if="!namaSaya.trim()" class="pesan-status waspada">Isi "Nama Anda" dulu.</p>
+        <p v-if="!namaSaya.trim()" class="pesan-status waspada">Masuk dulu lewat "Masuk dengan VD.net".</p>
         <p v-if="st.galat" class="pesan-status bahaya">{{ st.galat }}</p>
         <div class="aksi-dialog">
           <button type="button" class="tombol garis" @click="emit('tutup')">Batal</button>

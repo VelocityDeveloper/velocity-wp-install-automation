@@ -2,14 +2,12 @@
 import { ref, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { kirim } from './api.js'
+import { namaAkun } from './akun.js'
 
-// Nama pengisi dicatat di riwayat tiap aksi (tanpa login; dashboard hanya LAN/Tailscale).
-// Bawaan Dwi Ernawati (PM utama, permintaan user 1 Okt); pilihan lain tetap tersimpan per browser.
-export const NAMA_BAWAAN = 'Dwi Ernawati'
-export const namaSaya = ref(NAMA_BAWAAN)
-try { namaSaya.value = localStorage.getItem('laravel-oleh') || NAMA_BAWAAN } catch { /* penyimpanan diblokir */ }
-watch(namaSaya, (v) => { try { localStorage.setItem('laravel-oleh', v) } catch { /* abaikan */ } })
-// Tautan "Isi Nama Anda" di mana pun → gulir & fokus ke kolom nama (id="nama-saya")
+// Nama pengisi di riwayat tiap aksi = akun yang masuk ke dash.velocity.ai.id (Masuk dengan VD.net).
+// Backend menggantinya dari cookie sesi; di sini untuk tampilan & mencegah aksi saat belum masuk.
+export const namaSaya = namaAkun
+// Tautan "Masuk dulu" di mana pun → gulir & fokus ke tombol akun/masuk (id="nama-saya")
 export function keNama() {
   const el = document.getElementById('nama-saya')
   if (!el) return
@@ -56,7 +54,8 @@ const PESAN = {
   status_tidak_sah: 'Status tidak dikenal.',
   invalid_judul: 'Judul wajib diisi, tanpa tanda kutip, $, \\, |, &, ;, < atau >.',
   invalid_klien: 'Nama klien memuat karakter terlarang.',
-  invalid_oleh: 'Isi nama Anda dulu (kolom "Nama Anda").',
+  invalid_oleh: 'Masuk dulu lewat tombol "Masuk dengan VD.net".',
+  login_diperlukan: 'Sesi login habis atau belum masuk. Klik "Masuk dengan VD.net".',
   invalid_domain: 'Domain tidak sah (contoh: namaklien.com).',
   invalid_app: 'Nama aplikasi: huruf kecil, angka, tanda hubung; 3–32 karakter, diawali huruf.',
   onprogress_tidak_ada: 'Folder On Progress tidak ditemukan.',
@@ -93,7 +92,7 @@ const PESAN = {
   forbidden: 'Hanya bisa dari jaringan kantor/Tailscale.',
   payload_too_large: 'Terlalu besar (dokumen maks 25 MB).',
   contoh_belum_ada: 'Buat contoh tampilan dulu.',
-  preview_belum_diatur: 'Server preview nglorok.com belum diatur (akses SSH VPS Sumopod).',
+  preview_belum_diatur: 'Server preview velocity.ai.id belum diatur (/etc/velocity/secrets/preview-velocity-ai.env).',
 }
 // Review dianggap mendesak (merah) bila agen tertahan gerbang review atau ada fitur menunggu lebih dari sehari
 export const reviewMendesak = (r) => !!(r?.tertahan || (r?.tertua && Date.now() / 1000 - r.tertua > 86400))
@@ -110,6 +109,15 @@ export const jam = (n) => {
 // Token ringkas: 196.951.220 → "197 jt", 73.486 → "73 rb"
 export const angkaToken = (n) => n >= 1e6 ? `${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 1 })} jt` : n >= 1e3 ? `${Math.round(n / 1e3).toLocaleString('id-ID')} rb` : String(n || 0)
 // Jam kerja webmaster dalam hari kerja (1 hari = 7 jam): 14,5 → "2 hari 0,5 jam"
+// Alamat aplikasi dev (port 8xxx). Dibuka dari LAN/Tailscale → host yang sama; dibuka lewat domain tunnel
+// (dash.velocity.ai.id) → IP LAN server dari API, karena tunnel hanya meneruskan dashboard.
+const HOST_LOKAL = /^(\d+\.\d+\.\d+\.\d+|localhost|.+\.lan|.+\.ts\.net)$/
+export const alamatDev = (port, lanIp) => {
+  if (!port) return ''
+  const host = HOST_LOKAL.test(location.hostname) ? location.hostname : (lanIp || location.hostname)
+  return `http://${host}:${port}/`
+}
+
 export const JAM_SEHARI = 7
 export const hariJam = (n) => {
   const t = Math.round(Number(n || 0) * 10) / 10

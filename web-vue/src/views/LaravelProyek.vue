@@ -119,7 +119,7 @@ async function simpanIdentitas() {
           </p>
         </div>
         <div class="kanan">
-          <div class="nama-saya"><label for="nama-saya" class="redup">Nama Anda</label><PilihNama :tim="d.tim" /></div>
+          <div class="nama-saya"><span class="redup">Dicatat sebagai</span><PilihNama :tim="d.tim" /></div>
           <a v-if="d.contoh?.terbit?.ok" class="tombol kecil" :href="d.contoh.terbit.url" target="_blank" rel="noopener"><Ikon nama="luar" :ukuran="16" /> Preview klien</a>
           <button v-else type="button" class="tombol garis kecil" @click="keContoh"><Ikon nama="claude" :ukuran="16" /> {{ d.contoh ? 'Contoh tampilan' : 'Buat contoh tampilan' }}</button>
           <button v-if="d.contoh" type="button" class="tombol garis kecil" @click="keContoh">Kelola contoh</button>

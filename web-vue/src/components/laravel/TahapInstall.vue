@@ -3,7 +3,7 @@
 import { ref, computed } from 'vue'
 import LogLive from './LogLive.vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, keNama, jalurLaravel } from '../../laravel.js'
+import { aksi, pesanGalat, namaSaya, keNama, jalurLaravel, alamatDev } from '../../laravel.js'
 import { konfirmasi } from '../../konfirmasi.js'
 import { tanggalWaktu } from '../../api.js'
 
@@ -37,7 +37,7 @@ async function install() {
     emit('ubah')
   } catch (e) { status.value = { kelas: 'bahaya', teks: pesanGalat(e) } }
 }
-const alamat = computed(() => inst.value.port ? `http://${location.hostname}:${inst.value.port}/` : '')
+const alamat = computed(() => alamatDev(inst.value.port, props.d.lan_ip))
 </script>
 
 <template>
@@ -61,7 +61,7 @@ const alamat = computed(() => inst.value.port ? `http://${location.hostname}:${i
         <label class="centang"><input v-model="lanjutAgen" type="checkbox"> Sesudah install, langsung serahkan ke agen Claude</label>
         <div class="aksi">
           <button type="button" class="tombol" :disabled="!d.estimasi_kunci || !app || !!salahApp || !!d.job || !namaSaya.trim()" @click="install"><Ikon nama="installer" :ukuran="18" /> Run Install</button>
-          <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Isi "Nama Anda" dulu →</button>
+          <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Masuk dulu →</button>
           <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
         </div>
       </div>

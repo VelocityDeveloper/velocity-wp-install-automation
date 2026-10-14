@@ -20,6 +20,7 @@
   --waspada: #e8b54a;
   --bahaya: #ff6b6b;
   --ungu: #b2a8ff;
+  --teal: #4fd1b5;
   --teks-kuat: #fff;          /* teks saat hover/aktif */
   --kaca: rgba(15, 18, 36, .72);       /* panel utama */
   --kaca-atas: rgba(8, 10, 23, .92);   /* bilah atas HP */
@@ -57,6 +58,7 @@
   --waspada: #9a6400;
   --bahaya: #d03434;
   --ungu: #5b4fd1;
+  --teal: #12735f;
   --teks-kuat: #0b0f24;
   --kaca: rgba(255, 255, 255, .78);
   --kaca-atas: rgba(255, 255, 255, .92);
@@ -160,6 +162,8 @@ table.tabel { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .lencana.kuning { color: var(--waspada); background: rgba(232, 181, 74, .12); }
 .lencana.merah { color: var(--bahaya); background: rgba(255, 107, 107, .12); }
 .lencana.abu { color: var(--teks-2); background: var(--kartu-2); }
+.lencana.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 14%, transparent); }
+.lencana.teal { color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); }
 .kepala-halaman { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .kepala-halaman h1 { font-size: 26px; }
 .kepala-halaman p { margin: 4px 0 0; }
@@ -168,3 +172,10 @@ table.tabel { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 /* Tautan "Isi Nama Anda dulu" di halaman Installer Laravel → fokus ke kolom nama */
 .isi-nama { border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--waspada); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .isi-nama:hover { color: var(--teks-kuat); }
+
+/* Avatar inisial akun (kartu akun sidebar, bilah HP, halaman Profil) */
+.avatar {
+  display: inline-grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%;
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; color: #fff;
+  background: linear-gradient(135deg, var(--aksen), var(--aksen-terang));
+}

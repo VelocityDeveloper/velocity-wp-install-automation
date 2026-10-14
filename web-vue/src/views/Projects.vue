@@ -5,6 +5,7 @@ import { ref, computed, reactive } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
 import { pakaiPolling, ukuranBerkas, waktuLalu, tanggalWaktu, kirim } from '../api.js'
+import { alamatDev } from '../laravel.js'
 
 const { data, galat, memuat, muatUlang } = pakaiPolling('/api/projects', 15000)
 const projects = computed(() => data.value?.projects || [])
@@ -30,9 +31,9 @@ const ringkas = computed(() => {
   return { klien: klien.length, klienJalan: klien.filter((p) => kondisi(p).kelas === 'baik').length, total: projects.value.length }
 })
 
-// Tautan ikut host yang sedang dibuka (LAN atau Tailscale); port dev hanya http.
-const alamatBuka = (p) => p.url || `http://${location.hostname}:${p.port}/`
-const labelBuka = (p) => p.url ? p.url : `${location.hostname}:${p.port}`
+// Tautan ikut host yang sedang dibuka (LAN atau Tailscale); lewat domain tunnel → IP LAN server (alamatDev).
+const alamatBuka = (p) => p.url || alamatDev(p.port, data.value?.lan_ip)
+const labelBuka = (p) => p.url ? p.url : alamatBuka(p).replace(/^http:\/\/|\/$/g, '')
 const totalMemori = (p) => p.layanan.reduce((n, l) => n + (l.memori || 0), 0)
 const sejak = (p) => Math.min(...p.layanan.map((l) => l.sejak || Infinity))
 

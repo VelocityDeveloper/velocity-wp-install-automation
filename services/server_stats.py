@@ -14,6 +14,8 @@ import sys
 sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
 import velocity_update  # noqa: E402 — jurnal Velocity Update (/api/velocity-update)
 import keamanan_pc  # noqa: E402 — menu Security (/api/security)
+sys.path.insert(0, '/opt/velocity-wp-install-automation/services')
+import sesi_dash  # noqa: E402 — nama pelaku dari sesi login dash.velocity.ai.id
 
 VU_COOKIE = 'vu_sesi'
 VU_GAGAL = {}  # ip -> [waktu sandi salah]
@@ -614,6 +616,21 @@ def simpan_email_login(body):
     return None
 
 
+_IP_LAN = {'nilai': None, 'waktu': 0}
+
+
+def ip_lan():
+    """IP LAN saat ini (src rute default, cache 60 dtk) untuk tautan port dev saat dashboard dibuka lewat tunnel."""
+    if time.time() - _IP_LAN['waktu'] > 60:
+        try:
+            r = subprocess.run(['ip', '-4', 'route', 'get', '1.1.1.1'], capture_output=True, text=True, timeout=5)
+            m = re.search(r'\bsrc (\S+)', r.stdout)
+            _IP_LAN.update(nilai=m.group(1) if m else None, waktu=time.time())
+        except (OSError, subprocess.SubprocessError):
+            _IP_LAN.update(nilai=None, waktu=time.time())
+    return _IP_LAN['nilai']
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, status, data, cookie=None):
         body = json.dumps(data, separators=(',', ':')).encode()
@@ -638,6 +655,7 @@ class Handler(BaseHTTPRequestHandler):
             data = dict(projects_status())
             login = projects_login()
             data['projects'] = [{**p, 'login': login.get(p['id'])} for p in data.get('projects', [])]
+            data['lan_ip'] = ip_lan()
             self.json_response(200, data)
             return
         if path == '/api/email-notif':
@@ -663,7 +681,7 @@ class Handler(BaseHTTPRequestHandler):
         if path != '/api/stats':
             self.send_error(404)
             return
-        self.json_response(200, payload())
+        self.json_response(200, {**payload(), 'lan_ip': ip_lan()})
 
     def do_POST(self):
         if self.path == '/api/projects/login':
@@ -795,6 +813,11 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get('Host', '').split(':', 1)[0]
         if client is None or not any(client in network for network in LAN_NETWORKS) or origin_host != host:
             self.json_response(403, {'error': 'forbidden'})
+            return
+        # "Dicatat oleh" = akun yang masuk ke dash.velocity.ai.id, bukan ketikan bebas.
+        tolak = sesi_dash.pasang_pelaku(self, batas=65536)
+        if tolak:
+            self.json_response(tolak[0], tolak[1])
             return
         try:
             panjang = int(self.headers.get('Content-Length', 0))

@@ -4,14 +4,14 @@
 // Tiap Revisi menambah kriteria "Revisi N: …" (ditandai garis kuning) yang ikut dilaporkan agen & wajib dicentang.
 import { ref, reactive, computed, watch } from 'vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, keNama, STATUS_FITUR, tabUrl } from '../../laravel.js'
+import { aksi, pesanGalat, namaSaya, keNama, STATUS_FITUR, tabUrl, alamatDev } from '../../laravel.js'
 import { tanggalWaktu, waktuLalu } from '../../api.js'
 
 const props = defineProps({ d: { type: Object, required: true } })
 const emit = defineEmits(['ubah'])
 const bisaDicek = computed(() => props.d.fitur.filter((f) => ['dites', 'ok', 'revisi'].includes(f.status) && f.hasil))
 const ok = computed(() => props.d.fitur.filter((f) => f.status === 'ok').length)
-const alamat = computed(() => props.d.install?.port ? `http://${location.hostname}:${props.d.install.port}` : '')
+const alamat = computed(() => alamatDev(props.d.install?.port, props.d.lan_ip))
 
 // Centang & catatan per fitur (disimpan ke server saat tombol ditekan)
 const draf = reactive({})
@@ -121,7 +121,7 @@ const AGEN = { terpenuhi: ['hijau', 'terpenuhi'], sebagian: ['kuning', 'sebagian
         </template>
         <p v-else class="pesan-status">Menunggu agen mengerjakan revisi (tab Agen).</p>
         <p v-if="f.status !== 'revisi' && /belum ada/i.test(draf[f.id].catatan)" class="pesan-status redup">Sebelum mengirim "belum ada": cek Rencana fitur lain di atas — bila halamannya dijadwalkan di fitur lain, tidak perlu direvisi di sini.</p>
-        <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Isi "Nama Anda" dulu →</button>
+        <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Masuk dulu →</button>
         <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
       </article>
     </div>

@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Pasang ClamAV (RPM resmi clamav.net, pengganti scanner cPGuard) di satu server hosting.
+#
+#   clamav-pasang <server> [--status|--copot]
+#
+# Kenapa RPM resmi, bukan EPEL: clamav EPEL 1.4.x butuh OpenSSL 3.4, server CloudLinux 9.6 masih 3.2 (menaikkan
+# OpenSSL server produksi terlalu berisiko). RPM resmi membawa library sendiri di /usr/local/lib64 (RPATH, tanpa
+# ld.so.conf), hanya butuh glibc ≥2.28. DirectAdmin clamav_exim tidak tersentuh: /etc/exim.clamav*.conf tidak dibuat,
+# jadi email tidak ikut dipindai.
+#
+# Yang dipasang:
+#   - user clamav, /var/lib/clamav (database), /var/log/clamav
+#   - /usr/local/etc/{clamd,freshclam}.conf, unit velocity-clamd.service + velocity-freshclam.service
+#     (clamd nice 15 + IO idle; pindai berkas akun lewat `clamdscan --fdpass` sebagai root)
+#   - signature tambahan Linux Malware Detect (rfxn.hdb/ndb/yara, khusus malware PHP/web) + pembaruan harian
+#     /etc/cron.d/velocity-rfxn
+# Tidak ada pemindaian otomatis/realtime dan tidak ada karantina — dipanggil dari dashboard (Server > Antivirus).
+set -Eeuo pipefail
+
+VERSI=1.4.3
+RPM_URL="https://www.clamav.net/downloads/production/clamav-$VERSI.linux.x86_64.rpm"
+SIDIK_KUNCI=5BADCA2665EF59DCF8A23D8B707F0DB480836771   # Talos (Cisco) — kunci rilis ClamAV
+CACHE=/var/lib/velocity/clamav
+UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+AKAR=$(cd "$(dirname "$0")/.." && pwd)
+
+[[ $# -ge 1 ]] || { sed -n 2,4p "$0"; exit 2; }
+NAMA=$1; AKSI=${2:-pasang}
+
+# Data SSH server dari daftar dashboard
+read -r HOST PORT USR < <(python3 - "$NAMA" <<'EOF'
+import json, sys
+n = sys.argv[1].lower()
+for s in json.load(open('/var/lib/velocity/servers.json')):
+    if isinstance(s, dict) and n in (str(s.get('name', '')).lower(), s.get('host')):
+        print(s['host'], s.get('port', 22), s.get('user') or 'root'); break
+else:
+    sys.exit('server tidak dikenal')
+EOF
+)
+KUNCI=$(python3 -c "import sys; sys.path.insert(0, '$AKAR/services'); import installer_status as i; print(i.ssh_key_file())")
+SSH=(ssh -i "$KUNCI" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=8 "$USR@$HOST")
+
+if [[ $AKSI == --status ]]; then
+  "${SSH[@]}" 'systemctl is-active velocity-clamd velocity-freshclam 2>&1 | paste -sd" "; /usr/local/bin/clamdscan --version 2>&1; ls -la /var/lib/clamav 2>&1 | tail -n +2'
+  exit
+fi
+if [[ $AKSI == --copot ]]; then
+  "${SSH[@]}" 'systemctl disable --now velocity-clamd velocity-freshclam 2>/dev/null || true
+    rm -f /etc/systemd/system/velocity-clamd.service /etc/systemd/system/velocity-freshclam.service /etc/cron.d/velocity-rfxn /usr/local/sbin/velocity-rfxn-update
+    systemctl daemon-reload; rpm -e clamav 2>/dev/null || true; echo "ClamAV dicopot (database /var/lib/clamav & user clamav dibiarkan)"'
+  exit
+fi
+
+# 1. RPM resmi: unduh sekali ke cache dashboard, verifikasi tanda tangan GPG Talos
+mkdir -p "$CACHE"
+RPM="$CACHE/clamav-$VERSI.linux.x86_64.rpm"
+if [[ ! -s $RPM.ok ]]; then
+  curl -sfL -A "$UA" -o "$RPM" "$RPM_URL"
+  curl -sfL -A "$UA" -o "$RPM.sig" "$RPM_URL.sig"
+  export GNUPGHOME=$CACHE/gnupg; mkdir -p -m 700 "$GNUPGHOME"
+  gpg --batch -q --keyserver hkps://keyserver.ubuntu.com --recv-keys "$SIDIK_KUNCI" 2>/dev/null
+  gpg --batch --status-fd 1 --verify "$RPM.sig" "$RPM" 2>/dev/null | grep -q "VALIDSIG $SIDIK_KUNCI" \
+    || { echo "tanda tangan RPM tidak sah" >&2; rm -f "$RPM"; exit 1; }
+  sha256sum "$RPM" | cut -d' ' -f1 > "$RPM.ok"
+fi
+echo "RPM terverifikasi: $(cat "$RPM.ok")"
+
+# 2. Kirim RPM (scp per berkas; folder tujuan dibuat 700 milik root)
+"${SSH[@]}" 'install -d -m 700 /root/velocity-clamav'
+scp -q -i "$KUNCI" -P "$PORT" -o BatchMode=yes "$RPM" "$USR@$HOST:/root/velocity-clamav/"
+"${SSH[@]}" "echo '$(cat "$RPM.ok")  /root/velocity-clamav/$(basename "$RPM")' | sha256sum -c --quiet"
+
+# 3. Pasang & konfigurasi di server
+"${SSH[@]}" "VERSI=$VERSI UA='$UA' bash -s" <<'REMOTE'
+set -Eeuo pipefail
+log() { echo "[$(date +%T)] $*"; }
+getent group clamav >/dev/null || groupadd -r clamav
+id clamav >/dev/null 2>&1 || useradd -r -g clamav -s /sbin/nologin -d /var/lib/clamav -M -c "ClamAV" clamav
+if rpm -q clamav >/dev/null 2>&1; then log "rpm clamav sudah ada: $(rpm -q clamav)"; else rpm -i "/root/velocity-clamav/clamav-$VERSI.linux.x86_64.rpm"; log "rpm terpasang"; fi
+/usr/local/bin/clamscan --version
+install -d -o clamav -g clamav -m 755 /var/lib/clamav
+install -d -o clamav -g clamav -m 750 /var/log/clamav
+
+cat > /usr/local/etc/freshclam.conf <<'EOF'
+# Dipasang scripts/clamav-pasang (dashboard Velocity)
+DatabaseDirectory /var/lib/clamav
+UpdateLogFile /var/log/clamav/freshclam.log
+LogTime yes
+LogFileMaxSize 5M
+LogRotate yes
+DatabaseOwner clamav
+DatabaseMirror database.clamav.net
+Checks 12
+NotifyClamd /usr/local/etc/clamd.conf
+Foreground yes
+EOF
+cat > /usr/local/etc/clamd.conf <<'EOF'
+# Dipasang scripts/clamav-pasang (dashboard Velocity). Pindai dengan: clamdscan --fdpass <berkas>
+User clamav
+LocalSocket /run/clamd/clamd.sock
+LocalSocketMode 660
+LocalSocketGroup clamav
+DatabaseDirectory /var/lib/clamav
+LogFile /var/log/clamav/clamd.log
+LogTime yes
+LogFileMaxSize 10M
+LogRotate yes
+Foreground yes
+MaxThreads 8
+MaxQueue 200
+MaxFileSize 25M
+MaxScanSize 100M
+MaxRecursion 10
+# Muat ulang database tanpa menggandakan memori puncak tidak diperlukan (RAM lega); bawaan dipakai
+SelfCheck 3600
+DetectPUA no
+EOF
+
+# Signature tambahan Linux Malware Detect (rfxn): malware PHP/webshell yang lemah di database resmi
+cat > /usr/local/sbin/velocity-rfxn-update <<'EOF'
+#!/bin/bash
+# Perbarui signature rfxn (Linux Malware Detect) untuk ClamAV; tiap berkas diuji dulu, yang rusak tidak dipakai.
+set -u
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+curl -sfL --max-time 120 -A "${UA:-Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0 Safari/537.36}" -o "$T/sig.tgz" https://cdn.rfxn.com/downloads/maldet-sigpack.tgz || exit 1
+tar -xzf "$T/sig.tgz" -C "$T" || exit 1
+ubah=0
+for f in rfxn.hdb rfxn.ndb rfxn.yara; do
+  src=$(find "$T" -name "$f" -type f | head -1); [ -n "$src" ] || continue
+  cmp -s "$src" "/var/lib/clamav/$f" && continue
+  if /usr/local/bin/clamscan --quiet --no-summary -d "$src" /dev/null 2>"$T/err"; then
+    install -o clamav -g clamav -m 644 "$src" "/var/lib/clamav/$f"; ubah=1
+  else
+    echo "$f ditolak clamscan: $(head -c 300 "$T/err")" >&2
+  fi
+done
+[ $ubah = 1 ] && [ -S /run/clamd/clamd.sock ] && timeout 30 /usr/local/bin/clamdscan --reload >/dev/null 2>&1 || true
+exit 0
+EOF
+chmod 755 /usr/local/sbin/velocity-rfxn-update
+echo "35 4 * * * root nice -n 15 /usr/local/sbin/velocity-rfxn-update >/dev/null 2>>/var/log/clamav/rfxn.log" > /etc/cron.d/velocity-rfxn
+chmod 644 /etc/cron.d/velocity-rfxn
+
+cat > /etc/systemd/system/velocity-freshclam.service <<'EOF'
+[Unit]
+Description=ClamAV freshclam (Velocity)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/freshclam -d --foreground=true --config-file=/usr/local/etc/freshclam.conf
+Nice=15
+IOSchedulingClass=idle
+Restart=on-failure
+RestartSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/velocity-clamd.service <<'EOF'
+[Unit]
+Description=ClamAV clamd (Velocity) — dipakai dashboard Server > Antivirus
+After=network.target velocity-freshclam.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/clamd --foreground=true --config-file=/usr/local/etc/clamd.conf
+RuntimeDirectory=clamd
+RuntimeDirectoryMode=0750
+Nice=15
+IOSchedulingClass=idle
+MemoryHigh=3G
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chown root:clamav /usr/local/etc/clamd.conf /usr/local/etc/freshclam.conf
+systemctl daemon-reload
+
+log "unduh database resmi (freshclam)…"
+nice -n 15 /usr/local/bin/freshclam --foreground=true --config-file=/usr/local/etc/freshclam.conf 2>&1 | tail -6
+log "signature rfxn…"
+UA="$UA" /usr/local/sbin/velocity-rfxn-update || echo "rfxn gagal diunduh (dicoba ulang lewat cron)"
+ls -la /var/lib/clamav
+
+systemctl enable --now velocity-freshclam.service velocity-clamd.service
+for i in $(seq 1 60); do [ -S /run/clamd/clamd.sock ] && break; sleep 2; done
+[ -S /run/clamd/clamd.sock ] || { journalctl -u velocity-clamd -n 20 --no-pager; exit 1; }
+log "clamd siap: $(/usr/local/bin/clamdscan --version)"
+
+# Uji EICAR (berkas uji standar antivirus, bukan malware) lalu hapus
+U=$(mktemp -d /root/velocity-clamav/uji.XXXX)
+printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > "$U/eicar.txt"
+/usr/local/bin/clamdscan --fdpass --no-summary "$U/eicar.txt" || true
+rm -rf "$U"
+systemctl show velocity-clamd -p MemoryCurrent
+REMOTE
+echo "selesai: ClamAV $VERSI di $NAMA"

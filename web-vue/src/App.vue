@@ -5,12 +5,14 @@ import Ikon from './components/Ikon.vue'
 import KonfirmasiHost from './components/KonfirmasiHost.vue'
 import { pakaiPolling } from './api.js'
 import { tema, gantiTema } from './tema.js'
+import { akun, muatAkun, inisial, URL_KELUAR } from './akun.js'
 
 const route = useRoute()
 const sekarang = ref(new Date())
 let jam = null
 onMounted(() => { jam = setInterval(() => { sekarang.value = new Date() }, 1000) })
 onBeforeUnmount(() => clearInterval(jam))
+onMounted(muatAkun)
 
 const tanggal = computed(() => sekarang.value.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' }))
 const pukul = computed(() => sekarang.value.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
@@ -19,6 +21,7 @@ const labelTema = computed(() => (tema.value === 'light' ? 'Ganti ke mode gelap'
 // Status server untuk kartu sambutan: ONLINE selama /api/stats menjawab
 const stats = pakaiPolling('/api/stats', 5000)
 const online = computed(() => !!stats.data.value && !stats.galat.value)
+const ipLokal = computed(() => stats.data.value?.lan_ip || '')
 
 const backup = pakaiPolling('/api/backup', 30000)
 const backupBerikut = computed(() => {
@@ -34,6 +37,11 @@ const NAV = [
     { ke: '/server', label: 'Daftar Server', ikon: 'server', tepat: true },
     { ke: '/server/monitoring', label: 'Monitoring', ikon: 'pantau' },
     { ke: '/server/proteksi', label: 'Proteksi', ikon: 'perisai' },
+    { ke: '/server/antivirus', label: 'Antivirus', ikon: 'virus' },
+    { ke: '/server/waf', label: 'WAF', ikon: 'waf' },
+    { ke: '/server/cms', label: 'Kerentanan CMS', ikon: 'cms' },
+    { ke: '/server/bruteforce', label: 'Brute Force', ikon: 'kunci' },
+    { ke: '/server/cpguard', label: 'Kesiapan Copot cPGuard', ikon: 'daftar' },
   ] },
   { ke: '/security', label: 'Security', ikon: 'perisai' },
   { grup: 'installer', label: 'Installer', ikon: 'installer', anak: [
@@ -50,6 +58,10 @@ const NAV = [
   { grup: 'pc', label: 'PC Lokal', ikon: 'komputer', anak: [
     { ke: '/berkas', label: 'File Manager', ikon: 'berkas' },
     { ke: '/projects', label: 'Project Lokal', ikon: 'proyek' },
+  ] },
+  { grup: 'pcbackup', label: 'PC Backup', ikon: 'nas', anak: [
+    { ke: '/pc-backup/status', label: 'Status Backup', ikon: 'cadangan' },
+    { ke: '/pc-backup/berkas', label: 'File Manager', ikon: 'berkas' },
   ] },
   { grup: 'pantau', label: 'Pemantauan', ikon: 'pantau', anak: [
     { ke: '/notif-email', label: 'Notif Email', ikon: 'email' },
@@ -82,6 +94,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
       <RouterLink to="/" class="merek"><img src="/ikon.png" alt="" width="28" height="28"><span>Local PC</span></RouterLink>
       <span class="pil" :class="online ? 'baik' : 'bahaya'">{{ online ? 'Online' : 'Offline' }}</span>
       <button class="ikon-tombol" type="button" :aria-label="labelTema" :title="labelTema" @click="gantiTema"><Ikon :nama="tema === 'light' ? 'bulan' : 'matahari'" /></button>
+      <RouterLink v-if="akun" to="/profil" class="avatar" :title="`Profil ${akun.nama}`" :aria-label="`Profil ${akun.nama}`">{{ inisial(akun.nama) }}</RouterLink>
     </header>
     <div v-if="menuBuka" class="tirai" @click="menuBuka = false" />
 
@@ -100,6 +113,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
           <span class="pil" :class="online ? 'baik' : 'bahaya'">{{ online ? 'Online' : 'Offline' }}</span>
         </div>
         <p class="pukul"><Ikon nama="jam" :ukuran="15" /> {{ pukul }}</p>
+        <p v-if="ipLokal" class="ip-lokal">IP lokal <b>{{ ipLokal }}</b></p>
       </section>
 
       <nav class="nav-kartu" aria-label="Halaman">
@@ -132,6 +146,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
         </a>
       </nav>
 
+      <section v-if="akun" class="akun-kartu" aria-label="Akun">
+        <RouterLink to="/profil" class="akun-info" :class="{ aktif: route.path === '/profil' }">
+          <span class="avatar" aria-hidden="true">{{ inisial(akun.nama) }}</span>
+          <span class="akun-teks"><b>{{ akun.nama }}</b><small>{{ akun.sumber === 'vdnet' ? 'VD.net' : 'Akun dashboard' }}<template v-if="akun.peran.length"> · {{ akun.peran[0] }}</template></small></span>
+        </RouterLink>
+        <a :href="URL_KELUAR" class="ikon-tombol" title="Keluar" aria-label="Keluar"><Ikon nama="keluar" :ukuran="18" /></a>
+      </section>
+
       <RouterLink to="/#backup" class="kartu-bawah">
         <span class="kb-ikon"><Ikon nama="cadangan" :ukuran="18" /></span>
         <span><b>{{ backup.data.value?.state === 'running' ? 'Backup Google Drive' : 'Backup berikutnya' }}</b><small>{{ backupBerikut }}</small></span>
@@ -163,6 +185,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 
 .sambutan { padding: 16px 18px; border-radius: var(--radius); background: var(--kartu); border: 1px solid var(--garis); }
 .sambutan-baris { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ip-lokal { margin: 6px 0 0; font-size: 12.5px; color: var(--teks-2); }
+.ip-lokal b { color: var(--teks-kuat); font-weight: 600; font-variant-numeric: tabular-nums; user-select: all; }
 .tanggal { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--teks-3); }
 .pukul { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--teks-2); font-variant-numeric: tabular-nums; }
 
@@ -183,6 +207,16 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 @media (prefers-reduced-motion: reduce) { .nav-induk .panah { transition: none; } }
 .lencana { margin-left: auto; padding: 1px 7px; border-radius: 6px; font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--waspada); background: rgba(232, 181, 74, .12); }
 
+.akun-kartu { margin-top: auto; display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 8px; border-radius: var(--radius); background: var(--kartu); border: 1px solid var(--garis); }
+.akun-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--radius-kecil); color: var(--teks); }
+.akun-info:hover, .akun-info.aktif { background: var(--kartu-2); color: var(--teks-kuat); }
+.akun-teks { min-width: 0; }
+.akun-teks b, .akun-teks small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.akun-teks b { font-size: 13.5px; font-weight: 600; }
+.akun-teks small { font-size: 12px; color: var(--teks-3); }
+.akun-kartu a.ikon-tombol:hover { color: var(--bahaya); }
+.akun-kartu + .kartu-bawah { margin-top: 0; }
+.atas-hp .avatar { width: 34px; height: 34px; font-size: 12px; }
 .kartu-bawah {
   margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--radius);
   background: linear-gradient(135deg, #2346c9, #3d6bff 60%, #5b8cff); color: #fff;
@@ -196,7 +230,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 .atas-hp, .tirai { display: none; }
 
 @media (max-width: 960px) {
-  .kerangka { grid-template-columns: minmax(0, 1fr); padding: 0; gap: 0; }
+  .kerangka { grid-template-columns: minmax(0, 1fr); padding: 0; gap: 0; align-content: start; }
   .atas-hp { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; padding: 10px 16px; background: var(--kaca-atas); border-bottom: 1px solid var(--garis); backdrop-filter: blur(8px); }
   .atas-hp .pil { margin-left: auto; }
   .sisi { position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(300px, 86vw); height: 100vh; top: 0; padding: 16px; background: var(--panel); transform: translateX(-105%); transition: transform .2s ease; visibility: hidden; }

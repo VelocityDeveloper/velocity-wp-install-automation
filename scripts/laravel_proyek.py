@@ -491,12 +491,29 @@ def daftar():
     return sorted(semua, key=lambda x: x.get('dibuat') or 0, reverse=True)
 
 
+_IP_LAN = {'nilai': None, 'waktu': 0}
+
+
+def ip_lan():
+    """IP LAN server saat ini (src rute default, cache 60 dtk). Dashboard dibuka lewat dash.velocity.ai.id →
+    tombol aplikasi dev tak bisa pakai location.hostname:port (tunnel hanya meneruskan dashboard)."""
+    if time.time() - _IP_LAN['waktu'] > 60:
+        try:
+            r = subprocess.run(['ip', '-4', 'route', 'get', '1.1.1.1'], capture_output=True, text=True, timeout=5)
+            m = re.search(r'\bsrc (\S+)', r.stdout)
+            _IP_LAN.update(nilai=m.group(1) if m else None, waktu=time.time())
+        except (OSError, subprocess.SubprocessError):
+            _IP_LAN.update(nilai=None, waktu=time.time())
+    return _IP_LAN['nilai']
+
+
 def detail(slug):
     if not (folder(slug) / 'proyek.json').is_file():
         return None
     p = baca_json(folder(slug) / 'proyek.json', {})
     return {
         **ringkas(slug),
+        'lan_ip': ip_lan(),
         'riwayat': (p.get('riwayat') or [])[-50:][::-1],
         'catatan': baca_teks(slug, 'catatan.md'),
         'design': baca_teks(slug, 'DESIGN.md'),
@@ -887,19 +904,22 @@ def ubah_status(slug, payload):
 
 # Hapus project (permintaan user 2026-10-05: project ujicoba menumpuk di daftar). Hanya project yang BELUM diinstall
 # (app/database/repo GitHub/layanan dev tidak ikut terhapus — itu dibereskan manual). Folder data dipindah ke
-# CADANGAN_HAPUS (bukan rm), preview contoh di nglorok.com dicabut, nomornya dicatat di TERHAPUS agar tak dipakai ulang.
+# CADANGAN_HAPUS (bukan rm), preview contoh di velocity.ai.id dicabut, nomornya dicatat di TERHAPUS agar tak dipakai ulang.
 CADANGAN_HAPUS = Path('/root/velocity-cadangan/laravel-proyek-terhapus')
 TERHAPUS = DASAR / 'proyek-terhapus.json'
 
 
 def cabut_preview(slug):
-    """Hapus folder contoh di VPS preview (best effort) -> pesan galat atau ''."""
+    """Hapus folder contoh di server preview (best effort) -> pesan galat atau ''."""
     terbit = ((baca_json(folder(slug) / 'contoh.json', {}) or {}).get('terbit') or {})
     kode = (baca_json(folder(slug) / 'proyek.json', {}) or {}).get('contoh_kode')
     k = konfig_preview()
     if not (terbit and kode and k and re.fullmatch(r'[a-z0-9-]+', kode)):
         return ''
     tujuan = f"{k['PREVIEW_DIR'].rstrip('/')}/{kode}"
+    if preview_lokal(k):
+        shutil.rmtree(tujuan, ignore_errors=True)
+        return ''
     ssh = ['ssh', '-p', k.get('PREVIEW_PORT') or '22', '-i', str(KUNCI_SSH), '-o', 'BatchMode=yes',
            '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15']
     try:
@@ -1334,9 +1354,11 @@ def path_rangkuman(slug):
 
 # --- Contoh tampilan (mockup HTML landing + dashboard) untuk dipamerkan ke klien -------------------------
 # laravel-brief <id> contoh → <proyek>/contoh/{index.html, dashboard.html (hanya Laravel), aset/} + contoh.json, lalu terbit ke
-# VPS preview (nglorok.com, Sumopod) lewat rsync: <PREVIEW_URL>/<kode>/. Kode = slug judul + 6 hex acak supaya
-# tautan klien tidak bisa ditebak dari nomor project. Konfigurasi di CONTOH_ENV (tanpa berkas itu: pratinjau lokal saja).
-CONTOH_ENV = Path('/etc/velocity/secrets/preview-nglorok.env')
+# server preview lewat rsync: <PREVIEW_URL>/<kode>/. Kode = slug judul + 6 hex acak supaya tautan klien tidak bisa
+# ditebak dari nomor project. Konfigurasi di CONTOH_ENV (tanpa berkas itu: pratinjau lokal saja). Sejak 9 Okt 2026
+# PREVIEW_HOST=lokal: folder di PC ini (/home/velocity-ai-id/preview) yang tayang di velocity.ai.id lewat Cloudflare
+# Tunnel; nglorok.com (VPS Sumopod) tidak dipakai lagi.
+CONTOH_ENV = Path('/etc/velocity/secrets/preview-velocity-ai.env')
 CONTOH_HALAMAN = {'index.html': 'Landing page', 'dashboard.html': 'Dashboard'}
 KUNCI_SSH = Path('/root/.ssh/id_ed25519')
 
@@ -1394,6 +1416,10 @@ def konfig_preview():
     return k if all(k.get(x) for x in wajib) else {}
 
 
+def preview_lokal(k):
+    return k.get('PREVIEW_HOST') in ('lokal', 'localhost', '127.0.0.1')
+
+
 def kode_contoh(slug):
     p = baca_json(folder(slug) / 'proyek.json', {}) or {}
     if p.get('contoh_kode'):
@@ -1405,7 +1431,7 @@ def kode_contoh(slug):
 
 
 def terbitkan_contoh(slug, oleh='Claude'):
-    """rsync folder contoh/ ke VPS preview. -> {'ok', 'url', 'waktu', 'galat'} (juga disimpan di contoh.json)."""
+    """rsync folder contoh/ ke server preview (lokal velocity.ai.id). -> {'ok', 'url', 'waktu', 'galat'} (juga disimpan di contoh.json)."""
     if not info_contoh(slug):
         raise ValueError('contoh_belum_ada')
     k = konfig_preview()
@@ -1418,9 +1444,14 @@ def terbitkan_contoh(slug, oleh='Claude'):
     login = f"{k.get('PREVIEW_USER') or 'root'}@{k['PREVIEW_HOST']}"
     hasil = {'waktu': sekarang(), 'url': f"{k['PREVIEW_URL'].rstrip('/')}/{kode}/", 'ok': False, 'galat': ''}
     try:
-        # mkdir lewat ssh dulu (rsync --mkpath butuh rsync ≥3.2.3 di VPS)
-        r = subprocess.run(ssh + [login, f"mkdir -p '{tujuan}'"], capture_output=True, text=True, timeout=40)
-        if not r.returncode:
+        if preview_lokal(k):
+            Path(tujuan).mkdir(parents=True, exist_ok=True)
+            r = subprocess.run(['rsync', '-rt', '--delete', '--chmod=D755,F644', f'{folder_contoh(slug)}/', tujuan],
+                               capture_output=True, text=True, timeout=120)
+        else:
+            # mkdir lewat ssh dulu (rsync --mkpath butuh rsync ≥3.2.3 di VPS)
+            r = subprocess.run(ssh + [login, f"mkdir -p '{tujuan}'"], capture_output=True, text=True, timeout=40)
+        if not r.returncode and not preview_lokal(k):
             r = subprocess.run(['rsync', '-rt', '--delete', '--chmod=D755,F644', '-e', ' '.join(ssh),
                                 f'{folder_contoh(slug)}/', f'{login}:{tujuan}'],
                                capture_output=True, text=True, timeout=120)
@@ -1428,7 +1459,7 @@ def terbitkan_contoh(slug, oleh='Claude'):
             hasil['galat'] = (r.stderr or r.stdout).strip()[-400:]
         else:
             # Pastikan benar-benar tayang lewat Cloudflare/nginx: HTTP 200 DAN isinya mockup kita (pita), karena
-            # SPA beranda nglorok.com dulu menjawab 200 untuk alamat apa pun
+            # SPA beranda (nglorok.com dulu, velocity.ai.id kini) menjawab 200 untuk alamat apa pun
             c = subprocess.run(['curl', '-s', '-w', '\n%{http_code}', '-m', '20', '-H', 'Cache-Control: no-cache',
                                 '-A', 'Mozilla/5.0 (VelocityPreviewCheck)', hasil['url']],
                                capture_output=True, text=True, timeout=30)
@@ -1513,7 +1544,7 @@ def handle(metode, path, query, payload):
                 return 200, {'proyek': daftar(), 'port_berikut': port_berikut(), 'prasyarat': prasyarat(),
                              'id_berikut': id_berikut(), 'tim': tim_crm()}
             if bagian == ['server']:
-                return 200, server_dev.status_semua()
+                return 200, {**server_dev.status_semua(), 'lan_ip': ip_lan()}
             if bagian[0] == 'p' and len(bagian) == 2 and ID_RE.match(bagian[1]):
                 q = parse_qs(query)
                 if 'log' in q:

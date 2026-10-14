@@ -29,8 +29,7 @@ CMD = ist.RESOURCE_CMD + '\n' + TAMBAHAN
 
 
 def ambil(srv, key):
-    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-           '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}", CMD]
+    cmd = ist.perintah_server(srv, key, CMD)
     try:
         r = ist.subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
     except ist.subprocess.TimeoutExpired:
@@ -67,12 +66,7 @@ def catat():
     key = ist.ssh_key_file()
     if not key:
         sys.exit('kunci SSH installer tidak ada')
-    servers = []
-    for item in ist.load_servers():
-        if isinstance(item, dict):
-            srv, err = ist.clean_server(item)
-            if not err:
-                servers.append(srv)
+    servers = ist.server_dipantau()
     hasil = [None] * len(servers)
 
     def kerja(i):

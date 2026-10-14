@@ -2,7 +2,8 @@
 // File Manager seluruh sistem (/) — pengganti File Browser (/files/). API: services/file_manager.py (/api/fm/*, port 9123).
 // Tanpa login: nginx membatasi ke LAN/Tailscale; aksi ubah berkas hanya diterima dari halaman ini (Origin = Host).
 // Folder aktif disimpan di ?path= supaya tombol Kembali browser & tautan langsung berfungsi.
-import { ref, reactive, computed, watch } from 'vue'
+// /pc-backup/berkas = File Manager PC Backup (Ubuntu + ZFS): akar /mnt/pc-backup (SSHFS lewat Tailscale), backup DA baca-saja.
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
@@ -12,9 +13,29 @@ import { kirim, minta, ukuranBerkas, tanggalWaktu } from '../api.js'
 
 const route = useRoute()
 const router = useRouter()
-const folder = computed(() => (typeof route.query.path === 'string' && route.query.path.startsWith('/') ? route.query.path : '/'))
+const PC = {
+  lokal: { ke: '/berkas', label: 'PC Lokal', akar: '/' },
+  backup: { ke: '/pc-backup/berkas', label: 'PC Backup', akar: '/mnt/pc-backup' },
+}
+const pc = computed(() => (route.path.startsWith('/pc-backup') ? 'backup' : 'lokal'))
+const akar = computed(() => PC[pc.value].akar)
+const diDalamAkar = (p) => akar.value === '/' || p === akar.value || p.startsWith(akar.value + '/')
+const folder = computed(() => {
+  const p = route.query.path
+  return typeof p === 'string' && p.startsWith('/') && diDalamAkar(p) ? p : akar.value
+})
+// Backup DirectAdmin di PC Backup di-mount baca-saja (kernel menolak tulis); tombol tulis dimatikan supaya jelas
+const bacaSaja = computed(() => pc.value === 'backup' && (folder.value + '/').startsWith(akar.value + '/directadmin/'))
 const gabung = (a, b) => (a === '/' ? '' : a) + '/' + b
 const induk = (p) => p.replace(/\/[^/]+$/, '') || '/'
+
+// PC Backup: cek mount SSHFS; kalau putus, daftar folder kosong menyesatkan → tampilkan peringatan
+const statusBackup = ref(null)
+async function cekBackup() {
+  if (pc.value !== 'backup') return
+  try { statusBackup.value = await minta('/api/fm/pc-backup') } catch { statusBackup.value = { tersambung: false } }
+}
+onMounted(cekBackup)
 
 const PESAN = {
   forbidden: 'Hanya bisa dari jaringan kantor/Tailscale lewat halaman dashboard.',
@@ -26,7 +47,8 @@ const PESAN = {
   berkas_biner: 'Berkas biner, tidak bisa dibuka sebagai teks.',
   berkas_berubah: 'Berkas sudah diubah pihak lain sejak dibuka.',
   sudah_ada: 'Nama itu sudah ada di tujuan.',
-  dilindungi: 'Folder tingkat atas (mis. /etc, /usr, /home) tidak boleh dihapus, dipindah, atau diganti nama.',
+  dilindungi: 'Folder tingkat atas (mis. /etc, /usr, /home) dan titik mount (mis. /mnt/pc-backup) tidak boleh dihapus, dipindah, atau diganti nama.',
+  baca_saja: 'Folder ini baca-saja (backup DirectAdmin di PC Backup). Berkas hanya bisa dilihat & diunduh.',
   nama_tidak_valid: 'Nama tidak valid (tanpa "/", bukan "." atau "..").',
   path_tidak_valid: 'Path harus diawali "/".',
   tujuan_bukan_folder: 'Tujuan bukan folder yang ada.',
@@ -83,12 +105,16 @@ function ubahUrut(k) {
 const ariaUrut = (k) => (urut.kunci === k ? (urut.naik ? 'ascending' : 'descending') : 'none')
 
 const remah = computed(() => {
-  const bagian = folder.value.split('/').filter(Boolean)
-  return [{ nama: '/', path: '/' }, ...bagian.map((n, i) => ({ nama: n, path: '/' + bagian.slice(0, i + 1).join('/') }))]
+  const a = akar.value === '/' ? '' : akar.value
+  const bagian = folder.value.slice(a.length).split('/').filter(Boolean)
+  return [{ nama: a ? PC.backup.label : '/', path: akar.value }, ...bagian.map((n, i) => ({ nama: n, path: a + '/' + bagian.slice(0, i + 1).join('/') }))]
 })
 function keAlamat() {
-  const p = alamat.value.trim()
-  if (p.startsWith('/')) buka(p.replace(/\/+$/, '') || '/')
+  const p = alamat.value.trim().replace(/\/+$/, '') || '/'
+  if (!p.startsWith('/')) return
+  if (!diDalamAkar(p)) return konfirmasi({ judul: 'Di luar PC Backup', teks: `File Manager PC Backup hanya menjangkau ${akar.value}. Buka ${p} di File Manager PC Lokal?`, tombol: 'Buka di PC Lokal' })
+    .then((ya) => ya && router.push({ path: PC.lokal.ke, query: { path: p } }))
+  buka(p)
 }
 
 // ---- cari di folder ini & seluruh subfolder (GET /api/fm/cari, maks 500 hasil / 15 detik) ----
@@ -114,6 +140,8 @@ function tutupCari() {
 }
 const modeCari = computed(() => !!(pencarian.hasil || pencarian.memuat || pencarian.galat))
 watch(folder, () => { pilih.value = new Set(); cari.value = ''; alamat.value = folder.value; tutupCari(); muat() }, { immediate: true })
+// /berkas ↔ /pc-backup/berkas memakai komponen yang sama (instance dipakai ulang), jadi cek ulang saat PC berganti
+watch(pc, cekBackup)
 // path relatif terhadap folder tempat mencari, supaya kolom nama tidak penuh awalan yang sama
 const relatif = (p) => (folder.value === '/' ? p.slice(1) : p.slice(folder.value.length + 1))
 function klikHasil(h) {
@@ -317,6 +345,7 @@ async function kumpulkan(entry, awalan, hasil) {
 }
 async function lepas(ev) {
   seret.value = false
+  if (bacaSaja.value) return konfirmasi({ judul: 'Folder baca-saja', teks: PESAN.baca_saja, tombol: 'Tutup' })
   const hasil = []
   const entri = [...ev.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean)
   if (entri.length) for (const e of entri) await kumpulkan(e, '', hasil)
@@ -333,17 +362,26 @@ const ikonEntri = (e) => (e.jenis === 'folder' ? 'berkas' : e.link ? 'tautan' : 
     <header class="kepala-halaman">
       <div>
         <h1>File Manager</h1>
-        <p class="redup">Seluruh sistem berkas Local PC. Hanya dari jaringan kantor/Tailscale; berkas baru ikut pemilik folder induknya.</p>
+        <p v-if="pc === 'backup'" class="redup">Penyimpanan PC Backup (ZFS) lewat Tailscale. Folder <code>directadmin</code> berisi backup server DA dan baca-saja.</p>
+        <p v-else class="redup">Seluruh sistem berkas Local PC. Hanya dari jaringan kantor/Tailscale; berkas baru ikut pemilik folder induknya.</p>
       </div>
+      <nav class="segmen" aria-label="Pilih PC">
+        <RouterLink v-for="(v, k) in PC" :key="k" :to="v.ke" :class="{ aktif: pc === k }" :aria-current="pc === k ? 'page' : undefined">{{ v.label }}</RouterLink>
+      </nav>
       <p v-if="data?.disk" class="redup disk">Sisa disk {{ ukuranBerkas(data.disk.sisa) }} dari {{ ukuranBerkas(data.disk.total) }}</p>
     </header>
 
+    <p v-if="pc === 'backup' && statusBackup && !statusBackup.tersambung" class="peringatan" role="alert">
+      PC Backup tidak tersambung (PC mati atau Tailscale putus). Isi folder di bawah bukan isi PC Backup.
+      Mount disambung ulang otomatis tiap 2 menit. <RouterLink to="/pc-backup/status">Lihat status</RouterLink>
+    </p>
+
     <section class="kartu" :class="{ seret }" aria-label="Isi folder" @dragover.prevent="seret = true" @dragleave.self="seret = false" @drop.prevent="lepas">
       <div class="bar-alamat">
-        <button type="button" class="tombol garis kecil" :disabled="folder === '/'" aria-label="Naik satu folder" @click="buka(induk(folder))"><Ikon nama="naik" :ukuran="16" /></button>
+        <button type="button" class="tombol garis kecil" :disabled="folder === akar" aria-label="Naik satu folder" @click="buka(induk(folder))"><Ikon nama="naik" :ukuran="16" /></button>
         <nav class="remah" aria-label="Lokasi">
           <template v-for="(r, i) in remah" :key="r.path">
-            <span v-if="i > 1" class="pemisah" aria-hidden="true">/</span>
+            <span v-if="i > 1 || (i === 1 && akar !== '/')" class="pemisah" aria-hidden="true">/</span>
             <button type="button" :aria-current="r.path === folder ? 'page' : undefined" @click="buka(r.path)">{{ r.nama }}</button>
           </template>
         </nav>
@@ -355,10 +393,10 @@ const ikonEntri = (e) => (e.jenis === 'folder' ? 'berkas' : e.link ? 'tautan' : 
 
       <div class="bar-alat">
         <div class="kelompok">
-          <button type="button" class="tombol kecil" @click="inputBerkas.click()"><Ikon nama="unggah" :ukuran="15" /> Unggah</button>
-          <button type="button" class="tombol garis kecil" @click="inputFolder.click()">Unggah folder</button>
-          <button type="button" class="tombol garis kecil" @click="folderBaru"><Ikon nama="tambah" :ukuran="15" /> Folder</button>
-          <button type="button" class="tombol garis kecil" @click="berkasBaru"><Ikon nama="tambah" :ukuran="15" /> Berkas</button>
+          <button type="button" class="tombol kecil" :disabled="bacaSaja" @click="inputBerkas.click()"><Ikon nama="unggah" :ukuran="15" /> Unggah</button>
+          <button type="button" class="tombol garis kecil" :disabled="bacaSaja" @click="inputFolder.click()">Unggah folder</button>
+          <button type="button" class="tombol garis kecil" :disabled="bacaSaja" @click="folderBaru"><Ikon nama="tambah" :ukuran="15" /> Folder</button>
+          <button type="button" class="tombol garis kecil" :disabled="bacaSaja" @click="berkasBaru"><Ikon nama="tambah" :ukuran="15" /> Berkas</button>
           <button type="button" class="tombol garis kecil" aria-label="Muat ulang" @click="muat"><Ikon nama="ulang" :ukuran="15" /></button>
         </div>
         <div class="kelompok">
@@ -516,6 +554,13 @@ const ikonEntri = (e) => (e.jenis === 'folder' ? 'berkas' : e.link ? 'tautan' : 
 <style scoped>
 .halaman { display: grid; gap: 18px; min-width: 0; }
 .disk { margin: 0; }
+.segmen { display: inline-flex; padding: 3px; border: 1px solid var(--garis); border-radius: var(--radius-kecil); background: var(--panel); }
+.segmen a { color: var(--teks-2); padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; }
+.segmen a:hover { color: var(--teks-kuat); }
+.segmen a.aktif { background: var(--aksen); color: #fff; }
+.segmen a:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
+.peringatan { margin: 0; padding: 12px 14px; border-radius: var(--radius-kecil); border: 1px solid var(--waspada); background: rgba(232, 181, 74, .1); color: var(--teks); font-size: 14px; }
+.peringatan a { color: var(--aksen-terang); }
 .kartu { min-width: 0; display: grid; gap: 12px; transition: box-shadow .15s; }
 .kartu.seret { box-shadow: 0 0 0 2px var(--aksen-terang) inset; }
 .bar-alamat { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -19,6 +19,8 @@ Sumber metrik otomatis (kunci `sumber` per update):
   crm_konsep      order web konsep di CRM (laporan konsep_detail)
   omzet           omzet perusahaan per kategori (CRM Laporan → Rincian Transaksi), bulan berjalan vs tanggal sama
   kasus_tim       penanganan kasus di menu Kasus Support CRM: penangan, catatan, handover, lama selesai
+  kasus_ai        kasus Support per orang (penangan + jurnal CRM) dan kasus yang dikerjakan pakai Claude Code
+                  (sesi Claude orang itu menyebut domain/nomor HP kasus): menit jurnal pakai AI vs tanpa AI per jenis
   webmaster       tiap webmaster sedang mengerjakan apa: CRM + installer WP/Laravel + sesi Claude (timer 09.00, 13.00, 17.00, 21.30)
   konsep_wm       aplikasi custom/konsep: installer Laravel → order CRM (project_list) → webmaster, disambung per domain
   ai_orang:<Nama> pemakaian Claude satu orang per hari, dibanding median divisinya
@@ -62,8 +64,8 @@ SANDI = Path('/etc/velocity/secrets/velocity-update.json')   # hash sandi halama
 SESI_DETIK = 30 * 86400
 
 STATUS = ('berjalan', 'bagus', 'perlu_perhatian', 'selesai', 'dihentikan')
-SUMBER_TETAP = ('kasus_support', 'installer_wp', 'laravel', 'crm_konsep', 'konsep_wm', 'omzet', 'webmaster', 'kasus_tim')
-SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|ai:[A-Za-z ]{1,30}'
+SUMBER_TETAP = ('kasus_support', 'installer_wp', 'laravel', 'crm_konsep', 'konsep_wm', 'omzet', 'webmaster', 'kasus_tim', 'kasus_ai')
+SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|kasus_ai|ai:[A-Za-z ]{1,30}'
                        r'|ai_orang:[A-Za-z .]{1,40}|bahasa:[a-z0-9-]{2,40}|harga_domain:[a-z.]{2,12}:\d{4,8}:\d{4,8})(@\d{4}-\d{2}-\d{2})?$')
 REKAM_ENV = Path('/etc/velocity/secrets/pengawas-wa.env')     # REKAM_URL & REKAM_KUNCI (dipinjam dari pengawas-wa)
 REPO = Path('/opt/velocity-wp-install-automation')
@@ -227,7 +229,8 @@ def sumber_tersedia():
          ('konsep_wm', 'Aplikasi custom/konsep: installer → CRM → webmaster'),
          ('omzet', 'Omzet perusahaan (Rincian Transaksi CRM)'),
          ('webmaster', 'Webmaster sedang mengerjakan apa'),
-         ('kasus_tim', 'Penanganan kasus Support (CRM)'), ('ai:semua', 'Pemakaian AI semua tim')]
+         ('kasus_tim', 'Penanganan kasus Support (CRM)'), ('kasus_ai', 'Kasus Support per orang + dikerjakan pakai Claude'),
+         ('ai:semua', 'Pemakaian AI semua tim')]
     try:
         for dv in json.loads(TOKEN_JSON.read_text()).get('divisi') or []:
             s.append((f'ai:{dv}', f'Pemakaian AI tim {dv}'))
@@ -1051,6 +1054,125 @@ def metrik_kasus_tim(mulai):
                    'Menunggu tim dihitung 30 hari terakhir, sama dengan rentang bawaan menu.'}
 
 
+KASUS_MENU_SEJAK = date(2026, 10, 2)   # rilis menu Kasus Support: penangan & jurnal baru ada sejak ini
+# Nama CRM → nama di token.json. Agung di CRM bernama "Fajar Agung cahyo Romadhon", jangan dicocokkan per kata pertama.
+NAMA_SUPPORT = {'Niken Ayu Anjaratri': 'Niken', 'Agus Dwi Yulianto': 'Agus', 'Fajar Irawan': 'Fajar',
+                'Fajar Agung cahyo Romadhon': 'Agung'}
+JENIS_LABEL = {'web_down': 'Web down/error', 'panduan': 'Panduan', 'login_akses': 'Login/akses', 'ubah_konten': 'Ubah konten',
+               'tampilan_fitur': 'Tampilan/fitur', 'hosting_penuh': 'Hosting penuh', 'perpanjangan': 'Perpanjangan',
+               'email': 'Email', 'lainnya': 'Lainnya', 'order_baru': 'Order baru', 'domain_ssl': 'Domain/SSL',
+               'google_seo': 'Google/SEO', 'file_backup': 'File/backup', 'keamanan': 'Keamanan'}
+KASUS_AI_MIN = 3                       # minimal kasus per kelompok sebelum median dibandingkan
+
+
+def _domain_web(x):
+    x = re.sub(r'^https?://', '', (x or '').lower().strip())
+    return re.sub(r'^www\.', '', x).split('/')[0]
+
+
+def _kasus_crm(dari, sampai):
+    rows, hal = [], 1
+    while True:
+        r = subprocess.run([API_SH, f'/api/api/kasus-support?per_page=200&page={hal}&dari={dari}&sampai={sampai}'],
+                           capture_output=True, text=True, timeout=120)
+        d = json.loads(r.stdout.splitlines()[0])
+        rows += d['data']
+        if hal >= d['meta']['last_page']:
+            return rows
+        hal += 1
+
+
+def metrik_kasus_ai(mulai):
+    """Kasus per anggota Support + kasus mana yang dikerjakan dengan Claude Code.
+
+    Kasus dianggap pakai AI bila ada sesi Claude milik orang yang menangani kasus itu (penangan/jurnal) yang
+    judulnya menyebut domain web kasus atau 9 digit akhir nomor HP klien, dan sesinya berjalan antara 1 jam
+    sebelum chat pertama sampai 3 jam sesudah chat terakhir. Waktu kerja = total menit jurnal kasus."""
+    awal = max(mulai, KASUS_MENU_SEJAK)
+    hari_ini = date.today()
+    try:
+        rows = _kasus_crm(awal, hari_ini)
+    except Exception as e:  # noqa: BLE001
+        return {'galat': f'CRM: {str(e)[:200]}'}
+    try:
+        t = json.loads(TOKEN_JSON.read_text())
+    except (OSError, ValueError):
+        return {'galat': 'token.json tidak terbaca'}
+    sesi = {p['nama']: p.get('sesi') or [] for p in t.get('pengguna') or [] if p.get('divisi') == 'Support'}
+    nama = lambda n: NAMA_SUPPORT.get(n) or (n or '').split(' ')[0]  # noqa: E731
+    detik = lambda x: datetime.fromisoformat(x.replace('Z', '+00:00')).timestamp()  # noqa: E731
+    orang, jenis = {}, {}
+    for k in rows:
+        dom, hp = _domain_web(k.get('web')), (k.get('nomor') or '')[-9:]
+        pegang = nama(k['penangan']['name']) if k.get('penangan') else None
+        ikut = {nama((j.get('user') or {}).get('name')) for j in k.get('jurnal') or []} | ({pegang} if pegang else set())
+        ikut.discard('')
+        a, b = detik(k['mulai']) - 3600, detik(k['terakhir']) + 3 * 3600
+        ai = set()
+        for o in ikut:
+            for s in sesi.get(o, []):
+                jd = (s.get('judul') or '').lower()
+                if s['mulai'] <= b and s['akhir'] >= a and (('.' in dom and dom in jd) or (len(hp) == 9 and hp in re.sub(r'\D', '', jd))):
+                    ai.add(o)
+        menit = sum(j.get('time') or 0 for j in k.get('jurnal') or []) / 60
+        selesai = k['status'] == 'selesai'
+        for o in ikut:
+            x = orang.setdefault(o, {'nama': o, 'pegang': 0, 'ikut': 0, 'selesai': 0, 'ai': 0, 'm_ai': [], 'm_non': []})
+            x['ikut'] += 1
+            x['pegang'] += o == pegang
+            x['selesai'] += selesai
+            x['ai'] += o in ai
+            if selesai and menit > 0:
+                x['m_ai' if o in ai else 'm_non'].append(menit)
+        if selesai and menit > 0:
+            jj = jenis.setdefault(k.get('jenis') or 'lainnya', {'m_ai': [], 'm_non': []})
+            jj['m_ai' if ai else 'm_non'].append(menit)
+    if not orang:
+        return {'galat': 'belum ada kasus bertangan di menu Kasus Support'}
+    med = lambda xs: round(statistics.median(xs)) if xs else None  # noqa: E731
+    mnt = lambda v: '–' if v is None else f'{v} mnt'  # noqa: E731
+    baris_orang = []
+    for o in sorted(orang.values(), key=lambda x: -x['ikut']):
+        baris_orang.append([o['nama'], o['pegang'], o['ikut'], o['selesai'],
+                            f"{o['ai']} ({round(100 * o['ai'] / o['ikut'])}%)", mnt(med(o['m_ai'])), mnt(med(o['m_non']))])
+    baris_jenis, cepat_ai, cepat_non = [], [], []
+    for j, v in sorted(jenis.items(), key=lambda x: -(len(x[1]['m_ai']) + len(x[1]['m_non']))):
+        ma, mn = med(v['m_ai']), med(v['m_non'])
+        if len(v['m_ai']) >= KASUS_AI_MIN and len(v['m_non']) >= KASUS_AI_MIN:
+            hasil = 'pakai AI lebih cepat' if ma < mn else 'tanpa AI lebih cepat' if ma > mn else 'sama'
+            (cepat_ai if ma < mn else cepat_non if ma > mn else []).append(JENIS_LABEL.get(j, j))
+        else:
+            hasil = 'data belum cukup'
+        baris_jenis.append([JENIS_LABEL.get(j, j), f"{mnt(ma)} ({len(v['m_ai'])})", f"{mnt(mn)} ({len(v['m_non'])})", hasil])
+    n_ai = sum(o['ai'] for o in orang.values())
+    semua_ai = [m for v in jenis.values() for m in v['m_ai']]
+    semua_non = [m for v in jenis.values() for m in v['m_non']]
+    tgl = f"{awal.day} {BULAN_ID[awal.month - 1]}"
+    per_orang = ', '.join(f"{o['nama']} {o['ikut']}" for o in sorted(orang.values(), key=lambda x: -x['ikut']))
+    ringkasan = (f"Sejak {tgl}: {len(rows)} kasus. Ditangani per orang (penangan atau jurnal): {per_orang}. "
+                 f"Dikerjakan pakai Claude: {sum(len(v['m_ai']) for v in jenis.values())} kasus selesai, median {med(semua_ai)} mnt "
+                 f"vs tanpa AI {med(semua_non)} mnt. "
+                 + (f"Lebih cepat pakai AI: {', '.join(cepat_ai)}. " if cepat_ai else 'Belum ada jenis kasus yang terbukti lebih cepat pakai AI. ')
+                 + (f"Lebih cepat tanpa AI: {', '.join(cepat_non)}." if cepat_non else ''))
+    return {'judul': 'Kasus Support per orang & pakai AI', 'ringkas': ringkasan,
+            'sorot': [{'label': 'Kasus sejak ' + tgl, 'nilai': len(rows)},
+                      {'label': 'Kasus × orang pakai Claude', 'nilai': n_ai},
+                      {'label': 'Jenis lebih cepat pakai AI', 'nilai': len(cepat_ai)}],
+            'tabel': [{'judul': 'Per orang',
+                       'kolom': ['Nama', 'Dipegang', 'Ikut menangani', 'Selesai', 'Pakai Claude', 'Menit kerja pakai AI', 'Menit kerja tanpa AI'],
+                       'baris': baris_orang},
+                      {'judul': 'Per jenis kasus (kasus selesai, median menit jurnal; angka dalam kurung = jumlah kasus)',
+                       'kolom': ['Jenis', 'Pakai AI', 'Tanpa AI', 'Hasil'], 'baris': baris_jenis}],
+            'periode': {'sesudah': [awal.isoformat(), hari_ini.isoformat()]},
+            'ket': 'Data kasus dari menu Kasus Support CRM (penangan dan jurnal baru ada sejak 2 Okt). Dipegang = penangan kasus; '
+                   'ikut menangani = penangan atau punya jurnal di kasus itu (handover dihitung untuk keduanya). Pakai Claude = '
+                   'ada sesi Claude Code orang itu yang judulnya menyebut domain atau nomor HP klien, berjalan 1 jam sebelum chat '
+                   'pertama sampai 3 jam sesudah chat terakhir; sesi yang judulnya tidak menyebut domain/nomor tidak terhitung, jadi '
+                   'angka pakai AI adalah batas bawah. Menit kerja = total menit jurnal (termasuk waktu klien menunggu pekerjaan tim). '
+                   f'Jenis dibandingkan bila masing-masing ≥{KASUS_AI_MIN} kasus. Kasus yang dibawa ke Claude cenderung yang lebih '
+                   'sulit, jadi "tanpa AI lebih cepat" belum tentu berarti AI memperlambat.'}
+
+
 def _pakai_harian(p):
     """{tanggal: panggilan} satu orang dari token.json."""
     per_hari = {}
@@ -1098,13 +1220,16 @@ def metrik_ai_orang(nama, mulai):
     seri = [{'t': (sb_a + timedelta(days=i)).isoformat(), 'v': harian.get((sb_a + timedelta(days=i)).isoformat(), 0)}
             for i in range((date.today() - sb_a).days + 1)]
     tgl = f"{mulai.day} {BULAN_ID[mulai.month - 1]}"
+    hitung_mulai = mulai + timedelta(days=1)
+    rek = lambda x: f"{x['rekan']}% dari median rekan" if x['rekan'] is not None else 'belum ada rekan divisi pembanding'  # noqa: E731
     if ss['n']:
         ringkasan = (f"Sejak {tgl}: {nama} rata-rata {ss['per_hari']} panggilan/hari kerja "
-                     f"({ss['rekan']}% dari median rekan), sebelumnya {sb['per_hari']} ({sb['rekan']}%). "
+                     f"({rek(ss)}), sebelumnya {sb['per_hari']} ({rek(sb)}). "
                      f"Pembanding: {sb['n']} hari kerja sebelum vs {ss['n']} sesudah.")
     else:
-        ringkasan = (f"Sebelum {tgl}: {nama} rata-rata {sb['per_hari']} panggilan/hari kerja ({sb['rekan']}% dari median rekan, "
-                     f"{sb['n']} hari kerja). Angka sesudah {tgl} mulai dihitung besok.")
+        ringkasan = (f"Sebelum {tgl}: {nama} rata-rata {sb['per_hari']} panggilan/hari kerja ({rek(sb)}, "
+                     f"{sb['n']} hari kerja). Angka sejak {tgl} mulai dihitung "
+                     + ('besok.' if hitung_mulai == date.today() + timedelta(days=1) else f"{hitung_mulai.day} {BULAN_ID[hitung_mulai.month - 1]}."))
     return {'judul': f'Pemakaian AI {nama}', 'angka': angka, 'ringkas': ringkasan, 'seri': seri, 'seri_tanda': mulai.isoformat(),
             'periode': {'sebelum': [sb_a.isoformat(), sb_b.isoformat()], 'sesudah': [ss_a.isoformat(), ss_b.isoformat()]},
             'ket': f'Data pemakaian Claude baru tercatat sejak {awal_data.day} {BULAN_ID[awal_data.month - 1]}, jadi pembanding "sebelum" '
@@ -1469,6 +1594,8 @@ def _hitung_sumber(sumber, mulai):
         return metrik_webmaster(mulai)
     if sumber == 'kasus_tim':
         return metrik_kasus_tim(mulai)
+    if sumber == 'kasus_ai':
+        return metrik_kasus_ai(mulai)
     if sumber.startswith('ai:'):
         return metrik_ai(sumber[3:])
     if sumber.startswith('ai_orang:'):
@@ -1492,7 +1619,7 @@ def pantau(hanya=None, sumber_saja=None):
         if u['status'] in ('selesai', 'dihentikan'):
             continue
         for s in u.get('sumber') or []:
-            if sumber_saja and s.partition('@')[0] != sumber_saja:
+            if sumber_saja and sumber_saja not in (s.partition('@')[0], s.partition(':')[0]):
                 continue
             kunci = (s, u['mulai'] if not s.startswith('ai:') and '@' not in s else '')
             if kunci not in cache:

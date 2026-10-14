@@ -19,117 +19,15 @@ Langkah pasang (di server, lewat `ssh … python3 -`):
  4. Gagal di langkah 3 → include dihapus, berkas lama dikembalikan, LiteSpeed direstart lagi.
 """
 import argparse
-import base64
 import json
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 AKAR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AKAR / 'services'))
 sys.path.insert(0, str(AKAR / 'scripts'))
 import installer_status as ist  # noqa: E402
-
-REMOTE = r'''
-import base64, glob, json, os, re, shutil, subprocess, time
-P = json.loads(base64.b64decode(SANDI).decode())
-DIR = '/etc/velocity-waf'
-INC = '/etc/modsecurity.d/velocity-waf.conf'
-ELOG = '/usr/local/lsws/logs/error.log'
-out = {'langkah': []}
-def jalan(cmd, batas=120):
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=batas, shell=isinstance(cmd, str))
-    return r.returncode, r.stdout
-def status():
-    v = open(DIR + '/VERSI').read().strip() if os.path.isfile(DIR + '/VERSI') else None
-    return {'terpasang': os.path.isfile(INC), 'versi': v, 'cpguard': os.path.isfile('/etc/modsecurity.d/cpguard_waf.conf'),
-            'lsws': os.path.isfile('/usr/local/lsws/bin/lswsctrl'), 'modsecurity_d': os.path.isdir('/etc/modsecurity.d')}
-def situs():
-    # domain pertama yang punya docroot, untuk uji HTTP
-    for f in sorted(glob.glob('/usr/local/directadmin/data/users/*/domains.list')):
-        for d in open(f).read().split():
-            if d:
-                return d
-def http(domain, ua):
-    kode, o = jalan(['curl', '-sk', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20', '-A', ua,
-                     '--resolve', '%s:443:127.0.0.1' % domain, 'https://%s/' % domain], 30)
-    return o.strip()
-def restart():
-    k, o = jalan(['/usr/local/lsws/bin/lswsctrl', 'restart'], 120)
-    time.sleep(6)
-    return k, o.strip()[-300:]
-def galat_baru(ukuran_awal):
-    try:
-        with open(ELOG, errors='replace') as f:
-            f.seek(ukuran_awal if os.path.getsize(ELOG) >= ukuran_awal else 0)
-            teks = f.read()
-    except OSError:
-        return []
-    # Baris rule terpicu ("ModSecurity: …" / "[MODSEC] mod_security rule … triggered!") bukan galat walau berlabel [error]
-    return [b[:300] for b in teks.split('\n') if 'velocity-waf' in b.lower() and 'ModSecurity: ' not in b and 'triggered' not in b
-            and re.search(r'fail|parse|invalid|unknown|syntax|cannot|could not', b, re.I)][:10]
-aksi = P['aksi']
-s = status()
-if aksi == 'status' or not s['lsws'] or not s['modsecurity_d']:
-    out.update(ok=aksi == 'status', status=s, error=None if aksi == 'status' else 'bukan_litespeed_modsecurity')
-    print(json.dumps(out)); raise SystemExit
-cadangan = None
-if aksi == 'copot':
-    if os.path.isfile(INC):
-        os.remove(INC)
-    k, o = restart()
-    out.update(ok=k == 0, status=status(), restart=o); print(json.dumps(out)); raise SystemExit
-# --- pasang ---
-if os.path.isdir(DIR):
-    cadangan = DIR + '.bak-' + time.strftime('%Y%m%d%H%M%S')
-    shutil.copytree(DIR, cadangan)
-    out['langkah'].append('cadangan ' + cadangan)
-os.makedirs(DIR, exist_ok=True)
-os.chmod(DIR, 0o755)
-for nama, isi in P['berkas'].items():
-    jalur = os.path.join(DIR, os.path.basename(nama))
-    with open(jalur + '.baru', 'w') as f:
-        f.write(isi)
-    os.chmod(jalur + '.baru', 0o644)
-    os.rename(jalur + '.baru', jalur)
-out['langkah'].append('%d berkas ditulis' % len(P['berkas']))
-sudah = os.path.isfile(INC)
-with open(INC, 'w') as f:
-    f.write('# Velocity WAF — dipasang scripts/velocity-waf-pasang (dashboard Velocity). Hapus berkas ini untuk mencopot.\nInclude %s/velocity-waf.conf\n' % DIR)
-os.chmod(INC, 0o644)
-domain = situs()
-awal = os.path.getsize(ELOG) if os.path.isfile(ELOG) else 0
-sebelum = http(domain, 'Mozilla/5.0 velocity-waf-cek') if domain else None
-k, o = restart()
-out['langkah'].append('lswsctrl restart: %s' % k)
-galat = galat_baru(awal)
-sesudah = http(domain, 'Mozilla/5.0 velocity-waf-cek') if domain else None
-uji = http(domain, 'sqlmap/1.7 velocity-waf-cek') if domain else None
-time.sleep(1)
-try:
-    with open(ELOG, errors='replace') as f:
-        f.seek(awal); tercatat = 'Velocity WAF - Scanner/bot jahat' in f.read()
-except OSError:
-    tercatat = False
-out.update(domain=domain, http_sebelum=sebelum, http_sesudah=sesudah, http_uji_sqlmap=uji, tercatat=tercatat, galat=galat)
-rusak = k != 0 or galat or (sesudah or '000')[0] == '5' or sesudah == '000' and sebelum != '000'
-harap_blokir = P['mode'] == 'blokir'
-if not rusak and harap_blokir and uji != '429':
-    rusak = True; out['alasan'] = 'mode blokir tetapi request uji tidak dijawab 429'
-if not rusak and not harap_blokir and not tercatat:
-    out['peringatan'] = 'request uji belum tercatat di error.log (bisa karena LSCache/situs pertama tidak di server ini) — cek halaman WAF'
-if rusak:
-    os.remove(INC) if not sudah else None
-    if cadangan:
-        shutil.rmtree(DIR); shutil.copytree(cadangan, DIR)
-    k2, o2 = restart()
-    out.update(ok=False, error='dikembalikan', restart_ulang=k2)
-else:
-    out.update(ok=True)
-out['status'] = status()
-print(json.dumps(out))
-'''
+import velocity_waf  # noqa: E402  (REMOTE, rakit berkas, setelan dashboard)
 
 
 def server(nama):
@@ -149,25 +47,17 @@ def main():
     ap.add_argument('--status', action='store_true')
     ap.add_argument('--tanpa-seo', action='store_true')
     ap.add_argument('--tanpa-ai', action='store_true')
-    ap.add_argument('--ai-pencarian', choices=['blokir', 'catat'], default='catat')
+    ap.add_argument('--ai-pencarian', choices=['blokir', 'catat'])
     a = ap.parse_args()
     s = server(a.server)
     perintah = {'aksi': 'status' if a.status else 'copot' if a.copot else 'pasang', 'mode': a.mode}
     if perintah['aksi'] == 'pasang':
-        with tempfile.TemporaryDirectory() as tmp:
-            arg = [str(AKAR / 'scripts' / 'velocity-waf-build'), '--keluar', tmp, '--mode', a.mode, '--ai-pencarian', a.ai_pencarian]
-            arg += ['--tanpa-seo'] if a.tanpa_seo else []
-            arg += ['--tanpa-ai'] if a.tanpa_ai else []
-            subprocess.run(arg, check=True, stdout=subprocess.DEVNULL)
-            perintah['berkas'] = {p.name: p.read_text() for p in Path(tmp).iterdir() if p.is_file()}
-    sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
-    cmd = ['ssh', '-i', str(ist.ssh_key_file()), '-p', s['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-           f"{s['user']}@{s['host']}", 'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -']
-    r = subprocess.run(cmd, input=f"SANDI = '{sandi}'\n{REMOTE}", capture_output=True, text=True, timeout=400)
-    try:
-        hasil = json.loads(r.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        sys.exit(f'gagal: {(r.stderr or r.stdout)[-500:]}')
+        # Setelan dashboard (Server > WAF > Setelan) sebagai dasar; opsi baris perintah menimpa
+        setelan = velocity_waf.baca_setelan()
+        setelan.update({k: v for k, v in (('seo', False if a.tanpa_seo else None), ('ai', False if a.tanpa_ai else None),
+                                           ('ai_pencarian', a.ai_pencarian)) if v is not None})
+        perintah['berkas'], _, _ = velocity_waf.rakit_berkas(a.mode, setelan)
+    hasil = velocity_waf.jalankan(s, ist.ssh_key_file(), perintah)
     print(json.dumps(hasil, indent=2, ensure_ascii=False))
     sys.exit(0 if hasil.get('ok') else 1)
 

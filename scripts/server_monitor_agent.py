@@ -13,7 +13,11 @@ from datetime import datetime, timedelta
 
 LAYANAN = ['directadmin', 'litespeed', 'lsws', 'httpd', 'nginx', 'mariadb', 'mysqld', 'exim', 'dovecot',
            'pure-ftpd', 'proftpd', 'named', 'sshd', 'crond', 'lfd', 'fail2ban', 'imunify360', 'imunify-antivirus',
-           'clamd', 'redis', 'rspamd']
+           'clamd', 'redis', 'rspamd',
+           # PC Backup (Ubuntu): nama unit Debian + layanan penyimpanan
+           'ssh', 'cron', 'vsftpd', 'tailscaled', 'zfs-zed',
+           # PC Lokal (dashboard kantor): tunnel publik + layanan dashboard
+           'cloudflared', 'installer-status', 'dash-login', 'php-fpm']
 PROSES_CPGUARD = ['cpguard', 'cpgosm']
 
 
@@ -26,6 +30,11 @@ def jalan(cmd, batas=15):
         return -1, ''
 
 
+def nama_os():
+    m = re.search(r'^PRETTY_NAME="?([^"\n]*)', baca('/etc/os-release'), re.M)
+    return m.group(1) if m else ''
+
+
 def baca(path, default=''):
     try:
         with open(path, errors='replace') as f:
@@ -36,7 +45,7 @@ def baca(path, default=''):
 
 def sistem():
     out = {'hostname': os.uname()[1], 'kernel': os.uname()[2],
-           'os': baca('/etc/redhat-release').strip() or baca('/etc/os-release').split('\n')[0]}
+           'os': baca('/etc/redhat-release').strip() or nama_os()}
     out['uptime'] = int(float(baca('/proc/uptime', '0').split()[0]))
     out['load'] = [float(x) for x in baca('/proc/loadavg', '0 0 0').split()[:3]]
     out['cpu_core'] = os.cpu_count()
@@ -65,9 +74,9 @@ def sistem():
 
     disks = []
     _, teks = jalan(['df', '-PB1', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'overlay', '-x', 'squashfs',
-                     '-x', 'efivarfs'])
+                     '-x', 'efivarfs', '-x', 'fuse.sshfs'])
     _, teks_i = jalan(['df', '-Pi', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'overlay', '-x', 'squashfs',
-                       '-x', 'efivarfs'])
+                       '-x', 'efivarfs', '-x', 'fuse.sshfs'])
     inode = {}
     for baris in teks_i.split('\n')[1:]:
         p = baris.split()
@@ -82,7 +91,9 @@ def sistem():
             disks.append({'mount': p[5], 'total': total, 'used': used, 'free': free,
                           'persen': round(used * 100 / (used + free), 1) if used + free else 0,
                           'inode': inode.get(p[5])})
-    out['disks'] = disks
+    # Dataset ZFS anak berbagi ruang kosong pool induknya → cukup induknya
+    out['disks'] = [d for d in disks if not any(
+        o is not d and o['free'] == d['free'] and d['mount'].startswith(o['mount'].rstrip('/') + '/') for o in disks)]
     return out
 
 
@@ -192,7 +203,34 @@ def keamanan():
             out[k] = m.group(1).strip()
     kode, _ = jalan(['needs-restarting', '-r'], 30)
     out['perlu_reboot'] = True if kode == 1 else (False if kode == 0 else None)
+    if out['perlu_reboot'] is None and os.path.isfile('/etc/debian_version'):
+        out['perlu_reboot'] = os.path.exists('/var/run/reboot-required')
+    # PC kantor tanpa CSF: firewalld (AlmaLinux) atau ufw (Ubuntu)
+    if not os.path.isfile('/etc/csf/csf.conf') and os.path.isfile('/usr/bin/firewall-cmd'):
+        _, f = jalan(['firewall-cmd', '--state'], 10)
+        out['firewalld'] = f.strip() or None
+    if os.path.isfile('/usr/sbin/ufw'):
+        _, u = jalan(['ufw', 'status'], 10)
+        m = re.search(r'Status: (\w+)', u)
+        out['ufw'] = m.group(1) if m else None
     return out
+
+
+def penyimpanan():
+    """Pool ZFS (PC Backup): ukuran, kesehatan, jumlah & waktu snapshot terakhir. None bila tanpa ZFS."""
+    kode, t = jalan(['zpool', 'list', '-Hp', '-o', 'name,size,alloc,free,cap,health'], 10)
+    if kode != 0 or not t.strip():
+        return None
+    pool = []
+    for baris in t.strip().split('\n'):
+        p = baris.split('\t')
+        if len(p) == 6:
+            pool.append({'nama': p[0], 'total': int(p[1]), 'used': int(p[2]), 'free': int(p[3]),
+                         'persen': int(p[4]), 'health': p[5]})
+    _, s = jalan(['zfs', 'list', '-Hp', '-t', 'snapshot', '-o', 'name,creation', '-s', 'creation'], 15)
+    snap = [b.split('\t') for b in s.strip().split('\n') if '\t' in b]
+    return {'pool': pool, 'snapshot': len(snap),
+            'snapshot_terakhir': {'nama': snap[-1][0], 'waktu': int(snap[-1][1])} if snap else None}
 
 
 def hosting():
@@ -246,7 +284,7 @@ def hosting():
 def main():
     hasil = {'v': 1}
     for nama, fn in (('sistem', sistem), ('layanan', layanan), ('firewall', firewall), ('keamanan', keamanan),
-                     ('hosting', hosting), ('cpguard', proses_cpguard)):
+                     ('hosting', hosting), ('cpguard', proses_cpguard), ('penyimpanan', penyimpanan)):
         t0 = time.time()
         try:
             hasil[nama] = fn()

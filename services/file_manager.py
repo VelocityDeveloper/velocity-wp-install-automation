@@ -6,6 +6,7 @@ mengubah berkas wajib datang dari halaman dashboard sendiri (Origin = Host), sam
 Pengaman: folder tingkat atas (/etc, /usr, /home, ...) tidak bisa dihapus/dipindah/diganti nama;
 berkas & folder baru ikut pemilik folder induknya (situs di /home/<user> tetap milik user itu).
 """
+import errno
 import fnmatch
 import json
 import mimetypes
@@ -19,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
 from urllib.parse import parse_qs, quote, urlsplit
 
+import pc_backup
+
 PORT = 9123
 LAN_NETWORKS = tuple(map(ip_network, ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')))
 BATAS_BACA_TEKS = 5 * 1024 * 1024
@@ -27,7 +30,7 @@ POTONGAN = 1024 * 1024
 BATAS_HASIL_CARI = 500
 BATAS_WAKTU_CARI = 15  # detik
 # Sistem berkas virtual: isinya bukan berkas sungguhan & bisa membuat penelusuran menggantung
-LEWATI_CARI = {'/proc', '/sys', '/dev', '/run'}
+LEWATI_CARI = {'/proc', '/sys', '/dev', '/run', pc_backup.AKAR}  # PC Backup (SSHFS) hanya dicari bila dimulai dari dalamnya
 
 _NAMA_USER = {}
 _NAMA_GRUP = {}
@@ -68,8 +71,9 @@ def jalur(p):
 
 
 def dilindungi(p):
-    # / dan anak langsungnya (/etc, /usr, /home, ...) terlalu berbahaya untuk dihapus/dipindah
-    return p.count('/') <= 1
+    # / dan anak langsungnya (/etc, /usr, /home, ...) terlalu berbahaya untuk dihapus/dipindah;
+    # titik mount (mis. /mnt/pc-backup = isi NAS) juga, karena hapus rekursif akan mengosongkan disk lain
+    return p.count('/') <= 1 or p == pc_backup.AKAR or os.path.ismount(p)
 
 
 def nama_valid(nama):
@@ -436,7 +440,10 @@ class Handler(BaseHTTPRequestHandler):
         except zipfile.BadZipFile:
             self.json_response(400, {'error': 'zip_rusak'})
         except OSError as e:
-            self.json_response(400, {'error': f'os: {e.strerror or e}'})
+            if e.errno == errno.EROFS:
+                self.json_response(403, {'error': 'baca_saja'})
+            else:
+                self.json_response(400, {'error': f'os: {e.strerror or e}'})
 
     def do_GET(self):
         path, _, query = self.path.partition('?')
@@ -452,6 +459,8 @@ class Handler(BaseHTTPRequestHandler):
             self.jalankan(lambda: cari(q.get('path', '/'), q.get('q', ''), q.get('jenis', 'semua'), q.get('tersembunyi') != '0'))
         elif path == '/api/fm/info':
             self.jalankan(lambda: info(jalur(q.get('path', ''))))
+        elif path == '/api/fm/pc-backup':
+            self.jalankan(lambda: pc_backup.status(q.get('segar') == '1'))
         elif path == '/api/fm/unduh':
             self.unduh(q.get('path', ''), q.get('lihat') == '1')
         else:

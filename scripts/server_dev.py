@@ -8,6 +8,9 @@ Daftar project dari config/local-projects.json (yang stack-nya Laravel). Dipakai
 
 Aktivitas = request HTTP selain "/" (cek kesehatan dashboard hanya memanggil "/"), berkas kode diubah,
 commit git, atau tombol Nyalakan/Restart. Project dengan "selalu_nyala": true tidak pernah dimatikan otomatis.
+
+Layanan dev sengaja TIDAK di-enable (user 13 Okt 2026): sesudah PC restart semuanya mati dan dinyalakan manual
+saat dipakai. Hanya project "selalu_nyala" (vdnet-production) yang tetap enabled. Lihat pastikan_boot().
 """
 import json
 import os
@@ -22,6 +25,8 @@ REPO = Path(__file__).resolve().parent.parent
 PROJECTS_FILE = REPO / 'config' / 'local-projects.json'
 STATE_FILE = Path('/var/lib/velocity/laravel/server-dev.json')
 BATAS_DIAM = 24 * 3600
+with open('/proc/stat') as _f:
+    BOOT = next(int(b.split()[1]) for b in _f if b.startswith('btime'))
 AKSI = ('nyala', 'mati', 'restart')
 # Folder kode yang dipantau untuk aktivitas pengembangan (vendor/node_modules/storage tidak).
 FOLDER_KODE = ('app', 'routes', 'resources', 'database', 'config', 'tests', 'bootstrap/app.php', '.env')
@@ -178,6 +183,8 @@ def status_project(p, state=None):
         if alasan:
             kondisi = 'perlu_restart'
     mulai = min((l['sejak'] for l in aktif if l['sejak']), default=None)
+    if mulai and mulai - BOOT < 900:
+        mulai = None  # menyala bersama boot PC, bukan dinyalakan orang → tidak dihitung aktivitas
     dasar = max(filter(None, [aktivitas, mulai]), default=None)
     return {
         'id': p['id'], 'nama': p.get('nama'), 'port': p.get('port'), 'stack': p.get('stack'),
@@ -206,6 +213,18 @@ def status_semua():
     return {'server': hasil, 'batas_diam': BATAS_DIAM, 'diperiksa': int(time.time())}
 
 
+def pastikan_boot(p):
+    """Selaraskan enable/disable systemd: selalu_nyala → enabled (ikut boot), lainnya → disabled (tidak ikut boot)."""
+    ingin = 'enable' if p.get('selalu_nyala') else 'disable'
+    for n in p['layanan']:
+        kode, out = _jalankan(['systemctl', 'is-enabled', f'{n}.service'])
+        sekarang = out.strip()
+        if sekarang in ('static', 'masked', 'not-found', ''):
+            continue
+        if (sekarang == 'enabled') != (ingin == 'enable'):
+            _jalankan(['systemctl', ingin, '-q', f'{n}.service'], timeout=30)
+
+
 def aksi(pid, jenis, oleh=''):
     p = next((x for x in daftar_project() if x['id'] == pid), None)
     if not p:
@@ -218,6 +237,7 @@ def aksi(pid, jenis, oleh=''):
     kode, out = _jalankan(['systemctl', perintah, *[f'{n}.service' for n in p['layanan']]], timeout=60)
     if kode:
         raise ValueError('systemctl_gagal')
+    pastikan_boot(p)
     sekarang = int(time.time())
 
     def catat(d):
@@ -244,6 +264,8 @@ def tidurkan(uji=False):
     """Dipanggil timer tiap jam: simpan aktivitas terakhir, matikan project yang diam >= BATAS_DIAM."""
     sekarang = int(time.time())
     for p in daftar_project():
+        if not uji:
+            pastikan_boot(p)  # project baru/diubah manual ikut aturan boot tanpa menunggu tombol diklik
         st = status_project(p)
         if st['aktivitas']:
             ubah_state(lambda d: d.setdefault(p['id'], {}).update(aktivitas=st['aktivitas']))

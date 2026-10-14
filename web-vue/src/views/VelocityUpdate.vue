@@ -6,6 +6,8 @@ import { ref, reactive, computed, watch } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
 import Info from '../components/Info.vue'
+import PelakuAkun from '../components/PelakuAkun.vue'
+import { namaAkun } from '../akun.js'
 import { konfirmasi } from '../konfirmasi.js'
 import { pakaiPolling, kirim, tanggalWaktu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
@@ -53,6 +55,7 @@ const PESAN = {
   sandi_salah: 'Sandi salah.',
   terlalu_banyak_percobaan: 'Terlalu banyak sandi salah. Coba lagi 15 menit lagi.',
   perlu_masuk: 'Sesi berakhir. Masukkan sandi lagi.',
+  login_diperlukan: 'Belum masuk ke dashboard. Klik "Masuk dengan VD.net" di kolom Dicatat oleh.',
 }
 const pesanGalat = (e) => PESAN[e.message] || e.message
 
@@ -108,8 +111,8 @@ const buka = reactive({})
 const jurnalPenuh = reactive({})
 
 // ---- nama pencatat (disimpan di browser) ----
-const oleh = ref((() => { try { return localStorage.getItem('vu-oleh') || 'Muh' } catch { return 'Muh' } })())
-watch(oleh, (v) => { try { localStorage.setItem('vu-oleh', v) } catch { /* mode privat */ } })
+// "Dicatat oleh" = akun yang masuk ke dash.velocity.ai.id (backend menggantinya dari cookie sesi)
+const oleh = namaAkun
 
 async function aksi(nama, body) {
   try {
@@ -432,6 +435,17 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
                 </tbody>
               </table>
             </div>
+            <div v-for="tb in m.tabel || []" :key="tb.judul" class="tabel-wadah">
+              <p class="redup">{{ tb.judul }}</p>
+              <table class="tabel orang">
+                <thead><tr><th v-for="c in tb.kolom" :key="c">{{ c }}</th></tr></thead>
+                <tbody>
+                  <tr v-for="(b, i) in tb.baris" :key="i">
+                    <td v-for="(c, j) in b" :key="j">{{ typeof c === 'number' ? angka(c) : c }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             <div v-if="m.omzet?.length" class="tabel-wadah">
               <table class="tabel orang angka-kanan">
                 <thead><tr><th>Bulan</th><th>Omzet kotor</th><th class="sembunyi-hp">Versi Ringkasan</th><th>Pembuatan</th><th class="sembunyi-hp">Laba buat</th><th>Perpanjangan</th><th class="sembunyi-hp">Tambah space</th><th class="sembunyi-hp">Iklan+deposit</th><th class="sembunyi-hp">Jasa update</th><th class="sembunyi-hp">Lain</th><th class="sembunyi-hp">Order buat</th></tr></thead>
@@ -581,7 +595,7 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
               <option v-for="(v, k) in STATUS" :key="k" :value="k">{{ v.label }}</option>
             </select>
           </label>
-          <label class="isian"><span>Dicatat oleh</span><input v-model="oleh" maxlength="60" required></label>
+          <div class="isian"><span>Dicatat oleh</span><PelakuAkun id="vu-oleh" /></div>
         </div>
         <p v-if="fk.galat" class="pesan-status bahaya" role="alert">{{ fk.galat }}</p>
         <div class="aksi-dialog">
