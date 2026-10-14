@@ -4,12 +4,11 @@
 Satu baris JSON per server ke /var/lib/velocity/server-usage/riwayat.jsonl:
 {"t", "host", "name", "cpu", "ram", "swap", "disk" (persen), "load", "core", "req" (request/dtk LiteSpeed),
 "conn" (koneksi live LiteSpeed, cadangan: TCP established :80/:443), "net_in"/"net_out" (Mbps kartu jaringan utama)}.
-RESOURCE_CMD dari installer_status.py + baris tambahan (hanya baca: /proc, df, .rtreport LiteSpeed, ss).
+Sampel = installer_status.usage_sampel (RESOURCE_CMD + baris tambahan, hanya baca: /proc, df, .rtreport LiteSpeed, ss).
 Traffic dihitung dari selisih counter /proc/net/dev dengan catatan sebelumnya (net-state.json). Riwayat disimpan 31 hari;
 dibaca GET /api/servers/riwayat untuk grafik di /server/monitoring.
 """
 import json
-import re
 import sys
 import threading
 import time
@@ -20,44 +19,6 @@ import installer_status as ist  # noqa: E402
 
 BERKAS = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
 STATE_NET = BERKAS.parent / 'net-state.json'
-TAMBAHAN = r'''
-rt=/tmp/lshttpd/.rtreport; [ -r $rt ] && { echo "W $(grep -m1 '^REQ_RATE \[\]' $rt)"; echo "K $(grep -m1 '^MAXCONN' $rt)"; }
-echo "E $(ss -Htn state established '( sport = :80 or sport = :443 )' 2>/dev/null | wc -l)"
-dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p'); [ -n "$dev" ] && echo "N $(grep " $dev:" /proc/net/dev | tr ':' ' ')"
-'''
-CMD = ist.RESOURCE_CMD + '\n' + TAMBAHAN
-
-
-def ambil(srv, key):
-    cmd = ist.perintah_server(srv, key, CMD)
-    try:
-        r = ist.subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    except ist.subprocess.TimeoutExpired:
-        return None
-    if r.returncode != 0 or not (r.stdout or '').strip():
-        return None
-    out = ist._parse_resource(r.stdout)
-    for baris in r.stdout.splitlines():
-        kode, _, isi = baris.partition(' ')
-        try:
-            if kode == 'W':
-                m = re.search(r'REQ_PER_SEC: ([\d.]+)', isi)
-                if m:
-                    out['req'] = float(m.group(1))
-            elif kode == 'K':
-                plain, ssl = re.search(r'PLAINCONN: (\d+)', isi), re.search(r'SSLCONN: (\d+)', isi)
-                if plain and ssl:
-                    out['conn'] = int(plain.group(1)) + int(ssl.group(1))
-            elif kode == 'E':
-                out['established'] = int(isi.strip() or 0)
-            elif kode == 'N':
-                p = isi.split()  # iface rx_bytes … (kolom ke-9 dari data = tx_bytes)
-                out['net'] = {'rx': int(p[1]), 'tx': int(p[9])}
-        except (ValueError, IndexError):
-            continue
-    out['ok'] = True
-    return out
-
 
 SIMPAN_HARI = 31
 
@@ -70,7 +31,7 @@ def catat():
     hasil = [None] * len(servers)
 
     def kerja(i):
-        hasil[i] = ambil(servers[i], key)
+        hasil[i] = ist.usage_sampel(servers[i], key)
     utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
     for t in utas:
         t.start()
@@ -86,16 +47,10 @@ def catat():
     for srv, r in zip(servers, hasil):
         b = {'t': now, 'host': srv['host'], 'name': srv['name']}
         if r and r.get('ok'):
-            disk = max((d['persen'] for d in r.get('disks') or []), default=None)
-            b.update(cpu=r.get('cpu'), ram=(r.get('ram') or {}).get('persen'), swap=(r.get('swap') or {}).get('persen'),
-                     disk=disk, load=(r.get('load') or [None])[0], core=r.get('cpu_core'),
-                     req=r.get('req'), conn=r.get('conn', r.get('established')))
-            net, lama = r.get('net'), state.get(srv['host'])
+            b.update(ist.usage_titik(r))
+            net = r.get('net')
             if net:
-                if lama and 0 < now - lama['t'] <= 900 and net['rx'] >= lama['rx'] and net['tx'] >= lama['tx']:
-                    dt = now - lama['t']
-                    b['net_in'] = round((net['rx'] - lama['rx']) * 8 / dt / 1e6, 2)
-                    b['net_out'] = round((net['tx'] - lama['tx']) * 8 / dt / 1e6, 2)
+                b.update(ist.usage_net(net, state.get(srv['host']), now, 900))
                 state[srv['host']] = {'t': now, **net}
         else:
             b['ok'] = False  # titik kosong = server tak terjangkau (grafik putus di sini)

@@ -5,7 +5,7 @@ Pemakaian:
   velocity-waf-build --keluar DIR [--mode deteksi|blokir] [--dir /etc/velocity-waf]
                      [--tanpa-seo] [--tanpa-ai] [--ai-pencarian blokir|catat] [--xmlrpc 10] [--login 10]
 
-Hasil di DIR: velocity-waf.conf + berkas data (bot-*.txt, klien-skrip.txt, ip-putih.txt) + VERSI.
+Hasil di DIR: velocity-waf.conf + berkas data (bot-*.txt, klien-skrip.txt, ip-putih.txt, ip-ai-pencarian.txt) + VERSI.
 Mode deteksi: semua aturan hanya mencatat ("ModSecurity: Warning", request tetap lolos) — dipakai selama cPGuard
 masih jalan paralel. Mode blokir: request ditolak (429 bot, 403 eksploit, 406 rate limit). Aturan injeksi (77006xx)
 dan klien skrip selalu hanya dicatat.
@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 AKAR = Path(__file__).resolve().parent.parent / 'waf'
-DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt']
+DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt']
 
 
 def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, ai_pencarian='catat', xmlrpc=10, login=10):

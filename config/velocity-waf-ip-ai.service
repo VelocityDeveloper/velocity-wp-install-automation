@@ -1,0 +1,7 @@
+[Unit]
+Description=Perbarui daftar IP resmi bot AI pencarian untuk Velocity WAF (aturan 7700106)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/velocity-waf-ip-ai
+TimeoutStartSec=120

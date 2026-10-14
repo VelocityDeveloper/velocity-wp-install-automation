@@ -3,6 +3,8 @@
 // dicocokkan dengan basis data publik wpvulnerability.net. Data: GET /api/servers/cms (ringkas, tanpa SSH),
 // GET /api/servers/cms?server=<host> (detail), POST /api/servers/cms/scan (SSH hanya baca + cocokkan; thread latar).
 // cPGuard "CMS Threat" (cms.db) ditampilkan sebagai pembanding selama cPGuard masih jalan. Hanya melapor.
+import PilihServer from '../components/PilihServer.vue'
+import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
@@ -17,7 +19,7 @@ const riwayat = pakaiPolling('/api/servers/cms/riwayat', 0)
 const servers = computed(() => cms.data.value?.servers || [])
 const job = computed(() => cms.data.value?.job || null)
 const berjalan = computed(() => job.value?.status === 'berjalan')
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['situs', 'komponen', 'cpguard', 'riwayat']
 const tab = tabUrl('tab', 'situs', { boleh: TAB })
@@ -56,17 +58,6 @@ function tingkatServer(s) {
   if (r.tinggi || r.sedang) return 'waspada'
   return 'baik'
 }
-const total = computed(() => {
-  const acc = { situs: 0, rentan: 0, kritis: 0, tinggi: 0, inti_usang: 0, cpg_rentan: 0, sudah: 0 }
-  for (const s of servers.value) {
-    if (!s.ringkas) continue
-    acc.sudah++
-    for (const k of Object.keys(acc)) if (k !== 'sudah') acc[k] += s.ringkas[k] || 0
-  }
-  return acc
-})
-const diambilTerlama = computed(() => Math.min(...servers.value.map((s) => s.diambil || Infinity)))
-
 // ---- Scan ----
 async function mulaiScan(server) {
   if (!oleh.value.trim()) {
@@ -272,25 +263,6 @@ const cacheHasil = new Map()
     <p v-else-if="cms.galat.value && !cms.data.value" class="pesan-status bahaya">Gagal memuat: {{ cms.galat.value.message }}</p>
 
     <template v-else-if="cms.data.value">
-      <div class="ringkas">
-        <div class="kartu tile">
-          <span class="tile-ikon biru"><Ikon nama="cms" :ukuran="20" /></span>
-          <div><span class="redup">Situs WordPress</span><b>{{ angka(total.situs) }}</b><small class="redup">{{ total.sudah }} / {{ servers.length }} server sudah di-scan</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon merah"><Ikon nama="peringatan" :ukuran="20" /></span>
-          <div><span class="redup">Situs rentan</span><b>{{ angka(total.rentan) }}</b><small class="redup">{{ angka(total.kritis) }} kritis · {{ angka(total.tinggi) }} tinggi</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon kuning"><Ikon nama="ulang" :ukuran="20" /></span>
-          <div><span class="redup">Inti WP belum terbaru</span><b>{{ angka(total.inti_usang) }}</b><small class="redup">terbaru {{ servers.find((s) => s.wp_terbaru)?.wp_terbaru || '-' }}</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">Rentan menurut cPGuard</span><b>{{ angka(total.cpg_rentan) }}</b><small class="redup">{{ total.sudah ? `scan ${waktuLalu(diambilTerlama)}` : 'pembanding' }}</small></div>
-        </div>
-      </div>
-
       <div v-if="berjalan" class="kemajuan kartu" role="status">
         <span class="putar besar" aria-hidden="true" />
         <div>
@@ -303,12 +275,27 @@ const cacheHasil = new Map()
 
       <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
 
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
-          <span class="titik" :class="tingkatServer(s)" aria-hidden="true" /> {{ s.name }}
-          <span v-if="s.ringkas?.rentan" class="hitung-menu">{{ s.ringkas.rentan }}</span>
-        </button>
-      </nav>
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="tingkatServer(terpilih)" :teks="(s) => s.name + (s.ringkas?.rentan ? ` · ${s.ringkas.rentan} rentan` : '')" @update:model-value="pilih = $event" />
+
+      <!-- Ringkasan server terpilih (sesudah pernah di-scan) -->
+      <div v-if="terpilih?.ringkas" class="ringkas">
+        <div class="kartu tile">
+          <span class="tile-ikon biru"><Ikon nama="cms" :ukuran="20" /></span>
+          <div><span class="redup">Situs WordPress</span><b>{{ angka(terpilih.ringkas.situs) }}</b><small class="redup">scan {{ waktuLalu(terpilih.diambil) }}</small></div>
+        </div>
+        <div class="kartu tile">
+          <span class="tile-ikon merah"><Ikon nama="peringatan" :ukuran="20" /></span>
+          <div><span class="redup">Situs rentan</span><b>{{ angka(terpilih.ringkas.rentan) }}</b><small class="redup">{{ angka(terpilih.ringkas.kritis) }} kritis · {{ angka(terpilih.ringkas.tinggi) }} tinggi</small></div>
+        </div>
+        <div class="kartu tile">
+          <span class="tile-ikon kuning"><Ikon nama="ulang" :ukuran="20" /></span>
+          <div><span class="redup">Inti WP belum terbaru</span><b>{{ angka(terpilih.ringkas.inti_usang) }}</b><small class="redup">terbaru {{ terpilih.wp_terbaru || '-' }}</small></div>
+        </div>
+        <div class="kartu tile">
+          <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
+          <div><span class="redup">Rentan menurut cPGuard</span><b>{{ angka(terpilih.ringkas.cpg_rentan) }}</b><small class="redup">pembanding</small></div>
+        </div>
+      </div>
 
       <section v-if="terpilih" class="kartu" aria-labelledby="judul-cms">
         <div class="kartu-judul">
@@ -509,13 +496,7 @@ const cacheHasil = new Map()
 .kartu-judul h2 { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kartu-judul h2 small { font-size: 12.5px; font-weight: 400; }
 .judul-kanan { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
 .hitung-menu { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--bahaya) 18%, transparent); color: var(--bahaya); }
-.sub-menu button.aktif .hitung-menu { background: rgb(255 255 255 / .22); color: #fff; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik { background: var(--baik); }
 .titik.waspada { background: var(--waspada); }

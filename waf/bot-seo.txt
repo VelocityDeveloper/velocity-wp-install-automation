@@ -1,7 +1,7 @@
 # Crawler SEO komersial (bukan mesin pencari) — sama dengan perilaku cPGuard: diblokir (429).
 # Hapus baris bila ada klien yang memakai Ahrefs/Semrush/Majestic untuk situsnya.
-ahrefsbot
-semrushbot
+ahrefs
+semrush
 mj12bot
 dotbot
 linkdexbot
@@ -11,4 +11,18 @@ serpstatbot
 barkrowler
 seokicks
 megaindex
-# PetalBot (Petal Search, Huawei) = mesin pencari → TIDAK diblokir (cPGuard juga tidak memblokirnya).
+# Ditambah 14 Okt 2026: bot SEO yang diblokir cPGuard di Wulan tapi belum tercakup.
+seranking
+pandalytics
+rogerbot
+# Ditambah 14 Okt 2026 (ukur access log Wulan 24 jam): tool SEO/monitoring merek.
+backlinksextendedbot
+seojuice
+awariobot
+# Mesin pencari luar yang tak dipakai pengunjung Indonesia tapi berat — diblokir atas keputusan user 14 Okt 2026.
+# PetalBot sendiri ±22 rb request PHP/hari di Wulan (10% request dinamis, nomor 2 sesudah Bingbot).
+# Google, Bing, Apple, DuckDuckGo & bot pratinjau tautan (Facebook/Twitter/WhatsApp/TikTok) tetap diizinkan.
+petalbot
+aspiegelbot
+baiduspider
+openindexspider

@@ -4,6 +4,8 @@
 // Pasang / ganti mode / perbarui / copot: POST /api/servers/waf/aksi → job latar (LiteSpeed direstart, rollback
 // otomatis bila situs uji error), dipantau lewat GET /api/servers/waf/job?id=. Setelan rakit berlaku untuk semua
 // server: POST /api/servers/waf/setelan. Log: komponen LogWaf (sama dengan Proteksi > WAF).
+import PilihServer from '../components/PilihServer.vue'
+import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
@@ -27,7 +29,7 @@ async function muatSegar() {
 }
 const servers = computed(() => waf.data.value?.servers || [])
 const lokal = computed(() => waf.data.value?.lokal || null)
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['status', 'log', 'aturan', 'setelan', 'riwayat']
 const tab = tabUrl('tab', 'status', { boleh: TAB })
@@ -72,18 +74,9 @@ function keadaan(s) {
   if (st(s).mode === 'blokir') return { kelas: 'hijau', titik: perluUpdate(s) ? 'waspada' : 'baik', label: 'Mode blokir' }
   return { kelas: 'biru', titik: perluUpdate(s) ? 'waspada' : 'biru', label: 'Mode deteksi' }
 }
-const total = computed(() => {
-  const ok = servers.value.filter((s) => s.ok)
-  return {
-    terpasang: ok.filter(terpasang).length,
-    blokir: ok.filter((s) => terpasang(s) && st(s).mode === 'blokir').length,
-    deteksi: ok.filter((s) => terpasang(s) && st(s).mode !== 'blokir').length,
-    update: ok.filter(perluUpdate).length,
-    cpguard: ok.filter((s) => st(s).cpguard).length,
-  }
-})
 // Server tanpa WAF sama sekali: cPGuard WAF tidak ada dan Velocity WAF belum terpasang
-const tanpaWaf = computed(() => servers.value.filter((s) => s.ok && st(s).lsws && !st(s).cpguard && !terpasang(s)))
+const tanpaWaf = (s) => s.ok && st(s).lsws && !st(s).cpguard && !terpasang(s)
+const jumlahTerpasang = computed(() => servers.value.filter((s) => s.ok && terpasang(s)).length)
 
 // ---- Job pasang/copot ----
 const jobs = ref({})  // host → job terakhir dari sesi ini
@@ -242,7 +235,7 @@ async function simpanSetelan() {
     const r = await kirim('/api/servers/waf/setelan', { setelan: { ...form }, oleh: oleh.value.trim() })
     waf.data.value = { ...waf.data.value, lokal: r }
     isiForm()
-    Object.assign(pesan, { teks: `Setelan disimpan. ${total.value.terpasang ? `Tekan "Perbarui" di tiap server (${total.value.terpasang} terpasang) agar berlaku.` : 'Berlaku saat WAF dipasang.'}`, galat: false })
+    Object.assign(pesan, { teks: `Setelan disimpan. ${jumlahTerpasang.value ? `Tekan "Perbarui" di tiap server (${jumlahTerpasang.value} terpasang) agar berlaku.` : 'Berlaku saat WAF dipasang.'}`, galat: false })
     riwayat.muatUlang()
   } catch (e) {
     Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
@@ -283,33 +276,29 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
     <p v-else-if="waf.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ pesanGalat(waf.data.value.error) }}</p>
 
     <template v-else-if="waf.data.value">
-      <div class="ringkas">
+      <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
+
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="keadaan(terpilih).titik" :teks="(s) => s.name + (berjalan(s.host) ? ' · perubahan berjalan' : '')" @update:model-value="pilih = $event" />
+
+      <!-- Ringkasan server terpilih -->
+      <div v-if="terpilih?.ok" class="ringkas">
         <div class="kartu tile">
-          <span class="tile-ikon biru"><Ikon nama="waf" :ukuran="20" /></span>
-          <div><span class="redup">Velocity WAF terpasang</span><b>{{ total.terpasang }} / {{ servers.length }}</b><small class="redup">{{ total.blokir }} blokir · {{ total.deteksi }} deteksi</small></div>
+          <span class="tile-ikon" :class="!terpasang(terpilih) ? 'merah' : st(terpilih).mode === 'blokir' ? 'hijau' : 'kuning'"><Ikon nama="waf" :ukuran="20" /></span>
+          <div><span class="redup">Velocity WAF</span><b>{{ !terpasang(terpilih) ? 'Belum' : st(terpilih).mode === 'blokir' ? 'Mode blokir' : 'Mode deteksi' }}</b><small class="redup">{{ terpasang(terpilih) ? `versi ${st(terpilih).versi}` : 'belum dipasang' }}</small></div>
         </div>
         <div class="kartu tile">
-          <span class="tile-ikon kuning"><Ikon nama="ulang" :ukuran="20" /></span>
-          <div><span class="redup">Perlu diperbarui</span><b>{{ total.update }}</b><small class="redup">versi lokal {{ lokal?.versi }} · sidik {{ lokal?.sidik }}</small></div>
+          <span class="tile-ikon" :class="perluUpdate(terpilih) ? 'kuning' : 'biru'"><Ikon nama="ulang" :ukuran="20" /></span>
+          <div><span class="redup">Ruleset</span><b>{{ !terpasang(terpilih) ? '–' : perluUpdate(terpilih) ? 'Perlu diperbarui' : 'Terbaru' }}</b><small class="redup">dashboard {{ lokal?.versi }} · sidik {{ lokal?.sidik }}</small></div>
         </div>
         <div class="kartu tile">
           <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">cPGuard WAF aktif</span><b>{{ total.cpguard }} / {{ servers.length }}</b><small class="redup">dicopot = aturannya ikut hilang</small></div>
+          <div><span class="redup">cPGuard WAF</span><b>{{ st(terpilih).cpguard ? 'Aktif' : 'Tidak aktif' }}</b><small class="redup">dicopot = aturannya ikut hilang</small></div>
         </div>
         <div class="kartu tile">
-          <span class="tile-ikon" :class="tanpaWaf.length ? 'merah' : 'hijau'"><Ikon :nama="tanpaWaf.length ? 'peringatan' : 'centang'" :ukuran="20" /></span>
-          <div><span class="redup">Server tanpa WAF</span><b>{{ tanpaWaf.length }}</b><small class="redup">{{ tanpaWaf.length ? tanpaWaf.map((s) => s.name).join(', ') : `dibaca ${waktuLalu(waf.data.value.diambil)}` }}</small></div>
+          <span class="tile-ikon" :class="tanpaWaf(terpilih) ? 'merah' : 'hijau'"><Ikon :nama="tanpaWaf(terpilih) ? 'peringatan' : 'centang'" :ukuran="20" /></span>
+          <div><span class="redup">Perlindungan</span><b>{{ tanpaWaf(terpilih) ? 'Tanpa WAF' : 'Terlindungi' }}</b><small class="redup">dibaca {{ waktuLalu(waf.data.value.diambil) }}</small></div>
         </div>
       </div>
-
-      <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
-
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
-          <span class="titik" :class="keadaan(s).titik" aria-hidden="true" /> {{ s.name }}
-          <span v-if="berjalan(s.host)" class="putar" aria-label="perubahan berjalan" />
-        </button>
-      </nav>
 
       <section v-if="terpilih" class="kartu" aria-labelledby="judul-detail">
         <div class="kartu-judul">
@@ -508,11 +497,6 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
 .tile-ikon.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 15%, transparent); }
 .tile-ikon.hijau { color: var(--baik); background: color-mix(in srgb, var(--baik) 15%, transparent); }
 .tile-ikon.biru { color: var(--aksen-terang); background: var(--aksen-lembut); }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik, .titik.hijau { background: var(--baik); }
 .titik.waspada, .titik.kuning { background: var(--waspada); }

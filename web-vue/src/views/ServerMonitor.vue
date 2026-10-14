@@ -2,13 +2,14 @@
 // Monitoring sistem & keamanan server hosting (sub-menu Server). Data: GET /api/servers/monitor
 // (installer_status.py → scripts/server_monitor_agent.py lewat SSH, hanya baca, cache 60 dtk).
 // Dasar modul keamanan sendiri pengganti cPGuard; angka cPGuard ditampilkan sebagai pembanding.
-import { ref, computed, watch } from 'vue'
+import PilihServer from '../components/PilihServer.vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import Info from '../components/Info.vue'
 import GrafikGaris from '../components/GrafikGaris.vue'
 import { minta, pakaiPolling, ukuranBerkas, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
-import { jenisServer, pcKantor } from '../jenisServer.js'
+import { jenisServer, pcKantor, pilihServer } from '../jenisServer.js'
 
 const monitor = pakaiPolling('/api/servers/monitor', 60000)
 const segarkan = ref(false)
@@ -20,15 +21,41 @@ async function muatSegar() {
 }
 const servers = computed(() => monitor.data.value?.servers || [])
 // Tanpa ?s= → server pertama (Farnaz) yang terbuka
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 
 // Grafik usage: riwayat dicatat scripts/server-usage-catat tiap 5 mnt (GET /api/servers/riwayat)
-const RENTANG = [{ k: '24j', label: '24 jam' }, { k: '7h', label: '7 hari' }, { k: '30h', label: '30 hari' }]
+const RENTANG = [{ k: '1j', label: '1 jam' }, { k: '24j', label: '24 jam' }, { k: '7h', label: '7 hari' }, { k: '30h', label: '30 hari' }]
 const rentang = tabUrl('r', '24j', { boleh: RENTANG.map((r) => r.k) })
 // Hanya riwayat server yang dibuka; server= kosong → server pertama (sama dengan tab bawaan)
 const riwayat = pakaiPolling(() => `/api/servers/riwayat?rentang=${rentang.value}&server=${encodeURIComponent(terpilih.value?.name || pilih.value)}`, 300000)
 watch(rentang, () => riwayat.muatUlang())
+// Mode Live: sampel GET /api/servers/live tiap 5 dtk (SSH baca saja), hanya di memori, maks 1 jam terakhir.
+// Tab tersembunyi = jeda; ganti server = mulai dari kosong.
+const LIVE_JEDA = 5000
+const live = ref(false)
+const titikLive = ref([])
+let timerLive = null
+async function ambilLive() {
+  const nama = terpilih.value?.name
+  if (!document.hidden && nama) {
+    try {
+      const r = await minta(`/api/servers/live?server=${encodeURIComponent(nama)}`)
+      // titik tanpa angka (server tak terjangkau) tetap dimasukkan → grafik putus
+      if (live.value && r.name === nama && r.titik.t !== titikLive.value.at(-1)?.t) titikLive.value = [...titikLive.value, r.titik].slice(-3600000 / LIVE_JEDA)
+    } catch { /* sampel gagal dilewati, coba lagi di putaran berikut */ }
+  }
+  if (live.value) timerLive = setTimeout(ambilLive, LIVE_JEDA)
+}
+function aturLive(nyala) {
+  clearTimeout(timerLive)
+  live.value = nyala
+  titikLive.value = []
+  if (nyala) ambilLive()
+}
+function pilihRentang(k) { aturLive(false); rentang.value = k }
+watch(() => terpilih.value?.name, () => { if (live.value) aturLive(true) })
+onBeforeUnmount(() => clearTimeout(timerLive))
 watch(() => terpilih.value?.name, (nama) => {
   if (nama && riwayat.data.value && !(riwayat.data.value.servers || []).some((r) => r.name === nama)) riwayat.muatUlang()
 })
@@ -56,8 +83,8 @@ const nilaiAkhir = (titik, kunci) => { for (let i = titik.length - 1; i >= 0; i-
 // Request/detik hanya dari LiteSpeed (server hosting); PC Backup juga tanpa web server → koneksi web disembunyikan
 const GRAFIK_DISEMBUNYIKAN = { lokal: ['req'], backup: ['req', 'conn'] }
 function grafikServer(host, jenis) {
-  const titik = titikServer(host)
-  const core = (riwayat.data.value?.servers || []).find((r) => r.host === host)?.core
+  const titik = titikGrafik(host)
+  const core = (riwayat.data.value?.servers || []).find((r) => r.host === host)?.core || titik.at(-1)?.core
   return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id)).map((gr) => {
     // Seri tanpa data sama sekali (mis. Swap di server tanpa swap) tidak digambar
     const seri = gr.seri.filter((sr) => titik.some((q) => q[sr.kunci] != null))
@@ -69,14 +96,16 @@ function grafikServer(host, jenis) {
 }
 const riwayatPerHost = computed(() => Object.fromEntries((riwayat.data.value?.servers || []).map((r) => [r.host, r.titik])))
 const titikServer = (host) => riwayatPerHost.value[host] || []
+const titikGrafik = (host) => (live.value ? titikLive.value : titikServer(host))
 const BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
 const dua = (v) => String(v).padStart(2, '0')
 function formatWaktu(t, lengkap) {
   const d = new Date(t * 1000)
   const jam = `${dua(d.getHours())}.${dua(d.getMinutes())}`
   const tgl = `${d.getDate()} ${BULAN[d.getMonth()]}`
+  if (live.value) return `${jam}.${dua(d.getSeconds())}`
   if (lengkap) return `${tgl}, ${jam}`
-  if (rentang.value !== '24j') return tgl
+  if (rentang.value === '7h' || rentang.value === '30h') return tgl
   return d.toDateString() === new Date().toDateString() ? jam : `${tgl} ${jam}`
 }
 const puncak = (titik, kunci) => titik.reduce((a, q) => (q[kunci] != null && q[kunci] > a ? q[kunci] : a), 0)
@@ -165,8 +194,11 @@ function periksa(s) {
   else if (k.modsecurity !== 'yes') tambah('waspada', 'ModSecurity mati', 'tidak ada WAF di web server')
   if (k.perlu_reboot) tambah('waspada', 'Perlu reboot', 'kernel/library baru belum dipakai')
   const h = s.hosting || {}
-  if (h.antrean_email >= 1000) tambah('bahaya', `Antrean email ${angka(h.antrean_email)}`, 'kemungkinan ada akun mengirim spam')
-  else if (h.antrean_email >= 300) tambah('waspada', `Antrean email ${angka(h.antrean_email)}`, 'periksa pengirim terbanyak')
+  const antreanAkun = (h.antrean_email ?? 0) - (h.antrean_sistem ?? 0)
+  const teratas = (h.antrean_teratas || []).map(([a, n]) => `${a} (${angka(n)})`).join(', ') || 'periksa pengirim terbanyak'
+  if (antreanAkun >= 1000) tambah('bahaya', `Antrean email akun ${angka(antreanAkun)}`, `kemungkinan ada akun mengirim spam: ${teratas}`)
+  else if (antreanAkun >= 300) tambah('waspada', `Antrean email akun ${angka(antreanAkun)}`, teratas)
+  if (h.antrean_sistem >= 300) tambah('info', `Antrean surat sistem ${angka(h.antrean_sistem)}`, 'alert/bounce ke root macet, cek alias root di /etc/aliases')
   if (s.cpguard && Object.values(s.cpguard.proses || {}).some((v) => !v)) tambah('waspada', 'Proses cPGuard berhenti', Object.entries(s.cpguard.proses).filter(([, v]) => !v).map(([n]) => n).join(', '))
   if (s.cpguard?.malware) tambah('bahaya', `cPGuard: ${s.cpguard.malware} malware 24 jam`, 'cek Malware Scanner cPGuard')
   for (const [bagian, g] of Object.entries(s.galat || {})) tambah('info', `Data ${bagian} gagal dibaca`, g)
@@ -183,17 +215,18 @@ const hasil = computed(() => servers.value.map((s) => {
 }))
 const pilihan = computed(() => hasil.value.find((h) => h.s === terpilih.value) || null)
 
+// Kartu ringkasan untuk server terpilih saja
 const ringkas = computed(() => {
-  const ok = servers.value.filter((s) => s.ok)
+  const s = terpilih.value
+  const p = pilihan.value?.periksa || []
   return {
-    sehat: hasil.value.filter((h) => h.tingkat === 'baik').length,
-    online: ok.length,
-    layananMati: hasil.value.reduce((a, h) => a + h.periksa.filter((p) => p.judul.endsWith(' mati') && p.tingkat === 'bahaya').length, 0),
-    blokir: ok.reduce((a, s) => a + (s.firewall?.blokir_24j || 0), 0),
-    gagal: ok.reduce((a, s) => a + (s.firewall?.gagal_24j || 0), 0),
-    akun: ok.reduce((a, s) => a + (s.hosting?.akun || 0), 0),
-    cpgMalware: ok.reduce((a, s) => a + (s.cpguard?.malware || 0), 0),
-    cpgWaf: ok.reduce((a, s) => a + (s.cpguard?.waf || 0), 0),
+    bahaya: p.filter((x) => x.tingkat === 'bahaya').length,
+    waspada: p.filter((x) => x.tingkat === 'waspada').length,
+    layananMati: p.filter((x) => x.judul.endsWith(' mati') && x.tingkat === 'bahaya').length,
+    blokir: s?.firewall?.blokir_24j || 0,
+    gagal: s?.firewall?.gagal_24j || 0,
+    akun: s?.hosting?.akun || 0,
+    cpg: s?.cpguard || null,
   }
 })
 
@@ -260,9 +293,9 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
       </div>
     </header>
 
-    <!-- Skeleton: bentuk halaman tampil selagi SSH ke semua server berjalan (muatan pertama ±10–40 dtk) -->
+    <!-- Skeleton: bentuk halaman tampil selagi SSH ke semua server berjalan (muatan pertama ±5–10 dtk) -->
     <div v-if="monitor.memuat.value && !monitor.data.value" class="skeleton" aria-busy="true">
-      <p class="redup status-muat" role="status">Memeriksa semua server lewat SSH (±10–40 detik)…</p>
+      <p class="redup status-muat" role="status">Memeriksa semua server lewat SSH (±5–10 detik)…</p>
       <div class="ringkas">
         <div v-for="i in 4" :key="i" class="kartu tile"><span class="sk sk-ikon" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks pendek" /></div></div>
       </div>
@@ -277,35 +310,32 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
     <p v-else-if="monitor.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ monitor.data.value.error }}</p>
 
     <template v-else-if="monitor.data.value">
-      <div class="ringkas">
-        <div class="kartu tile">
-          <span class="tile-ikon" :class="ringkas.sehat === servers.length ? 'hijau' : 'kuning'"><Ikon nama="server" :ukuran="20" /></span>
-          <div><span class="redup">Server sehat</span><b>{{ ringkas.sehat }} / {{ servers.length }}</b><small class="redup">{{ ringkas.online }} tersambung · {{ angka(ringkas.akun) }} akun</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon" :class="ringkas.layananMati ? 'merah' : 'hijau'"><Ikon nama="daya" :ukuran="20" /></span>
-          <div><span class="redup">Layanan penting mati</span><b>{{ ringkas.layananMati }}</b><small class="redup">web, database, email, DNS, SSH…</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">IP diblokir LFD · 24 jam</span><b>{{ angka(ringkas.blokir) }}</b><small class="redup">{{ angka(ringkas.gagal) }} percobaan login gagal</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon" :class="ringkas.cpgMalware ? 'merah' : 'hijau'"><Ikon nama="pantau" :ukuran="20" /></span>
-          <div><span class="redup">cPGuard · 24 jam <Info label="Tentang angka cPGuard" rata="kanan"><p>Angka dari database cPGuard sebagai pembanding selama modul keamanan sendiri dibangun (jalan paralel).</p></Info></span><b>{{ angka(ringkas.cpgMalware) }} malware</b><small class="redup">{{ angka(ringkas.cpgWaf) }} kejadian WAF</small></div>
-        </div>
-      </div>
-
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="h in hasil" :key="h.s.host" type="button" :class="{ aktif: terpilih === h.s }" :aria-current="terpilih === h.s ? 'page' : undefined" @click="pilih = h.s.name">
-          <span class="titik" :class="h.tingkat" aria-hidden="true" /> {{ h.s.name }}
-          <span class="lencana" :class="jenisServer(h.s.jenis).kelas" :title="jenisServer(h.s.jenis).ket">{{ jenisServer(h.s.jenis).label }}</span>
-          <span v-if="h.periksa.filter((p) => p.tingkat === 'bahaya').length" class="hitung">{{ h.periksa.filter((p) => p.tingkat === 'bahaya').length }}</span>
-        </button>
-      </nav>
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="hasil.find((h) => h.s === terpilih)?.tingkat" :teks="(s) => { const h = hasil.find((x) => x.s === s); const n = h ? h.periksa.filter((p) => p.tingkat === 'bahaya').length : 0; return `${s.name} · ${jenisServer(s.jenis).label}${n ? ` · ${n} bahaya` : ''}` }" @update:model-value="pilih = $event" />
 
       <!-- ================= Detail satu server ================= -->
       <template v-if="pilihan">
+        <div v-if="terpilih.ok" class="ringkas">
+          <div class="kartu tile">
+            <span class="tile-ikon" :class="ringkas.bahaya ? 'merah' : ringkas.waspada ? 'kuning' : 'hijau'"><Ikon nama="server" :ukuran="20" /></span>
+            <div><span class="redup">Peringatan</span><b>{{ ringkas.bahaya + ringkas.waspada }}</b><small class="redup">{{ ringkas.bahaya + ringkas.waspada ? `${ringkas.bahaya} bahaya · ${ringkas.waspada} waspada` : 'semua normal' }}</small></div>
+          </div>
+          <div class="kartu tile">
+            <span class="tile-ikon" :class="ringkas.layananMati ? 'merah' : 'hijau'"><Ikon nama="daya" :ukuran="20" /></span>
+            <div><span class="redup">Layanan penting mati</span><b>{{ ringkas.layananMati }}</b><small class="redup">{{ ringkas.akun ? `${angka(ringkas.akun)} akun hosting` : 'web, database, email, DNS, SSH…' }}</small></div>
+          </div>
+          <div class="kartu tile">
+            <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
+            <div><span class="redup">IP diblokir · 24 jam</span><b>{{ angka(ringkas.blokir) }}</b><small class="redup">{{ angka(ringkas.gagal) }} percobaan login gagal</small></div>
+          </div>
+          <div class="kartu tile">
+            <span class="tile-ikon" :class="ringkas.cpg?.malware ? 'merah' : 'hijau'"><Ikon nama="pantau" :ukuran="20" /></span>
+            <div><span class="redup">cPGuard · 24 jam <Info label="Tentang angka cPGuard" rata="kanan"><p>Angka dari database cPGuard sebagai pembanding selama modul keamanan sendiri dibangun (jalan paralel).</p></Info></span>
+              <template v-if="ringkas.cpg"><b>{{ angka(ringkas.cpg.malware || 0) }} malware</b><small class="redup">{{ angka(ringkas.cpg.waf || 0) }} kejadian WAF</small></template>
+              <template v-else><b>–</b><small class="redup">tidak terpasang</small></template>
+            </div>
+          </div>
+        </div>
+
         <section class="kartu status-proteksi" :class="pilihan.tingkat" aria-labelledby="judul-status">
           <div class="perisai-besar" aria-hidden="true"><Ikon nama="server" :ukuran="40" /></div>
           <div class="status-teks">
@@ -330,18 +360,20 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
             <div class="kartu-judul">
               <h2 id="judul-grafik"><Ikon nama="token" :ukuran="16" /> Grafik pemakaian</h2>
               <div class="tab" role="tablist" aria-label="Rentang grafik">
-                <button v-for="r in RENTANG" :key="r.k" type="button" role="tab" :aria-selected="rentang === r.k" :class="{ aktif: rentang === r.k }" @click="rentang = r.k">{{ r.label }}</button>
+                <button type="button" role="tab" class="tombol-live" :aria-selected="live" :class="{ aktif: live }" title="Sampel tiap 5 detik, menyimpan 1 jam terakhir selama halaman terbuka" @click="aturLive(!live)"><span class="titik-live" aria-hidden="true" /> Live</button>
+                <button v-for="r in RENTANG" :key="r.k" type="button" role="tab" :aria-selected="!live && rentang === r.k" :class="{ aktif: !live && rentang === r.k }" @click="pilihRentang(r.k)">{{ r.label }}</button>
               </div>
             </div>
-            <div v-if="riwayat.memuat.value && !riwayat.data.value" class="grafik-grid" aria-busy="true">
+            <p v-if="live && titikLive.length < 2" class="redup" aria-live="polite">Mengambil sampel live tiap 5 detik…</p>
+            <div v-else-if="!live && riwayat.memuat.value && !riwayat.data.value" class="grafik-grid" aria-busy="true">
               <div v-for="gr in GRAFIK" :key="gr.id" class="grafik-item"><div class="grafik-kepala"><b>{{ gr.judul }}</b></div><span class="sk sk-grafik" /></div>
             </div>
-            <div v-else-if="titikServer(terpilih.host).length" class="grafik-grid">
+            <div v-else-if="titikGrafik(terpilih.host).length" class="grafik-grid">
               <div v-for="gr in grafikServer(terpilih.host, terpilih.jenis)" :key="gr.id" class="grafik-item">
                 <div class="grafik-kepala"><b>{{ gr.judul }}</b><span v-if="gr.ket" class="redup">{{ gr.ket }}</span></div>
                 <template v-if="gr.ada">
                   <ul v-if="gr.seri.length > 1" class="legenda"><li v-for="sr in gr.seri" :key="sr.kunci"><span class="kotak" :style="{ background: sr.warna }" /> {{ sr.label }}</li></ul>
-                  <GrafikGaris :titik="titikServer(terpilih.host)" :seri="gr.seri" :format-waktu="formatWaktu" :tinggi="170" :maks="gr.maks" :format="gr.format" :acuan="gr.acuan" :ruang-label="gr.ruang || 64" :format-sumbu="gr.sumbu || null" />
+                  <GrafikGaris :titik="titikGrafik(terpilih.host)" :seri="gr.seri" :format-waktu="formatWaktu" :tinggi="170" :maks="gr.maks" :format="gr.format" :acuan="gr.acuan" :ruang-label="gr.ruang || 64" :format-sumbu="gr.sumbu || null" />
                   <small v-for="r in gr.ringkas" :key="r" class="redup ringkas-grafik">{{ r }}</small>
                 </template>
                 <p v-else class="redup kosong">Belum ada data di rentang ini; mulai tercatat sejak 12 Okt.</p>
@@ -529,20 +561,11 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .tile-ikon.kuning { color: var(--waspada); background: color-mix(in srgb, var(--waspada) 15%, transparent); }
 .tile-ikon.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 15%, transparent); }
 .tile-ikon.hijau { color: var(--baik); background: color-mix(in srgb, var(--baik) 15%, transparent); }
-.sub-menu { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
-.sub-menu .lencana { font-size: 10px; padding: 0 6px; }
-.sub-menu button.aktif .lencana { color: #fff; background: rgba(255, 255, 255, .2); }
-.sub-menu .hitung { min-width: 20px; padding: 1px 6px; border-radius: 999px; font-size: 11.5px; background: var(--bahaya); color: #fff; text-align: center; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }
 .titik.baik { background: var(--baik); }
 .titik.waspada { background: var(--waspada); }
 .titik.bahaya { background: var(--bahaya); }
 .titik.biru { background: var(--aksen-terang); }
-.sub-menu button.aktif .titik { box-shadow: 0 0 0 2px #fff; }
 /* Tabel ringkasan */
 .blok { display: block; font-size: 11.5px; }
 .kanan { text-align: right; white-space: nowrap; }
@@ -590,6 +613,11 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .tab { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); flex-wrap: wrap; }
 .tab button { border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
 .tab button.aktif { background: var(--aksen); color: #fff; }
+.tombol-live { display: inline-flex; align-items: center; gap: 6px; }
+.titik-live { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .5; }
+.tombol-live.aktif .titik-live { background: #fff; opacity: 1; animation: denyut-live 1.4s ease-in-out infinite; }
+@keyframes denyut-live { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .tombol-live.aktif .titik-live { animation: none; } }
 .legenda { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--teks-2); }
 .legenda li { display: inline-flex; align-items: center; gap: 7px; }
 .kotak { width: 10px; height: 10px; border-radius: 3px; }

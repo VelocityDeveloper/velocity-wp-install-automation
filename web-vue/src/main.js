@@ -13,6 +13,7 @@ const ServerWaf = () => import('./views/ServerWaf.vue')
 const ServerBruteforce = () => import('./views/ServerBruteforce.vue')
 const ServerCms = () => import('./views/ServerCms.vue')
 const ServerCpguard = () => import('./views/ServerCpguard.vue')
+const ServerLog = () => import('./views/ServerLog.vue')
 const Installer = () => import('./views/Installer.vue')
 const Susulan = () => import('./views/Susulan.vue')
 const InstallerLaravel = () => import('./views/InstallerLaravel.vue')
@@ -41,6 +42,7 @@ const routes = [
   { path: '/server/bruteforce', component: ServerBruteforce, meta: { judul: 'Brute Force' } },
   { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS' } },
   { path: '/server/cpguard', component: ServerCpguard, meta: { judul: 'Kesiapan Copot cPGuard' } },
+  { path: '/server/log', component: ServerLog, meta: { judul: 'Log Server' } },
   { path: '/security', component: Security, meta: { judul: 'Security' } },
   // Installer bersub-menu per jenis aplikasi; alamat lama /installer & /installer/susulan dialihkan
   { path: '/installer', redirect: '/installer/wordpress' },

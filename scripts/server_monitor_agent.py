@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import socket
 import time
 from datetime import datetime, timedelta
 
@@ -201,10 +202,12 @@ def keamanan():
         m = re.search(r'^%s=(.*)$' % k, opsi, re.M)
         if m:
             out[k] = m.group(1).strip()
-    kode, _ = jalan(['needs-restarting', '-r'], 30)
-    out['perlu_reboot'] = True if kode == 1 else (False if kode == 0 else None)
-    if out['perlu_reboot'] is None and os.path.isfile('/etc/debian_version'):
-        out['perlu_reboot'] = os.path.exists('/var/run/reboot-required')
+    # needs-restarting (dnf) makan 5–20 dtk; backend menyisipkan LEWATI_REBOOT = True selama hasil terakhirnya < 6 jam
+    if not globals().get('LEWATI_REBOOT'):
+        kode, _ = jalan(['needs-restarting', '-r'], 30)
+        out['perlu_reboot'] = True if kode == 1 else (False if kode == 0 else None)
+        if out['perlu_reboot'] is None and os.path.isfile('/etc/debian_version'):
+            out['perlu_reboot'] = os.path.exists('/var/run/reboot-required')
     # PC kantor tanpa CSF: firewalld (AlmaLinux) atau ufw (Ubuntu)
     if not os.path.isfile('/etc/csf/csf.conf') and os.path.isfile('/usr/bin/firewall-cmd'):
         _, f = jalan(['firewall-cmd', '--state'], 10)
@@ -240,8 +243,23 @@ def hosting():
     except OSError:
         out['akun'] = None
     out['domain'] = sum(1 for b in baca('/etc/virtual/domainowners').split('\n') if ':' in b) or None
-    kode, n = jalan(['exim', '-bpc'], 20)
-    out['antrean_email'] = int(n.strip()) if kode == 0 and n.strip().isdigit() else None
+    kode, q = jalan(['exim', '-bp'], 30)
+    if kode == 0:
+        # surat sistem (bounce <> / pengirim @hostname server, mis. alert lfd ke root) bukan tanda spam akun
+        host = socket.gethostname().lower()
+        pengirim = {}
+        sistem = 0
+        for m in re.finditer(r'^\s*\d+[smhdw]\s+\S+\s+\S+\s+<([^>]*)>', q, re.M):
+            a = m.group(1).lower()
+            if not a or a.endswith('@' + host):
+                sistem += 1
+            else:
+                pengirim[a] = pengirim.get(a, 0) + 1
+        out['antrean_email'] = sistem + sum(pengirim.values())
+        out['antrean_sistem'] = sistem
+        out['antrean_teratas'] = sorted(pengirim.items(), key=lambda x: -x[1])[:3]
+    else:
+        out['antrean_email'] = None
     kode, st = jalan(['mysqladmin', '--defaults-extra-file=/usr/local/directadmin/conf/my.cnf', 'status'], 10)
     if kode == 0:
         for k, kunci in (('Threads', 'mysql_threads'), ('Slow queries', 'mysql_slow'), ('Uptime', 'mysql_uptime')):

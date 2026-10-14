@@ -4,6 +4,8 @@
 // Velocity WAF. Data: GET /api/servers/bfm (installer_status.py → scripts/server_bfm_agent.py, termasuk simulasi
 // 24 jam dari log WAF). Pasang/copot: POST /api/servers/bfm/aksi → job latar (csf -r + restart lfd, rollback otomatis).
 // Ambang & durasi bersama semua server: POST /api/servers/bfm/setelan.
+import PilihServer from '../components/PilihServer.vue'
+import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
@@ -25,7 +27,7 @@ async function muatSegar() {
 }
 const servers = computed(() => bfm.data.value?.servers || [])
 const lokal = computed(() => bfm.data.value?.lokal || null)
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['status', 'setelan', 'riwayat']
 const tab = tabUrl('tab', 'status', { boleh: TAB })
@@ -62,18 +64,19 @@ const limit = (s) => Number(s?.csf?.DENY_IP_LIMIT || 0)
 const terpasang = (s) => !!s?.blok?.terpasang
 const perluUpdate = (s) => terpasang(s) && lokal.value && s.blok.sidik !== lokal.value.sidik
 const simBlokir = (s) => Object.values(s?.simulasi?.aturan || {}).reduce((a, x) => a + (x.blokir || 0), 0)
+// Kartu ringkasan untuk server terpilih saja
 const total = computed(() => {
-  const ok = servers.value.filter((s) => s.ok)
-  const deny = ok.reduce((a, s) => a + s.deny.total, 0)
-  const cpg = ok.reduce((a, s) => a + s.deny.sumber.cpguard, 0)
+  const s = terpilih.value
+  const deny = s.deny.total
+  const cpg = s.deny.sumber.cpguard
   return {
     deny, cpg, persenCpg: deny ? Math.round((cpg / deny) * 100) : 0,
-    penuh: ok.filter((s) => limit(s) && s.deny.total >= limit(s)).map((s) => s.name),
-    terpasang: ok.filter(terpasang).length,
-    sim: ok.reduce((a, s) => a + simBlokir(s), 0),
-    cpg24: ok.reduce((a, s) => a + (s.cpguard?.ip || 0), 0),
+    penuh: !!(limit(s) && deny >= limit(s)),
+    sim: simBlokir(s),
+    cpg24: s.cpguard?.ip || 0,
   }
 })
+const jumlahTerpasang = computed(() => servers.value.filter((s) => s.ok && terpasang(s)).length)
 function titik(s) {
   if (!s.ok || !s.lfd_aktif) return 'bahaya'
   if (terpasang(s)) return perluUpdate(s) ? 'waspada' : 'baik'
@@ -170,7 +173,7 @@ async function simpan() {
     const r = await kirim('/api/servers/bfm/setelan', { aturan: form, oleh: oleh.value.trim() })
     bfm.data.value = { ...bfm.data.value, lokal: r }
     isiForm()
-    Object.assign(pesan, { teks: `Setelan disimpan. ${total.value.terpasang ? 'Tekan "Perbarui" di server yang sudah terpasang.' : ''} Simulasi dihitung ulang…`, galat: false })
+    Object.assign(pesan, { teks: `Setelan disimpan. ${jumlahTerpasang.value ? 'Tekan "Perbarui" di server yang sudah terpasang.' : ''} Simulasi dihitung ulang…`, galat: false })
     riwayat.muatUlang()
     muatSegar()
   } catch (e) {
@@ -210,33 +213,29 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${lokal.v
     <p v-else-if="bfm.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ pesanGalat(bfm.data.value.error) }}</p>
 
     <template v-else-if="bfm.data.value">
-      <div class="ringkas">
+      <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
+
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="titik(terpilih)" :teks="(s) => s.name + (berjalan(s.host) ? ' · perubahan berjalan' : '')" @update:model-value="pilih = $event" />
+
+      <!-- Ringkasan server terpilih -->
+      <div v-if="terpilih?.ok" class="ringkas">
         <div class="kartu tile">
           <span class="tile-ikon kuning"><Ikon nama="perisai" :ukuran="20" /></span>
           <div><span class="redup">Blokir permanen dari cPGuard</span><b>{{ total.persenCpg }}%</b><small class="redup">{{ angka(total.cpg) }} dari {{ angka(total.deny) }} IP di csf.deny</small></div>
         </div>
         <div class="kartu tile">
-          <span class="tile-ikon" :class="total.penuh.length ? 'merah' : 'hijau'"><Ikon :nama="total.penuh.length ? 'peringatan' : 'centang'" :ukuran="20" /></span>
-          <div><span class="redup">csf.deny penuh</span><b>{{ total.penuh.length }}</b><small class="redup">{{ total.penuh.length ? `${total.penuh.join(', ')} — blokir lama tergusur` : 'semua masih ada ruang' }}</small></div>
+          <span class="tile-ikon" :class="total.penuh ? 'merah' : 'hijau'"><Ikon :nama="total.penuh ? 'peringatan' : 'centang'" :ukuran="20" /></span>
+          <div><span class="redup">csf.deny</span><b>{{ total.penuh ? 'Penuh' : 'Ada ruang' }}</b><small class="redup">{{ angka(total.deny) }}{{ limit(terpilih) ? ` / ${angka(limit(terpilih))}` : '' }} IP{{ total.penuh ? ' — blokir lama tergusur' : '' }}</small></div>
         </div>
         <div class="kartu tile">
-          <span class="tile-ikon biru"><Ikon nama="kunci" :ukuran="20" /></span>
-          <div><span class="redup">Velocity BFM terpasang</span><b>{{ total.terpasang }} / {{ servers.length }}</b><small class="redup">aktif memblokir bila WAF mode blokir</small></div>
+          <span class="tile-ikon" :class="!terpasang(terpilih) ? 'merah' : perluUpdate(terpilih) ? 'kuning' : 'biru'"><Ikon nama="kunci" :ukuran="20" /></span>
+          <div><span class="redup">Velocity BFM</span><b>{{ !terpasang(terpilih) ? 'Belum' : perluUpdate(terpilih) ? 'Perlu diperbarui' : 'Terpasang' }}</b><small class="redup">aktif memblokir bila WAF mode blokir</small></div>
         </div>
         <div class="kartu tile">
           <span class="tile-ikon ungu"><Ikon nama="pantau" :ukuran="20" /></span>
           <div><span class="redup">Simulasi 24 jam</span><b>{{ angka(total.sim) }} IP</b><small class="redup">akan diblokir Velocity · cPGuard {{ angka(total.cpg24) }} IP</small></div>
         </div>
       </div>
-
-      <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
-
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
-          <span class="titik" :class="titik(s)" aria-hidden="true" /> {{ s.name }}
-          <span v-if="berjalan(s.host)" class="putar" aria-label="perubahan berjalan" />
-        </button>
-      </nav>
 
       <section v-if="terpilih" class="kartu" aria-labelledby="judul-detail">
         <div class="kartu-judul">
@@ -408,11 +407,6 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${lokal.v
 .tile-ikon.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 15%, transparent); }
 .tile-ikon.hijau { color: var(--baik); background: color-mix(in srgb, var(--baik) 15%, transparent); }
 .tile-ikon.biru { color: var(--aksen-terang); background: var(--aksen-lembut); }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik, .titik.hijau { background: var(--baik); }
 .titik.waspada, .titik.kuning { background: var(--waspada); }

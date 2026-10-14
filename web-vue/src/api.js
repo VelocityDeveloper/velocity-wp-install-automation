@@ -15,12 +15,17 @@ export function pakaiPolling(url, jeda) {
   let timer = null
   let etag = null
   let urlAkhir = null
+  // Backend menjawab data cache lama bertanda `menyegarkan` (SSH sedang jalan di latar) → muat ulang cepat
+  let cepat = null
+  let ulangCepat = 0
   // cache 'no-cache': peramban bertanya ulang ke server (If-None-Match) → 304 tanpa isi untuk berkas statis
   // yang tidak berubah (mis. /brain/*.json); ETag sama = data identik, jadi tidak diurai & tidak memicu render.
   const muatUlang = async () => {
     try {
       const u = typeof url === 'function' ? url() : url
+      if (!u) return // url fungsi boleh null = belum/tidak perlu dimuat
       const r = await fetch(u, { cache: 'no-cache' })
+      if (typeof url === 'function' && url() !== u) return // URL sudah berganti selama menunggu → jawaban lama dibuang
       if (!r.ok) throw new Error(`${r.status} ${u}`)
       const e = r.headers.get('etag')
       if (!(e && e === etag && u === urlAkhir && data.value != null)) {
@@ -29,6 +34,9 @@ export function pakaiPolling(url, jeda) {
         urlAkhir = u
       }
       galat.value = null
+      clearTimeout(cepat)
+      ulangCepat = data.value?.menyegarkan && ulangCepat < 6 ? ulangCepat + 1 : 0
+      if (ulangCepat) cepat = setTimeout(muatUlang, 8000)
     } catch (e) {
       galat.value = e
     } finally {
@@ -42,7 +50,7 @@ export function pakaiPolling(url, jeda) {
     if (jeda) timer = setInterval(() => { if (!document.hidden) muatUlang() }, jeda)
     document.addEventListener('visibilitychange', terlihat)
   })
-  onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visibilitychange', terlihat) })
+  onBeforeUnmount(() => { clearInterval(timer); clearTimeout(cepat); document.removeEventListener('visibilitychange', terlihat) })
   return { data, galat, memuat, muatUlang }
 }
 

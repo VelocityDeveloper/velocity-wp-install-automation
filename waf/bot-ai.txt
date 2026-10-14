@@ -11,3 +11,11 @@ diffbot
 imagesiftbot
 omgili
 timpibot
+# Ditambah 14 Okt 2026 (ukur access log Wulan 24 jam): crawler pencarian/agen AI kecil.
+youbot
+exasearchbot
+shapbot
+aionbot
+brightbot
+keenablebot
+isonsearchbot

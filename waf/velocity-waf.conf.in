@@ -17,6 +17,11 @@ SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
 @SEO@    "id:7700102,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler SEO'"
 @AI@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai.txt" \
 @AI@    "id:7700103,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI'"
+# Bot AI pencarian PALSU: UA ChatGPT-User/OAI-SearchBot/PerplexityBot dari IP di luar daftar resmi (probe .env dsb.).
+# Sebelum 7700104 supaya tetap ditolak walau bot AI pencarian asli hanya dicatat. Daftar: scripts/velocity-waf-ip-ai.
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
+    "id:7700106,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Bot AI pencarian palsu (IP bukan milik OpenAI/Perplexity)',chain"
+    SecRule REMOTE_ADDR "!@ipMatchFromFile @DIR@/ip-ai-pencarian.txt" "t:none"
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
     "id:7700104,phase:1,t:none,t:lowercase,@AKSIAICARI@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Bot AI pencarian'"
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/klien-skrip.txt" \

@@ -17,6 +17,9 @@ from http.cookies import SimpleCookie
 KUNCI_SESI = '/etc/velocity/secrets/dash_session_key'
 PROFIL = '/var/lib/velocity/dash-login/profil.json'
 COOKIE = 'vd_dash'
+# Sama dengan /opt/dash-login/server.py: akun dashboard (bukan VD.net) hanya 1 jam sejak masuk
+UMUR = 7 * 24 * 3600
+UMUR_LOKAL = 3600
 
 
 def _kunci():
@@ -41,7 +44,8 @@ def dari_cookie(header_cookie):
     kunci = _kunci()
     try:
         user, sampai, sig = c[COOKIE].value.rsplit('.', 2)
-        if not kunci or int(sampai) < time.time():
+        batas = int(sampai) if user.startswith('vdnet:') else int(sampai) - UMUR + UMUR_LOKAL
+        if not kunci or batas < time.time():
             return None
         benar = hmac.new(kunci, f'{user}|{sampai}'.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, benar):

@@ -132,7 +132,8 @@ const matriks = computed(() => {
     const wajib = FUNGSI.filter((f) => f.wajib)
     const siap = wajib.filter((f) => hasil[f.k].status === 'siap').length
     const sebagian = wajib.filter((f) => hasil[f.k].status === 'sebagian').length
-    const cpgJalan = ctx.m?.cpguard ? Object.values(ctx.m.cpguard.proses || {}).some(Boolean) : null
+    // Patokan sama dengan Monitoring & Antivirus: daemon utama `cpguard` (cpgosm saja = modul monitor, bukan cPGuard jalan)
+    const cpgJalan = ctx.m?.cpguard ? !!ctx.m.cpguard.proses?.cpguard : null
     return { ...s, hasil, siap, sebagian, skor: siap + sebagian / 2, total: wajib.length, cpgJalan, cpgVersi: ctx.m?.cpguard?.versi,
       langkah: wajib.map((f) => ({ f, ...hasil[f.k] })).filter((x) => x.status !== 'siap' && x.langkah) }
   })

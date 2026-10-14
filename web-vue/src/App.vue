@@ -41,6 +41,7 @@ const NAV = [
     { ke: '/server/waf', label: 'WAF', ikon: 'waf' },
     { ke: '/server/cms', label: 'Kerentanan CMS', ikon: 'cms' },
     { ke: '/server/bruteforce', label: 'Brute Force', ikon: 'kunci' },
+    { ke: '/server/log', label: 'Log', ikon: 'dokumen' },
     { ke: '/server/cpguard', label: 'Kesiapan Copot cPGuard', ikon: 'daftar' },
   ] },
   { ke: '/security', label: 'Security', ikon: 'perisai' },
@@ -76,6 +77,7 @@ const grupBuka = ref({})
 const grupTerbuka = (n) => grupBuka.value[n.grup] ?? n.anak.some((a) => aktif(a.ke))
 const LAYANAN = [
   { url: '/n8n/', label: 'n8n', ikon: 'n8n' },
+  { url: 'http://192.168.20.40/phpmyadmin/', label: 'phpMyAdmin', ikon: 'database' },
   { url: '/newvdnet/', label: 'New VDNet', ikon: 'crm', dev: true },
 ]
 

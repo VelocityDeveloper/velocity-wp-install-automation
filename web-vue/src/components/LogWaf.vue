@@ -202,7 +202,7 @@ const satu = computed(() => (props.server !== 'semua' ? daftar.value[0] : null))
         </table>
       </div>
       <button v-if="tersaring.length > batas" type="button" class="tombol garis kecil lagi" @click="batas += 100">Tampilkan 100 lagi ({{ angka(tersaring.length - batas) }} tersisa)</button>
-      <p class="redup catatan">Angka & peringkat dihitung dari seluruh log; tabel memuat {{ server === 'semua' ? '250' : '800' }} kejadian terbaru{{ server === 'semua' ? ' per server' : '' }}. Klik aturan/domain untuk menyaring, klik IP untuk mengeceknya.</p>
+      <p class="redup catatan">Angka & peringkat dihitung dari seluruh log; tabel memuat {{ server === 'semua' ? '250' : '3.000' }} kejadian terbaru{{ server === 'semua' ? ' per server' : '' }}. Klik aturan/domain untuk menyaring, klik IP untuk mengeceknya.</p>
     </template>
   </div>
 </template>

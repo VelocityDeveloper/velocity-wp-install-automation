@@ -3,6 +3,8 @@
 // 30 hari sebagai pembanding, dan karantina manual. Data: GET /api/servers/antivirus (installer_status.py →
 // scripts/server_antivirus_agent.py lewat SSH), scan: GET/POST /api/servers/antivirus/scan, aksi karantina:
 // POST /api/servers/antivirus/aksi (dicatat di riwayat). Tidak ada karantina otomatis — semua temuan hanya dilaporkan.
+import PilihServer from '../components/PilihServer.vue'
+import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
@@ -26,7 +28,7 @@ async function muatSegar() {
   riwayat.muatUlang()
 }
 const servers = computed(() => av.data.value?.servers || [])
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['scan', 'cpguard', 'karantina', 'riwayat']
 const tab = tabUrl('tab', 'scan', { boleh: TAB })
@@ -74,15 +76,16 @@ const hariLalu = (n) => tglLokal(new Date(Date.now() - n * 86400000))
 const cpgJumlah = (s, n) => Object.entries(s?.cpguard?.per_hari || {}).reduce((a, [t, v]) => a + (t >= hariLalu(n - 1) ? v : 0), 0)
 const scanServer = (host) => (daftarScan.data.value?.scan || []).filter((j) => j.host === host)
 const scanTerakhir = (host) => scanServer(host).find((j) => j.status === 'selesai')
+// Ringkasan kartu untuk server terpilih saja
 const total = computed(() => {
-  const ok = servers.value.filter((s) => s.ok)
+  const s = terpilih.value
+  const scan = scanTerakhir(s.host)
   return {
-    cpg24: ok.reduce((a, s) => a + cpgJumlah(s, 1), 0),
-    cpg30: ok.reduce((a, s) => a + cpgJumlah(s, 30), 0),
-    virus: ok.reduce((a, s) => a + (scanTerakhir(s.host)?.jumlah_virus || 0), 0),
-    curiga: ok.reduce((a, s) => a + ((scanTerakhir(s.host)?.jumlah_temuan || 0) - (scanTerakhir(s.host)?.jumlah_virus || 0)), 0),
-    karantina: ok.reduce((a, s) => a + (s.karantina?.length || 0), 0),
-    cpgJalan: ok.filter((s) => s.cpguard_jalan).length,
+    cpg24: cpgJumlah(s, 1),
+    cpg30: cpgJumlah(s, 30),
+    virus: scan?.jumlah_virus || 0,
+    curiga: (scan?.jumlah_temuan || 0) - (scan?.jumlah_virus || 0),
+    karantina: s.karantina?.length || 0,
   }
 })
 function tingkat(s) {
@@ -280,39 +283,33 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
     <p v-else-if="av.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ pesanGalat(av.data.value.error) }}</p>
 
     <template v-else-if="av.data.value">
-      <div class="ringkas">
-        <div class="kartu tile">
-          <span class="tile-ikon merah"><Ikon nama="virus" :ukuran="20" /></span>
-          <div><span class="redup">Virus (scan terakhir)</span><b>{{ angka(total.virus) }}</b><small class="redup">{{ angka(total.curiga) }} berkas mencurigakan</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon kuning"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">Deteksi cPGuard 24 jam</span><b>{{ angka(total.cpg24) }}</b><small class="redup">{{ angka(total.cpg30) }} dalam 30 hari</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon ungu"><Ikon nama="kunci" :ukuran="20" /></span>
-          <div><span class="redup">Dikarantina Velocity</span><b>{{ angka(total.karantina) }}</b><small class="redup">bisa dikembalikan</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon hijau"><Ikon nama="server" :ukuran="20" /></span>
-          <div><span class="redup">cPGuard jalan</span><b>{{ total.cpgJalan }} / {{ servers.length }}</b><small class="redup">dibaca {{ waktuLalu(av.data.value.diambil) }}</small></div>
-        </div>
-      </div>
-
       <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
 
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
-          <span class="titik" :class="tingkat(s)" aria-hidden="true" /> {{ s.name }}
-          <span v-if="scanServer(s.host).some((j) => j.status === 'berjalan')" class="putar" aria-label="scan berjalan" />
-        </button>
-      </nav>
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="tingkat(terpilih)" :teks="(s) => s.name + (scanServer(s.host).some((j) => j.status === 'berjalan') ? ' · scan berjalan' : '')" @update:model-value="pilih = $event" />
 
       <template v-if="terpilih">
         <section v-if="!terpilih.ok" class="kartu">
           <p class="pesan-status bahaya">Tidak bisa dibaca: {{ pesanGalat(terpilih.error) }}</p>
         </section>
-        <section v-else class="kartu" aria-labelledby="judul-detail">
+        <div v-if="terpilih.ok" class="ringkas">
+            <div class="kartu tile">
+              <span class="tile-ikon merah"><Ikon nama="virus" :ukuran="20" /></span>
+              <div><span class="redup">Virus (scan terakhir)</span><b>{{ angka(total.virus) }}</b><small class="redup">{{ angka(total.curiga) }} berkas mencurigakan</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon kuning"><Ikon nama="perisai" :ukuran="20" /></span>
+              <div><span class="redup">Deteksi cPGuard 24 jam</span><b>{{ angka(total.cpg24) }}</b><small class="redup">{{ angka(total.cpg30) }} dalam 30 hari</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon ungu"><Ikon nama="kunci" :ukuran="20" /></span>
+              <div><span class="redup">Dikarantina Velocity</span><b>{{ angka(total.karantina) }}</b><small class="redup">bisa dikembalikan</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon hijau"><Ikon nama="server" :ukuran="20" /></span>
+              <div><span class="redup">cPGuard</span><b>{{ terpilih.cpguard_jalan ? 'Jalan' : 'Mati' }}</b><small class="redup">dibaca {{ waktuLalu(av.data.value.diambil) }}</small></div>
+            </div>
+          </div>
+        <section v-if="terpilih.ok" class="kartu" aria-labelledby="judul-detail">
           <div class="kartu-judul">
             <h2 id="judul-detail"><Ikon nama="virus" :ukuran="16" /> {{ terpilih.name }}
               <small class="redup">{{ terpilih.akun.length }} akun · cPGuard {{ terpilih.cpguard ? (terpilih.cpguard_jalan ? 'jalan' : 'TIDAK jalan') : 'tidak terpasang' }}</small>
@@ -539,11 +536,6 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
 .tile-ikon.kuning { color: var(--waspada); background: color-mix(in srgb, var(--waspada) 15%, transparent); }
 .tile-ikon.ungu { color: var(--ungu); background: color-mix(in srgb, var(--ungu) 15%, transparent); }
 .tile-ikon.hijau { color: var(--baik); background: color-mix(in srgb, var(--baik) 15%, transparent); }
-.sub-menu { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); overflow-x: auto; }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik, .titik.hijau { background: var(--baik); }
 .titik.waspada, .titik.kuning { background: var(--waspada); }

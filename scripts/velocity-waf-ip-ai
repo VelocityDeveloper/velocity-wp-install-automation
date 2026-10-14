@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Perbarui waf/ip-ai-pencarian.txt dari daftar IP resmi bot AI pencarian (OpenAI & Perplexity).
+
+Dipakai aturan Velocity WAF 7700106: UA bot AI pencarian (bot-ai-pencarian.txt) dari IP di luar daftar ini = bot palsu.
+Satu sumber gagal / kosong → berkas TIDAK diubah (lebih baik daftar lama daripada bot asli ikut terblokir).
+Berkas berubah → sidik WAF berubah → dashboard Server > WAF menandai "Perlu diperbarui"; pasang ulang manual.
+"""
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+BERKAS = Path(__file__).resolve().parent.parent / 'waf' / 'ip-ai-pencarian.txt'
+SUMBER = {
+    'OpenAI ChatGPT-User': 'https://openai.com/chatgpt-user.json',
+    'OpenAI OAI-SearchBot': 'https://openai.com/searchbot.json',
+    'Perplexity PerplexityBot': 'https://www.perplexity.ai/perplexitybot.json',
+    'Perplexity Perplexity-User': 'https://www.perplexity.ai/perplexity-user.json',
+}
+
+
+def ambil(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; velocity-waf-ip-ai)'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.load(r)
+    return [p.get('ipv4Prefix') or p.get('ipv6Prefix') for p in data.get('prefixes', []) if p.get('ipv4Prefix') or p.get('ipv6Prefix')]
+
+
+def main():
+    baris = ['# IP resmi bot AI pencarian — DIBUAT OTOMATIS oleh scripts/velocity-waf-ip-ai, jangan disunting.',
+             '# UA ChatGPT-User/OAI-SearchBot/PerplexityBot/Perplexity-User dari IP di luar daftar ini = palsu (aturan 7700106).']
+    for nama, url in SUMBER.items():
+        try:
+            ip = ambil(url)
+        except Exception as e:  # noqa: BLE001
+            raise SystemExit(f'gagal ambil {nama} ({url}): {e} — berkas tidak diubah')
+        if not ip:
+            raise SystemExit(f'{nama}: daftar kosong — berkas tidak diubah')
+        baris += [f'# {nama}: {url}'] + sorted(set(ip))
+    baru = '\n'.join(baris) + '\n'
+    lama = BERKAS.read_text() if BERKAS.exists() else ''
+    if baru == lama:
+        print(f'{BERKAS.name}: tidak berubah')
+        return 0
+    BERKAS.write_text(baru)
+    print(f'{BERKAS.name}: diperbarui ({sum(1 for b in baris if not b.startswith("#"))} prefiks)')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

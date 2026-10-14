@@ -5,6 +5,7 @@
 // IP kantor, IP server sendiri, LAN, dan IP whitelist ditolak agen saat diblokir.
 // PC kantor (tag PC Lokal/PC Backup) tanpa CSF: agen memakai firewalld/ufw + fail2ban; tab WAF & Setelan disembunyikan,
 // "Semua server" di dialog = server hosting saja.
+import PilihServer from '../components/PilihServer.vue'
 import { ref, reactive, computed, watch } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
@@ -16,7 +17,7 @@ import LogWaf from '../components/LogWaf.vue'
 import { konfirmasi } from '../konfirmasi.js'
 import { minta, kirim, pakaiPolling, tanggalWaktu, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
-import { jenisServer, pcKantor } from '../jenisServer.js'
+import { jenisServer, pcKantor, pilihServer } from '../jenisServer.js'
 
 const fw = pakaiPolling('/api/servers/firewall', 120000)
 const riwayat = pakaiPolling('/api/servers/firewall/riwayat', 120000)
@@ -30,7 +31,7 @@ async function muatSegar() {
 }
 const servers = computed(() => fw.data.value?.servers || [])
 // Tanpa ?s= → server pertama (Farnaz) yang terbuka
-const pilih = tabUrl('s', '')
+const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const TAB = ['blokir', 'sementara', 'whitelist', 'log', 'waf', 'setelan', 'riwayat']
 const TAB_KHUSUS_CSF = ['waf', 'setelan']
@@ -106,17 +107,6 @@ const aktif = (s) => s.ok && (s.csf
   : !!s.firewall && s.layanan?.[s.firewall] === 'active')
 const batasDeny = (s) => Number(s.setelan?.DENY_IP_LIMIT || 0)
 const penuh = (s) => batasDeny(s) && s.deny.length >= batasDeny(s)
-const total = computed(() => {
-  const ok = servers.value.filter((s) => s.ok && adaFw(s))
-  return {
-    deny: ok.reduce((a, s) => a + s.deny.length, 0),
-    sementara: ok.reduce((a, s) => a + s.sementara.length, 0),
-    allow: ok.reduce((a, s) => a + s.allow.filter((x) => !x.include && !x.aturan).length, 0),
-    aktif: servers.value.filter(aktif).length,
-    penuh: ok.filter(penuh).length,
-    dashboard: ok.reduce((a, s) => a + s.deny.filter((d) => d.sumber === 'dashboard').length, 0),
-  }
-})
 function peringatan(s) {
   const out = []
   if (!s.ok) return [{ tingkat: 'bahaya', teks: `Tidak bisa dibaca: ${pesanGalat(s.error)}` }]
@@ -358,25 +348,6 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
     <p v-else-if="fw.data.value?.error" class="pesan-status bahaya">Gagal memuat: {{ pesanGalat(fw.data.value.error) }}</p>
 
     <template v-else-if="fw.data.value">
-      <div class="ringkas">
-        <div class="kartu tile">
-          <span class="tile-ikon merah"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">Blokir permanen</span><b>{{ angka(total.deny) }}</b><small class="redup">{{ total.penuh }} server daftar penuh</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon kuning"><Ikon nama="jam" :ukuran="20" /></span>
-          <div><span class="redup">Blokir sementara</span><b>{{ angka(total.sementara) }}</b><small class="redup">lepas otomatis saat habis</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon hijau"><Ikon nama="centang" :ukuran="20" /></span>
-          <div><span class="redup">Whitelist</span><b>{{ angka(total.allow) }}</b><small class="redup">IP tidak pernah diblokir</small></div>
-        </div>
-        <div class="kartu tile">
-          <span class="tile-ikon ungu"><Ikon nama="server" :ukuran="20" /></span>
-          <div><span class="redup">Firewall aktif</span><b>{{ total.aktif }} / {{ servers.length }}</b><small class="redup">dibaca {{ waktuLalu(fw.data.value.diambil) }}</small></div>
-        </div>
-      </div>
-
       <!-- Cek & tindak satu IP di semua server -->
       <section class="kartu" aria-labelledby="judul-cek">
         <div class="kartu-judul">
@@ -434,12 +405,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 
       <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
 
-      <nav class="sub-menu" aria-label="Pilih server">
-        <button v-for="s in servers" :key="s.host" type="button" :class="{ aktif: terpilih === s }" :aria-current="terpilih === s ? 'page' : undefined" @click="pilih = s.name">
-          <span class="titik" :class="tingkat(s)" aria-hidden="true" /> {{ s.name }}
-          <span class="lencana" :class="jenisServer(s.jenis).kelas" :title="jenisServer(s.jenis).ket">{{ jenisServer(s.jenis).label }}</span>
-        </button>
-      </nav>
+      <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="tingkat(terpilih)" :teks="(s) => `${s.name} · ${jenisServer(s.jenis).label}`" @update:model-value="pilih = $event" />
 
       <!-- ================= Detail satu server ================= -->
       <template v-if="terpilih">
@@ -447,6 +413,26 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
           <p class="pesan-status bahaya">{{ peringatan(terpilih)[0]?.teks }}</p>
         </section>
         <template v-else>
+          <!-- Ringkasan server terpilih -->
+          <div class="ringkas">
+            <div class="kartu tile">
+              <span class="tile-ikon merah"><Ikon nama="perisai" :ukuran="20" /></span>
+              <div><span class="redup">Blokir permanen</span><b>{{ angka(terpilih.deny.length) }}</b><small class="redup">{{ batasDeny(terpilih) ? `maks. ${angka(batasDeny(terpilih))} IP${penuh(terpilih) ? ' · daftar penuh' : ''}` : 'tanpa batas jumlah' }}</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon kuning"><Ikon nama="jam" :ukuran="20" /></span>
+              <div><span class="redup">Blokir sementara</span><b>{{ angka(terpilih.sementara.length) }}</b><small class="redup">lepas otomatis saat habis</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon hijau"><Ikon nama="centang" :ukuran="20" /></span>
+              <div><span class="redup">Whitelist</span><b>{{ angka(whitelist.length) }}</b><small class="redup">IP tidak pernah diblokir</small></div>
+            </div>
+            <div class="kartu tile">
+              <span class="tile-ikon ungu"><Ikon nama="server" :ukuran="20" /></span>
+              <div><span class="redup">Firewall</span><b>{{ aktif(terpilih) ? 'Aktif' : 'Mati' }}</b><small class="redup">{{ namaFw(terpilih) }} · dibaca {{ waktuLalu(fw.data.value.diambil) }}</small></div>
+            </div>
+          </div>
+
           <ul v-if="peringatan(terpilih).length" class="daftar-peringatan">
             <li v-for="p in peringatan(terpilih)" :key="p.teks" :class="p.tingkat"><span class="titik" :class="p.tingkat" aria-hidden="true" /> {{ p.teks }}</li>
           </ul>
@@ -651,13 +637,6 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
 .hasil-cek { margin-top: 14px; display: grid; gap: 8px; }
 .hasil-kepala { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .hasil-kepala p { margin: 0; font-size: 14px; }
-.sub-menu { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu); border: 1px solid var(--garis); }
-.sub-menu button { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 0; background: transparent; color: var(--teks-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 14px; border-radius: 9px; cursor: pointer; }
-.sub-menu button:hover { color: var(--teks-kuat); background: var(--sorot); }
-.sub-menu button.aktif { background: var(--aksen); color: #fff; }
-.sub-menu .lencana { font-size: 10px; padding: 0 6px; }
-.sub-menu button.aktif .lencana { color: #fff; background: rgba(255, 255, 255, .2); }
 .titik { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); vertical-align: 1px; }
 .titik.baik, .titik.hijau { background: var(--baik); }
 .titik.waspada, .titik.kuning { background: var(--waspada); }

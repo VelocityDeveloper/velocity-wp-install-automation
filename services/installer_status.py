@@ -195,6 +195,20 @@ def client_ip(handler: BaseHTTPRequestHandler) -> str:
     return peer
 
 
+def rate_ip(handler: BaseHTTPRequestHandler) -> str:
+    """Kunci batas request. Akses dash.velocity.ai.id masuk lewat proxy lokal (X-Real-IP 127.0.0.1), jadi semua
+    pengguna berbagi satu jatah; untuk itu pakai X-Forwarded-For (diisi CF-Connecting-IP oleh gerbang dash).
+    Cek LAN tetap memakai client_ip()."""
+    ip = client_ip(handler) or 'unknown'
+    try:
+        if not ipaddress.ip_address(ip).is_loopback:
+            return ip
+        # Entri terakhir = yang ditambahkan proxy terdekat, bukan isian klien
+        return str(ipaddress.ip_address((handler.headers.get('X-Forwarded-For') or '').split(',')[-1].strip()))
+    except ValueError:
+        return ip
+
+
 def _is_local_net(ip: str) -> bool:
     """Loopback, RFC1918 LAN, or Tailscale CGNAT."""
     try:
@@ -289,11 +303,55 @@ def server_usage():
 HOST_LOKAL = ('127.0.0.1', 'localhost')
 
 
+# Koneksi SSH dipakai ulang: satu master per host bertahan 10 mnt, jabat tangan 1–4 dtk per panggilan hilang.
+# Master dijalankan terpisah dengan stdio /dev/null — ControlMaster=auto langsung di subprocess.run(capture_output)
+# membuat proses master latar memegang pipa stderr, pemanggil ikut menunggu sampai master mati.
+SSH_KONTROL = Path('/run/velocity-ssh')
+SSH_PERSIST = 600
+_ssh_master_kunci = {}  # soket → sedang dibuat
+_ssh_master_kunci_induk = threading.Lock()
+
+
+def _ssh_master(dasar, tujuan, soket):
+    """True bila master hidup dan soketnya bisa dipakai. Bila belum, master dibuat di thread latar dan panggilan
+    ini konek langsung — server yang tak terjangkau tidak membuat pemanggil menunggu dua kali."""
+    try:
+        if os.path.exists(soket) and subprocess.run(['ssh', '-S', soket, '-O', 'check', tujuan], stdin=subprocess.DEVNULL,
+                                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0:
+            return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    with _ssh_master_kunci_induk:
+        if soket in _ssh_master_kunci:
+            return False  # sedang dibuat
+        _ssh_master_kunci[soket] = True
+
+    def buat():
+        try:
+            SSH_KONTROL.mkdir(mode=0o700, exist_ok=True)
+            if os.path.exists(soket):
+                os.unlink(soket)  # sisa master yang sudah mati
+            subprocess.run([*dasar, '-M', '-N', '-f', '-S', soket, '-o', f'ControlPersist={SSH_PERSIST}', tujuan],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            with _ssh_master_kunci_induk:
+                _ssh_master_kunci.pop(soket, None)
+    threading.Thread(target=buat, daemon=True).start()
+    return False
+
+
 def perintah_server(srv, key, remote, *opsi):
     if srv['host'] in HOST_LOKAL:
         return ['bash', '-c', remote]
-    return ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', *opsi,
-            '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}", remote]
+    tujuan = f"{srv['user']}@{srv['host']}"
+    # ServerAliveInterval di sini: pada koneksi lewat soket yang berlaku setelan master (scan antivirus bisa 60 mnt)
+    dasar = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+             '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new']
+    soket = str(SSH_KONTROL / f"{srv['user']}@{srv['host']}:{srv['port']}")
+    kontrol = ['-o', f'ControlPath={soket}', '-o', 'ControlMaster=no'] if _ssh_master(dasar, tujuan, soket) else []
+    return [*dasar[:-2], *opsi, *kontrol, *dasar[-2:], tujuan, remote]
 
 
 def servers_view():
@@ -521,8 +579,8 @@ def server_resource(paksa=False):
 
 
 class CacheLatar:
-    """Cache data SSH (monitor/firewall/log). Kedaluwarsa tapi < UMUR_MAKS → dijawab seketika dan disegarkan
-    di belakang; lebih tua dari itu (atau paksa) → ditunggu, supaya halaman keamanan tak menampilkan data basi."""
+    """Cache data SSH (monitor/firewall/log). Kedaluwarsa → dijawab seketika dan disegarkan di belakang; lebih tua
+    dari UMUR_MAKS ikut bertanda 'menyegarkan' supaya halaman memuat ulang cepat. Hanya paksa / belum ada data → ditunggu."""
     UMUR_MAKS = 900
 
     def __init__(self):
@@ -537,9 +595,10 @@ class CacheLatar:
             umur = time.time() - lama[0]
             if umur < ttl:
                 return lama[1]
-            if umur < self.UMUR_MAKS:
-                self._latar(kunci, fn)
+            self._latar(kunci, fn)
+            if umur < self.UMUR_MAKS or not isinstance(lama[1], dict):
                 return lama[1]
+            return {**lama[1], 'menyegarkan': True}
         return self._isi(kunci, fn, self.gen)
 
     def _isi(self, kunci, fn, gen):
@@ -576,6 +635,24 @@ class CacheLatar:
 MONITOR_TTL = 60
 MONITOR_AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_monitor_agent.py'
 _cache_monitor = CacheLatar()
+# Hasil needs-restarting per host {host: (waktu, nilai)}: perintahnya 5–20 dtk, cukup dicek tiap 6 jam
+REBOOT_TTL = 6 * 3600
+# Disimpan ke disk supaya restart layanan tidak membuat pembacaan pertama menjalankan needs-restarting lagi
+REBOOT_BERKAS = Path('/var/lib/velocity/server-monitor/reboot.json')
+try:
+    _reboot_terakhir = {h: tuple(v) for h, v in json.loads(REBOOT_BERKAS.read_text()).items()}
+except (OSError, ValueError, TypeError, AttributeError):
+    _reboot_terakhir = {}
+
+
+def _reboot_simpan():
+    try:
+        REBOOT_BERKAS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REBOOT_BERKAS.with_suffix('.tmp')
+        tmp.write_text(json.dumps(dict(_reboot_terakhir)))
+        os.replace(tmp, REBOOT_BERKAS)
+    except OSError:
+        pass
 # PC kantor (PC Lokal = dashboard ini, PC Backup), sengaja di luar servers.json agar tidak ikut jadi
 # tujuan installer, CSF, WAF, atau antivirus. Entri = kolom server biasa + 'jenis' ('lokal' | 'backup').
 # Server hosting dari servers.json berjenis 'hosting'; jenis jadi tag pembeda di halaman Server.
@@ -619,7 +696,7 @@ def _monitor_satu(srv, key, kode):
 
 
 def server_monitor(paksa=False):
-    # SSH ke semua server ±10–40 dtk; lihat CacheLatar
+    # SSH ke semua server ±5–10 dtk (needs-restarting disimpan 6 jam); lihat CacheLatar
     return _cache_monitor.ambil('semua', _monitor_ambil, MONITOR_TTL, paksa)
 
 
@@ -636,12 +713,27 @@ def _monitor_ambil():
     hasil = [None] * len(servers)
 
     def kerja(i):
-        hasil[i] = _monitor_satu(servers[i], key, kode)
+        host = servers[i]['host']
+        simpan = _reboot_terakhir.get(host)
+        lewati = simpan and now - simpan[0] < REBOOT_TTL
+        h = _monitor_satu(servers[i], key, ('LEWATI_REBOOT = True\n' + kode) if lewati else kode)
+        aman = h.get('keamanan') if isinstance(h.get('keamanan'), dict) else None
+        if aman is not None and 'perlu_reboot' in aman:
+            _reboot_terakhir[host] = (now, aman['perlu_reboot'])
+        elif aman is not None and lewati:
+            # Server sudah reboot sejak pengecekan terakhir → nilai lama tak berlaku, cek ulang putaran berikutnya
+            if ((h.get('sistem') or {}).get('uptime') or 0) < now - simpan[0]:
+                _reboot_terakhir.pop(host, None)
+                aman['perlu_reboot'] = None
+            else:
+                aman['perlu_reboot'] = simpan[1]
+        hasil[i] = h
     utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
     for t in utas:
         t.start()
     for t in utas:
         t.join(65)
+    _reboot_simpan()
     data = {'servers': [h or {'host': s['host'], 'name': s['name'], 'jenis': s.get('jenis', ''), 'ok': False, 'error': 'timeout'}
                         for h, s in zip(hasil, servers)],
             'diambil': int(now)}
@@ -805,7 +897,7 @@ def firewall_log(host, hari, jenis='log'):
             return {'error': 'server_tidak_dikenal'}
 
     def ambil():
-        hasil, err = _firewall_semua(servers, {'aksi': jenis, 'hari': hari, 'maks': (1500 if host != 'semua' else 400) if jenis == 'log' else (800 if host != 'semua' else 250)}, 120)
+        hasil, err = _firewall_semua(servers, {'aksi': jenis, 'hari': hari, 'maks': (1500 if host != 'semua' else 400) if jenis == 'log' else (3000 if host != 'semua' else 250)}, 120)
         if err:
             return {'error': err}
         return {'hari': hari, 'servers': hasil, 'diambil': int(time.time())}
@@ -845,9 +937,7 @@ _antivirus_tulis = threading.Lock()
 def _antivirus_ssh(srv, key, perintah, prioritas_rendah=False):
     sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
     py = 'nice -n 15 ionice -c3 python3 -' if prioritas_rendah else 'python3 -'
-    cmd = ['ssh', '-i', str(key), '-p', srv['port'], '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-           '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
-           f'command -v python3 >/dev/null && exec {py} || exec /usr/libexec/platform-python -']
+    cmd = perintah_server(srv, key, f'command -v python3 >/dev/null && exec {py} || exec /usr/libexec/platform-python -')
     return cmd, f"{ANTIVIRUS_AGEN.read_text()}\njalankan('{sandi}')\n"
 
 
@@ -1367,7 +1457,7 @@ server_cms.pasang(lambda: _daftar_server(), lambda: ssh_key_file())
 # Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h).
 # Data dicatat scripts/server-usage-catat (timer 5 mnt); dirata-rata per ember agar ±300 titik per server.
 USAGE_RIWAYAT = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
-RENTANG_USAGE = {'24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200)}
+RENTANG_USAGE = {'1j': (3600, 300), '24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200)}
 USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out')
 
 
@@ -1437,6 +1527,89 @@ def _riwayat_urai(rentang):
                 titik.append({'t': k})
         hasil.append({'host': srv['host'], 'name': srv['name'], 'core': srv['core'], 'titik': titik})
     return {'rentang': rentang, 'ember': ember, 'servers': hasil}
+
+
+# Sampel pemakaian satu server (dipakai scripts/server-usage-catat tiap 5 mnt & mode Live /api/servers/live).
+# RESOURCE_CMD + baris tambahan, hanya baca: /proc, df, .rtreport LiteSpeed, ss.
+USAGE_CMD = RESOURCE_CMD + r'''
+rt=/tmp/lshttpd/.rtreport; [ -r $rt ] && { echo "W $(grep -m1 '^REQ_RATE \[\]' $rt)"; echo "K $(grep -m1 '^MAXCONN' $rt)"; }
+echo "E $(ss -Htn state established '( sport = :80 or sport = :443 )' 2>/dev/null | wc -l)"
+dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p'); [ -n "$dev" ] && echo "N $(grep -E "^ *$dev:" /proc/net/dev | tr ':' ' ')"
+'''
+
+
+def usage_sampel(srv, key):
+    cmd = perintah_server(srv, key, USAGE_CMD)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+    except subprocess.TimeoutExpired:
+        return None
+    if r.returncode != 0 or not (r.stdout or '').strip():
+        return None
+    out = _parse_resource(r.stdout)
+    for baris in r.stdout.splitlines():
+        kode, _, isi = baris.partition(' ')
+        try:
+            if kode == 'W':
+                m = re.search(r'REQ_PER_SEC: ([\d.]+)', isi)
+                if m:
+                    out['req'] = float(m.group(1))
+            elif kode == 'K':
+                plain, ssl = re.search(r'PLAINCONN: (\d+)', isi), re.search(r'SSLCONN: (\d+)', isi)
+                if plain and ssl:
+                    out['conn'] = int(plain.group(1)) + int(ssl.group(1))
+            elif kode == 'E':
+                out['established'] = int(isi.strip() or 0)
+            elif kode == 'N':
+                p = isi.split()  # iface rx_bytes … (kolom ke-9 dari data = tx_bytes)
+                out['net'] = {'rx': int(p[1]), 'tx': int(p[9])}
+        except (ValueError, IndexError):
+            continue
+    out['ok'] = True
+    return out
+
+
+def usage_titik(r):
+    """Kolom riwayat dari hasil usage_sampel (tanpa net_in/net_out: butuh selisih counter)."""
+    return dict(cpu=r.get('cpu'), ram=(r.get('ram') or {}).get('persen'), swap=(r.get('swap') or {}).get('persen'),
+                disk=max((d['persen'] for d in r.get('disks') or []), default=None), load=(r.get('load') or [None])[0],
+                core=r.get('cpu_core'), req=r.get('req'), conn=r.get('conn', r.get('established')))
+
+
+def usage_net(net, lama, now, maks_dt):
+    """Mbps masuk/keluar dari selisih counter /proc/net/dev; {} bila catatan lama tak cocok (reboot/terlalu lama)."""
+    if lama and 0 < now - lama['t'] <= maks_dt and net['rx'] >= lama['rx'] and net['tx'] >= lama['tx']:
+        dt = now - lama['t']
+        return {'net_in': round((net['rx'] - lama['rx']) * 8 / dt / 1e6, 2), 'net_out': round((net['tx'] - lama['tx']) * 8 / dt / 1e6, 2)}
+    return {}
+
+
+# Mode Live: satu SSH per permintaan; hasil < 3 dtk dipakai bersama agar beberapa penonton tak menumpuk SSH.
+_live_cache = {}
+_live_kunci = threading.Lock()
+
+
+def server_live(nama=None):
+    daftar = server_dipantau()
+    srv = next((s for s in daftar if s['name'] == nama), daftar[0] if daftar else None)
+    if not srv:
+        return {'error': 'server tidak ada'}
+    with _live_kunci:
+        c = _live_cache.setdefault(srv['host'], {'lock': threading.Lock(), 'hasil': None, 'net': None})
+    with c['lock']:
+        if c['hasil'] and time.time() - c['hasil']['titik']['t'] < 3:
+            return c['hasil']
+        key = ssh_key_file()
+        r = usage_sampel(srv, key) if key else None
+        now = time.time()
+        titik = {'t': round(now, 1)}
+        if r and r.get('ok'):
+            titik.update(usage_titik(r))
+            if r.get('net'):
+                titik.update(usage_net(r['net'], c['net'], now, 120))
+                c['net'] = {'t': now, **r['net']}
+        c['hasil'] = {'host': srv['host'], 'name': srv['name'], 'ok': bool(r and r.get('ok')), 'titik': titik}
+        return c['hasil']
 
 
 _local_ip_cache = {'at': 0, 'value': []}
@@ -3113,7 +3286,7 @@ class Handler(BaseHTTPRequestHandler):
         baca_bagan = path == '/api/installer' and 'domain' in parse_qs(parsed.query)
         # Halaman project Laravel memantau log & status tiap 2-3 detik selama agen/installer berjalan
         baca_bagan = baca_bagan or path.startswith('/api/laravel/p/')
-        if not baca_bagan and not _rate_ok(ip):
+        if not baca_bagan and not _rate_ok(rate_ip(self)):
             self._send_json({'error': 'rate_limited'}, 429)
             return
 
@@ -3131,6 +3304,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             self._send_json(server_resource('segar' in parse_qs(parsed.query)))
+            return
+        if path == '/api/servers/live':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_live((parse_qs(parsed.query).get('server') or [None])[0]))
             return
         if path == '/api/servers/riwayat':
             if not _check_auth(self):
@@ -3345,7 +3524,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         ip = client_ip(self) or 'unknown'
-        if not _rate_ok(ip):
+        if not _rate_ok(rate_ip(self)):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
@@ -3618,7 +3797,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         ip = client_ip(self) or 'unknown'
-        if not _rate_ok(ip):
+        if not _rate_ok(rate_ip(self)):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
