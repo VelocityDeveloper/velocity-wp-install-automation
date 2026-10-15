@@ -61,10 +61,10 @@ PENGGUNA_BAWAAN = {
     "Reza": {"ssh": ["Reza"]},
     "Aditya K": {"telegram": ["785329499"], "ssh": ["Aditya K"], "ip": ["192.168.72.150"]},  # @adityak_vd = kunci Aditya K (user, 24 Sep); IP = login password desktop app (user, 25 Sep)
     "Imam WS": {"telegram": ["5017545247"]},
-    "Adityathok": {"telegram": ["787473227"], "ssh": ["Adityathok"]},  # kunci SSH "Adityathok" (dulu aditya0thok@gmail.com, user 25 Sep)
+    "Adityathok": {"telegram": ["787473227"], "ssh": ["Adityathok"], "ip": ["100.78.200.37"]},  # IP = Tailscale SSH desktop-foivqik, tanpa fingerprint (user, 15 Okt); kunci SSH "Adityathok" (dulu aditya0thok@gmail.com, user 25 Sep)
     "Afif": {"telegram": ["8563985331"]},
     "Eko Mustaqim": {"telegram": ["240477294"]},
-    "Irawan VD": {"telegram": ["375333725"], "ssh": ["Irawan"]},  # kunci SSH "Irawan" (PC11 .72.20)
+    "Irawan VD": {"telegram": ["375333725"], "ssh": ["Irawan"], "ip": ["100.118.106.78"]},  # kunci SSH "Irawan" (PC11 .72.20); IP = Tailscale SSH PC11 "irawan", tanpa fingerprint (user, 15 Okt)
     "Yaya": {"telegram": ["8528357317"]},
     "Mas Toro": {"telegram": ["260162734"]},
     "Lingga": {"telegram": ["2054457133"], "ssh": ["Lingga"]},
@@ -453,6 +453,20 @@ def catat_sesi_hidup():
         pasang.write_text(json.dumps({"sejak": time.time()}))
 
 
+def sesi_aktif():
+    """sid sesi Claude yang prosesnya masih hidup (sessions/<pid>.json dihapus saat keluar; pid dicek juga)."""
+    hasil = set()
+    for _, d in AKUN:
+        for f in (d / "sessions").glob("*.json"):
+            try:
+                x = json.loads(f.read_text())
+                if Path(f"/proc/{int(x['pid'])}").exists():
+                    hasil.add(x["sessionId"])
+            except (OSError, ValueError, KeyError):
+                continue
+    return hasil
+
+
 def akun_sesi():
     """{sid: akun} untuk akun selain akun 1, dari sesi.jsonl dan history.jsonl tiap folder akun."""
     hasil = {}
@@ -608,6 +622,7 @@ def main():
 
     koreksi = muat_json(DATA / "jenis.json", {})
     akun_per = akun_sesi()
+    aktif = sesi_aktif()
     orang = {}
     for s in sesi.values():
         if not s["hari"]:
@@ -634,7 +649,7 @@ def main():
         o["sesi"].append({
             "sid": s["sid"], "akun": akun_per.get(s["sid"], "1"), "jalur": jalur, "asal": asal, "judul": s["judul"] or "",
             "jenis": koreksi.get(s["sid"]) or tebak_jenis(s), "mulai": s["mulai"], "akhir": s["akhir"],
-            "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
+            "aktif": s["sid"] in aktif, "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
         })
 
     for s in sesi_installer():
