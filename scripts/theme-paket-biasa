@@ -941,6 +941,13 @@ if (!empty($d['berita'])) {
                             'meta_query' => [['key' => 'hit', 'compare' => 'NOT EXISTS']]]);
     foreach ($tanpa_hit as $pid) { add_post_meta($pid, 'hit', 0, true); }
     if ($tanpa_hit) { echo 'tampilan: berita_hit_awal:' . count($tanpa_hit) . "\n"; }
+    // Beranda statis berita4/berita11 wajib bertemplate page-home.php ("Home Page", bukan "Home Template" yang
+    // dicari site-finish). Dipasang di sini, sebelum cadangan adaptor AI dicatat: aksara-media.com 2026-10-15
+    // pemeriksaan adaptor gagal -> KEMBALIKAN_PHP menghapus template -> beranda tampil sebagai halaman teks.
+    if (!$berita_depan && !empty($d['situs_baru']) && $pof && is_file("$sd/page-home.php")
+        && in_array((string) get_post_meta($pof, '_wp_page_template', true), ['', 'default'], true)) {
+        update_post_meta($pof, '_wp_page_template', 'page-home.php'); echo "tampilan: berita_template_beranda:page-home.php\n";
+    }
 }
 // berita4 berberanda page-home.php (beranda statis) tetapi menunya sama dengan portal berita lain
 // (user 2026-10-09, info-luarbiasa.com): primary = Beranda + kategori, secondary = ikon home ala demo,
