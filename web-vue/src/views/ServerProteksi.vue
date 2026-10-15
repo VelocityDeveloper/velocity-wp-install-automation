@@ -195,8 +195,17 @@ async function kirimDialog() {
 }
 
 // ---- Detail server ----
-const SUMBER = { cpguard: 'cPGuard', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban' }
-const KELAS_SUMBER = { cpguard: 'ungu', lfd: 'biru', dashboard: 'hijau', manual: 'abu', fail2ban: 'biru' }
+const SUMBER = { cpguard: 'cPGuard', velocity: 'Velocity WAF', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban' }
+const KELAS_SUMBER = { cpguard: 'ungu', velocity: 'teal', lfd: 'biru', dashboard: 'hijau', manual: 'abu', fail2ban: 'biru' }
+// Tab Sementara: blokir Velocity WAF (pemicu LFD vwaf*) masuk csf.tempban, bukan csf.deny
+const sumberSementara = ref('')
+watch(pilih, () => { sumberSementara.value = '' })
+const sementaraTersaring = computed(() => (terpilih.value?.sementara || []).filter((d) => !sumberSementara.value || d.sumber === sumberSementara.value))
+const hitungSumberSementara = computed(() => {
+  const out = {}
+  for (const d of terpilih.value?.sementara || []) if (d.sumber) out[d.sumber] = (out[d.sumber] || 0) + 1
+  return out
+})
 const negaraDari = (ket) => (ket || '').match(/\(([A-Z]{2})\/([^/)]*)/)
 const alasanRingkas = (ket) => (ket || '').replace(/^(lfd: |BFM: |velocity: )/, '').replace(/\s*\([A-Z]{2}\/[^)]*\)/, '').trim() || '-'
 const cariDeny = ref('')
@@ -488,13 +497,18 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
               <div class="alat"><span class="redup">Blokir sementara lepas sendiri saat waktunya habis.</span>
                 <button type="button" class="tombol bahaya kecil" :disabled="proses" @click="bukaDialog('blokir', '', terpilih.host)"><Ikon nama="tambah" :ukuran="15" /> Blokir IP</button>
               </div>
+              <div v-if="Object.keys(hitungSumberSementara).length > 1" class="chip-filter" role="group" aria-label="Sumber blokir sementara">
+                <button type="button" :class="{ aktif: !sumberSementara }" @click="sumberSementara = ''">Semua {{ terpilih.sementara.length }}</button>
+                <button v-for="(n, k) in hitungSumberSementara" :key="k" type="button" :class="{ aktif: sumberSementara === k }" @click="sumberSementara = k">{{ SUMBER[k] || k }} {{ n }}</button>
+              </div>
               <p v-if="!terpilih.sementara.length" class="redup">Tidak ada blokir sementara.</p>
               <div v-else class="tabel-wadah">
                 <table class="tabel">
-                  <thead><tr><th scope="col">IP</th><th scope="col">Port / arah</th><th scope="col">Alasan</th><th scope="col">Sisa</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
+                  <thead><tr><th scope="col">IP</th><th scope="col">Sumber</th><th scope="col">Port / arah</th><th scope="col">Alasan</th><th scope="col">Sisa</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
                   <tbody>
-                    <tr v-for="d in terpilih.sementara" :key="d.ip + d.port">
+                    <tr v-for="d in sementaraTersaring" :key="d.ip + d.port">
                       <td class="nowrap"><code>{{ d.ip }}</code></td>
+                      <td><span v-if="d.sumber" class="lencana" :class="KELAS_SUMBER[d.sumber]">{{ SUMBER[d.sumber] || d.sumber }}</span></td>
                       <td class="nowrap">{{ d.port }} · {{ d.arah }}</td>
                       <td class="ket">{{ alasanRingkas(d.ket) }}</td>
                       <td class="nowrap">{{ sisa(d.sisa) }}</td>

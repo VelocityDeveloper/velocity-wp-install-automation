@@ -81,6 +81,9 @@ def pecah(b):
 def sumber(ket):
     if ket.startswith('BFM:'):
         return 'cpguard'
+    # Velocity BFM = pemicu LFD kustom vwaf* (regex.custom.pm), termasuk yang jadi permanen lewat LF_PERMBLOCK
+    if 'Velocity WAF' in ket or '(vwaf' in ket:
+        return 'velocity'
     if ket.startswith('lfd:') or ket.startswith('lfd '):
         return 'lfd'
     if ket.startswith('velocity:'):
@@ -130,8 +133,9 @@ def daftar_sementara(berkas):
         except ValueError:
             continue
         if sisa > 0:
-            out.append({'ip': p[1], 'port': p[2] or '*', 'arah': p[3], 'sisa': int(sisa), 'ket': '|'.join(p[5:]).strip(),
-                        'waktu': int(p[0])})
+            ket = '|'.join(p[5:]).strip()
+            out.append({'ip': p[1], 'port': p[2] or '*', 'arah': p[3], 'sisa': int(sisa), 'ket': ket,
+                        'waktu': int(p[0]), 'sumber': sumber(ket)})
     return out
 
 

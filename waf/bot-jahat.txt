@@ -33,11 +33,7 @@ datacha0s
 deepnet explorer
 desktopsmiley
 digext
-feedfinder
 gamingharbor
-heritrix
-indy library
-jakarta
 juicyaccess
 larbin
 missigua
@@ -50,12 +46,9 @@ twitturly
 viewzi
 webcapture
 yebolbot
-rssingbot
 scanbot
 betabot
 seoscanners.net
 ltx71
 inboundlinks.win
 sitebot
-moreover
-feedfetcher

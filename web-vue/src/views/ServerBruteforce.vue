@@ -94,11 +94,14 @@ const LOGIN_LFD = [
   { k: 'LF_SSHD', label: 'SSH' }, { k: 'LF_DIRECTADMIN', label: 'DirectAdmin' }, { k: 'LF_FTPD', label: 'FTP' },
   { k: 'LF_SMTPAUTH', label: 'SMTP' }, { k: 'LF_POP3D', label: 'POP3' }, { k: 'LF_IMAPD', label: 'IMAP' },
 ]
-const durasiLabel = (d) => (d >= 86400 ? `${d / 86400} hari` : d >= 3600 ? `${d / 3600} jam` : `${d / 60} menit`)
+const durasiLabel = (d) => (d === 1 ? 'permanen' : d >= 86400 ? `${d / 86400} hari` : d >= 3600 ? `${d / 3600} jam` : `${d / 60} menit`)
 const ATURAN_KET = {
-  eksploit: 'Akses .env/.git/wp-config, PHP di uploads, traversal, enumerasi user, PHP tanpa User-Agent',
+  berat: 'Akses .env/.git, wp-config, dump database/cadangan/alat debug, PHP tersembunyi, null byte, path traversal, bot AI palsu — tidak pernah dilakukan pengunjung asli',
+  eksploit: 'Probe lain: PHP di uploads/cache, enumerasi user (?author=), PHP tanpa User-Agent',
   bot: 'sqlmap, nikto, masscan, zgrab, dan scanner lain (bot-jahat.txt)',
-  crawler: 'Ahrefs, Semrush, GPTBot, ClaudeBot… — sudah ditolak 429 oleh WAF; blokir firewall hanya menghemat beban',
+  crawler: 'Ahrefs, Semrush, PetalBot, Baiduspider… (bot-seo.txt) — sudah ditolak 429 oleh WAF; blokir firewall hanya menghemat beban',
+  ai: 'Bot pengumpul data untuk melatih model AI (GPTBot, ClaudeBot, CCBot, Bytespider… — bot-ai.txt). Tidak mendatangkan pengunjung ke situs klien; sudah ditolak 429 oleh WAF, blokir firewall hanya menghemat beban',
+  pencarian: 'Bot AI yang mengambil halaman saat pengguna bertanya ke ChatGPT/Perplexity (ChatGPT-User, OAI-SearchBot, PerplexityBot dari IP resmi). Bisa membuat situs klien dikutip & mendatangkan pengunjung; WAF hanya mencatatnya, jadi aturan ini tidak memblokir apa pun selama itu. UA serupa dari IP palsu masuk Eksploit',
   login: 'IP yang terus mencoba sesudah kena rate limit wp-login.php / xmlrpc.php',
 }
 

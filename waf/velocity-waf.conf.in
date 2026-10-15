@@ -46,6 +46,12 @@ SecRule REQUEST_FILENAME "@rx (?:\.(?:sql|sql\.gz|sql\.zip|mysql|bak|old|swp|sav
 # PHP dijalankan dari folder unggahan / berkas PHP tersembunyi (ciri webshell)
 SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
     "id:7700210,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/uploads'"
+# Folder cache plugin tak pernah berisi PHP yang dipanggil langsung (webshell eksploit Podlove dkk.)
+SecRule REQUEST_FILENAME "@rx /wp-content/cache/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
+    "id:7700213,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/cache'"
+# Eksploit Podlove Podcast Publisher image cache (unduh berkas PHP dari URL luar)
+SecRule ARGS_NAMES "@streq podlove_image_cache_url" \
+    "id:7700214,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Eksploit Podlove image cache'"
 SecRule REQUEST_FILENAME "@rx /\.[^/]+\.php\d?$" \
     "id:7700211,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Berkas PHP tersembunyi'"
 # URL berisi /wp-content/uploads/ ≥3 kali (scraper rusak membaca srcset)

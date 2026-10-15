@@ -3,7 +3,7 @@
 // dan apa langkah berikutnya. HANYA MEMBACA endpoint modul lain (tanpa SSH baru, tanpa tombol aksi):
 // /api/servers/waf, /api/servers/bfm, /api/servers/monitor (cache SSH modul masing-masing),
 // /api/servers/antivirus/scan & /api/servers/cms (berkas hasil di disk dashboard).
-// Mencopot cPGuard tetap manual per server atas izin (keputusan 12 Okt: paralel dulu 1–2 minggu).
+// Mencopot cPGuard tetap manual per server atas izin; masa uji berdampingan diuji manual oleh user (15 Okt).
 import { computed } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import Info from '../components/Info.vue'
@@ -11,7 +11,6 @@ import { pakaiPolling, waktuLalu, tanggalWaktu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
 
 // Ambang kesiapan
-const HARI_PARALEL = 7 // WAF Velocity berdampingan dengan cPGuard minimal sekian hari sebelum cPGuard dicopot
 const HARI_SCAN_CMS = 7
 const HARI_SCAN_AV = 7
 
@@ -47,17 +46,6 @@ const FUNGSI = [
     },
   },
   {
-    k: 'paralel', label: 'Masa uji berdampingan', pengganti: `≥ ${HARI_PARALEL} hari bersama cPGuard`, ke: '/server/waf?tab=log', wajib: true,
-    ket: 'Velocity WAF dijalankan berdampingan dengan cPGuard agar positif palsu & selisih deteksi terlihat sebelum cPGuard dicopot.',
-    cek: ({ w }) => {
-      const st = w?.status
-      if (!st?.terpasang || !st.diubah) return { status: 'belum', teks: 'Belum mulai (WAF belum terpasang)' }
-      const h = hari(st.diubah)
-      if (h >= HARI_PARALEL) return { status: 'siap', teks: `${Math.floor(h)} hari sejak ${tanggalWaktu(st.diubah)}` }
-      return { status: 'sebagian', teks: `Hari ke-${Math.floor(h) + 1} dari ${HARI_PARALEL}`, langkah: `Tunggu ±${Math.ceil(HARI_PARALEL - h)} hari lagi` }
-    },
-  },
-  {
     k: 'bfm', label: 'Brute Force Monitor (BFM)', pengganti: 'Velocity BFM + LFD', ke: '/server/bruteforce', wajib: true,
     ket: 'BFM cPGuard memblokir IP dari hit WAF ke csf.deny ("BFM:"). Pengganti membaca log WAF Velocity lewat aturan LFD.',
     cek: ({ b }) => {
@@ -86,23 +74,26 @@ const FUNGSI = [
   },
   {
     k: 'cms', label: 'CMS Threat (kerentanan WordPress)', pengganti: 'Kerentanan CMS', ke: '/server/cms', wajib: true,
-    ket: 'cPGuard memperbarui cms.db tiap malam. Pengganti: scan dari halaman Kerentanan CMS (belum terjadwal otomatis).',
+    ket: 'cPGuard memperbarui cms.db tiap malam. Pengganti: scan otomatis harian di halaman Kerentanan CMS, kerentanan kritis/tinggi baru → Telegram.',
     cek: ({ c }) => {
-      if (!c?.diambil) return { status: 'belum', teks: 'Belum pernah di-scan', langkah: 'Scan dari halaman Kerentanan CMS' }
+      if (!c?.diambil) return { status: 'belum', teks: 'Belum pernah di-scan', langkah: 'Aktifkan scan otomatis harian di halaman Kerentanan CMS' }
       const h = hari(c.diambil)
-      if (h > HARI_SCAN_CMS) return { status: 'sebagian', teks: `Scan terakhir ${waktuLalu(c.diambil)}`, langkah: 'Scan ulang / buat jadwal malam' }
-      return { status: 'sebagian', teks: `Scan ${waktuLalu(c.diambil)} · ${angka(c.ringkas?.situs)} situs, belum terjadwal`, langkah: 'Buat jadwal scan malam + notifikasi' }
+      if (cms.data.value?.jadwal?.[c.host]?.harian && h <= 2) return { status: 'siap', teks: `Terjadwal harian · scan ${waktuLalu(c.diambil)}, ${angka(c.ringkas?.situs)} situs` }
+      if (h > HARI_SCAN_CMS) return { status: 'sebagian', teks: `Scan terakhir ${waktuLalu(c.diambil)}`, langkah: 'Aktifkan scan otomatis harian' }
+      return { status: 'sebagian', teks: `Scan ${waktuLalu(c.diambil)} · ${angka(c.ringkas?.situs)} situs, belum terjadwal`, langkah: 'Aktifkan scan otomatis harian' }
     },
   },
   {
     k: 'malware', label: 'Pemindai malware', pengganti: 'Antivirus Velocity (VD.*)', ke: '/server/antivirus', wajib: true,
-    ket: 'cPGuard memindai real-time (setiap berkas berubah) dengan libclamav + tanda tangan Malware.Expert. Pengganti saat ini scan manual tanda tangan VD.*; ClamAV ditunda menunggu keputusan.',
+    ket: 'cPGuard memindai real-time (setiap berkas berubah) dengan libclamav + tanda tangan Malware.Expert. Pengganti: tanda tangan VD.* dengan scan otomatis harian (berkas berubah 24 jam) & mingguan (semua berkas), virus → Telegram.',
     cek: ({ a }) => {
       const selesai = a.filter((j) => j.status === 'selesai')
       const semua = selesai.find((j) => j.akun === 'semua')
-      if (!selesai.length) return { status: 'belum', teks: 'Belum pernah di-scan dari dashboard; tanpa real-time', langkah: 'Putuskan ClamAV + jadwal scan' }
-      if (!semua || hari(semua.mulai) > HARI_SCAN_AV) return { status: 'belum', teks: `Scan manual terakhir ${waktuLalu(selesai[0].mulai)}; tanpa real-time`, langkah: 'Putuskan ClamAV + jadwal scan' }
-      return { status: 'sebagian', teks: `Scan semua akun ${waktuLalu(semua.mulai)}; tanpa real-time & tanpa jadwal`, langkah: 'Putuskan ClamAV + jadwal scan' }
+      const terjadwal = selesai.find((j) => j.jadwal)
+      if (terjadwal && hari(terjadwal.mulai) <= 2) return { status: 'siap', teks: `Scan ${terjadwal.jadwal} terjadwal ${waktuLalu(terjadwal.mulai)}` }
+      if (!selesai.length) return { status: 'belum', teks: 'Belum pernah di-scan dari dashboard', langkah: 'Aktifkan scan otomatis di halaman Antivirus' }
+      if (!semua || hari(semua.mulai) > HARI_SCAN_AV) return { status: 'belum', teks: `Scan manual terakhir ${waktuLalu(selesai[0].mulai)}`, langkah: 'Aktifkan scan otomatis di halaman Antivirus' }
+      return { status: 'sebagian', teks: `Scan semua akun ${waktuLalu(semua.mulai)}; tanpa jadwal`, langkah: 'Aktifkan scan otomatis di halaman Antivirus' }
     },
   },
   {
@@ -237,13 +228,13 @@ const pemblokirUmum = computed(() => FUNGSI.filter((f) => f.wajib && matriks.val
       <section class="kartu catatan" aria-labelledby="judul-copot">
         <div class="kartu-judul"><h2 id="judul-copot"><Ikon nama="peringatan" :ukuran="16" /> Urutan copot yang disarankan (manual)</h2></div>
         <ol class="langkah">
-          <li>Semua baris wajib <b>Siap</b>, WAF mode blokir ≥ {{ HARI_PARALEL }} hari tanpa keluhan positif palsu.</li>
+          <li>Semua baris wajib <b>Siap</b> dan uji manual berdampingan dengan cPGuard tanpa keluhan positif palsu.</li>
           <li>Cadangkan konfigurasi: <code>/etc/cpguard/</code>, <code>/opt/cpguard/app/data/*.db</code>, <code>csf.conf</code>, <code>csf.deny</code>.</li>
           <li>Hentikan layanan cPGuard dulu (jangan langsung uninstall), pantau 48 jam: WAF, LFD, situs klien, beban server.</li>
           <li>Bila aman: uninstall cPGuard, pastikan include <code>cpguard_modsec*.conf</code> hilang dan LiteSpeed restart bersih.</li>
           <li>Blokir "BFM:" lama di csf.deny dibiarkan kedaluwarsa tergusur blokir baru.</li>
         </ol>
-        <p class="redup kecil-teks">Ambang: masa uji {{ HARI_PARALEL }} hari, scan CMS & antivirus ≤ {{ HARI_SCAN_CMS }} hari. Scan manual dihitung "Sebagian" sampai ada jadwal otomatis.</p>
+        <p class="redup kecil-teks">Ambang: scan CMS & antivirus ≤ {{ HARI_SCAN_CMS }} hari. Antivirus "Siap" bila scan terjadwal berjalan ≤ 2 hari terakhir; scan manual saja dihitung "Sebagian".</p>
       </section>
     </template>
   </div>

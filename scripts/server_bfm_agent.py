@@ -62,26 +62,43 @@ def jalan(cmd, batas=120):
     return r.returncode, r.stdout
 
 
+# Probe yang tak pernah dilakukan pengunjung asli (.env/.git, wp-config, dump/backup, PHP tersembunyi, null byte,
+# traversal, bot AI palsu) → kelompok 'berat' (bawaan blokir permanen). Harus sama dengan RE_BERAT di blok Perl.
+BERAT = ('7700201', '7700202', '7700203', '7700211', '7700301', '7700302', '7700106')
+RE_BERAT = '/^(%s)$/' % '|'.join(BERAT)
+
+
 def kelompok(rid):
     """id aturan Velocity WAF → kunci aturan BFM (harus sama dengan blok Perl)."""
+    if rid in BERAT:
+        return 'berat'
     if rid.startswith('77005'):
         return 'login'
-    if rid in ('7700102', '7700103', '7700104'):
+    if rid == '7700102':
         return 'crawler'
+    if rid == '7700103':
+        return 'ai'
+    if rid == '7700104':
+        return 'pencarian'
     if rid == '7700101':
         return 'bot'
     return 'eksploit'
 
 
 def blok_perl(aturan, slot, sidik):
-    """aturan: {kunci: {'aktif', 'ambang', 'durasi'}} → teks blok untuk regex.custom.pm."""
+    """aturan: {kunci: {'aktif', 'ambang', 'durasi'}} → teks blok untuk regex.custom.pm (durasi 1 = permanen di CSF)."""
     def ret(k, teks):
         a = aturan[k]
         return 'return ("%s (id:$id) dari", $ip, "vwaf%s", "%d", "", "%d", "0")' % (teks, k, int(a['ambang']), int(a['durasi']))
     cabang = []
     for k, cocok, teks in (('login', "$id =~ /^77005/", 'Velocity WAF brute force login'),
-                           ('crawler', "$id =~ /^770010[234]$/", 'Velocity WAF crawler'),
-                           ('bot', "$id eq '7700101'", 'Velocity WAF bot jahat')):
+                           ('crawler', "$id eq '7700102'", 'Velocity WAF crawler SEO'),
+                           ('ai', "$id eq '7700103'", 'Velocity WAF crawler AI'),
+                           ('pencarian', "$id eq '7700104'", 'Velocity WAF bot AI pencarian'),
+                           ('bot', "$id eq '7700101'", 'Velocity WAF bot jahat'),
+                           ('berat', '$id =~ ' + RE_BERAT, 'Velocity WAF eksploit berat')):
+        if k not in aturan:  # setelan lama tanpa kelompok ini → ikut aturan eksploit
+            continue
         cabang.append('\t\tif (%s) {%s}' % (cocok, ret(k, teks) if aturan[k]['aktif'] else 'return 0'))
     akhir = ret('eksploit', 'Velocity WAF eksploit/probe') if aturan['eksploit']['aktif'] else 'return 0'
     return '\n'.join([

@@ -83,6 +83,24 @@ async function mulaiScan(server) {
     proses.value = false
   }
 }
+// Scan otomatis harian per server (backend: tiap hari jam_jadwal; kerentanan kritis/tinggi baru → Telegram)
+const jadwal = computed(() => cms.data.value?.jadwal?.[terpilih.value?.host] || {})
+async function aturJadwal(nilai) {
+  if (!oleh.value.trim()) {
+    Object.assign(pesan, { teks: PESAN.invalid_oleh, galat: true })
+    return
+  }
+  proses.value = true
+  try {
+    const r = await kirim('/api/servers/cms/jadwal', { server: terpilih.value.host, harian: nilai, oleh: oleh.value.trim() })
+    cms.data.value = { ...cms.data.value, jadwal: r.jadwal }
+    Object.assign(pesan, { teks: `Scan CMS harian ${terpilih.value.name} ${nilai ? 'diaktifkan' : 'dimatikan'}.`, galat: false })
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  } finally {
+    proses.value = false
+  }
+}
 // Selama scan berjalan: muat ulang ringkas tiap 3 dtk; sesudah selesai muat detail & riwayat
 const timer = setInterval(() => { if (berjalan.value) cms.muatUlang() }, 3000)
 onBeforeUnmount(() => clearInterval(timer))
@@ -316,6 +334,8 @@ const cacheHasil = new Map()
             <button type="button" class="tombol garis kecil" :disabled="proses || berjalan" @click="mulaiScan(terpilih.host)"><Ikon nama="ulang" :ukuran="15" /> Scan server ini</button>
           </div>
         </div>
+        <label class="cek-jadwal"><input type="checkbox" :checked="!!jadwal.harian" :disabled="proses" @change="aturJadwal($event.target.checked)">
+          Scan otomatis harian {{ cms.data.value?.jam_jadwal }} <small class="redup">kerentanan kritis/tinggi baru dikirim ke Telegram tim server<template v-if="jadwal.terakhir"> · terakhir {{ jadwal.terakhir }}</template></small></label>
 
         <div v-if="!terpilih.diambil" class="kosong">
           <p><b>Server ini belum pernah di-scan.</b></p>
@@ -477,6 +497,8 @@ const cacheHasil = new Map()
 </template>
 
 <style scoped>
+.cek-jadwal { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; font-size: 13.5px; cursor: pointer; }
+.cek-jadwal small { font-size: 12px; }
 .halaman { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1100px; }
 .halaman > * { min-width: 0; }
 .kepala-aksi { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }

@@ -9,8 +9,9 @@ naik >= --ambang-cpu detik sejak pengecekan sebelumnya = aktif.
 Sesi yang menganggur >= --batas-jam jam dihentikan (SIGTERM). --jam-hentikan
 membatasi penghentian ke satu jam tertentu (default: setiap jalan).
 
-Tidak disentuh: bot Telegram (claude-tg, di-restart terpisah) dan job
-otomatis `claude -p`, yang selesai sendiri.
+Tidak disentuh: bot Telegram (claude-tg, di-restart terpisah), job
+otomatis `claude -p` yang selesai sendiri, dan proses di KECUALI
+(--kecualikan PID; dilepas --lepas-induk dari hook SessionStart "clear").
 """
 import argparse
 import glob
@@ -21,6 +22,7 @@ import time
 from datetime import datetime
 
 STATE = "/var/lib/claude-sesi-diam/state.json"
+KECUALI = "/var/lib/claude-sesi-diam/kecuali.json"  # {"pid:starttime": catatan}
 TICK = os.sysconf("SC_CLK_TCK")
 with open("/proc/stat") as _f:
     BOOT = next(int(b.split()[1]) for b in _f if b.startswith("btime"))
@@ -83,6 +85,42 @@ def sesi_claude():
         yield int(pid), kunci, cpu, transkrip, ("remote " if remote else "") + " ".join(argv[:3])[:80]
 
 
+def kunci_pid(pid):
+    with open(f"/proc/{pid}/stat") as f:
+        return f"{pid}:{f.read().rsplit(')', 1)[1].split()[19]}"
+
+
+def ubah_kecuali(fn):
+    try:
+        with open(KECUALI) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    fn(data)
+    os.makedirs(os.path.dirname(KECUALI), exist_ok=True)
+    with open(KECUALI + ".tmp", "w") as f:
+        json.dump(data, f)
+    os.replace(KECUALI + ".tmp", KECUALI)
+    return data
+
+
+def leluhur_claude():
+    """PID proses `claude` terdekat di atas proses ini (hook dijalankan oleh sesi itu)."""
+    pid = os.getppid()
+    while pid > 1:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = f.read().decode(errors="replace").split("\0")
+            with open(f"/proc/{pid}/stat") as f:
+                induk = int(f.read().rsplit(")", 1)[1].split()[1])
+        except OSError:
+            return None
+        if os.path.basename(argv[0]) == "claude" or "/.claude/remote/ccd-cli/" in argv[0]:
+            return pid
+        pid = induk
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batas-jam", type=float, default=6)
@@ -90,7 +128,24 @@ def main():
     ap.add_argument("--jam-hentikan", type=int, default=None, help="hanya hentikan pada jam ini (default: setiap jalan)")
     ap.add_argument("--hentikan-sekarang", action="store_true")
     ap.add_argument("--uji", action="store_true", help="tampilkan saja, jangan hentikan/simpan")
+    ap.add_argument("--kecualikan", type=int, metavar="PID", help="jangan hentikan proses sesi ini")
+    ap.add_argument("--lepas-induk", action="store_true", help="dari hook: lepas pengecualian sesi pemanggil")
     a = ap.parse_args()
+    if a.kecualikan:
+        k = kunci_pid(a.kecualikan)
+        print(ubah_kecuali(lambda d: d.__setitem__(k, time.strftime("%Y-%m-%d %H:%M"))))
+        return
+    if a.lepas_induk:
+        pid = leluhur_claude()
+        if pid:
+            k = kunci_pid(pid)
+            ubah_kecuali(lambda d: d.pop(k, None))
+        return
+    try:
+        with open(KECUALI) as f:
+            kecuali = json.load(f)
+    except (OSError, ValueError):
+        kecuali = {}
 
     try:
         with open(STATE) as f:
@@ -102,6 +157,10 @@ def main():
     hentikan = a.hentikan_sekarang or a.jam_hentikan is None or time.localtime().tm_hour == a.jam_hentikan
     baru = {}
     for pid, kunci, cpu, transkrip, ringkas in sesi_claude():
+        if kunci in kecuali:
+            if a.uji:
+                print(f"pid={pid} dikecualikan sejak {kecuali[kunci]} {ringkas}")
+            continue
         s = lama.get(kunci)
         if s is None or cpu - s["cpu"] >= a.ambang_cpu:
             s = {"cpu": cpu, "sejak": sekarang}

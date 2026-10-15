@@ -13,6 +13,8 @@ Aksi:
 - karantina: pindahkan satu berkas ke KARANTINA/<id>/ + meta.json (pemilik, izin, waktu, sha256).
 - kembalikan: pulihkan berkas karantina ke lokasi asal (pemilik & izin semula); gagal bila lokasi terisi.
 - hapus: hapus permanen satu entri karantina.
+- baca (baca): isi satu berkas di /home (path) atau salinan karantina (id), maks MAKS_LIHAT byte + sha256 utuh.
+- scan menerima 'aman' {path: sha256}: berkas yang ditandai aman dari dashboard dilewati selama isinya sama.
 """
 import base64
 import hashlib
@@ -51,7 +53,11 @@ RE_SHELL = r(r'FilesMan|b374k|c99shell|r57shell|IndoXploit|AnonymousFox|ALFA_DAT
 RE_EKSEKUSI = r(r'\b(?:system|shell_exec|passthru|proc_open|popen|exec|eval|move_uploaded_file)\s*\(')
 RE_SUPERGLOBAL = r(r'\$_(?:POST|GET|REQUEST|FILES|COOKIE)\b')
 RE_HACKED = r(r'<title>[^<]{0,60}hack(?:ed|3d)\s*by')
-RE_LOCALE = r(r'wp-locale-perf|Locale Performance Cache|wp-cachepress|craft-harvester-jet|widget-compat-helper')
+RE_LOCALE = r(r'wp-locale-perf|Locale Performance Cache|wp-cachepress|craft-harvester-jet|widget-compat-helper|wp_locale_cache_\w+|locale-cache-(?:db|oc)\b|Anti-DB-wipe MU loader')
+# Botnet backlink "WP-LinkHelper" (folder wlh-*/class-wlh-*.php, panel cachelayer.top), dari karantina cPGuard Fahmi 14 Okt 2026
+RE_WLH = r(r'\bclass\s+WLH_\w+|\bWLH_(?:REMOTE_URL|HANDSHAKE|OPT_LINKS)\b|WP-LinkHelper', 0)
+# Payload dipecah jadi array potongan base64 pendek lalu di-eval (wp-config-sample.php sisipan)
+RE_ARRAY_B64 = r(r'array\s*\(\s*(?:[\'"][A-Za-z0-9+/=]{16,64}[\'"]\s*,\s*){30,}')
 RE_ROT13_URL = r(r'str_rot13\s*\(\s*[\'"]uggcf?://')
 RE_CHR_RANTAI = r(r'(?:chr\s*\(\s*\d+\s*\)\s*\.\s*){24,}')
 RE_EVAL_VAR = r(r'\b(?:eval|assert)\s*\(\s*(?:@\s*)?\$\w+\s*\)')
@@ -159,6 +165,11 @@ def uploader(teks, path):
     return None
 
 
+def array_b64(teks, path):
+    m = RE_ARRAY_B64.search(teks)
+    return potong(teks, m) if m and RE_EVAL_APA.search(teks) else None
+
+
 def judi(teks, path):
     # Berita boleh menyebut "judi online"; spam SEO memakai banyak istilah berbeda
     jenis = {re.sub(r'\s+', ' ', t.decode('utf-8', 'replace').lower()) for t in RE_JUDI.findall(teks)}
@@ -187,7 +198,9 @@ TANDA = [
     ('VD.PHP.EvalInput', 'Eksekusi input pengunjung', 'virus', 'php', cari(RE_EVAL_INPUT), (b'$_',)),
     ('VD.Webshell.Nama', 'Webshell dikenal', 'virus', 'php', webshell, (b'filesman', b'b374k', b'c99shell', b'r57shell', b'indoxploit', b'anonymousfox', b'alfa_data', b'wsosetcookie', b'foxauto', b'0x1949', b'mini', b'blackdragon', b'gecko')),
     ('VD.Deface.HackedBy', 'Halaman deface "hacked by"', 'virus', 'web', cari(RE_HACKED), (b'hacked', b'hack3d')),
-    ('VD.WP.PluginPalsu', 'Plugin samaran (Locale Perf / cachepress dkk.)', 'virus', 'php', cari(RE_LOCALE), (b'locale', b'cachepress', b'craft-harvester', b'widget-compat')),
+    ('VD.WP.PluginPalsu', 'Plugin samaran (Locale Perf / cachepress dkk.)', 'virus', 'php', cari(RE_LOCALE), (b'locale', b'cachepress', b'craft-harvester', b'widget-compat', b'anti-db-wipe')),
+    ('VD.WP.LinkHelper', 'Botnet backlink WP-LinkHelper (wlh)', 'virus', 'php', cari(RE_WLH), (b'wlh_', b'wp-linkhelper')),
+    ('VD.PHP.ArrayBase64', 'Payload base64 dipecah dalam array + eval', 'virus', 'php', array_b64, (b'eval', b'assert', b'create_function')),
     ('VD.Backlink.Rot13', 'Backlink tersembunyi str_rot13', 'virus', 'php', cari(RE_ROT13_URL), (b'str_rot13',)),
     ('VD.PHP.RantaiChr', 'Rantai chr() (webshell disamarkan)', 'virus', 'php', cari(RE_CHR_RANTAI), (b'chr(',)),
     ('VD.WP.LoginPaksa', 'Login admin paksa via wp-load', 'virus', 'php', auth_paksa, (b'wp_set_auth_cookie',)),
@@ -270,7 +283,8 @@ def scan(p):
     batas = int(p.get('batas') or 1500)
     semua = akun_da()
     if akun == 'semua':
-        if hari <= 0:
+        # Semua akun + semua berkas hanya untuk scan mingguan terjadwal (berjam-jam, nice/ionice)
+        if hari <= 0 and not p.get('penuh'):
             return {'ok': False, 'error': 'semua_akun_perlu_batas_hari'}
         daftar = [a['user'] for a in semua]
     else:
@@ -279,7 +293,8 @@ def scan(p):
         daftar = [akun]
     sejak = time.time() - hari * 86400 if hari > 0 else 0
     mulai = time.time()
-    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0}
+    aman = p.get('aman') or {}
+    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0, 'aman': 0}
     temuan = []
     terpotong = None
     lapor = 0
@@ -293,7 +308,9 @@ def scan(p):
             for nama in files:
                 hit['berkas'] += 1
                 ext = ekstensi(nama)
-                if ext not in EKSTENSI or (di_cache and ext not in PHP and ext != 'htaccess'):
+                # Loader PHP tersembunyi tanpa ekstensi .php (mis. .c274a4e194190d4e) — dicek isinya di bawah
+                tersembunyi = ext not in EKSTENSI and nama.startswith('.')
+                if (ext not in EKSTENSI and not tersembunyi) or (di_cache and ext not in PHP and ext != 'htaccess'):
                     continue
                 path = os.path.join(folder, nama)
                 try:
@@ -303,7 +320,7 @@ def scan(p):
                 if not (st.st_mode & 0o170000 == 0o100000) or st.st_size == 0 or st.st_size > MAKS_BACA:
                     continue
                 # Sisipan PHP di gambar biasanya berkas kecil; gambar besar dilewati agar scan tak membaca GB foto
-                if (ext in GAMBAR and st.st_size > 262144) or (ext in ('html', 'htm', 'js') and st.st_size > 1048576):
+                if (ext in GAMBAR and st.st_size > 262144) or ((tersembunyi or ext in ('html', 'htm', 'js')) and st.st_size > 1048576):
                     continue
                 if sejak and max(st.st_mtime, st.st_ctime) < sejak:
                     continue
@@ -312,11 +329,19 @@ def scan(p):
                         teks = f.read()
                 except OSError:
                     continue
+                if tersembunyi:
+                    if b'<?php' not in teks[:256]:
+                        continue
+                    ext = 'php'
                 hit['dibaca'] += 1
                 hit['byte'] += len(teks)
                 tanda = periksa(path, ext, teks)
                 if tanda:
-                    temuan.append({'path': path, 'user': user, 'ukuran': st.st_size, 'mtime': int(st.st_mtime),
+                    sha = hashlib.sha256(teks).hexdigest()
+                    if aman.get(path) == sha:
+                        hit['aman'] += 1
+                        continue
+                    temuan.append({'path': path, 'user': user, 'ukuran': st.st_size, 'mtime': int(st.st_mtime), 'sha256': sha,
                                    'ctime': int(st.st_ctime), 'izin': oct(st.st_mode & 0o777)[2:],
                                    'tingkat': 'virus' if any(t['tingkat'] == 'virus' for t in tanda) else 'curiga',
                                    'tanda': tanda})
@@ -477,7 +502,37 @@ def hapus(p):
     return {'ok': True, 'path': meta['path']}
 
 
-AKSI = {'ringkas': ringkas, 'scan': scan, 'karantina': karantina, 'kembalikan': kembalikan, 'hapus': hapus}
+MAKS_LIHAT = 512 * 1024
+
+
+def baca(p):
+    if p.get('id'):
+        folder, meta = entri(p['id'])
+        if not meta:
+            return {'ok': False, 'error': 'karantina_tidak_ada'}
+        path, asal = os.path.join(folder, 'berkas'), meta['path']
+        sha = meta.get('sha256')
+    else:
+        # Lebih longgar dari aman_path: berkas biasa mana pun di /home (deteksi cPGuard bisa di luar domains/)
+        asal = p.get('path') or ''
+        path = os.path.realpath(asal)
+        if '\0' in asal or not path.startswith(HOME + '/'):
+            return {'ok': False, 'error': 'path_tidak_sah'}
+        if os.path.islink(asal) or not os.path.isfile(path):
+            return {'ok': False, 'error': 'berkas_tidak_ada'}
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for blok in iter(lambda: f.read(1 << 20), b''):
+                h.update(blok)
+        sha = h.hexdigest()
+    st = os.stat(path)
+    with open(path, 'rb') as f:
+        isi = f.read(MAKS_LIHAT)
+    return {'ok': True, 'path': asal, 'ukuran': st.st_size, 'mtime': int(st.st_mtime), 'terpotong': st.st_size > len(isi), 'sha256': sha,
+            'biner': b'\0' in isi[:8192], 'isi': isi.decode('utf-8', 'replace')}
+
+
+AKSI = {'baca': baca, 'ringkas': ringkas, 'scan': scan, 'karantina': karantina, 'kembalikan': kembalikan, 'hapus': hapus}
 
 
 def jalankan(kode):

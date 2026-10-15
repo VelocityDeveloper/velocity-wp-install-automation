@@ -10,6 +10,7 @@ import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
 import { namaAkun } from '../akun.js'
 import Info from '../components/Info.vue'
+import Dialog from '../components/Dialog.vue'
 import GrafikBatangTumpuk from '../components/GrafikBatangTumpuk.vue'
 import { konfirmasi } from '../konfirmasi.js'
 import { minta, kirim, pakaiPolling, tanggalWaktu, waktuLalu, angka, ukuranBerkas } from '../api.js'
@@ -51,6 +52,7 @@ const PESAN = {
   lokasi_asal_terisi: 'Lokasi asal sudah berisi berkas lain — tidak ditimpa.',
   folder_asal_hilang: 'Folder asal sudah tidak ada.',
   karantina_tidak_ada: 'Entri karantina tidak ditemukan.',
+  bukan_aman: 'Berkas ini tidak sedang ditandai aman.',
   salin_gagal: 'Salinan karantina tidak cocok — berkas asli tidak disentuh.',
   terputus: 'Terputus (layanan dashboard di-restart saat scan berjalan).',
   dihentikan: 'Dihentikan.',
@@ -167,13 +169,13 @@ const relatif = (p) => (p || '').replace(/^\/home\/[^/]+\/domains\//, '')
 const temuanTersaring = computed(() => {
   const q = cariTemuan.value.trim().toLowerCase()
   return (detail.value?.temuan || [])
-    .filter((t) => (!filterTingkat.value || t.tingkat === filterTingkat.value)
+    .filter((t) => (filterTingkat.value === 'aman' ? t.aman : !t.aman && (!filterTingkat.value || t.tingkat === filterTingkat.value))
       && (!q || t.path.toLowerCase().includes(q) || t.tanda.some((x) => x.id.toLowerCase().includes(q))))
     .sort((a, b) => (a.tingkat === b.tingkat ? b.mtime - a.mtime : a.tingkat === 'virus' ? -1 : 1))
 })
 const hitungTingkat = computed(() => {
-  const out = { virus: 0, curiga: 0 }
-  for (const t of detail.value?.temuan || []) out[t.tingkat]++
+  const out = { virus: 0, curiga: 0, aman: 0 }
+  for (const t of detail.value?.temuan || []) out[t.aman ? 'aman' : t.tingkat]++
   return out
 })
 const labelRentang = (h) => (h ? `berubah ${RENTANG.find((r) => r.nilai === h)?.label || `${h} hari`}` : 'semua berkas')
@@ -198,6 +200,70 @@ async function karantina(path, alasan) {
     Object.assign(pesan, { teks: `${relatif(path)} dikarantina.`, galat: false })
     av.muatUlang()
     riwayat.muatUlang()
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  } finally {
+    proses.value = false
+  }
+}
+
+// ---- Pratinjau isi berkas (baca saja, tidak dicatat) ----
+const pratinjau = reactive({ buka: false, judul: '', path: '', kid: '', alasan: '', bukti: [], memuat: false, data: null, galat: '' })
+async function lihatBerkas(path, kid, bukti = [], alasan = '') {
+  Object.assign(pratinjau, { buka: true, judul: relatif(path), path, kid: kid || '', alasan, bukti, memuat: true, data: null, galat: '' })
+  try {
+    const q = new URLSearchParams({ server: terpilih.value.host, path: kid ? '' : path, id: kid || '' })
+    const r = await minta(`/api/servers/antivirus/baca?${q}`)
+    if (!r.ok) throw new Error(r.error)
+    pratinjau.data = r
+  } catch (e) {
+    pratinjau.galat = pesanGalat(e.message)
+  } finally {
+    pratinjau.memuat = false
+  }
+}
+
+// ---- Scan otomatis (per server; jadwal di backend: tiap hari jam_jadwal, Minggu = mingguan) ----
+const jadwal = computed(() => av.data.value?.jadwal?.[terpilih.value?.host] || {})
+async function aturJadwal(jenis, nilai) {
+  if (perluNama()) return
+  if (jenis === 'mingguan' && nilai) {
+    const ya = await konfirmasi({ judul: 'Aktifkan scan mingguan?', teks: `Tiap Minggu ${av.data.value?.jam_jadwal} semua berkas semua akun di ${terpilih.value.name} dipindai (bisa beberapa jam, prioritas rendah).`, tombol: 'Aktifkan' })
+    if (!ya) return
+  }
+  proses.value = true
+  try {
+    const r = await kirim('/api/servers/antivirus/jadwal', { server: terpilih.value.host, [jenis]: nilai, oleh: oleh.value.trim() })
+    av.data.value = { ...av.data.value, jadwal: r.jadwal }
+    Object.assign(pesan, { teks: `Scan ${jenis} ${terpilih.value.name} ${nilai ? 'diaktifkan' : 'dimatikan'}.`, galat: false })
+    riwayat.muatUlang()
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  } finally {
+    proses.value = false
+  }
+}
+
+// ---- Tandai aman (buatan sendiri / false positive) ----
+// Disimpan di dashboard terikat sha256 isi saat ini; berkas yang berubah terdeteksi lagi di scan berikutnya.
+// shortcut: label AMAN di tab cPGuard hanya mencocokkan path (cPGuard tak memberi hash), cek ulang bila berkas berubah.
+const amanServer = computed(() => av.data.value?.aman?.[terpilih.value?.host] || {})
+async function tandaiAman(path, aksi = 'aman', alasan = '') {
+  if (perluNama()) return
+  const ya = await konfirmasi(aksi === 'aman'
+    ? { judul: 'Tandai berkas ini aman?', teks: `${relatif(path)} tidak dihitung lagi sebagai temuan selama isinya sama persis. Bila berkas berubah, akan terdeteksi lagi.`, tombol: 'Tandai aman' }
+    : { judul: 'Batalkan status aman?', teks: `${relatif(path)} kembali dihitung sebagai temuan.`, tombol: 'Batalkan aman', kelas: 'bahaya' })
+  if (!ya) return
+  proses.value = true
+  try {
+    const r = await kirim('/api/servers/antivirus/aksi', { aksi, server: terpilih.value.host, path, alasan, oleh: oleh.value.trim() })
+    if (!r.ok) throw new Error(r.error)
+    Object.assign(pesan, { teks: aksi === 'aman' ? `${relatif(path)} ditandai aman.` : `Status aman ${relatif(path)} dibatalkan.`, galat: false })
+    pratinjau.buka = false
+    av.muatUlang()
+    daftarScan.muatUlang()
+    riwayat.muatUlang()
+    muatDetail()
   } catch (e) {
     Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
   } finally {
@@ -250,7 +316,7 @@ const formatTgl = (t) => new Date(`${t}T00:00`).toLocaleDateString('id-ID', { da
 const ringkasDefinisi = (d) => (d || '').replace(/^\{(HEX|CPG)\}/, '').replace(/\.UNOFFICIAL$/, '').replace(/^Malware\.Expert\./, '')
 
 const riwayatServer = computed(() => (riwayat.data.value?.riwayat || []).filter((r) => !terpilih.value || r.host === terpilih.value.host))
-const AKSI_LABEL = { karantina: ['merah', 'Karantina'], kembalikan: ['hijau', 'Kembalikan'], hapus: ['abu', 'Hapus permanen'] }
+const AKSI_LABEL = { karantina: ['merah', 'Karantina'], kembalikan: ['hijau', 'Kembalikan'], hapus: ['abu', 'Hapus permanen'], aman: ['hijau', 'Tandai aman'], batal_aman: ['abu', 'Batal aman'], jadwal: ['biru', 'Scan otomatis'] }
 const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)?.nama || id
 </script>
 
@@ -349,6 +415,14 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
               <Info label="Daftar tanda tangan"><ul class="daftar-tanda"><li v-for="t in terpilih.tanda" :key="t.id"><span class="lencana" :class="t.tingkat === 'virus' ? 'merah' : 'kuning'">{{ t.tingkat === 'virus' ? 'VIRUS' : 'CURIGA' }}</span> {{ t.nama }}</li></ul></Info>
             </p>
 
+            <fieldset class="jadwal">
+              <legend>Scan otomatis <small class="redup">· virus dikirim ke Telegram tim server</small></legend>
+              <label class="cek"><input type="checkbox" :checked="!!jadwal.harian" :disabled="proses" @change="aturJadwal('harian', $event.target.checked)">
+                Harian {{ av.data.value?.jam_jadwal }} <small class="redup">berkas yang berubah 24 jam<template v-if="jadwal.terakhir?.harian"> · terakhir {{ jadwal.terakhir.harian }}</template></small></label>
+              <label class="cek"><input type="checkbox" :checked="!!jadwal.mingguan" :disabled="proses" @change="aturJadwal('mingguan', $event.target.checked)">
+                Mingguan (Minggu {{ av.data.value?.jam_jadwal }}) <small class="redup">semua berkas, menggantikan harian hari itu<template v-if="jadwal.terakhir?.mingguan"> · terakhir {{ jadwal.terakhir.mingguan }}</template></small></label>
+            </fieldset>
+
             <!-- Daftar scan server ini -->
             <div v-if="scanServer(terpilih.host).length" class="daftar-scan" role="list" aria-label="Scan sebelumnya">
               <button v-for="j in scanServer(terpilih.host).slice(0, 8)" :key="j.id" type="button" role="listitem" class="scan-item" :class="{ aktif: lihatId === j.id }" @click="lihatId = j.id">
@@ -394,6 +468,7 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                       <button type="button" :class="{ aktif: !filterTingkat }" @click="filterTingkat = ''">Semua {{ detail.temuan.length }}</button>
                       <button type="button" :class="{ aktif: filterTingkat === 'virus' }" @click="filterTingkat = 'virus'">Virus {{ hitungTingkat.virus }}</button>
                       <button type="button" :class="{ aktif: filterTingkat === 'curiga' }" @click="filterTingkat = 'curiga'">Curiga {{ hitungTingkat.curiga }}</button>
+                      <button v-if="hitungTingkat.aman" type="button" :class="{ aktif: filterTingkat === 'aman' }" @click="filterTingkat = 'aman'">Aman {{ hitungTingkat.aman }}</button>
                     </div>
                   </div>
                   <div class="tabel-wadah">
@@ -413,7 +488,10 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                           <td class="nowrap">{{ tanggalWaktu(t.mtime) }}<small v-if="Math.abs(t.ctime - t.mtime) > 86400" class="redup blok" title="ctime = saat berkas terakhir ditulis/diubah izinnya; mtime bisa dipalsukan">ctime {{ tanggalWaktu(t.ctime) }}</small></td>
                           <td class="kanan">
                             <span v-if="karantinaPath.has(t.path)" class="lencana ungu">DIKARANTINA</span>
-                            <button v-else type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(t.path, t.tanda.map((x) => x.id).join(', '))">Karantina</button>
+                            <template v-else-if="t.aman"><span class="lencana hijau" :title="`Ditandai ${t.aman.oleh} · ${tanggalWaktu(t.aman.waktu)}`">AMAN</span>
+                              <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(t.path, 'batal_aman')">Batal aman</button></template>
+                            <template v-else><button type="button" class="tombol garis kecil" @click="lihatBerkas(t.path, '', t.tanda.map((x) => x.bukti), t.tanda.map((x) => x.id).join(', '))">Lihat</button>
+                            <button type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(t.path, t.tanda.map((x) => x.id).join(', '))">Karantina</button></template>
                           </td>
                         </tr>
                       </tbody>
@@ -464,7 +542,10 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                       <td class="nowrap">{{ tanggalWaktu(d.waktu.replace(' ', 'T')) }}</td>
                       <td class="kanan">
                         <span v-if="karantinaPath.has(d.path)" class="lencana ungu">DIKARANTINA</span>
-                        <button v-else-if="d.ada" type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(d.path, `cPGuard ${d.definisi}`)">Karantina</button>
+                        <template v-else-if="d.ada && amanServer[d.path]"><span class="lencana hijau">AMAN</span>
+                          <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(d.path, 'batal_aman')">Batal aman</button></template>
+                        <button v-else-if="d.ada" type="button" class="tombol garis kecil" @click="lihatBerkas(d.path, '', [], `cPGuard ${d.definisi}`)">Lihat</button>
+                        <button v-if="d.ada && !karantinaPath.has(d.path) && !amanServer[d.path]" type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(d.path, `cPGuard ${d.definisi}`)">Karantina</button>
                       </td>
                     </tr>
                   </tbody>
@@ -487,6 +568,7 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                     <td class="ket">{{ (k.alasan || '-').split(', ').map(namaTanda).join(', ') }}</td>
                     <td class="nowrap">{{ tanggalWaktu(k.waktu) }}<small class="redup blok">{{ k.oleh || '-' }}</small></td>
                     <td class="kanan">
+                      <button type="button" class="tombol garis kecil" @click="lihatBerkas(k.path, k.id)">Lihat</button>
                       <button type="button" class="tombol garis kecil" :disabled="proses || k.asal_terisi" :title="k.asal_terisi ? 'Lokasi asal sudah berisi berkas lain' : ''" @click="aksiKarantina(k, 'kembalikan')">Kembalikan</button>
                       <button type="button" class="tombol bahaya kecil" :disabled="proses" @click="aksiKarantina(k, 'hapus')">Hapus</button>
                     </td>
@@ -514,10 +596,34 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
         </section>
       </template>
     </template>
+
+    <Dialog :buka="pratinjau.buka" :judul="pratinjau.judul" lebar="1100px" @tutup="pratinjau.buka = false">
+      <p v-if="pratinjau.memuat" class="redup">Membaca berkas…</p>
+      <p v-else-if="pratinjau.galat" class="pesan-status bahaya">{{ pratinjau.galat }}</p>
+      <template v-else-if="pratinjau.data">
+        <small class="redup blok">{{ pratinjau.data.path }} · {{ ukuranBerkas(pratinjau.data.ukuran) }} · diubah {{ tanggalWaktu(pratinjau.data.mtime) }}</small>
+        <p v-if="pratinjau.data.terpotong" class="pesan-status waspada">Hanya 512 KB pertama yang ditampilkan.</p>
+        <p v-if="pratinjau.data.biner" class="pesan-status waspada">Berkas biner — karakter tak terbaca diganti �.</p>
+        <div v-for="(b, i) in pratinjau.bukti" :key="i" class="bukti-pratinjau"><span class="redup">Bukti:</span> <code>{{ b }}</code></div>
+        <pre class="isi-berkas">{{ pratinjau.data.isi }}</pre>
+        <div v-if="!pratinjau.kid" class="aksi-pratinjau">
+          <span class="redup">Buatan sendiri / bukan malware?</span>
+          <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(pratinjau.path, 'aman', pratinjau.alasan)">Tandai aman</button>
+          <button type="button" class="tombol bahaya kecil" :disabled="proses" @click="pratinjau.buka = false; karantina(pratinjau.path, pratinjau.alasan)">Karantina</button>
+        </div>
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <style scoped>
+.isi-berkas { margin-top: 10px; max-height: 65vh; overflow: auto; padding: 12px; border-radius: 8px; background: var(--kartu-2); border: 1px solid var(--garis); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.pesan-status.waspada { color: var(--waspada); }
+.jadwal { display: grid; gap: 6px; margin: 14px 0 4px; padding: 12px 14px; border: 1px solid var(--garis); border-radius: 10px; }
+.jadwal .cek { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13.5px; cursor: pointer; }
+.jadwal legend { padding: 0 6px; font-weight: 700; font-size: 13px; }
+.aksi-pratinjau { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.bukti-pratinjau { margin-top: 6px; font-size: 12px; word-break: break-all; }
 .halaman { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1100px; }
 .halaman > * { min-width: 0; }
 .kepala-aksi { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }

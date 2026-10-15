@@ -7,6 +7,8 @@ Alur scan (POST /api/servers/cms/scan, thread latar):
    feed Wordfence v3 wajib API key). Jawaban di-cache di VULN_DIR 24 jam; gagal ambil → pakai cache lama.
 3. Hasil per server disimpan di HASIL_DIR/<host>.json; GET hanya membaca berkas (tanpa SSH).
 Tidak ada perubahan apa pun di server klien — memperbarui plugin tetap dikerjakan manual/oleh tim.
+Scan otomatis harian per server (JADWAL, diatur di halaman CMS): kerentanan kritis/tinggi yang BARU dibanding
+hasil sebelumnya → Telegram tim server.
 """
 import base64
 import hashlib
@@ -31,18 +33,21 @@ API = 'https://www.wpvulnerability.net'
 UA = 'Mozilla/5.0 (X11; Linux x86_64) VelocityDashboard/1.0 (+https://velocitydeveloper.com)'
 BATAS_SSH = 900
 PEKERJA_API = 6
+JADWAL = CMS_DIR / 'jadwal.json'  # {host: {harian, terakhir}}
+JAM_JADWAL = (2, 0)  # WIB, sesudah scan antivirus 01:30
 TINGKAT_HURUF = {'c': 'kritis', 'h': 'tinggi', 'm': 'sedang', 'l': 'rendah', 'n': 'rendah'}
 
 _job = {}
 _kunci = threading.Lock()
 _daftar_server = None
 _ssh_key_file = None
+_kirim_tg = None
 
 
-def pasang(daftar_server, ssh_key_file):
-    """Dipanggil installer_status.py: sumber daftar server hosting & kunci SSH."""
-    global _daftar_server, _ssh_key_file
-    _daftar_server, _ssh_key_file = daftar_server, ssh_key_file
+def pasang(daftar_server, ssh_key_file, kirim_tg=None):
+    """Dipanggil installer_status.py: sumber daftar server hosting, kunci SSH, dan pengirim Telegram tim server."""
+    global _daftar_server, _ssh_key_file, _kirim_tg
+    _daftar_server, _ssh_key_file, _kirim_tg = daftar_server, ssh_key_file, kirim_tg
 
 
 # ---------- Versi ----------
@@ -290,6 +295,7 @@ def _kerja(job, servers, key):
                 hasil.append({'host': srv['host'], 'server': srv['name'], 'ok': False, 'error': h.get('error')})
                 continue
             punya = h['situs']  # dict yang sama dengan di `situs`, sudah diberi 'temuan' oleh _cocokkan
+            lama = _baca_hasil(srv['host'])
             dipakai = {i for s in punya for t in s['temuan'] for i in t['id']}
             data = {'host': srv['host'], 'server': srv['name'], 'diambil': int(time.time()), 'oleh': job['oleh'],
                     'detik_ssh': h.get('detik'), 'terpotong': h.get('terpotong'), 'wp_terbaru': wp_terbaru,
@@ -300,10 +306,107 @@ def _kerja(job, servers, key):
             tmp.write_text(json.dumps(data, separators=(',', ':')))
             tmp.replace(HASIL_DIR / f"{srv['host']}.json")
             hasil.append({'host': srv['host'], 'server': srv['name'], 'ok': True, **data['ringkas']})
+            if job.get('jadwal'):
+                _notif_baru(srv['name'], lama, data)
         job.update(status='selesai', selesai=int(time.time()), hasil=hasil, galat_api=len(galat))
     except Exception as e:  # noqa: BLE001
         job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])
+    if job.get('jadwal'):
+        gagal = [h['server'] for h in job.get('hasil') or [] if not h.get('ok')] or ([] if job['status'] == 'selesai' else job['server'])
+        if gagal and _kirim_tg:
+            _kirim_tg(f"⚠️ <b>Scan CMS terjadwal gagal</b>: {html.escape(', '.join(gagal))} ({html.escape(str(job.get('error') or 'SSH'))}).")
     _catat({k: job.get(k) for k in ('id', 'mulai', 'selesai', 'oleh', 'target', 'status', 'error', 'hasil', 'galat_api')})
+
+
+def _kritis(data):
+    """{(path, slug, id): (domain, nama, versi, tingkat, judul)} untuk kerentanan kritis/tinggi."""
+    kamus = (data or {}).get('kerentanan') or {}
+    out = {}
+    for s in (data or {}).get('situs') or []:
+        for t in s.get('temuan', []):
+            for i in t['id']:
+                v = kamus.get(i, {})
+                if v.get('tingkat') in ('kritis', 'tinggi'):
+                    out[(s['path'], t['slug'], i)] = (s.get('domain') or s['path'], t['nama'], t['versi'], v['tingkat'], v.get('judul') or i)
+    return out
+
+
+def _notif_baru(nama, lama, baru):
+    if not _kirim_tg:
+        return
+    sebelum = _kritis(lama)
+    tambah = [v for k, v in _kritis(baru).items() if k not in sebelum]
+    if not tambah:
+        return
+    baris = [f"• {'🔴' if t == 'kritis' else '🟠'} {html.escape(d)} — {html.escape(n)} {html.escape(str(ver))}: {html.escape(str(j)[:90])}"
+             for d, n, ver, t, j in tambah[:10]]
+    if len(tambah) > 10:
+        baris.append(f'… dan {len(tambah) - 10} lagi')
+    _kirim_tg('\n'.join([f'🛡️ <b>Kerentanan CMS baru di {html.escape(nama)}</b>', f'{len(tambah)} kerentanan kritis/tinggi baru', ''] + baris
+                         + ['', f'https://dash.velocity.ai.id/server/cms?s={urllib.parse.quote(nama)}', 'Perbarui plugin/tema terkait (manual).']))
+
+
+def _mulai(servers, key, oleh, target, jadwal=False):
+    job = {'id': time.strftime('%Y%m%d-%H%M%S'), 'mulai': int(time.time()), 'oleh': oleh, 'status': 'berjalan',
+           'target': target, 'server': [s['name'] for s in servers]}
+    if jadwal:
+        job['jadwal'] = True
+    with _kunci:
+        if any(j['status'] == 'berjalan' for j in _job.values()):
+            return None
+        _job[job['id']] = job
+    threading.Thread(target=_kerja, args=(job, servers, key), daemon=True).start()
+    return job
+
+
+def jadwal_baca():
+    try:
+        return json.loads(JADWAL.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _jadwal_tulis(data):
+    CMS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = JADWAL.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(JADWAL)
+
+
+def jadwal_atur(payload):
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
+    if not oleh:
+        return {'error': 'invalid_oleh'}, 400
+    if not any(s['host'] == payload.get('server') for s in _daftar_server()):
+        return {'error': 'server_tidak_dikenal'}, 400
+    with _kunci:
+        data = jadwal_baca()
+        j = data.setdefault(payload['server'], {})
+        j.update(harian=bool(payload.get('harian')), oleh=oleh, diubah=int(time.time()))
+        _jadwal_tulis(data)
+    return {'ok': True, 'jadwal': data}, 200
+
+
+def jadwal_jalan():
+    """Thread installer_status: tiap menit, sesudah JAM_JADWAL, scan server berjadwal yang belum di-scan hari ini."""
+    while True:
+        try:
+            kini = time.localtime()
+            tanda = time.strftime('%Y-%m-%d', kini)
+            data = jadwal_baca()
+            servers = [s for s in _daftar_server() if (data.get(s['host']) or {}).get('harian')
+                       and (data.get(s['host']) or {}).get('terakhir') != tanda]
+            key = _ssh_key_file()
+            if (kini.tm_hour, kini.tm_min) >= JAM_JADWAL and servers and key and \
+                    _mulai(servers, key, 'Jadwal harian', servers[0]['host'] if len(servers) == 1 else 'semua', True):
+                with _kunci:
+                    data = jadwal_baca()
+                    for s in servers:
+                        data.setdefault(s['host'], {})['terakhir'] = tanda
+                    _jadwal_tulis(data)
+        except Exception as e:  # noqa: BLE001
+            print(f'jadwal cms: {e}')
+        time.sleep(60)
 
 
 def scan_mulai(payload):
@@ -318,13 +421,9 @@ def scan_mulai(payload):
     key = _ssh_key_file()
     if not key:
         return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
-    job = {'id': time.strftime('%Y%m%d-%H%M%S'), 'mulai': int(time.time()), 'oleh': oleh, 'status': 'berjalan',
-           'target': target, 'server': [s['name'] for s in servers]}
-    with _kunci:
-        if any(j['status'] == 'berjalan' for j in _job.values()):
-            return {'error': 'scan_sedang_jalan'}, 409
-        _job[job['id']] = job
-    threading.Thread(target=_kerja, args=(job, servers, key), daemon=True).start()
+    job = _mulai(servers, key, oleh, target)
+    if not job:
+        return {'error': 'scan_sedang_jalan'}, 409
     return job, 200
 
 
@@ -347,7 +446,7 @@ def ringkasan():
         out.append(item)
     berjalan = next((j for j in _job.values() if j['status'] == 'berjalan'), None)
     terakhir = max(_job.values(), key=lambda j: j['mulai'], default=None)
-    return {'servers': out, 'job': berjalan or terakhir, 'sumber': API}
+    return {'servers': out, 'job': berjalan or terakhir, 'sumber': API, 'jadwal': jadwal_baca(), 'jam_jadwal': '%02d:%02d' % JAM_JADWAL}
 
 
 def detail(host):
