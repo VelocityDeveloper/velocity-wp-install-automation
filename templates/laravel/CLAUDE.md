@@ -154,7 +154,9 @@ di pesan commit.
     atas hijau) lewat satu komponen `WhatsAppIcon.vue` — bukan ikon lucide `MessageCircle`/`Phone`.
   - *Kembali ke atas*: halaman publik punya tombol mengambang "kembali ke atas" (ikon panah atas, ukuran dan
     tinggi sejajar tombol WhatsApp mengambang, posisinya di sebelah kanan tombol WA), muncul setelah digulir
-    ±400px, menggulir halus ke atas (`behavior: 'smooth'`, langsung bila `prefers-reduced-motion`).
+    ±400px, menggulir halus ke atas (`behavior: 'smooth'`, langsung bila `prefers-reduced-motion`). Muncul dan
+    hilangnya bertransisi (fade + geser ±300ms; tombol selalu dirender, lebar 0 ↔ penuh + `inert` saat
+    tersembunyi, agar tombol WA ikut bergeser halus — bukan `v-if` yang membuatnya melompat).
 - **Footer wajib**: `AppFooter` ("© tahun nama aplikasi · Design by Velocity Developer") tetap tampil di semua
   layout (aplikasi, halaman masuk, halaman depan). Layout baru juga memasangnya.
 
