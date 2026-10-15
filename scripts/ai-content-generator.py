@@ -647,7 +647,9 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # blok Customizer ke-N (theme-paket-biasa mengurutkan kategori terbanyak artikel dulu, sama banyak = urutan
 # form), jadi daftar wajib tidak naik. velocity-berita1: Highlight carousel 8, Home 1–3 (1+4), Home 4–5 6
 # — ircamedia.com 2026-10-15 hanya 3 artikel per kategori sehingga blok beranda bolong.
-ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6]}
+# velocity-berita4 (page-home.php): home_post_1–3 (1+4), 4 = 6, 5–7 = 4, 8 = 6; blok 8 butuh 6 sedangkan daftar
+# tidak boleh naik, jadi semua 6 — aksara-media.com 2026-10-15.
+ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 
