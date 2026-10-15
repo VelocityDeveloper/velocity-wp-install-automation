@@ -643,6 +643,46 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
     return layanan[:10 if jenis == 'berita' else 6]
 
 
+# Artikel minimal per kategori (urutan form) supaya blok beranda tema berita penuh. Kategori ke-N mengisi
+# blok Customizer ke-N (theme-paket-biasa mengurutkan kategori terbanyak artikel dulu, sama banyak = urutan
+# form), jadi daftar wajib tidak naik. velocity-berita1: Highlight carousel 8, Home 1–3 (1+4), Home 4–5 6
+# — ircamedia.com 2026-10-15 hanya 3 artikel per kategori sehingga blok beranda bolong.
+ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6]}
+assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
+
+
+def tema_aktif(domain, da_user, ssh_port, ssh_user, target_host):
+    """Slug child theme aktif di situs ('' bila tak terbaca)."""
+    ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not ssh_key or not Path(ssh_key).is_file():
+        return ''
+    perintah = (f"/usr/local/bin/wp eval 'echo get_stylesheet();' "
+                f'--path=/home/{da_user}/domains/{domain}/public_html --allow-root 2>/dev/null')
+    try:
+        hasil = subprocess.run(
+            ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}', perintah],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return hasil.stdout.strip()
+
+
+def artikel_bertahap(jumlah, site_title, domain, client_info, model, category, rincian, gaya):
+    """generate_articles maksimal 4 per panggilan (jumlah besar = jawaban AI terlalu panjang); panggilan
+    berikutnya diberi judul yang sudah ada supaya topiknya tidak berulang."""
+    hasil = []
+    while len(hasil) < jumlah:
+        sudah = '; '.join(str(a.get('title', '')) for a in hasil)
+        bagian = generate_articles(site_title, domain, client_info, model, min(4, jumlah - len(hasil)), category,
+                                   (rincian + (f' Jangan mengulang topik artikel: {sudah}.' if sudah else '')).strip(),
+                                   gaya) or []
+        if not bagian:
+            break
+        hasil.extend(bagian[:jumlah - len(hasil)])
+    return hasil
+
+
 def kategori_isi_contoh(domain):
     """Layanan dari isi contoh (<domain>-tema.json, scripts/paket-g-konten) sebagai kategori artikel.
 
@@ -960,8 +1000,14 @@ def main():
         if kategori:
             log(f'Kategori dari layanan isi contoh: {", ".join(k["judul"] for k in kategori)}')
     berita = bool(kategori) and kategori[0].get('jenis') == 'berita'
+    butuh = []
     if berita:
         per_kategori = max(per_kategori, int(cfg.get('articles_per_rubrik', '3')))
+        tema = tema_aktif(domain, da_user, ssh_port, ssh_user, target_host)
+        butuh = ARTIKEL_BLOK_BERITA.get(tema, [])
+        if butuh:
+            log(f'Artikel per kategori mengikuti blok beranda {tema}: {butuh}')
+    jumlah_ke = lambda i: max(per_kategori, butuh[i] if i < len(butuh) else 0)
     nama_kategori = {k['judul'] for k in kategori}
     if articles and kategori and not any(str(a.get('category')) in nama_kategori for a in articles):
         # Artikel tersimpan dibuat sebelum kategori situs ada (mis. semua "Blog"):
@@ -977,14 +1023,14 @@ def main():
     if articles and kategori:
         articles = [a for a in articles if str(a.get('title') or '').strip() and str(a.get('slug') or '').strip()]
         ada = {str(a.get('category')) for a in articles}
-        kurang = [k for k in kategori if k['judul'] not in ada]
-        for k in kurang:
+        kurang = [(i, k) for i, k in enumerate(kategori) if k['judul'] not in ada]
+        for i, k in kurang:
             if not docs['sources']:
                 docs = collect_client_docs(folder_klien(domain))
                 client_info = format_for_prompt(client_data, docs)
-            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {per_kategori}')
-            bagian = generate_articles(site_title, domain, client_info, model, per_kategori, k['judul'],
-                                       k.get('keterangan', ''), 'berita' if berita else 'bisnis') or []
+            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {jumlah_ke(i)}')
+            bagian = artikel_bertahap(jumlah_ke(i), site_title, domain, client_info, model, k['judul'],
+                                      k.get('keterangan', ''), 'berita' if berita else 'bisnis')
             for art in bagian:
                 art['category'] = k['judul']
             articles.extend(bagian)
@@ -997,12 +1043,12 @@ def main():
         if kategori:
             log(f'Kategori dari layanan situs: {", ".join(k["judul"] for k in kategori)}')
             articles = []
-            for layanan in kategori:
+            for i, layanan in enumerate(kategori):
                 nama = layanan['judul']
-                log(f'Generating {per_kategori} artikel untuk kategori "{nama}"...')
-                bagian = generate_articles(site_title, domain, client_info, model,
-                                           per_kategori, nama, layanan.get('keterangan', ''),
-                                           'berita' if berita else 'bisnis') or []
+                log(f'Generating {jumlah_ke(i)} artikel untuk kategori "{nama}"...')
+                bagian = artikel_bertahap(jumlah_ke(i), site_title, domain, client_info, model,
+                                          nama, layanan.get('keterangan', ''),
+                                          'berita' if berita else 'bisnis')
                 for art in bagian:
                     # Kategori dari AI kadang meleset; yang dipakai yang diminta.
                     art['category'] = nama

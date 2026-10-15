@@ -843,7 +843,9 @@ if (!empty($d['berita'])) {
         $wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
         $id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
         foreach ($wpc->controls() as $c) {
-            $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['']);
+            // Pilihan "disable" (berita1 Posts Highlight/Home 1–5, berita-8) bukan kategori: dulu membuat blok
+            // tak tertangkap sehingga Customizer Home kosong (ircamedia.com 2026-10-15).
+            $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['', 'disable']);
             // berita16 dkk. memakai kirki-react-select (dulu tak tertangkap: suarapurwakarta.com 2026-10-07).
             if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && count($pilih) > 1
                 && !array_diff($pilih, $id_kat) && is_object($c->setting)) { $blok_kat[] = $c->setting->id; }
@@ -856,6 +858,12 @@ if (!empty($d['berita'])) {
         if ($kini !== '' && $kini !== (string) ($st['berita_kat'][$k] ?? '')) { continue; }  // dipilih orang
         if (!isset($kategori[$i])) { break; }
         set_theme_mod($k, (string) $kategori[$i]->term_id); $st['berita_kat'][$k] = (string) $kategori[$i]->term_id;
+        // Judul blok pasangannya (cat_posts_home_1 -> title_posts_home_1) = nama kategori bila masih bawaan.
+        $judul = preg_replace('/^cat_/', 'title_', $k);
+        if ($judul !== $k && isset($wpc) && $wpc->get_setting($judul)
+            && in_array((string) get_theme_mod($judul, ''), ['', 'Recent Posts'], true)) {
+            set_theme_mod($judul, html_entity_decode($kategori[$i]->name));
+        }
         $isi_kat[] = "$k=" . $kategori[$i]->slug; $i++;
     }
     if ($isi_kat) { echo 'tampilan: berita_blok_kategori:' . implode(',', $isi_kat) . "\n"; }

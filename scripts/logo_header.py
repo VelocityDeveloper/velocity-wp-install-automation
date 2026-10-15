@@ -96,6 +96,15 @@ def analisis(folder, lebar, info):
     # Latar yang benar-benar terlihat di belakang logo (termasuk pelat/padding logo).
     belakang = _dominan(bening) if len(bening) > 0.05 * len(latar) else utama
     lb = _luminans(belakang)
+    # Logo tak transparan (JPEG berlatar putih) di header terang: latar logo sendiri menyatu dengan header
+    # dan dulu terhitung "tak terlihat" -> pelat gelap #1f2937 (ircamedia.com 2026-10-15). Latar itu
+    # (warna dominan tepi logo yang opak) bukan isi logo, jadi tidak ikut dinilai.
+    tepi = [pa[x, y] for x in range(x0, x1) for y in (y0, y1 - 1) if _jarak(pc[x, y], (255, 0, 255)) > 60]
+    tepi += [pa[x, y] for y in range(y0, y1) for x in (x0, x1 - 1) if _jarak(pc[x, y], (255, 0, 255)) > 60]
+    if opak and len(tepi) > (x1 - x0) + (y1 - y0):  # lebih dari separuh keliling opak
+        latar_logo = _dominan(tepi)
+        if _rasio(_luminans(latar_logo), lb) < 1.25:
+            opak = [p for p in opak if _jarak(p, latar_logo) >= 40] or opak
     tak_terlihat = (sum(_rasio(_luminans(p), lb) < 1.25 for p in opak) / len(opak)) if opak else 1
     return {'tinggi': info['kotak'][3], 'lebar': info['kotak'][2], 'melebihi': cocok < 0.9, 'muat': round(muat / sk),
             'tak_terlihat': round(tak_terlihat, 2), 'latar': '#%02x%02x%02x' % belakang,
