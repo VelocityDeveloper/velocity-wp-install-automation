@@ -1492,7 +1492,8 @@ def bfm_setelan_baca():
 
 
 def _bfm_sidik(aturan):
-    return hashlib.sha1(json.dumps(aturan, sort_keys=True).encode()).hexdigest()[:10]
+    # Kode agen ikut di-hash: blok Perl berubah (mis. pengecualian judi 77007) → server tampil "perlu diperbarui"
+    return hashlib.sha1((json.dumps(aturan, sort_keys=True) + BFM_AGEN.read_text()).encode()).hexdigest()[:10]
 
 
 def _bfm_satu(srv, key, perintah, batas=120):

@@ -97,3 +97,14 @@ SecRule ARGS|REQUEST_URI "@rx \bunion\b[\s/*()]+(?:all[\s/*()]+)?select\b|\binfo
 SecRule ARGS_GET|REQUEST_URI "@rx <script[\s>/]|javascript:|\bon(?:error|load|mouseover|focus)\s*=" \
     "id:7700602,phase:2,t:none,t:urlDecodeUni,t:htmlEntityDecode,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Indikasi XSS (dicatat)',chain"
     SecRule REQUEST_FILENAME "!@beginsWith /wp-admin/" "t:none,t:lowercase"
+
+# ---- 7. Spam judi online ----
+# Tidak dihitung Brute Force (server_bfm_agent): Googlebot ikut mengakses link spam ?s=slot+gacor.
+SecRule ARGS_GET "@rx (?:slot\s*(?:gacor|online|88|777|thailand|dana|pulsa|zeus)|situs\s*(?:slot|judi|toto|togel)|togel\s*online|judi\s*slot|maxwin|scatter\s*hitam|rtp\s*(?:live|slot)|bandar\s*(?:togel|slot|judi)|toto\s*(?:togel|macau|slot)|sbobet|mahjong\s*ways|bocoran\s*(?:slot|rtp)|pola\s*gacor|agen\s*(?:slot|judi|togel)|pkv\s*games)" \
+    "id:7700701,phase:1,t:none,t:urlDecodeUni,t:compressWhitespace,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Spam judi online di URL (?s= / parameter)'"
+SecRule REQUEST_FILENAME "@endsWith /wp-comments-post.php" \
+    "id:7700702,phase:2,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Komentar spam judi online',chain"
+    SecRule ARGS_POST:comment|ARGS_POST:url|ARGS_POST:author "@rx (?:slot\s*(?:gacor|online|88|777|thailand|dana|pulsa|zeus)|situs\s*(?:slot|judi|toto|togel)|togel\s*online|judi\s*(?:online|slot|bola)|maxwin|scatter\s*hitam|rtp\s*(?:live|slot)|bandar\s*(?:togel|slot|judi)|toto\s*(?:togel|macau|slot)|sbobet|mahjong\s*ways|bocoran\s*(?:slot|rtp)|pola\s*gacor|agen\s*(?:slot|judi|togel)|pkv\s*games)" \
+        "t:none,t:urlDecodeUni,t:htmlEntityDecode,t:compressWhitespace,t:lowercase"
+SecRule ARGS_POST:newcontent "@rx (?:slot\s*gacor|situs\s*(?:slot|judi|toto|togel)|togel\s*online|maxwin|scatter\s*hitam|rtp\s*(?:live|slot)|sbobet|mahjong\s*ways|pola\s*gacor|pkv\s*games)" \
+    "id:7700703,phase:2,t:none,t:htmlEntityDecode,t:compressWhitespace,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Sisipan judi lewat editor berkas tema/plugin'"

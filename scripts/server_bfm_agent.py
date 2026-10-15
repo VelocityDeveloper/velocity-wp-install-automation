@@ -108,6 +108,7 @@ def blok_perl(aturan, slot, sidik):
         '\tif (($globlogs{%s}{$lgfile}) and ($line =~ /^\\[[^\\]]+\\] \\[(?:\\S*:)?error\\] \\[client (\\S+)\\] ModSecurity: Access denied with code \\S+ .*?\\[id "(77\\d{5})"\\].*?\\[tag "velocity-waf"\\]/)) {' % slot,
         '\t\tmy ($ip, $id) = ($1, $2);',
         '\t\t$ip =~ s/^::ffff://;',
+        '\t\treturn 0 if $id =~ /^77007/;',
     ] + cabang + ['\t\t' + akhir, '\t}', SELESAI])
 
 
@@ -162,8 +163,8 @@ def simulasi(aturan, interval):
                     continue
                 mode[m.group(3)] += 1
                 rid = m.group(4)
-                if rid in ('7700105',) or rid.startswith('77006'):
-                    continue  # hanya dicatat di kedua mode
+                if rid in ('7700105',) or rid.startswith('77006') or rid.startswith('77007'):
+                    continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam
                 per.setdefault(kelompok(rid), {}).setdefault(m.group(2), []).append(t)
     hasil = {}
     for k, a in aturan.items():

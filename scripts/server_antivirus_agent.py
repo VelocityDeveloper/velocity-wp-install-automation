@@ -24,6 +24,7 @@ import pwd
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -33,9 +34,11 @@ CPG_DB = '/opt/cpguard/app/data/scanner.db'
 MAKS_BACA = 3 * 1024 * 1024
 MAKS_TEMUAN = 3000
 EKSTENSI = {'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'phar', 'inc', 'suspected',
-            'html', 'htm', 'js', 'htaccess', 'ico', 'png', 'jpg', 'jpeg', 'gif'}
+            'html', 'htm', 'js', 'txt', 'htaccess', 'ico', 'png', 'jpg', 'jpeg', 'gif'}
 GAMBAR = {'ico', 'png', 'jpg', 'jpeg', 'gif'}
 PHP = {'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'phar', 'inc', 'suspected'}
+# Halaman judi untuk cloaking sering disimpan sebagai .txt lalu di-include/readfile
+TEKS_JUDI = PHP | {'html', 'htm', 'txt'}
 # Folder yang tidak dipindai (surat, cadangan, statistik, cache paket)
 LEWATI = {'Maildir', 'imap', 'backups', '.trash', '.cagefs', '.cache', '.npm', '.composer', '.git', 'node_modules',
           'logs', 'stats', '.softaculous', 'awstats', '.cl.selector', 'lscache'}
@@ -71,7 +74,28 @@ RE_EVAL_APA = r(r'\b(?:eval|assert|create_function)\s*\(|\$GLOBALS\s*\[')
 RE_PREPEND = r(r'^\s*php_value\s+auto_(?:prepend|append)_file\s+\S+', re.I | re.M)
 RE_HANDLER = r(r'(?:AddType|AddHandler)\s+application/x-httpd-(?:php|ea-php|lsphp|alt-php)\S*\s+.*\.(?:jpe?g|png|gif|ico|txt|css)\b|SetHandler\s+application/x-httpd-php', re.I)
 RE_UPLOAD = r(r'move_uploaded_file\s*\(\s*\$_FILES')
-RE_JUDI = r(r'slot\s*gacor|situs\s*slot|togel\s*online|judi\s*online|maxwin|scatter\s*hitam|rtp\s*live|bandar\s*togel|slot\s*thailand|situs\s*toto')
+RE_JUDI = r(r'slot\s*gacor|situs\s*(?:slot|judi|toto|togel)|togel\s*(?:online|hari\s*ini)|judi\s*(?:online|slot|bola)|maxwin|scatter\s*hitam'
+             r'|rtp\s*(?:live|slot)|bandar\s*(?:togel|slot|judi)|slot\s*(?:thailand|online|88|777|demo|dana|pulsa|zeus)'
+             r'|toto\s*(?:togel|macau|slot)|sbobet|pragmatic\s*play|mahjong\s*ways|bocoran\s*(?:slot|rtp)|link\s*alternatif'
+             r'|bonus\s*new\s*member|deposit\s*pulsa|depo\s*\d+\s*k\b|pola\s*gacor|agen\s*(?:slot|judi|togel)|daftar\s*slot'
+             r'|[ck]asino\s*online|poker\s*online|sabung\s*ayam|pkv\s*games')
+GERBANG_JUDI = (b'slot', b'togel', b'judi', b'maxwin', b'toto', b'rtp', b'sbobet', b'casino', b'kasino', b'scatter',
+                b'pragmatic', b'mahjong', b'gacor', b'poker', b'sabung', b'pkv')
+# Judi online: teks disembunyikan dari pengunjung (link backlink untuk Google)
+RE_SEMBUNYI = r(r'display\s*:\s*none|visibility\s*:\s*hidden|(?:left|top|text-indent)\s*:\s*-\d{3,}\s*px|font-size\s*:\s*0(?:px)?\s*[;"\']')
+RE_LINK = r(r'<a\s[^>]*href')
+# Cloaking: Googlebot diberi halaman judi, pengunjung biasa halaman asli
+RE_UA = r(r'HTTP_USER_AGENT')
+RE_REFERER = r(r'HTTP_REFERER')
+RE_BOT = r(r'googlebot|google-inspectiontool|bingbot|slurp|yandex|\bbot\b|crawl|spider')
+RE_MESIN_CARI = r(r'\bgoogle\b|\bbing\b|yahoo|yandex')
+RE_KELUARKAN = r(r'(?:echo|print)\s*\(?\s*(?:@\s*)?(?:file_get_contents|curl_exec)\s*\(|\breadfile\s*\('
+                 r'|\b(?:include|require)(?:_once)?\s*\(?\s*[\'"][^\'"]+\.(?:txt|html?|jpe?g|png|gif|ico|css)[\'"]')
+RE_ECHO_VAR = r(r'\b(?:echo|print)\s*\(?\s*\$\w+')
+RE_ALIH = r(r'header\s*\(\s*[\'"]Location\s*:\s*https?://')
+# .htaccess: RewriteCond UA/referer mesin pencari lalu RewriteRule (bukan blokir [F]/[G]/-)
+RE_HT_CLOAK = r(r'RewriteCond\s+%\{HTTP_(?:USER_AGENT|REFERER)\}\s+[^!\s][^\n]*(?:google|bing|yahoo|bot)[^\n]*\n'
+                r'(?:[ \t]*RewriteCond[^\n]*\n)*[ \t]*RewriteRule\s+\S+\s+(\S+)([^\n]*)')
 RE_AUTH = r(r'wp_set_auth_cookie')
 RE_ADMIN_PAKSA = r(r'wp_set_current_user')
 RE_INPUT = r(r'\$_(?:GET|REQUEST|COOKIE)\s*\[')
@@ -170,10 +194,56 @@ def array_b64(teks, path):
     return potong(teks, m) if m and RE_EVAL_APA.search(teks) else None
 
 
+def kata_judi(teks):
+    return {re.sub(r'\s+', ' ', t.decode('utf-8', 'replace').lower()) for t in RE_JUDI.findall(teks)}
+
+
 def judi(teks, path):
-    # Berita boleh menyebut "judi online"; spam SEO memakai banyak istilah berbeda
-    jenis = {re.sub(r'\s+', ' ', t.decode('utf-8', 'replace').lower()) for t in RE_JUDI.findall(teks)}
-    return 'kata judi: ' + ', '.join(sorted(jenis)[:5]) if len(jenis) >= 3 else None
+    # Berita boleh menyebut "judi online"; spam SEO memakai banyak istilah berbeda (6+ = halaman judi → judi_berat)
+    jenis = kata_judi(teks)
+    return 'kata judi: ' + ', '.join(sorted(jenis)[:5]) if 3 <= len(jenis) < 6 else None
+
+
+def judi_berat(teks, path):
+    jenis = kata_judi(teks)
+    return '%d kata judi: %s' % (len(jenis), ', '.join(sorted(jenis)[:6])) if len(jenis) >= 6 else None
+
+
+def link_judi_sembunyi(teks, path):
+    for i, m in enumerate(RE_SEMBUNYI.finditer(teks)):
+        if i >= 300:
+            break
+        jendela = teks[m.start():m.start() + 3000]
+        if RE_LINK.search(jendela) and RE_JUDI.search(jendela):
+            return potong(teks, m, 160)
+    return None
+
+
+def cloaking(teks, path):
+    # Pemuat kecil: cek UA mesin pencari lalu cetak isi unduhan / berkas .txt/.html (halaman judi untuk Googlebot)
+    if len(teks) > 40000 or not RE_UA.search(teks) or not RE_BOT.search(teks):
+        return None
+    m = RE_KELUARKAN.search(teks)
+    if not m and RE_AMBIL_URL.search(teks) and RE_ECHO_VAR.search(teks):
+        m = RE_AMBIL_URL.search(teks)
+    return potong(teks, m) if m else None
+
+
+def alih_referer(teks, path):
+    # Pengunjung dari Google dialihkan ke situs lain (pola judi untuk HP/klik hasil pencarian)
+    if len(teks) > 40000 or not RE_REFERER.search(teks) or not RE_MESIN_CARI.search(teks):
+        return None
+    m = RE_ALIH.search(teks)
+    return potong(teks, m) if m else None
+
+
+def htaccess_cloak(teks, path):
+    for m in RE_HT_CLOAK.finditer(teks):
+        tujuan, bendera = m.group(1), m.group(2).upper()
+        if tujuan == b'-' or b'[F' in bendera or b',F' in bendera or b'[G' in bendera or b',G' in bendera:
+            continue
+        return potong(teks, m, 200)
+    return None
 
 
 def index_wp(teks, path):
@@ -207,6 +277,11 @@ TANDA = [
     ('VD.Htaccess.Handler', 'Gambar/teks dieksekusi sebagai PHP', 'virus', {'htaccess'}, cari(RE_HANDLER), (b'php',)),
     ('VD.PHP.DalamGambar', 'Kode PHP di berkas gambar', 'virus', GAMBAR, php_dalam_gambar, (b'<?php', b'eval', b'base64_decode', b'<script')),
     ('VD.WP.IndexTakStandar', 'index.php WordPress diubah', 'virus', {'php'}, index_wp, None),
+    ('VD.SEO.JudiHalaman', 'Halaman/teks judi online (6+ istilah)', 'virus', TEKS_JUDI, judi_berat, GERBANG_JUDI),
+    ('VD.SEO.JudiTersembunyi', 'Link judi tersembunyi (display:none dkk.)', 'virus', TEKS_JUDI | {'js'}, link_judi_sembunyi, GERBANG_JUDI),
+    ('VD.SEO.Cloaking', 'Cloaking: Googlebot diberi halaman lain', 'virus', 'php', cloaking, (b'http_user_agent',)),
+    ('VD.Htaccess.Cloaking', 'Cloaking/alih mesin pencari di .htaccess', 'virus', {'htaccess'}, htaccess_cloak, (b'rewritecond',)),
+    ('VD.SEO.AlihReferer', 'Pengunjung dari Google dialihkan ke situs lain', 'curiga', 'php', alih_referer, (b'http_referer',)),
     ('VD.PHP.EvalUnduh', 'eval kode yang diunduh', 'curiga', 'php', eval_ambil_url, (b'eval', b'assert')),
     ('VD.PHP.Goto', 'Kode disamarkan goto', 'curiga', 'php', goto_samar, (b'goto',)),
     ('VD.PHP.KodePanjang', 'String terkode panjang + dekode', 'curiga', 'php', kode_panjang, (b'base64_decode', b'gzinflate', b'gzuncompress', b'str_rot13', b'strrev')),
@@ -215,10 +290,9 @@ TANDA = [
     ('VD.PHP.Uploader', 'Pengunggah berkas kecil', 'curiga', 'php', uploader, (b'move_uploaded_file',)),
     ('VD.PHP.DiUploads', 'PHP di folder uploads', 'curiga', 'php', php_di_uploads, None),
     ('VD.Htaccess.Prepend', 'auto_prepend_file di .htaccess', 'curiga', {'htaccess'}, prepend, (b'auto_',)),
-    ('VD.SEO.Judi', 'Spam SEO judi', 'curiga', 'web', judi, (b'slot', b'togel', b'judi', b'maxwin', b'toto', b'rtp')),
+    ('VD.SEO.Judi', 'Spam SEO judi', 'curiga', TEKS_JUDI, judi, GERBANG_JUDI),
     ('VD.JS.Suntik', 'JavaScript tersuntik (fromCharCode)', 'curiga', {'js'}, js_suntik, (b'fromcharcode',)),
 ]
-INFO_TANDA = [{'id': t[0], 'nama': t[1], 'tingkat': t[2]} for t in TANDA]
 
 
 def ekstensi(nama):
@@ -272,6 +346,213 @@ def akar_akun(user):
     return os.path.join(HOME, user, 'domains')
 
 
+# Database WordPress: konten/opsi berisi judi (postingan spam, widget/kode header berisi link tersembunyi).
+# Kredensial dari wp-config.php situs itu sendiri; hanya SELECT.
+RE_DEF = re.compile(rb"define\s*\(\s*['\"](DB_NAME|DB_USER|DB_PASSWORD|DB_HOST)['\"]\s*,\s*(['\"])(.*?)(?<!\\)\2\s*\)", re.S)
+RE_PREFIX = re.compile(rb"\$table_prefix\s*=\s*['\"]([A-Za-z0-9_]{1,40})['\"]")
+POLA_SQL = ('slot[[:space:]]*(gacor|online|88|777|thailand|demo|dana|pulsa)|togel|judi[[:space:]]*(online|slot|bola)|maxwin|sbobet'
+            '|scatter[[:space:]]*hitam|rtp[[:space:]]*(live|slot)|situs[[:space:]]*(slot|judi|toto)|mahjong[[:space:]]*ways|toto[[:space:]]*macau')
+TANDA_DB = [('VD.DB.JudiTersembunyi', 'Database: link judi tersembunyi', 'virus', link_judi_sembunyi),
+            ('VD.DB.JudiHalaman', 'Database: konten judi online (6+ istilah)', 'virus', judi_berat),
+            ('VD.DB.Judi', 'Database: spam judi', 'curiga', judi)]
+
+
+def wp_kredensial(path):
+    try:
+        with open(path, 'rb') as f:
+            teks = f.read(200000)
+    except OSError:
+        return None
+    d = {k.decode(): re.sub(rb'\\(.)', rb'\1', v).decode('utf-8', 'replace') for k, _, v in RE_DEF.findall(teks)}
+    m = RE_PREFIX.search(teks)
+    if not m or not d.get('DB_NAME') or not d.get('DB_USER'):
+        return None
+    d['prefix'] = m.group(1).decode()
+    return d
+
+
+def mysql_baris(k, sql):
+    host, _, port = (k.get('DB_HOST') or 'localhost').partition(':')
+    cmd = ['mysql', '-B', '-N', '--connect-timeout=10', '-u', k['DB_USER'], '-h', host or 'localhost']
+    if port.isdigit():
+        cmd += ['-P', port]
+    env = dict(os.environ, MYSQL_PWD=k.get('DB_PASSWORD', ''))
+    r = subprocess.run(cmd + [k['DB_NAME'], '-e', sql], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=120)
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode('utf-8', 'replace')[:200])
+    # Mode batch meng-escape \t \n \\ \0 di nilai kolom
+    pulih = {b'n': b'\n', b't': b'\t', b'0': b'\0', b'\\': b'\\'}
+    return [[re.sub(rb'\\(.)', lambda m: pulih.get(m.group(1), m.group(1)), x) for x in b.split(b'\t')]
+            for b in r.stdout.split(b'\n') if b]
+
+
+def periksa_db(teks):
+    hasil = []
+    for tid, nama, tingkat, fn in TANDA_DB:
+        bukti = fn(teks, '')
+        if bukti:
+            hasil.append({'id': tid, 'nama': nama, 'tingkat': tingkat, 'bukti': bukti[:160]})
+            break  # satu tanda per baris cukup (urut dari terberat)
+    return hasil
+
+
+def scan_db(user, wpconfig, hari, aman, hit):
+    temuan = []
+    sejak = ' AND post_modified >= NOW() - INTERVAL %d DAY' % (hari + 1) if hari > 0 else ''
+    for path in wpconfig:
+        k = wp_kredensial(path)
+        if not k:
+            continue
+        akar, p = os.path.dirname(path), k['prefix']
+        kueri = (('posts', "SELECT ID, UNIX_TIMESTAMP(post_modified), CONCAT(post_type, ' ', post_status), post_title, LEFT(post_content, 300000) "
+                           "FROM `%sposts` WHERE post_status NOT IN ('trash','auto-draft','inherit') AND post_type NOT IN ('revision','attachment') "
+                           "AND LOWER(CONCAT(post_title, ' ', post_content)) REGEXP '%s'%s LIMIT 300" % (p, POLA_SQL, sejak)),
+                 ('options', "SELECT option_name, 0, 'option', option_name, LEFT(option_value, 300000) FROM `%soptions` "
+                             "WHERE option_name NOT LIKE '%%transient%%' AND LOWER(option_value) REGEXP '%s' LIMIT 100" % (p, POLA_SQL)))
+        hit['db'] += 1
+        for tabel, sql in kueri:
+            try:
+                baris = mysql_baris(k, sql)
+            except Exception:
+                hit['db_gagal'] += 1
+                break
+            for b in baris:
+                if len(b) < 5:
+                    continue
+                kid, waktu, jenis, judul, isi = b[0].decode('utf-8', 'replace'), b[1], b[2].decode(), b[3], b[4]
+                tanda = periksa_db(judul + b'\n' + isi)
+                if not tanda:
+                    continue
+                lokasi = '%s#db:%s%s:%s' % (akar, p, tabel, kid)
+                sha = hashlib.sha256(isi).hexdigest()
+                if aman.get(lokasi) == sha:
+                    hit['aman'] += 1
+                    continue
+                w = int(waktu) if waktu.isdigit() else 0
+                temuan.append({'path': lokasi, 'user': user, 'ukuran': len(isi), 'mtime': w, 'ctime': w, 'sha256': sha, 'izin': '-',
+                               'tingkat': tanda[0]['tingkat'], 'tanda': tanda,
+                               'db': {'nama': k['DB_NAME'], 'tabel': p + tabel, 'id': kid, 'jenis': jenis,
+                                      'judul': judul.decode('utf-8', 'replace')[:120]}})
+    return temuan
+
+
+# Cloaking dari luar: beranda tiap domain diambil lewat IP situs sendiri sebagai browser, Googlebot, dan HP dari
+# hasil Google. Halaman judi yang hanya muncul untuk Googlebot / alih ke situs lain = situs disusupi.
+UA_BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
+UA_GOOGLEBOT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+UA_HP = ('Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) '
+         'Chrome/141.0 Mobile Safari/537.36')
+TANDA_WEB = [('VD.Web.Cloaking', 'Situs: Googlebot diberi halaman judi', 'virus'),
+             ('VD.Web.AlihGoogle', 'Situs: pengunjung dari Google dialihkan', 'virus'),
+             ('VD.Web.HalamanJudi', 'Situs: beranda berisi judi', 'virus'),
+             ('VD.Web.Judi', 'Situs: istilah judi di beranda', 'curiga')]
+NAMA_WEB = {t[0]: t for t in TANDA_WEB}
+
+
+def ip_domain(user, domain):
+    try:
+        with open('/usr/local/directadmin/data/users/%s/domains/%s.conf' % (user, domain), errors='replace') as f:
+            for b in f:
+                if b.startswith('ip='):
+                    return b.strip()[3:]
+    except OSError:
+        pass
+    return '127.0.0.1'
+
+
+def ambil(domain, ip, ua, referer=None):
+    """(kode, alih, isi) beranda; query unik → tidak dijawab dari LSCache. Tanpa ikut redirect."""
+    for skema, port in (('https', 443), ('http', 80)):
+        cmd = ['curl', '-sk', '--compressed', '--max-time', '20', '--max-filesize', '3000000', '-A', ua,
+               '--resolve', '%s:%d:%s' % (domain, port, ip), '-o', '-', '-w', '\nVCEK %{http_code} %{redirect_url}',
+               '%s://%s/?vcek=%d' % (skema, domain, time.time())]
+        if referer:
+            cmd[-1:-1] = ['-e', referer]
+        try:
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+        except subprocess.TimeoutExpired:
+            continue
+        isi, _, ekor = r.stdout.rpartition(b'\nVCEK ')
+        kode, _, alih = ekor.decode('utf-8', 'replace').strip().partition(' ')
+        if kode not in ('', '000'):
+            return kode, alih.strip(), isi
+    return '000', '', b''
+
+
+def host_url(url):
+    m = re.match(r'^[a-z]+://([^/:?#]+)', url or '', re.I)
+    return m.group(1).lower() if m else ''
+
+
+def domain_sama(a, b):
+    a, b = a.lower(), b.lower()
+    return a == b or a.endswith('.' + b) or b.endswith('.' + a) or a.replace('www.', '', 1) == b.replace('www.', '', 1)
+
+
+def cek_web(user, domain):
+    ip = ip_domain(user, domain)
+    kb, ab, ib = ambil(domain, ip, UA_BROWSER)
+    kg, ag, ig = ambil(domain, ip, UA_GOOGLEBOT)
+    kh, ah, _ = ambil(domain, ip, UA_HP, 'https://www.google.com/')
+    jb, jg = kata_judi(ib), kata_judi(ig)
+    tanda = []
+
+    def tambah(tid, bukti):
+        tanda.append({'id': tid, 'nama': NAMA_WEB[tid][1], 'tingkat': NAMA_WEB[tid][2], 'bukti': bukti[:160]})
+    luar_g = ag and not domain_sama(host_url(ag), domain) and host_url(ag) != host_url(ab)
+    if (len(jg) >= 3 and len(jg - jb) >= 2) or luar_g:
+        tambah('VD.Web.Cloaking', 'Googlebot: %s · browser: %s' % (', '.join(sorted(jg)[:4]) or 'alih ' + ag, ', '.join(sorted(jb)[:3]) or 'tanpa judi'))
+    luar_h = ah and not domain_sama(host_url(ah), domain) and host_url(ah) != host_url(ab)
+    if luar_h:
+        tambah('VD.Web.AlihGoogle', 'HP dari Google → %s (browser langsung: %s)' % (ah, ab or kb))
+    if not tanda:
+        semua = ib + b'\n' + ig
+        bukti = link_judi_sembunyi(semua, '') or judi_berat(semua, '')
+        if bukti:
+            tambah('VD.Web.HalamanJudi', bukti)
+        elif judi(semua, ''):
+            tambah('VD.Web.Judi', judi(semua, ''))
+    return {'kode': kb, 'kode_bot': kg, 'kode_hp': kh, 'alih': ab, 'alih_bot': ag, 'alih_hp': ah,
+            'sha256': hashlib.sha256(ig).hexdigest(), 'ukuran': len(ig), 'tanda': tanda}
+
+
+def scan_web(user, aman, hit, sisa):
+    try:
+        daftar = sorted(d for d in os.listdir(akar_akun(user))
+                        if not d.startswith('.') and os.path.isdir(os.path.join(akar_akun(user), d, 'public_html')))
+    except OSError:
+        return []
+    temuan = []
+    mulai = time.time()
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(4) as kolam:
+        # Per 8 domain supaya batas waktu scan bisa dicek di antaranya (tiap domain maks 3 request × 30 dtk)
+        for i in range(0, len(daftar), 8):
+            if time.time() - mulai > sisa:
+                break
+            potongan = daftar[i:i + 8]
+            for domain, h in zip(potongan, kolam.map(lambda d: cek_web(user, d), potongan)):
+                hit['situs'] += 1
+                if h['kode'] == '000':
+                    hit['situs_gagal'] += 1
+                if not h['tanda']:
+                    continue
+                lokasi = 'https://%s/#web' % domain
+                if aman.get(lokasi) == h['sha256']:
+                    hit['aman'] += 1
+                    continue
+                sekarang = int(time.time())
+                temuan.append({'path': lokasi, 'user': user, 'ukuran': h['ukuran'], 'mtime': sekarang, 'ctime': sekarang,
+                               'sha256': h['sha256'], 'izin': '-', 'tanda': h['tanda'],
+                               'tingkat': 'virus' if any(t['tingkat'] == 'virus' for t in h['tanda']) else 'curiga',
+                               'web': {'domain': domain, 'kode': h['kode'], 'kode_bot': h['kode_bot'], 'kode_hp': h['kode_hp'],
+                                       'alih': h['alih'], 'alih_bot': h['alih_bot'], 'alih_hp': h['alih_hp']}})
+    return temuan
+
+
+INFO_TANDA = [{'id': t[0], 'nama': t[1], 'tingkat': t[2]} for t in TANDA + TANDA_DB + TANDA_WEB]
+
+
 def kemajuan(data):
     sys.stdout.write('P ' + json.dumps(data) + '\n')
     sys.stdout.flush()
@@ -294,12 +575,15 @@ def scan(p):
     sejak = time.time() - hari * 86400 if hari > 0 else 0
     mulai = time.time()
     aman = p.get('aman') or {}
-    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0, 'aman': 0}
+    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0, 'aman': 0, 'db': 0, 'db_gagal': 0, 'situs': 0, 'situs_gagal': 0}
+    periksa_db_aktif = p.get('db', True)
+    periksa_web_aktif = p.get('web', True)
     temuan = []
     terpotong = None
     lapor = 0
     for ia, user in enumerate(daftar):
         akar = akar_akun(user)
+        wpconfig = []
         for folder, dirs, files in os.walk(akar):
             dirs[:] = [d for d in dirs if d not in LEWATI and not os.path.islink(os.path.join(folder, d))]
             hit['folder'] += 1
@@ -307,6 +591,8 @@ def scan(p):
             di_cache = '/cache' in folder
             for nama in files:
                 hit['berkas'] += 1
+                if nama == 'wp-config.php':
+                    wpconfig.append(os.path.join(folder, nama))
                 ext = ekstensi(nama)
                 # Loader PHP tersembunyi tanpa ekstensi .php (mis. .c274a4e194190d4e) — dicek isinya di bawah
                 tersembunyi = ext not in EKSTENSI and nama.startswith('.')
@@ -320,7 +606,7 @@ def scan(p):
                 if not (st.st_mode & 0o170000 == 0o100000) or st.st_size == 0 or st.st_size > MAKS_BACA:
                     continue
                 # Sisipan PHP di gambar biasanya berkas kecil; gambar besar dilewati agar scan tak membaca GB foto
-                if (ext in GAMBAR and st.st_size > 262144) or ((tersembunyi or ext in ('html', 'htm', 'js')) and st.st_size > 1048576):
+                if (ext in GAMBAR and st.st_size > 262144) or ((tersembunyi or ext in ('html', 'htm', 'js', 'txt')) and st.st_size > 1048576):
                     continue
                 if sejak and max(st.st_mtime, st.st_ctime) < sejak:
                     continue
@@ -357,6 +643,12 @@ def scan(p):
             if sekarang - mulai > batas:
                 terpotong = 'waktu_habis'
                 break
+        if periksa_db_aktif and not terpotong and wpconfig:
+            temuan.extend(scan_db(user, wpconfig, hari, aman, hit))
+        if periksa_web_aktif and not terpotong:
+            temuan.extend(scan_web(user, aman, hit, batas - (time.time() - mulai)))
+            if len(temuan) >= MAKS_TEMUAN:
+                terpotong = 'maks_temuan'
         if terpotong:
             break
     return {'ok': True, 'akun': akun, 'hari': hari, 'detik': round(time.time() - mulai, 1), 'terpotong': terpotong,

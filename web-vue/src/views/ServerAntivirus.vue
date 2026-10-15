@@ -478,8 +478,12 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                         <tr v-for="t in (tampilSemua ? temuanTersaring : temuanTersaring.slice(0, 100))" :key="t.path">
                           <td class="ket berkas">
                             <span class="lencana" :class="t.tingkat === 'virus' ? 'merah' : 'kuning'">{{ t.tingkat === 'virus' ? 'VIRUS' : 'CURIGA' }}</span>
-                            <code>{{ relatif(t.path) }}</code>
-                            <small class="redup blok">{{ t.user }} · {{ ukuranBerkas(t.ukuran) }} · izin {{ t.izin }}</small>
+                            <template v-if="t.db"><code>{{ relatif(t.path.split('#')[0]) }} · {{ t.db.tabel }} #{{ t.db.id }}</code>
+                              <small class="redup blok">{{ t.user }} · database {{ t.db.nama }} · {{ t.db.jenis }} · {{ t.db.judul }}</small></template>
+                            <template v-else-if="t.web"><code><a :href="`https://${t.web.domain}/`" target="_blank" rel="noopener noreferrer">{{ t.web.domain }}</a> · beranda</code>
+                              <small class="redup blok">{{ t.user }} · browser {{ t.web.kode }} · Googlebot {{ t.web.kode_bot }}{{ t.web.alih_bot ? ` → ${t.web.alih_bot}` : '' }} · HP dari Google {{ t.web.kode_hp }}{{ t.web.alih_hp ? ` → ${t.web.alih_hp}` : '' }}</small></template>
+                            <template v-else><code>{{ relatif(t.path) }}</code>
+                              <small class="redup blok">{{ t.user }} · {{ ukuranBerkas(t.ukuran) }} · izin {{ t.izin }}</small></template>
                           </td>
                           <td class="ket">
                             <span v-for="x in t.tanda" :key="x.id" class="blok"><b>{{ x.nama }}</b> <span class="redup">{{ x.id }}</span>
@@ -487,7 +491,9 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                           </td>
                           <td class="nowrap">{{ tanggalWaktu(t.mtime) }}<small v-if="Math.abs(t.ctime - t.mtime) > 86400" class="redup blok" title="ctime = saat berkas terakhir ditulis/diubah izinnya; mtime bisa dipalsukan">ctime {{ tanggalWaktu(t.ctime) }}</small></td>
                           <td class="kanan">
-                            <span v-if="karantinaPath.has(t.path)" class="lencana ungu">DIKARANTINA</span>
+                            <small v-if="t.db" class="redup">Bersihkan lewat wp-admin situs</small>
+                            <small v-else-if="t.web" class="redup">Cari sumbernya di temuan berkas/DB akun ini</small>
+                            <span v-else-if="karantinaPath.has(t.path)" class="lencana ungu">DIKARANTINA</span>
                             <template v-else-if="t.aman"><span class="lencana hijau" :title="`Ditandai ${t.aman.oleh} · ${tanggalWaktu(t.aman.waktu)}`">AMAN</span>
                               <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(t.path, 'batal_aman')">Batal aman</button></template>
                             <template v-else><button type="button" class="tombol garis kecil" @click="lihatBerkas(t.path, '', t.tanda.map((x) => x.bukti), t.tanda.map((x) => x.id).join(', '))">Lihat</button>
