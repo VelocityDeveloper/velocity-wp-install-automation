@@ -227,6 +227,11 @@ ATURAN:
 - Galeri/portofolio foto di beranda SELALU diisi dengan {{"__untuk__": "galeri", ...}} (daftarnya boleh kosong
   saat dipasang; installer yang menentukan). Gambar pendamping/gambar kecil banner/slider tambahan diisi
   {{{{id:foto1}}}}..{{{{id:foto3}}}}, jangan dikosongkan.
+- Dua aturan di atas hanya berlaku kalau beranda tema PUNYA seksi logo klien / galeri. Tema tanpa seksi itu:
+  JANGAN selipkan logo klien atau foto galeri ke slider/banner atau pengaturan lain (logo klien sempat tampil
+  sebagai slide velocity-spa, 2026-10-15).
+- Nomor WhatsApp/telepon/email yang dibaca tema (bar atas header, tombol booking/pesan, tautan wa.me) SELALU
+  diisi {{{{wa}}}} / {{{{telp}}}} / {{{{email}}}} sesuai format yang dibaca kode; kosong = tombol booking tanpa nomor.
 - Nilai ditulis dengan set_theme_mod() LANGSUNG, TANPA sanitize_callback Customizer. Simpan dalam bentuk yang
   DIBACA template (hasil sesudah sanitize): repeater yang di-json_decode oleh sanitize tetap ditulis sebagai array,
   bukan {{"__json__"}}. Pakai {{"__json__"}} hanya kalau template sendiri yang melakukan json_decode atas nilainya.
@@ -354,7 +359,15 @@ def isi_nilai(nilai, data, item=None):
             return [isi_nilai(nilai.get('isi'), data, (nilai['__untuk__'], x)) for x in data['daftar'][nilai['__untuk__']]]
         return {k: isi_nilai(v, data, item) for k, v in nilai.items()}
     if isinstance(nilai, list):
-        return [isi_nilai(v, data, item) for v in nilai]
+        # [{"image_id": ..}, {"__untuk__": "galeri", ..}] -> butir galeri disambung rata, bukan list bersarang
+        # (repeater slider velocity-spa membuang yang bersarang, ainakajeepmerapiadventure.com 2026-10-15).
+        hasil = []
+        for v in nilai:
+            if isinstance(v, dict) and '__untuk__' in v:
+                hasil += isi_nilai(v, data, item)
+            else:
+                hasil.append(isi_nilai(v, data, item))
+        return hasil
     if not isinstance(nilai, str):
         return nilai
 

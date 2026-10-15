@@ -657,6 +657,14 @@ def susun(domain, cfg, isi, kontak, klien_n=KLIEN_CONTOH):
         'kontak_customizer': {'telp': kontak['telp'] or kontak['wa_tampil'], 'wa': kontak['wa'],
                               'email': kontak['email'],
                               'alamat': alamat_pendek(kontak['alamat'], kontak.get('area')) or kontak['alamat']},
+        # Isi CPT beranda tema (velocity-spa: layanan & team) — langkah 6e.
+        'cpt_isi': {
+            'layanan': [{'judul': l['judul'], 'teks': l.get('teks') or '', 'rincian': l.get('rincian') or [],
+                         'gambar': '{{id:layanan-%s}}' % l['slug']} for l in layanan],
+            'team': [{'judul': k['judul'], 'teks': k.get('teks') or '', 'gambar': '{{id:%s}}' % g}
+                     for k, g in zip([k for k in isi.get('keunggulan') or [] if k.get('judul')], ('foto1', 'foto2', 'foto3', 'tentang'))],
+            'judul_team': js.get('keunggulan') or 'Keunggulan Kami',
+        },
     }
 
 
@@ -1195,10 +1203,13 @@ $lain = [];
 $opsi_lain = function ($jenis) use (&$lain) {
     if (!isset($lain[$jenis])) { $o = get_option("widget_$jenis", []); $lain[$jenis] = is_array($o) ? $o : []; }
 };
-$buat_lain = function ($jenis, $opsi) use (&$lain, $opsi_lain) {
-    $opsi_lain($jenis);
-    $n = 300; while (isset($lain[$jenis][$n])) { $n++; }
-    $lain[$jenis][$n] = $opsi; return "$jenis-$n";
+$buat_lain = function ($jenis, $opsi) use (&$lain, $opsi_lain, &$blok_w, &$ch, &$tx, &$rp, &$sr) {
+    // Jenis yang punya penampung sendiri ditulis ke penampung itu. Lewat $lain, option widget_<jenis> ditulis dua
+    // kali dan yang terakhir menimpa: text-300 sidebar panduan = text-300 footer statistik (ainakajeepmerapiadventure.com 2026-10-15).
+    $sendiri = ['block' => &$blok_w, 'custom_html' => &$ch, 'text' => &$tx, 'recent-posts' => &$rp, 'search' => &$sr];
+    if (isset($sendiri[$jenis])) { $o = &$sendiri[$jenis]; } else { $opsi_lain($jenis); $o = &$lain[$jenis]; }
+    $n = 300; while (isset($o[$n])) { $n++; }
+    $o[$n] = $opsi; return "$jenis-$n";
 };
 // Widget dari panduan pembuat tema (child-theme-data-setup.md, Paket F — scripts/panduan_tema.py, user
 // 2026-10-02). Widget lama (wp_register_sidebar_widget, mis. vrp-widget velocity-perusahaan1) menyimpan
@@ -1515,8 +1526,11 @@ if (!empty($d['situs_baru']) && empty($st['kontak_customizer'])) {
             if ($f->getExtension() !== 'php' || strpos($f->getPathname(), '/vendor/') !== false) { continue; }
             $src = (string) file_get_contents($f->getPathname());
             if (strpos($src, 'add_setting') === false && strpos($src, "'settings'") === false && strpos($src, '"settings"') === false) { continue; }
-            preg_match_all('/add_setting\(\s*[\'"]([A-Za-z0-9_\-]+)[\'"]|[\'"]settings[\'"]\s*=>\s*[\'"]([A-Za-z0-9_\-]+)[\'"]/', $src, $m, PREG_SET_ORDER);
-            foreach ($m as $x) { $id_set[$x[1] !== '' ? $x[1] : $x[2]] = ''; }
+            // Pola ketiga: daftar field yang di-loop ke add_setting($setting_id) — velocity-spa
+            // 'nowa' => array('section' => ...) (tombol Booking tanpa nomor, ainakajeepmerapiadventure.com 2026-10-15).
+            preg_match_all('/add_setting\(\s*[\'"]([A-Za-z0-9_\-]+)[\'"]|[\'"]settings[\'"]\s*=>\s*[\'"]([A-Za-z0-9_\-]+)[\'"]'
+                . '|[\'"]([A-Za-z0-9_\-]+)[\'"]\s*=>\s*(?:array\(|\[)\s*[\'"]section[\'"]/', $src, $m, PREG_SET_ORDER);
+            foreach ($m as $x) { $id_set[($x[1] ?? '') !== '' ? $x[1] : (($x[2] ?? '') !== '' ? $x[2] : $x[3])] = ''; }
         }
     }
     if (class_exists('Kirki') && !empty(Kirki::$all_fields)) {
@@ -1540,6 +1554,31 @@ if (!empty($d['situs_baru']) && empty($st['kontak_customizer'])) {
     }
     $st['kontak_customizer'] = gmdate('c');
     echo 'tampilan: kontak_customizer:' . ($isi_kc ? implode(',', $isi_kc) : 'tidak_ada_kolom') . "\n";
+}
+// 6e. Beranda tema yang membaca CPT (velocity-spa: kartu "layanan" + slider "team"). CPT kosong = seksi hilang
+// dan page-home.php mencetak isi halaman Beranda sebagai teks polos (ainakajeepmerapiadventure.com 2026-10-15).
+// Hanya instalasi baru, sekali per tipe, hanya tipe yang di-query template beranda, dan hanya kalau belum punya isi.
+$tpl_depan = (int) get_option('page_on_front') ? (string) get_post_meta((int) get_option('page_on_front'), '_wp_page_template', true) : '';
+$src_depan = $tpl_depan && is_file(get_stylesheet_directory() . "/$tpl_depan") ? (string) file_get_contents(get_stylesheet_directory() . "/$tpl_depan") : '';
+foreach ((array) ($d['cpt_isi'] ?? []) as $pt => $daftar) {
+    if (!is_array($daftar) || !$daftar || empty($d['situs_baru']) || !post_type_exists($pt) || !empty($st["cpt_$pt"])) { continue; }
+    if (!preg_match('/[\'"]post_type[\'"]\s*=>\s*[\'"]' . preg_quote($pt, '/') . '[\'"]/', $src_depan)) { continue; }
+    if (get_posts(['post_type' => $pt, 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids'])) { continue; }
+    $t = time(); $n = 0;
+    foreach ($daftar as $i => $it) {
+        $rincian = array_values(array_filter(array_map('trim', (array) ($it['rincian'] ?? []))));
+        $isi_pt = '<p>' . esc_html($it['teks'] ?? '') . '</p>' . ($rincian ? '<ul><li>' . implode('</li><li>', array_map('esc_html', $rincian)) . '</li></ul>' : '');
+        // Tanggal mundur per butir: tema mengurutkan terbaru dulu, jadi urutan tampil = urutan data.
+        $id = wp_insert_post(['post_type' => $pt, 'post_status' => 'publish', 'post_title' => $it['judul'], 'post_content' => $isi_pt,
+            'post_date' => wp_date('Y-m-d H:i:s', $t - $i * 60)], true);
+        if (is_wp_error($id)) { continue; }
+        if ($rincian) { update_post_meta($id, 'fasilitas', $rincian); }
+        if ($g = (int) $ganti($it['gambar'] ?? '')) { set_post_thumbnail($id, $g); }
+        $n++;
+    }
+    if ($pt === 'team' && $n && get_theme_mod('title_team', null) === null) { set_theme_mod('title_team', $d['cpt_isi']['judul_team']); }
+    $st["cpt_$pt"] = gmdate('c');
+    echo "tampilan: cpt_diisi:$pt:$n\n";
 }
 // 7. Statistik pengunjung (sekali; kalau orang mematikannya sesudah itu, dibiarkan)
 if (empty($st['statistik'])) {
