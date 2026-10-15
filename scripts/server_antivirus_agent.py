@@ -223,10 +223,15 @@ def cloaking(teks, path):
     # Pemuat kecil: cek UA mesin pencari lalu cetak isi unduhan / berkas .txt/.html (halaman judi untuk Googlebot)
     if len(teks) > 40000 or not RE_UA.search(teks) or not RE_BOT.search(teks):
         return None
-    m = RE_KELUARKAN.search(teks)
-    if not m and RE_AMBIL_URL.search(teks) and RE_ECHO_VAR.search(teks):
-        m = RE_AMBIL_URL.search(teks)
-    return potong(teks, m) if m else None
+    # Keluaran harus tepat sesudah cek UA bot (≤800 byte); readfile unduhan biasa di plugin (LSCache debug2) tidak
+    kandidat = list(RE_KELUARKAN.finditer(teks))
+    if RE_ECHO_VAR.search(teks):
+        kandidat += list(RE_AMBIL_URL.finditer(teks))
+    for m in kandidat:
+        depan = teks[max(0, m.start() - 800):m.start()]
+        if RE_UA.search(depan) and RE_BOT.search(depan):
+            return potong(teks, m)
+    return None
 
 
 def alih_referer(teks, path):
