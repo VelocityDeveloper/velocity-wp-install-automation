@@ -649,7 +649,10 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # — ircamedia.com 2026-10-15 hanya 3 artikel per kategori sehingga blok beranda bolong.
 # velocity-berita4 (page-home.php): home_post_1–3 (1+4), 4 = 6, 5–7 = 4, 8 = 6; blok 8 butuh 6 sedangkan daftar
 # tidak boleh naik, jadi semua 6 — aksara-media.com 2026-10-15.
-ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8}
+# velocity-child-berita2: Highlight carousel (2 per slide), Home 1 (1+4), Home 2 (1+5), Home 3 (1+2); Home 2 butuh 6
+# — republikharmoni.com 2026-10-16 hanya 3 artikel per kategori sehingga Posts Home 1/2 bolong.
+ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
+                       'velocity-child-berita2': [6, 6, 6]}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 
