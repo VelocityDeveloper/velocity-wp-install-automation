@@ -16,6 +16,7 @@ Alur paket ini di installer-runner (contoh pengerjaan manual: ghaffara.com 2026-
 --plugin: zip VD Marketplace dari API plugin Velocity (slug vd-marketplace), ditembolok di
   /var/lib/velocity/packages/vd-marketplace-<versi>.zip. Plugin yang sudah ada tidak ditimpa.
   VD Marketplace butuh VD Store aktif, jadi dijalankan sesudah vd-store.
+  Pendaftaran pengunjung dinyalakan (users_can_register=1, tautan Register di wp-login seperti demo mp1).
 
 --beranda (hanya bila tema aktif velocity-marketplace-child; tema lain dilewati):
   - halaman depan = template "Marketplace: Home Page" (page-home.php)
@@ -123,6 +124,10 @@ rm -f "$ZIP"
 wp plugin is-active {SLUG} >/dev/null 2>&1 || wp plugin activate {SLUG} 2>&1 | grep -v '^Warning:' | tail -1
 if wp plugin is-active {SLUG} >/dev/null 2>&1; then echo "plugin_aktif:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
 else echo "plugin_gagal:tidak_aktif"; exit 12; fi
+# Pengunjung harus bisa daftar (tautan Register di wp-login, seperti demo mp1; user 2026-10-16 proraya.com);
+# pendaftar baru dijadikan vd_member oleh VD Marketplace (hook user_register).
+if [[ "$(wp option get users_can_register 2>/dev/null)" != "1" ]]; then wp option update users_can_register 1 >/dev/null 2>&1; fi
+echo "registrasi:$(wp option get users_can_register 2>/dev/null)"
 '''
     _, keluaran = jalankan(cfg, skrip)
     # Kode keluar bisa 0 walau WP-CLI gagal diam-diam: yang dipercaya penanda aktif.

@@ -195,7 +195,7 @@
       // (scripts/marketplace-biasa --plugin), produk & beranda marketplace menyusul. Situs lama dilewati.
       { id: 'childMarket', kol: 8, jalur: 6, nama: 'Child theme marketplace', ket0: 'Marketplace Biasa: mp1 → velocity-marketplace-child (API tema)', mulai: CHILD_THEME,
         selesai: CHILD_THEME, ketHasil: hasilChild, aktif: c => dan(tanpaDry(c), c.market) },
-      { id: 'vdstoreMarket', kol: 9, jalur: 6, nama: 'VD Store + VD Marketplace', ket0: 'VD Store (pengaturan, VD Ongkir, halaman toko) + plugin VD Marketplace',
+      { id: 'vdstoreMarket', kol: 9, jalur: 6, nama: 'VD Store + VD Marketplace', ket0: 'VD Store (pengaturan, VD Ongkir, halaman toko) + plugin VD Marketplace + pendaftaran pengunjung (Register di wp-login)',
         mulai: /\] VD Store$/, selesai: /marketplace: (plugin_aktif|plugin_gagal|dilewati)|vd_store: dilewati/, gagal: /vd_store: gagal|marketplace: plugin_gagal/,
         ketHasil: t => { if (/marketplace: dilewati:situs_sudah_terpasang|vd_store: dilewati/.test(t)) return 'dilewati: situs lama';
           const m = /marketplace: plugin_aktif:(\S+)/.exec(t);
