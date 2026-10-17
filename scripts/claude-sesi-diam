@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Hentikan sesi Claude yang lama menganggur supaya RAM PC lokal tidak habis.
 
-Dipanggil claude-sesi-diam.timer tiap 15 menit. Sesi remote (ccd-cli
---resume=<id>) dinilai dari timestamp terakhir di transkrip
+Dipanggil claude-sesi-diam.timer tiap 15 menit. Sesi (remote & CLI) dinilai
+dari ~/.claude/sessions/<pid>.json (status busy = aktif; sessionId) dan
+timestamp terakhir di transkrip
 ~/.claude/projects/*/<id>.jsonl — tetap benar walau PC reboot dan aplikasi
-membuka ulang semua sesi. Sesi tanpa transkrip (claude CLI) memakai waktu CPU:
+membuka ulang semua sesi. Sesi tanpa keduanya memakai waktu CPU:
 naik >= --ambang-cpu detik sejak pengecekan sebelumnya = aktif.
 Sesi yang menganggur >= --batas-jam jam dihentikan (SIGTERM). --jam-hentikan
 membatasi penghentian ke satu jam tertentu (default: setiap jalan).
@@ -28,22 +29,33 @@ with open("/proc/stat") as _f:
     BOOT = next(int(b.split()[1]) for b in _f if b.startswith("btime"))
 
 
-def aktivitas_transkrip(argv):
-    """Epoch timestamp terakhir di transkrip sesi remote, atau None."""
-    sid = next((x.split("=", 1)[1] for x in argv if x.startswith("--resume=")), None)
-    if not sid:
-        return None
-    berkas = glob.glob(f"/root/.claude/projects/*/{sid}.jsonl")
+def info_sesi(pid, starttime):
+    """Isi ~/.claude/sessions/<pid>.json (sessionId, status) bila milik proses ini."""
+    try:
+        with open(f"/root/.claude/sessions/{pid}.json") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return d if str(d.get("procStart")) == starttime else {}
+
+
+def aktivitas_transkrip(argv, info):
+    """Epoch aktivitas terakhir (transkrip / status sesi), atau None."""
+    if info.get("status") == "busy":
+        return time.time()
+    # statusUpdatedAt berubah tiap giliran mulai/selesai, juga sebelum transkrip ada.
+    terakhir = max(info.get(k, 0) / 1000 for k in ("updatedAt", "statusUpdatedAt")) or None
+    sid = info.get("sessionId") or next((x.split("=", 1)[1] for x in argv if x.startswith("--resume=")), None)
+    berkas = glob.glob(f"/root/.claude/projects/*/{sid}.jsonl") if sid else []
     if not berkas:
-        return None
+        return terakhir
     try:
         with open(berkas[0], "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 262144))
             ekor = f.read().decode(errors="replace").splitlines()
     except OSError:
-        return None
-    terakhir = None
+        return terakhir
     for baris in ekor:
         try:
             ts = json.loads(baris).get("timestamp")
@@ -75,7 +87,7 @@ def sesi_claude():
         # utime=14, stime=15, starttime=22 (1-based) → indeks 11, 12, 19 setelah ")".
         cpu = (int(kolom[11]) + int(kolom[12])) / TICK
         kunci = f"{pid}:{kolom[19]}"
-        transkrip = aktivitas_transkrip(argv) if remote else None
+        transkrip = aktivitas_transkrip(argv, info_sesi(pid, kolom[19]))
         if transkrip is not None:
             # Sesi yang baru dibuka di aplikasi dihitung aktif sejak dibuka,
             # kecuali yang dibuka ulang otomatis saat PC menyala.
