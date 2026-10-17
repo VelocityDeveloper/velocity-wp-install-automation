@@ -56,18 +56,39 @@ const folderJadwal = (j) => {
   const p = (j.ftp_path || '/').replace(/\/$/, '')
   return j.append === 'dayofweek' ? j.hari.map((h) => `${p}/${HARI_DA[h] || h}`).join(', ') : p || '/'
 }
-const LAYANAN = { vsftpd: 'FTPS', tailscaled: 'Tailscale', 'zfs-zed': 'ZFS', 'backup-snapshot.timer': 'Snapshot', ufw: 'Firewall' }
+// Kesehatan HDD: bahaya = SMART gagal / sektor pending / uncorrectable / error ZFS; waspada = sektor realokasi / panas
+function statusDisk(x) {
+  if (x.sehat === false || x.pending > 0 || x.uncorrect > 0 || x.pool?.galat > 0 || (x.pool && x.pool.status !== 'ONLINE')) return ['bahaya', 'Bermasalah']
+  if (x.realloc > 0 || x.suhu >= 50) return ['waspada', 'Waspada']
+  if (x.sehat == null) return ['', 'Tak terbaca']
+  return ['baik', 'Sehat']
+}
+const diskBermasalah = computed(() => (pc.value?.disk || []).filter((x) => statusDisk(x)[0] === 'bahaya'))
+const LAYANAN = { smartmontools: 'SMART', vsftpd: 'FTPS', tailscaled: 'Tailscale', 'zfs-zed': 'ZFS', 'backup-snapshot.timer': 'Snapshot', ufw: 'Firewall' }
 const layananMati = computed(() => Object.entries(pc.value?.layanan || {}).filter(([, v]) => v !== 'active').map(([k]) => LAYANAN[k] || k))
 
 // Kiriman dianggap terlambat bila sesi terakhir > 26 jam lalu (jadwal harian + waktu kirim)
 function statusKirim(s) {
   const t = s.sesi_terakhir
   if (!t) return ['', 'Belum pernah']
-  if (t.gagal && !t.ok) return ['bahaya', 'Gagal']
-  if (t.gagal) return ['waspada', `${t.gagal} gagal`]
+  // vsftpd hanya mencatat berkas yang sempat tersambung; DA juga mencatat berkas yang tak pernah sampai
+  const gagal = Math.max(t.gagal, da(s)?.gagal_unggah?.length || 0)
+  if (gagal && !t.ok) return ['bahaya', 'Gagal']
+  if (gagal) return ['waspada', `${gagal} gagal`]
   if (Date.now() / 1000 - t.selesai > 26 * 3600) return ['waspada', 'Terlambat']
   return ['baik', 'Sukses']
 }
+
+// Backup sistem PC kantor (velocity-backup, harian 02:00) -> /srv/backup/pckantor; status dari server_stats.py
+const sistem = pakaiPolling('/api/backup', 15000)
+const bs = computed(() => sistem.data.value)
+const statusSistem = computed(() => {
+  const x = bs.value
+  if (!x) return ['', '-']
+  if (x.state === 'ok' && x.stale) return ['bahaya', 'Basi']
+  return ({ ok: ['baik', 'Sukses'], running: ['waspada', 'Berjalan'], error: ['bahaya', 'Gagal'], belum_pernah: ['', 'Belum pernah'] })[x.state] || ['', x.state]
+})
+const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'daftar-paket': 'Daftar paket', arsip: 'Mengarsip + enkripsi', unggah: 'Mengunggah ke PC Backup', mingguan: 'Salinan mingguan', pangkas: 'Pangkas arsip lama' }
 </script>
 
 <template>
@@ -92,6 +113,10 @@ function statusKirim(s) {
         <template v-if="pc">Data di bawah dari pengecekan terakhir yang berhasil ({{ waktuLalu(pc.waktu) }}).</template>
       </p>
       <p v-else-if="layananMati.length" class="peringatan" role="alert">Layanan tidak berjalan di PC Backup: {{ layananMati.join(', ') }}.</p>
+      <p v-if="diskBermasalah.length" class="peringatan bahaya" role="alert">
+        Disk bermasalah: <template v-for="(x, i) in diskBermasalah" :key="x.nama">{{ i ? '; ' : '' }}{{ x.model }} ({{ x.nama }})</template>.
+        Pool stripe: satu disk rusak = seluruh backup hilang. Siapkan pengganti.
+      </p>
       <p v-if="salahTujuan.length" class="peringatan" role="alert">
         Jadwal backup belum mengarah ke PC Backup ({{ d.ip_pc }}):
         <template v-for="(j, i) in salahTujuan" :key="j.server + j.id">{{ i ? '; ' : ' ' }}<span class="kapital">{{ j.server }}</span> #{{ j.id }} ({{ j.hari.join('/') }}) ke {{ tujuan(j) }}</template>.
@@ -122,6 +147,31 @@ function statusKirim(s) {
           <ul class="layanan">
             <li v-for="(v, k) in pc?.layanan || {}" :key="k"><span class="titik" :class="v === 'active' ? 'baik' : 'bahaya'" aria-hidden="true" /> {{ LAYANAN[k] || k }} <span v-if="v !== 'active'" class="redup">{{ v }}</span></li>
           </ul>
+        </div>
+      </section>
+
+      <section v-if="pc?.disk?.length" class="kartu" aria-labelledby="judul-disk">
+        <div class="kartu-judul"><h2 id="judul-disk">Kesehatan disk</h2><span class="redup">SMART + error ZFS · uji pendek harian, panjang bulanan</span></div>
+        <div class="tabel-gulir">
+          <table class="tabel-disk">
+            <thead><tr><th>Disk</th><th>Status</th><th>Suhu</th><th>Menyala</th><th title="Reallocated / Pending / Uncorrectable">Sektor rusak</th><th>Error ZFS</th><th>Uji terakhir</th></tr></thead>
+            <tbody>
+              <tr v-for="x in pc.disk" :key="x.nama">
+                <td><b>{{ x.model || x.nama }}</b><br><span class="redup kecil">{{ x.nama }} · {{ x.ukuran ? ukuranBerkas(x.ukuran) : '-' }} · {{ x.rpm ? `${x.rpm} rpm` : 'SSD' }}{{ x.pool ? ' · pool' : ' · sistem' }}</span></td>
+                <td><span class="pil" :class="statusDisk(x)[0]">{{ statusDisk(x)[1] }}</span></td>
+                <td :class="{ galat: x.suhu >= 50 }">{{ x.suhu != null ? `${x.suhu}°C` : '-' }}</td>
+                <td>{{ x.jam != null ? `${x.jam.toLocaleString('id-ID')} jam` : '-' }}<template v-if="x.jam != null"><br><span class="redup kecil">±{{ Math.floor(x.jam / 24).toLocaleString('id-ID') }} hari</span></template></td>
+                <td :class="{ galat: x.pending > 0 || x.uncorrect > 0 }">{{ x.realloc ?? '-' }} / {{ x.pending ?? '-' }} / {{ x.uncorrect ?? '-' }}<span v-if="x.crc" class="redup kecil"> · CRC {{ x.crc }}</span></td>
+                <td :class="{ galat: x.pool?.galat > 0 }">{{ x.pool ? x.pool.galat : '-' }}<template v-if="x.pool?.galat"><br><span class="redup kecil">baca {{ x.pool.baca }} · tulis {{ x.pool.tulis }} · cksum {{ x.pool.cksum }}</span></template></td>
+                <td class="kecil">{{ x.uji_terakhir ? `${x.uji_terakhir}: ${x.uji_hasil}` : 'Belum pernah' }}<span v-if="x.uji_jam != null && x.jam != null" class="redup"> · {{ x.jam - x.uji_jam }} jam lalu</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="pc.zfs_scan" class="redup kecil">Scrub terakhir: {{ pc.zfs_scan }}</p>
+        <div v-if="pc.zfs_rusak?.length" class="berkas-rusak">
+          <p class="galat"><b>{{ pc.zfs_rusak.length }} berkas rusak permanen</b> (blok gagal dibaca/checksum, tak bisa diperbaiki karena pool tanpa mirror). Entri <code>dataset@snapshot:</code> = salinan di snapshot.</p>
+          <ul class="kecil"><li v-for="f in pc.zfs_rusak" :key="f"><code>{{ f }}</code></li></ul>
         </div>
       </section>
 
@@ -196,6 +246,62 @@ function statusKirim(s) {
         </div>
       </section>
       <p v-if="pc && !pc.server?.length" class="redup">Belum ada server yang dibackup.</p>
+
+      <section v-if="bs" class="kartu" :class="{ berjalan: bs.state === 'running' }">
+        <div class="kartu-judul">
+          <h2><span v-if="bs.state === 'running'" class="denyut" aria-hidden="true" />PC Kantor <span class="pil" :class="statusSistem[0]">{{ statusSistem[1] }}</span></h2>
+          <span class="redup">
+            Backup sistem 192.168.88.211 · GPG AES256
+            · <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: bs.dest || '/srv/backup/pckantor' } }">Buka folder</RouterLink>
+          </span>
+        </div>
+        <div v-if="bs.state === 'running' && bs.progress" class="progres-sistem">
+          <p class="perkiraan">
+            <strong>{{ bs.progress.perkiraan ? '±' : '' }}{{ bs.progress.persen }}%</strong>
+            <span class="redup">{{ FASE[bs.phase] || bs.phase }} ·
+              {{ bs.progress.teks || `${ukuranBerkas(bs.progress.done)} dari ±${ukuranBerkas(bs.progress.total)}` }}
+              <template v-if="bs.progress.laju"> · {{ bs.progress.laju }}</template>
+              <template v-if="bs.progress.eta"> · sisa {{ bs.progress.eta }}</template>
+            </span>
+          </p>
+          <div class="meter jalan" role="progressbar" :aria-valuenow="bs.progress.persen" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${bs.progress.persen}%` }" /></div>
+          <p v-if="bs.progress.perkiraan" class="redup kecil">Perkiraan dibanding ukuran arsip sukses terakhir.</p>
+        </div>
+        <div class="blok-server">
+          <div>
+            <h3>Jadwal</h3>
+            <ul class="daftar">
+              <li><span>Harian · 02:00</span><span :class="bs.timer_active === false ? 'galat' : 'redup'">{{ bs.timer_active === false ? 'Timer mati' : 'harian/' }}</span></li>
+              <li><span>Minggu</span><span class="redup">mingguan/ (hardlink)</span></li>
+              <li><span>Berikutnya</span><span class="redup">{{ bs.next_run ? tanggalWaktu(bs.next_run) : '-' }}</span></li>
+            </ul>
+          </div>
+          <div>
+            <h3>{{ bs.state === 'running' ? 'Sedang berjalan' : 'Backup terakhir' }}</h3>
+            <ul class="daftar">
+              <template v-if="bs.state === 'running'">
+                <li><span>Tahap</span><span class="redup">{{ FASE[bs.phase] || bs.phase }}</span></li>
+                <li><span>Mulai</span><span class="redup">{{ tanggalWaktu(bs.started) }} · {{ durasi(bs.started, Math.floor(Date.now() / 1000)) }}</span></li>
+              </template>
+              <template v-else>
+                <li><span>{{ bs.finished ? tanggalWaktu(bs.finished) : '-' }}</span><span class="redup">{{ bs.duration ? durasi(0, bs.duration) : '' }}</span></li>
+                <li><span>Ukuran arsip</span><span class="redup">{{ bs.size ? ukuranBerkas(bs.size) : '-' }}</span></li>
+              </template>
+              <li><span>Terakhir sukses</span><span class="redup">{{ bs.last_ok ? waktuLalu(bs.last_ok) : '-' }}</span></li>
+            </ul>
+            <p v-if="bs.error" class="kecil galat">{{ bs.error }}</p>
+            <p v-else-if="bs.stale" class="kecil galat">Sukses terakhir lewat 48 jam. Periksa velocity-backup.timer.</p>
+          </div>
+          <div>
+            <h3>Arsip tersimpan</h3>
+            <ul class="daftar">
+              <li><span>Harian</span><span class="redup">{{ bs.kept?.harian ?? '-' }} (batas 3)</span></li>
+              <li><span>Mingguan</span><span class="redup">{{ bs.kept?.mingguan ?? '-' }} (batas 1)</span></li>
+              <li><span>Tujuan</span><span class="redup">{{ bs.remote }}:{{ bs.dest }}</span></li>
+            </ul>
+          </div>
+        </div>
+      </section>
       <p class="redup diperbarui">Diperbarui {{ waktuLalu(d.diperbarui) }}</p>
     </template>
   </div>
@@ -242,5 +348,16 @@ function statusKirim(s) {
 .perkiraan { margin: 0 0 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .perkiraan strong { font-size: 24px; }
 .kemajuan > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.progres-sistem { display: grid; gap: 6px; margin-bottom: 18px; }
+.progres-sistem .perkiraan { margin: 0; }
+.progres-sistem p.kecil { margin: 0; }
+.tabel-gulir { overflow-x: auto; }
+.tabel-disk { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tabel-disk th { text-align: left; font-size: 12px; font-weight: 600; color: var(--teks-3); padding: 0 12px 8px 0; white-space: nowrap; }
+.tabel-disk td { padding: 8px 12px 8px 0; border-top: 1px solid var(--garis); vertical-align: top; }
+.berkas-rusak { margin-top: 12px; }
+.berkas-rusak ul { margin: 6px 0 0; padding-left: 18px; }
+.berkas-rusak code { word-break: break-all; }
+.peringatan.bahaya { border-color: var(--bahaya); background: color-mix(in srgb, var(--bahaya) 10%, transparent); }
 .peringatan { margin: 0; padding: 12px 14px; border-radius: var(--radius-kecil); border: 1px solid var(--waspada); background: rgba(232, 181, 74, .1); color: var(--teks); font-size: 14px; }
 </style>

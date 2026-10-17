@@ -35,7 +35,7 @@ out = {'waktu': int(time.time())}
 m = re.search(r'^PRETTY_NAME="?([^"\n]*)', open('/etc/os-release').read(), re.M)
 out['sistem'] = {'host': os.uname().nodename, 'os': m.group(1) if m else '',
                  'uptime': int(float(open('/proc/uptime').read().split()[0]))}
-out['layanan'] = {n: sh('systemctl', 'is-active', n).strip() for n in ('vsftpd', 'tailscaled', 'zfs-zed', 'backup-snapshot.timer')}
+out['layanan'] = {n: sh('systemctl', 'is-active', n).strip() for n in ('vsftpd', 'tailscaled', 'zfs-zed', 'smartmontools', 'backup-snapshot.timer')}
 u = re.search(r'Status: (\w+)', sh('ufw', 'status'))
 out['layanan']['ufw'] = u.group(1) if u else 'tidak ada'
 
@@ -43,6 +43,43 @@ out['pool'] = []
 for b in sh('zpool', 'list', '-Hp', '-o', 'name,size,alloc,free,health').splitlines():
     n, s, a, f, h = b.split('\t')
     out['pool'].append({'nama': n, 'ukuran': int(s), 'terpakai': int(a), 'sisa': int(f), 'status': h})
+
+# Kesehatan HDD: SMART (smartctl -j) + error ZFS per disk. Pool stripe: SATU disk rusak = seluruh pool hilang.
+vdev = {}
+# -v: ZFS sendiri memetakan blok rusak (gagal checksum/baca) ke nama berkas; hanya blok yang pernah dibaca (scrub = semua)
+out['zfs_rusak'], out['zfs_scan'], daftar_rusak = [], '', False
+for b in sh('zpool', 'status', '-v', '-P', '-L').splitlines():
+    m = re.match(r'\s+/dev/([a-z]+)\d*\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)', b)
+    if m:
+        r, w, c = (int(x) for x in m.group(3, 4, 5))
+        vdev[m.group(1)] = {'status': m.group(2), 'galat': r + w + c, 'baca': r, 'tulis': w, 'cksum': c}
+    elif b.strip().startswith('scan:'):
+        out['zfs_scan'] = b.strip()[5:].strip()
+    elif b.startswith('errors:'):
+        daftar_rusak = 'Permanent errors' in b
+    elif daftar_rusak and b.strip() and len(out['zfs_rusak']) < 100:
+        out['zfs_rusak'].append(b.strip())
+out['disk'] = []
+for n in sh('lsblk', '-dno', 'NAME,TYPE').splitlines():
+    n, jenis = (n.split() + [''])[:2]
+    if jenis != 'disk':
+        continue
+    try:
+        j = json.loads(sh('smartctl', '-j', '-i', '-H', '-A', '-l', 'selftest', '/dev/' + n) or '{}')
+    except ValueError:
+        j = {}
+    atr = {a['id']: a['raw']['value'] for a in j.get('ata_smart_attributes', {}).get('table', [])}
+    uji = (j.get('ata_smart_self_test_log', {}).get('standard', {}).get('table') or [{}])[0]
+    out['disk'].append({
+        'nama': n, 'model': j.get('model_name', ''), 'serial': j.get('serial_number', ''),
+        'ukuran': j.get('user_capacity', {}).get('bytes'), 'rpm': j.get('rotation_rate'),
+        'sehat': j.get('smart_status', {}).get('passed'), 'suhu': j.get('temperature', {}).get('current'),
+        'jam': j.get('power_on_time', {}).get('hours'),
+        'realloc': atr.get(5), 'pending': atr.get(197), 'uncorrect': atr.get(198), 'crc': atr.get(199),
+        'uji_terakhir': uji.get('type', {}).get('string'), 'uji_hasil': uji.get('status', {}).get('string'),
+        'uji_jam': uji.get('lifetime_hours'), 'pool': vdev.get(n),
+    })
+
 dataset = {}
 for b in sh('zfs', 'list', '-Hp', '-o', 'name,used,usedbysnapshots', '-d', '1', 'Backup/directadmin').splitlines()[1:]:
     n, us, sn = b.split('\t')
