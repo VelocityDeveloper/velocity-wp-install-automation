@@ -170,8 +170,8 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
         </div>
         <p v-if="pc.zfs_scan" class="redup kecil">Scrub terakhir: {{ pc.zfs_scan }}</p>
         <div v-if="pc.zfs_rusak?.length" class="berkas-rusak">
-          <p class="galat"><b>{{ pc.zfs_rusak.length }} berkas rusak permanen</b> (blok gagal dibaca/checksum, tak bisa diperbaiki karena pool tanpa mirror). Entri <code>dataset@snapshot:</code> = salinan di snapshot.</p>
-          <ul class="kecil"><li v-for="f in pc.zfs_rusak" :key="f"><code>{{ f }}</code></li></ul>
+          <p class="galat"><b>{{ pc.zfs_rusak.length }} berkas rusak permanen</b> (blok gagal dibaca/checksum, tak bisa diperbaiki karena pool tanpa mirror).</p>
+          <ul class="kecil"><li v-for="f in pc.zfs_rusak" :key="f.berkas"><code>{{ f.berkas }}</code><span v-if="!f.aktif" class="redup"> · berkas sudah tak ada, tinggal di snapshot</span><span v-if="f.snapshot.length" class="redup"> · juga di snapshot {{ f.snapshot.join(', ') }}</span></li></ul>
         </div>
       </section>
 

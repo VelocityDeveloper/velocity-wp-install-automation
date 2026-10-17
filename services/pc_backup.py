@@ -59,6 +59,21 @@ for b in sh('zpool', 'status', '-v', '-P', '-L').splitlines():
         daftar_rusak = 'Permanent errors' in b
     elif daftar_rusak and b.strip() and len(out['zfs_rusak']) < 100:
         out['zfs_rusak'].append(b.strip())
+# Satu berkas bisa muncul 2x+ (berkas aktif + tiap snapshot yang berbagi blok rusak) → gabung per path asli
+rusak, titik = {}, {}
+for e in out['zfs_rusak']:
+    m = re.match(r'([^@\s:]+)@([^:]+):(/.*)', e)
+    if m:
+        ds, snap, rel = m.groups()
+        if ds not in titik:
+            titik[ds] = sh('zfs', 'get', '-Ho', 'value', 'mountpoint', ds).strip()
+        e = titik[ds].rstrip('/') + rel if titik[ds].startswith('/') else e
+    x = rusak.setdefault(e, {'berkas': e, 'aktif': False, 'snapshot': []})
+    if m:
+        x['snapshot'].append(snap)
+    else:
+        x['aktif'] = True
+out['zfs_rusak'] = list(rusak.values())
 out['disk'] = []
 for n in sh('lsblk', '-dno', 'NAME,TYPE').splitlines():
     n, jenis = (n.split() + [''])[:2]
