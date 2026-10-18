@@ -1156,6 +1156,37 @@ if ($depan && $tanpa_template && $d['beranda_blok'] !== '') {
     }
 }
 
+// 3b. Tema toko berberanda index.php (toko8 dkk., unggaslailadjaya.com 2026-10-18): slider + produk + blog
+// hanya tampil bila beranda = tulisan terbaru; halaman statis "Beranda" membuatnya cuma teks. Tema
+// berberanda page-home.php (toko15 dkk.) dibiarkan. Instalasi baru saja (situs lama mungkin disunting).
+// Mods di atas tetap ditulis lewat halaman depan lama; sesudahnya beranda dialihkan, menu Beranda ke "/",
+// dan Berita (bukan lagi Posts page) diisi blok Latest Posts selama isinya masih bawaan installer.
+if (!empty($d['situs_baru']) && strpos($tema, 'velocity-toko') === 0 && is_file("$sd/index.php")
+    && !is_file("$sd/front-page.php") && !is_file("$sd/page-home.php")) {
+    $pof = (int) get_option('page_on_front');
+    if (get_option('show_on_front') !== 'posts' || $pof) {
+        $pfp = (int) get_option('page_for_posts');
+        update_option('show_on_front', 'posts'); update_option('page_on_front', 0); update_option('page_for_posts', 0);
+        echo "tampilan: toko_beranda_tulisan_terbaru\n";
+        $menu_utama = (int) (get_nav_menu_locations()['primary'] ?? 0);
+        foreach ($menu_utama && $pof ? wp_get_nav_menu_items($menu_utama) : [] as $it) {
+            if ($it->type !== 'post_type' || (int) $it->object_id !== $pof) { continue; }
+            wp_update_nav_menu_item($menu_utama, $it->ID, ['menu-item-type' => 'custom', 'menu-item-url' => home_url('/'),
+                'menu-item-title' => $it->title, 'menu-item-status' => 'publish', 'menu-item-position' => $it->menu_order,
+                'menu-item-parent-id' => (int) $it->menu_item_parent]);
+            echo "tampilan: toko_menu_beranda_ke_akar\n";
+        }
+        $hal_berita = $pfp ?: (int) (get_page_by_path('berita', OBJECT, 'page')->ID ?? 0);
+        if ($hal_berita && trim(wp_strip_all_tags(get_post_field('post_content', $hal_berita))) === 'Halaman arsip berita.') {
+            wp_update_post(['ID' => $hal_berita, 'post_content' => '<!-- wp:latest-posts {"postsToShow":12,"displayPostContent":true,'
+                . '"excerptLength":25,"displayPostDate":true,"displayFeaturedImage":true,"featuredImageSizeSlug":"thumbnail",'
+                . '"featuredImageAlign":"left","featuredImageSizeWidth":120,"featuredImageSizeHeight":120,'
+                . '"addLinkToFeaturedImage":true} /-->']);
+            $tandai($hal_berita); echo "tampilan: toko_berita_latest_posts\n";
+        }
+    }
+}
+
 // 4. Blok kontak di Hubungi Kami
 $kontak = get_page_by_path('hubungi-kami', OBJECT, 'page');
 if ($kontak) {
