@@ -651,8 +651,9 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # tidak boleh naik, jadi semua 6 — aksara-media.com 2026-10-15.
 # velocity-child-berita2: Highlight carousel (2 per slide), Home 1 (1+4), Home 2 (1+5), Home 3 (1+2); Home 2 butuh 6
 # — republikharmoni.com 2026-10-16 hanya 3 artikel per kategori sehingga Posts Home 1/2 bolong.
+# velocity-berita3: Carousel 6, Posts Home 1–3 (1+5), 4 (2+3), 5 = 5 — lensajogjanews.com 2026-10-18 3 per rubrik kurang.
 ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
-                       'velocity-child-berita2': [6, 6, 6]}
+                       'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6]}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 

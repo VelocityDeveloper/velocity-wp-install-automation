@@ -734,7 +734,13 @@
   "areas": {
    "main-sidebar": []
   },
-  "catatan": "Demo TIDAK memakai widget sama sekali. Sidebar kanan (id right-sidebar) seluruhnya dicetak part-sidebar.php lewat hook justg_before_main_sidebar dari Customizer: iklan_sidebar (demo 350x384, deskripsi Customizer 400x335), posts sidebar 1 (title_posts_sidebar_1='Terbaru', cat_posts_sidebar_1 = term_id atau 'disable', 5 tulisan posts4), iklan_sidebar_2 (demo 300x250), posts sidebar 2 (title_posts_sidebar_2='Terpopuler', sortby_posts_sidebar_2='view', 5 tulisan posts3), lalu tab POPULAR/COMMENTS/TAGS tetap. Semua tampil walau main-sidebar kosong (cek has_action). Footer widget induk footer-widget-1..4 di-unregister_sidebar; footer hanya hak cipta + ikon sosmed Customizer. Posts_Berita_3_Widget terdaftar (widget-tabs tidak di-include) tapi tidak dipakai demo. Jangan menambah widget ke main-sidebar karena akan tampil di bawah blok Customizer dan tidak menyamai demo."
+  "catatan": "Demo TIDAK memakai widget sama sekali. Sidebar kanan (id right-sidebar) seluruhnya dicetak part-sidebar.php lewat hook justg_before_main_sidebar dari Customizer: iklan_sidebar (demo 350x384, deskripsi Customizer 400x335), posts sidebar 1 (title_posts_sidebar_1='Terbaru', cat_posts_sidebar_1 = term_id atau 'disable', 5 tulisan posts4), iklan_sidebar_2 (demo 300x250), posts sidebar 2 (title_posts_sidebar_2='Terpopuler', sortby_posts_sidebar_2='view', 5 tulisan posts3), lalu tab POPULAR/COMMENTS/TAGS tetap. Semua tampil walau main-sidebar kosong (cek has_action). Footer widget induk footer-widget-1..4 di-unregister_sidebar; footer hanya hak cipta + ikon sosmed Customizer. Posts_Berita_3_Widget terdaftar (widget-tabs tidak di-include) tapi tidak dipakai demo. Jangan menambah widget ke main-sidebar karena akan tampil di bawah blok Customizer dan tidak menyamai demo. latar & mod = background_website_color + Kolom Kanan Posts 1 Terbaru / Posts 2 Populer (urut tayangan) instalasi baru (user 2026-10-18 lensajogjanews.com: putih terlalu terang).",
+  "latar": "#e9edf2",
+  "mod": {
+   "title_posts_sidebar_1": "Terbaru",
+   "title_posts_sidebar_2": "Populer",
+   "sortby_posts_sidebar_2": "view"
+  }
  },
  "velocity-berita4": {
   "slug": "velocity-berita4",

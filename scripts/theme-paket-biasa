@@ -197,6 +197,16 @@ def latar_demo(tema):
     return warna if re.match(r'^#[0-9a-fA-F]{6}$', warna) else ''
 
 
+def mod_demo(tema):
+    """Theme mod Customizer bawaan tema berita di widget-demo.json "mod" ({kunci: nilai teks}), {} bila tidak ada."""
+    try:
+        semua = json.loads((HERE.parent / 'templates' / 'portal-berita' / 'widget-demo.json').read_text())
+    except (OSError, ValueError):
+        return {}
+    mod = (semua.get(tema) or {}).get('mod') or {}
+    return {str(k): str(v) for k, v in mod.items()} if isinstance(mod, dict) else {}
+
+
 def banner_iklan(lebar, tinggi, nama, warna, kontak, tujuan):
     """Banner "Ruang Iklan" di atas gradasi warna utama; teks menyesuaikan bentuk slot."""
     from PIL import ImageFont
@@ -1414,6 +1424,17 @@ if (!empty($d['situs_baru']) && !empty($d['latar_demo']) && empty($st['latar_dem
     } else { echo "tampilan: latar_tema_dibiarkan:$latar\n"; }
     $st['latar_demo'] = gmdate('c');
 }
+// Theme mod bawaan tema berita (widget-demo.json "mod", berita3 Kolom Kanan Terbaru/Populer — user 2026-10-18
+// lensajogjanews.com). Instalasi baru saja, sekali, dan hanya bila masih kosong/bawaan "Recent Posts".
+if (!empty($d['situs_baru']) && !empty($d['mod_demo']) && empty($st['mod_demo'])) {
+    $isi_mod = [];
+    foreach ((array) $d['mod_demo'] as $k => $v) {
+        if (!in_array((string) get_theme_mod($k, ''), ['', 'Recent Posts'], true)) { continue; }
+        set_theme_mod($k, $v); $isi_mod[] = "$k=$v";
+    }
+    echo 'tampilan: mod_tema:' . (implode(',', $isi_mod) ?: '-') . "\n";
+    $st['mod_demo'] = gmdate('c');
+}
 if ($utama && in_array($utama, $ubah, true)) {
     // Sidebar utama sudah disusun seperti demo tema berita.
 } elseif ($utama && $panduan_sb && $boleh($sb[$utama] ?? [])) {
@@ -2236,6 +2257,7 @@ def main():
         ukuran = {v['ukuran'] for v in data['berita_iklan'].values()}
         data['widget_demo'] = widget_demo(tema)
         data['latar_demo'] = latar_demo(tema)
+        data['mod_demo'] = mod_demo(tema)
         ukuran |= {i['ukuran'] for daftar in data['widget_demo'].values() for i in daftar if i.get('jenis') == 'iklan'}
         if data['widget_demo']:
             print(f"tampilan: widget_demo={tema} area={','.join(data['widget_demo'])}")
