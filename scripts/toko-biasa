@@ -489,6 +489,8 @@ foreach ($data as $p) {
     if (is_wp_error($id)) { echo 'produk: gagal:' . $id->get_error_message() . "\n"; continue; }
     update_post_meta($id, '_velocity_produk_kunci', $kunci);
     update_post_meta($id, '_store_product_type', 'physical');
+    // berat tak terbaca dari folder/contoh; produk fisik tanpa berat = 1 kg (keputusan user 2026-10-18)
+    update_post_meta($id, '_store_weight_kg', 1);
     if (!empty($p['harga'])) { update_post_meta($id, '_store_price', (int) $p['harga']); }
     if (!empty($p['contoh'])) { update_post_meta($id, '_velocity_contoh', 1); }
     if (!empty($p['kategori'])) {
