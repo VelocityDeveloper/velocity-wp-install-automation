@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Notif Telegram saat server hosting melewati ambang (permintaan Afif, 15 Okt 2026).
+
+- CPU/RAM/disk server SERVER_USAGE (bawaan Wulan) > AMBANG% (bawaan 25) → satu notif saat mulai lewat + satu saat kembali normal.
+  Mulai = N_MULAI sampel berturut di atas ambang, normal = N_PULIH sampel berturut di bawah
+  (sampel tiap 5 mnt dari server-usage-catat) supaya CPU yang naik-turun tidak membanjiri.
+- Serangan: hit WAF per jam (/api/servers/firewall/waf) jam terakhir yang sudah penuh
+  > (1 + LONJAK) × rata-rata per jam 7 hari sebelumnya dan selisihnya ≥ MIN_SELISIH.
+  Kategori bot tidak dihitung; rata-rata mulai ulang saat versi Velocity WAF server berubah (18 Okt).
+
+Opsi: --uji (cetak saja), --simulasi (hitung notif CPU/RAM/disk yang akan terkirim dari riwayat).
+"""
+import argparse, json, os, sys, time, urllib.parse, urllib.request
+from pathlib import Path
+
+RIWAYAT = Path("/var/lib/velocity/server-usage/riwayat.jsonl")
+STATE = Path("/var/lib/velocity/server-notif/state.json")
+LOG = Path("/var/lib/velocity/server-notif/log.jsonl")
+ENV = Path("/etc/velocity/secrets/telegram.env")
+API = "http://127.0.0.1:9121/api/servers"
+TUJUAN = os.environ.get("NOTIF_TUJUAN", "8563985331").split(",")
+AMBANG = float(os.environ.get("NOTIF_AMBANG", 25))
+N_MULAI, N_PULIH = 2, 3
+LONJAK = float(os.environ.get("NOTIF_LONJAK", 0.5))
+MIN_SELISIH = 100
+METRIK = {"cpu": "CPU", "ram": "RAM", "disk": "Disk"}
+LEWATI = {"PC Lokal", "PC Backup"}   # hanya server hosting
+SERVER_USAGE = set(filter(None, os.environ.get("NOTIF_SERVER_USAGE", "Wulan").split(",")))  # Afif: "batas 25% di wulan"
+
+
+def token():
+    for baris in ENV.read_text().splitlines():
+        if baris.startswith("TELEGRAM_BOT_TOKEN="):
+            return baris.split("=", 1)[1].strip().strip('"')
+
+
+def kirim(teks, uji):
+    if uji:
+        print("--- KIRIM ---\n" + teks)
+        return True
+    ok = True
+    for chat in TUJUAN:
+        data = urllib.parse.urlencode({"chat_id": chat, "text": teks, "parse_mode": "HTML"}).encode()
+        try:
+            urllib.request.urlopen(f"https://api.telegram.org/bot{token()}/sendMessage", data, timeout=20).read()
+        except Exception as e:
+            print(f"GAGAL kirim ke {chat}: {e}", file=sys.stderr)
+            ok = False
+    with open(LOG, "a") as fh:
+        fh.write(json.dumps({"waktu": time.time(), "ok": ok, "teks": teks}) + "\n")
+    return ok
+
+
+def baca_riwayat(detik):
+    batas, hasil = time.time() - detik, []
+    with open(RIWAYAT) as fh:
+        for baris in fh:
+            try:
+                d = json.loads(baris)
+            except ValueError:
+                continue
+            if d.get("t", 0) >= batas and d.get("name") in SERVER_USAGE:
+                hasil.append(d)
+    return hasil
+
+
+def langkah_usage(st, d, keluar):
+    """Perbarui status satu sampel; tambahkan pesan ke keluar bila kejadian mulai/selesai."""
+    for k, label in METRIK.items():
+        v = d.get(k)
+        if v is None:
+            continue
+        kunci = f"{d['name']}|{k}"
+        s = st.setdefault(kunci, {"aktif": False, "atas": 0, "bawah": 0})
+        if v > AMBANG:
+            s["atas"], s["bawah"] = s["atas"] + 1, 0
+        else:
+            s["bawah"], s["atas"] = s["bawah"] + 1, 0
+        if not s["aktif"] and s["atas"] >= N_MULAI:
+            s.update(aktif=True, sejak=d["t"], puncak=v)
+            keluar.append(f"🟠 <b>{d['name']}</b> {label} {v:.0f}% (di atas {AMBANG:.0f}%)")
+        elif s["aktif"]:
+            s["puncak"] = max(s.get("puncak", v), v)
+            if s["bawah"] >= N_PULIH:
+                lama = (d["t"] - s["sejak"]) / 60
+                keluar.append(f"🟢 <b>{d['name']}</b> {label} kembali {v:.0f}% · puncak {s['puncak']:.0f}% · "
+                              f"{lama:.0f} mnt")
+                s["aktif"] = False
+
+
+def cek_usage(st, uji):
+    pesan = []
+    terakhir = st.get("t_usage", time.time() - 900)
+    for d in baca_riwayat(time.time() - terakhir + 1):
+        if d["t"] > terakhir:
+            langkah_usage(st["usage"], d, pesan)
+            st["t_usage"] = max(st.get("t_usage", 0), d["t"])
+    if pesan:
+        kirim("🖥 <b>Pemakaian server</b>\n" + "\n".join(pesan), uji)
+
+
+def cek_serangan(st, uji):
+    jam_ini = int(time.time() // 3600 * 3600)
+    if st.get("jam_serangan") == jam_ini and not uji:
+        return
+    req = urllib.request.Request(f"{API}/firewall/waf?server=semua&hari=7")
+    d = json.load(urllib.request.urlopen(req, timeout=300))
+    pesan = []
+    for s in d.get("servers", []):
+        if not s.get("ok") or s.get("name") in LEWATI:
+            continue
+        # bot (crawler SEO/AI) diblokir rutin, bukan serangan → tidak dihitung
+        per_jam = {int(t): sum(n for k, n in v.items() if k != "bot") for t, v in s.get("jam", [])}
+        selesai = jam_ini - 3600            # jam terakhir yang sudah penuh
+        if not per_jam:
+            continue
+        # ganti WAF/ruleset (cPGuard → Velocity, sidik baru) mengubah jumlah hit → rata-rata mulai ulang dari situ
+        waf = s.get("velocity_waf")
+        b = st.setdefault("waf_basis", {}).get(s["name"])
+        if b is None or b["waf"] != waf:
+            b = st["waf_basis"][s["name"]] = {"waf": waf, "sejak": jam_ini if b else 0}
+        awal = max(min(per_jam), b["sejak"])
+        dasar = [per_jam.get(t, 0) for t in range(awal + 3600, selesai, 3600)]  # jam pertama mungkin terpotong
+        if len(dasar) < 24:
+            continue
+        rata = sum(dasar) / len(dasar)
+        n = per_jam.get(selesai, 0)
+        kunci = s["name"]
+        aktif = st["serangan"].get(kunci, False)
+        lonjak = n > (1 + LONJAK) * rata and n - rata >= MIN_SELISIH
+        jam = time.strftime("%H:00", time.localtime(selesai))
+        if lonjak and not aktif:
+            pesan.append(f"🔴 <b>{kunci}</b> WAF {n:,} hit jam {jam} · rata-rata {rata:,.0f}/jam "
+                         f"(+{(n / rata - 1) * 100 if rata else 100:.0f}%)")
+        elif aktif and not lonjak:
+            pesan.append(f"🟢 <b>{kunci}</b> serangan reda: {n:,} hit jam {jam} · rata-rata {rata:,.0f}/jam")
+        st["serangan"][kunci] = lonjak
+    st["jam_serangan"] = jam_ini
+    if pesan:
+        kirim("🛡 <b>Lonjakan serangan</b>\n" + "\n".join(pesan) +
+              "\n\nCek: dash.velocity.ai.id/server/log", uji)
+
+
+def simulasi():
+    st, keluar, per_hari = {}, [], {}
+    for d in sorted(baca_riwayat(7 * 86400), key=lambda x: x["t"]):
+        n = len(keluar)
+        langkah_usage(st, d, keluar)
+        if len(keluar) > n:
+            hari = time.strftime("%m-%d", time.localtime(d["t"]))
+            per_hari[hari] = per_hari.get(hari, 0) + len(keluar) - n
+    print(f"7 hari: {len(keluar)} baris notif (mulai+pulih); per hari: {per_hari}")
+    for k, s in st.items():
+        if s["aktif"]:
+            print("masih aktif:", k)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--uji", action="store_true")
+    ap.add_argument("--simulasi", action="store_true")
+    a = ap.parse_args()
+    if a.simulasi:
+        return simulasi()
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    st = json.loads(STATE.read_text()) if STATE.exists() else {}
+    st.setdefault("usage", {})
+    st.setdefault("serangan", {})
+    cek_usage(st, a.uji)
+    try:
+        cek_serangan(st, a.uji)
+    except Exception as e:
+        print(f"serangan: {e}", file=sys.stderr)
+    if not a.uji:
+        STATE.write_text(json.dumps(st))
+
+
+if __name__ == "__main__":
+    main()

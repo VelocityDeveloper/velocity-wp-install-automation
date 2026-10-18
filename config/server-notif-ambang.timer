@@ -1,0 +1,9 @@
+[Unit]
+Description=Velocity: cek ambang server tiap 5 menit
+
+[Timer]
+OnCalendar=*:2/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

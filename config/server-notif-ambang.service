@@ -1,0 +1,8 @@
+[Unit]
+Description=Velocity: notif Telegram pemakaian Wulan >25% & lonjakan serangan WAF (Afif)
+After=network-online.target installer-status.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/server-notif-ambang
+TimeoutStartSec=600
