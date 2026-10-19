@@ -2274,9 +2274,8 @@ def main():
         for u in sorted(ukuran):
             w, h = (int(x) for x in u.split('x'))
             kunci = f'iklan-{u}'
-            aset[kunci] = banner_iklan(w, h, data['nama'], warna_banner,
-                                       kontak['email'] or (f"WA {kontak['wa_tampil']}" if kontak['wa_tampil'] else ''),
-                                       kerja / f'{kunci}.jpg')
+            # Teks banner: RUANG IKLAN + "Pasang iklan Anda di <domain>", tanpa kontak (user 2026-10-19).
+            aset[kunci] = banner_iklan(w, h, data['domain'], warna_banner, '', kerja / f'{kunci}.jpg')
             judul[kunci] = f"Ruang iklan {u} {data['nama']}"
             iklan.append(kunci)
         print(f"tampilan: slot_iklan={len(data['berita_iklan'])} ukuran={','.join(sorted(ukuran)) or '-'}")
