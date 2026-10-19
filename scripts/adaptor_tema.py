@@ -131,6 +131,15 @@ def pengaturan_tema(info):
         kunci.update(re.findall(r"add_setting\(\s*['\"]([A-Za-z0-9_\-\[\]]+)['\"]", isi))
         kunci.update(re.findall(r"['\"]settings['\"]\s*=>\s*['\"]([A-Za-z0-9_\-]+)['\"]", isi))
         kunci.update(re.findall(r"(?:get_theme_mod|velocitytheme_option)\(\s*['\"]([A-Za-z0-9_\-]+)['\"]", isi))
+    # Fungsi pembungkus tema yang meneruskan argumennya ke get_theme_mod — hukum1 1.1.0
+    # velocity_hukum1_mod('hero_judul'), _gambar(), _daftar(): rcinstitut.id 2026-10-17 adaptor
+    # ditolak "pengaturan tidak ada di kode tema: hero_gambar…" lalu beranda tampil kosong.
+    semua = '\n'.join(info['file'].values())
+    pembungkus = {m.group(1) for m in re.finditer(
+        r"function\s+([A-Za-z0-9_]+)\s*\(\s*\$([A-Za-z0-9_]+)[^)]*\)\s*\{(?:(?!\bfunction\b).){0,600}?"
+        r"get_theme_mod\(\s*\$\2\b", semua, re.S)}
+    for nama in pembungkus:
+        kunci.update(re.findall(rf"\b{re.escape(nama)}\(\s*['\"]([A-Za-z0-9_\-]+)['\"]", semua))
     return kunci
 
 

@@ -1453,6 +1453,15 @@ if ($utama && in_array($utama, $ubah, true)) {
     $baru = [];
     foreach ($panduan_sb as $it) {
         $base = (string) $it['id_base']; $opsi = (array) ($it['opsi'] ?? []);
+        // Peta panduan masih penanda (hukum1 "URL_GOOGLE_MAPS_KLIEN" -> 404 di sidebar, rcinstitut.id
+        // 2026-10-17): src diisi titik velocity_map seperti peta Kontak; tanpa titik widget dilewati.
+        if (isset($opsi['content']) && preg_match('#<iframe[^>]+src="(?!https?://)[^"]*"#i', (string) $opsi['content'])) {
+            $pt = (array) get_option('velocity_map', []);
+            if (empty($pt['q'])) { echo "tampilan: widget_peta_dilewati:tanpa_titik\n"; continue; }
+            $src = esc_url('https://www.google.com/maps?q=' . rawurlencode((string) $pt['q']) . '&z=' . (int) ($pt['zoom'] ?? 15) . '&output=embed');
+            $opsi['content'] = preg_replace('#(<iframe[^>]+src=")[^"]*"#i', '${1}' . $src . '"', (string) $opsi['content']);
+            echo "tampilan: widget_peta_diisi:{$pt['q']}\n";
+        }
         if (isset($nama_pd[$base])) {
             $muat_pd($base); $n = 300; while (isset($opsi_pd[$base][$n])) { $n++; }
             $opsi_pd[$base][$n] = $opsi; $baru[] = "$base-$n";

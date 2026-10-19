@@ -31,6 +31,8 @@ def situs_url(domain: str) -> str:
 
 UA = {'User-Agent': 'velocity-installer-qa/1.0'}
 INSECURE = ssl._create_unverified_context()
+SEKSI_KOSONG = re.compile(r'(?:Hero )?Image Placeholder|Belum ada [a-z ]{0,30}yang ditambahkan\.?', re.I)
+PETA_PENANDA = re.compile(r'<iframe[^>]+src="(?!https?:|//)[^"]*"', re.I)
 
 
 def fetch(url, verify=False, method='GET', timeout=25):
@@ -109,6 +111,21 @@ def main():
     info['landing'] = landing
     if home and not maintenance and not landing and len(menu) < 2:
         problems.append('menu_tidak_lengkap')
+
+    # Seksi tema yang tampil kosong & peta berpenanda — rcinstitut.id 2026-10-17 lolos "ok" padahal
+    # beranda hukum1 "Hero Image Placeholder"/"Belum ada layanan…" dan peta sidebar src URL_GOOGLE_MAPS_KLIEN.
+    if home and not maintenance:
+        kosong = sorted({m.group(0).strip() for m in SEKSI_KOSONG.finditer(re.sub(r'<[^>]+>', ' ', home))})
+        if kosong:
+            problems.append('beranda_seksi_kosong:' + ','.join(kosong)[:120])
+        dalam = ''
+        if 'tentang-kami' in menu:
+            try:
+                dalam = fetch(f'{base}tentang-kami/')[1].decode('utf-8', 'replace')
+            except (urllib.error.URLError, OSError):
+                pass
+        if any(PETA_PENANDA.search(h) for h in (home, dalam)):
+            problems.append('peta_belum_diisi')
 
     pages = fetch_json(f'{base}wp-json/wp/v2/pages?per_page=50&_fields=slug,content') or []
     srcs, ph_pages = set(), []

@@ -656,10 +656,20 @@ else { echo "warna_tema_kept:" . $k; }
 // Link ikut warna tema selama masih navy bawaan induk (#002B5B) — solomerchandiseapparel.com 2026-10-07.
 $l = strtolower((string) get_theme_mod("link_color", ""));
 if ($l === "" || $l === "#002b5b") { set_theme_mod("link_color", $w); echo " link_color_set"; }
-if (class_exists("Kirki") && isset(Kirki::$all_fields["color_theme"])) {
+// Tema anak tanpa Kirki (hukum1 1.1.0) mendaftarkan color_theme di Customizer bawaan: dulu terlewat,
+// rcinstitut.id 2026-10-17 tetap coklat demo padahal form "oranye seperti logo".
+$kode = implode("\n", array_map("file_get_contents", glob(get_stylesheet_directory() . "/{*.php,inc/*.php}", GLOB_BRACE) ?: []));
+$punya = function ($k) use ($kode) { return (bool) preg_match("/(get_theme_mod|add_setting)\(\s*[\x27\"]" . $k . "[\x27\"]/", $kode); };
+$kirki = class_exists("Kirki") && isset(Kirki::$all_fields["color_theme"]);
+if ($kirki || $punya("color_theme")) {
     $c = (string) get_theme_mod("color_theme", "");
-    if ($c === "") { set_theme_mod("color_theme", $w); echo " color_theme_set:" . get_theme_mod("color_theme"); }
-    else { echo " color_theme_kept:" . $c; }
+    if ($c !== "") { echo " color_theme_kept:" . $c; }
+    elseif (!$kirki && strlen($w) === 7 && $punya("color_theme2") && (string) get_theme_mod("color_theme2", "") === "") {
+        // Dua warna (hukum1): color_theme2 = header & kartu, color_theme = seksi gelap berteks putih (30% lebih gelap).
+        $g = vsprintf("#%02x%02x%02x", array_map(function ($h) { return (int) round(hexdec($h) * 0.7); }, str_split(ltrim($w, "#"), 2)));
+        set_theme_mod("color_theme2", $w); set_theme_mod("color_theme", $g);
+        echo " color_theme_set:$g color_theme2_set:$w";
+    } else { set_theme_mod("color_theme", $w); echo " color_theme_set:" . get_theme_mod("color_theme"); }
 }' >&2 || true
   echo >&2
 fi
