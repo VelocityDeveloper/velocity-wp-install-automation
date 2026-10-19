@@ -917,26 +917,34 @@ if (!empty($d['berita'])) {
     // semua tema berita; Carousel/Posts Home di bawah tetap khusus berita-8.
     if (!empty($d['berita8']) && empty($st['berita8'])) {
         $b8 = [];
+        // color_theme berita11 kontrol warna inti (bukan Kirki): dulu terlewat. Form tanpa warna = Primary Color
+        // tema supaya Customizer > Warna tetap terisi (tintarakyatglobal.com 2026-10-19).
         $kirki_warna = class_exists('Kirki') && isset(Kirki::$all_fields['color_theme']);
-        if ($d['berita8']['warna'] !== '' && ($kirki_warna || get_stylesheet() === 'velocity-berita-8')
-            && get_theme_mod('color_theme', '') === '') {
-            set_theme_mod('color_theme', $d['berita8']['warna']); $b8[] = 'warna=' . $d['berita8']['warna'];
+        $ada_warna = $kirki_warna || get_stylesheet() === 'velocity-berita-8' || (isset($wpc) && $wpc->get_setting('color_theme'));
+        // Cadangan Primary Color hanya berita11: tema itu sendiri jatuh ke Primary Color, tampilan tak berubah.
+        $warna = $d['berita8']['warna'] !== '' ? $d['berita8']['warna']
+               : (get_stylesheet() === 'velocity-berita11' ? (string) sanitize_hex_color((string) get_theme_mod('primary_color', '')) : '');
+        if ($warna !== '' && $ada_warna && get_theme_mod('color_theme', '') === '') {
+            set_theme_mod('color_theme', $warna); $b8[] = 'warna=' . $warna;
         }
-        // Semua kontrol link_sosmed_* tema; platform tanpa data klien = tautan bawaan platformnya.
+        // Semua kontrol link_sosmed_* / sosmed_* (berita11) tema; platform tanpa data klien = tautan bawaan platformnya.
         $sosmed = [];
         foreach (isset($wpc) ? $wpc->controls() : [] as $c) {
-            if (is_object($c->setting) && preg_match('/^link_sosmed_([a-z0-9]+)$/', $c->setting->id, $m)) { $sosmed[] = $m[1]; }
+            if (is_object($c->setting) && preg_match('/^(?:link_)?sosmed_([a-z0-9]+)$/', $c->setting->id, $m)) { $sosmed[$m[1]] = $c->setting->id; }
         }
-        if (get_stylesheet() === 'velocity-berita-8') { $sosmed = array_unique(array_merge($sosmed, array_keys((array) $d['berita8']['sosmed']))); }
-        foreach ($sosmed as $k) {
+        if (get_stylesheet() === 'velocity-berita-8') {
+            foreach (array_keys((array) $d['berita8']['sosmed']) as $k) { $sosmed[$k] = $sosmed[$k] ?? "link_sosmed_$k"; }
+        }
+        foreach ($sosmed as $k => $id) {
             $u = $d['berita8']['sosmed'][$k] ?? "https://www.$k.com/";
-            if (get_theme_mod("link_sosmed_$k", '') === '') { set_theme_mod("link_sosmed_$k", $u); $b8[] = "sosmed_$k"; }
+            if (get_theme_mod($id, '') === '') { set_theme_mod($id, $u); $b8[] = "sosmed_$k"; }
         }
+        // Tautan iklan: image_iklan_X -> link_iklan_X, berita11 banner_X -> banner_X_link.
         $ke_kontak = home_url('/hubungi-kami/'); $n_link = 0;
         foreach ((array) get_theme_mods() as $k => $v) {
-            if (preg_match('/^image_iklan_(.+)$/', (string) $k, $m) && $v && get_theme_mod("link_iklan_{$m[1]}", '') === '') {
-                set_theme_mod("link_iklan_{$m[1]}", $ke_kontak); $n_link++;
-            }
+            $link = preg_match('/^image_iklan_(.+)$/', (string) $k, $m) ? "link_iklan_{$m[1]}"
+                  : (preg_match('/^banner_[a-z0-9]+$/', (string) $k) && isset($wpc) && $wpc->get_setting("{$k}_link") ? "{$k}_link" : '');
+            if ($link && $v && get_theme_mod($link, '') === '') { set_theme_mod($link, $ke_kontak); $n_link++; }
         }
         if ($n_link) { $b8[] = "link_iklan=$n_link"; }
         // Carousel = kategori ke-1, Posts Home 1–5 = kategori berikutnya (berputar bila kurang), judul = nama kategori.
