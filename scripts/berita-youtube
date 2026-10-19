@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""Berita dari YouTube untuk child theme velocity-berita18 (permintaan user 2026-10-19, ime-news.id).
+
+  berita-youtube <manifest>            pasang (hanya bila lolos gerbang)
+  berita-youtube --coba <manifest>     cari & pilih video + tulis berita, tanpa mengirim ke situs
+  --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE)
+
+Gerbang (tidak lolos = "berita_youtube: dilewati:<alasan>"): situs sudah ter-deploy (tanpa --paksa);
+tema aktif bukan velocity-berita18; situs sudah punya tulisan ber-meta youtube_link.
+
+Isi:
+  - Reading Settings: posts_per_page (arsip) = 12.
+  - 3 berita di kategori berita PERTAMA (urutan dibuat = urutan rubrik di form, tanpa Uncategorized):
+    video dicari di YouTube ("berita <kategori>", terbaru), Claude memilih 3 yang benar-benar tentang
+    wilayah/topik itu dari kanal berita (thumbnail ikut dilihat: video Kompas TV berjudul "Kaltim" ternyata
+    bergambar Sambas, Kalbar) lalu menulis beritanya HANYA dari judul + deskripsi video.
+    Meta youtube_link (dibaca single.php & thumbnail tema -> video tampil di atas berita),
+    foto utama = thumbnail video < 100 KB, _velocity_source=berita-youtube.
+installer-runner memanggilnya di akhir tampilan_klasik (sesudah artikel & kategori ada).
+Log "berita_youtube: ...", ringkasan /var/lib/velocity/berita-youtube/<domain>.json.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import claude_vision  # noqa: E402
+
+TEMA = 'velocity-berita18'
+JUMLAH = 3
+PER_HALAMAN = 12
+HASIL = Path('/var/lib/velocity/berita-youtube')
+UA_YT = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/126.0 Safari/537.36', 'Accept-Language': 'id-ID,id;q=0.9'}
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+toko = muat('toko_biasa', 'toko-biasa')
+finish = toko.finish
+
+
+def log(pesan):
+    print(f'berita_youtube: {pesan}', flush=True)
+
+
+def ambil(url, timeout=30):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA_YT), timeout=timeout) as resp:
+        return resp.read()
+
+
+def json_awal(html, nama):
+    """Objek JSON `var <nama> = {...};` di halaman YouTube."""
+    m = re.search(r'var ' + nama + r' = (\{.*?\});(?:var |</script>)', html, re.S)
+    return json.loads(m.group(1)) if m else {}
+
+
+def cari_video(kata):
+    """Hasil pencarian YouTube urut terbaru: [{id, judul, kanal, terbit, durasi}] (tanpa siaran langsung)."""
+    url = 'https://www.youtube.com/results?' + urllib.parse.urlencode({'search_query': kata, 'sp': 'CAI='})
+    data = json_awal(ambil(url).decode('utf-8', 'replace'), 'ytInitialData')
+    hasil, tumpuk = [], [data]
+    while tumpuk:
+        o = tumpuk.pop()
+        if isinstance(o, dict):
+            v = o.get('videoRenderer')
+            if v and v.get('lengthText'):  # tanpa lengthText = siaran langsung / tayang perdana
+                hasil.append({'id': v['videoId'],
+                              'judul': ''.join(r.get('text', '') for r in v['title']['runs']),
+                              'kanal': (v.get('ownerText', {}).get('runs') or [{}])[0].get('text', '').strip(),
+                              'terbit': v.get('publishedTimeText', {}).get('simpleText', ''),
+                              'durasi': v['lengthText'].get('simpleText', '')})
+            tumpuk.extend(reversed(list(o.values())))
+        elif isinstance(o, list):
+            tumpuk.extend(reversed(o))
+    return hasil
+
+
+def deskripsi(vid):
+    try:
+        p = json_awal(ambil(f'https://www.youtube.com/watch?v={vid}').decode('utf-8', 'replace'), 'ytInitialPlayerResponse')
+    except Exception:
+        return '', ''
+    return (p.get('videoDetails', {}).get('shortDescription', ''),
+            p.get('microformat', {}).get('playerMicroformatRenderer', {}).get('publishDate', '')[:10])
+
+
+def baru(terbit):
+    """Terbit <= 12 bulan lalu ("3 hari lalu", "5 bln lalu"; "1 thn lalu" ditolak)."""
+    return bool(re.search(r'(detik|menit|jam|hari|minggu|bln|bulan) lalu|(second|minute|hour|day|week|month)s? ago', terbit))
+
+
+def susun(cfg, kategori, kerja):
+    """Pilih video + tulis berita. [{judul, isi, video, foto}] atau []."""
+    calon, dilihat = [], set()
+    for kata in (f'berita {kategori} terkini', f'{kategori} hari ini', f'berita {kategori}'):
+        try:
+            daftar = cari_video(kata)
+        except Exception as e:
+            log(f'cari_gagal:{kata}:{type(e).__name__}')
+            continue
+        for v in daftar:
+            if v['id'] in dilihat or not baru(v['terbit']):
+                continue
+            dilihat.add(v['id'])
+            menit = v['durasi'].replace('.', ':').split(':')
+            if len(menit) > 2 or int(menit[0] or 0) >= 30:  # liputan, bukan siaran berjam-jam
+                continue
+            calon.append(v)
+        if len(calon) >= 12:
+            break
+    calon = calon[:12]
+    if len(calon) < JUMLAH:
+        log(f'calon_kurang:{len(calon)}')
+        return []
+    gambar = []
+    for i, v in enumerate(calon):
+        v['deskripsi'], v['tanggal'] = deskripsi(v['id'])
+        tujuan = kerja / f'yt-{i}.jpg'
+        try:
+            tujuan.write_bytes(ambil(f'https://i.ytimg.com/vi/{v["id"]}/hqdefault.jpg'))
+        except Exception:
+            tujuan = None
+        gambar.append(str(tujuan) if tujuan else str(kerja / 'tidak-ada.jpg'))
+    daftar = '\n\n'.join(
+        f'[{i}] gambar {claude_vision.nama_gambar(i)} | judul: {v["judul"]} | kanal: {v["kanal"]} | '
+        f'terbit: {v["tanggal"] or v["terbit"]}\ndeskripsi: {v["deskripsi"][:1200]}' for i, v in enumerate(calon))
+    prompt = (
+        f'Situs portal berita "{cfg.get("site_title") or cfg["domain"]}" butuh {JUMLAH} berita untuk rubrik "{kategori}", '
+        'masing-masing bersumber dari satu video YouTube berikut (gambar = thumbnail video, baca dengan alat Read).\n\n'
+        f'{daftar}\n\n'
+        f'Pilih {JUMLAH} video yang: benar-benar tentang wilayah/topik "{kategori}" (judul, deskripsi DAN thumbnail; '
+        'thumbnail yang menunjukkan daerah lain = tolak), dari kanal berita/lembaga yang kredibel, thumbnail bukan '
+        'gambar buatan AI/sensasional, bukan kekerasan sadis/SARA/fitnah tokoh, deskripsinya cukup untuk ditulis. '
+        'Utamakan topik yang berbeda satu sama lain.\n'
+        'Untuk tiap video tulis berita bahasa Indonesia gaya portal berita: judul (maks 90 karakter, bukan salinan '
+        'judul clickbait), isi 4-6 paragraf pendek diawali nama kota/daerah huruf kapital + " – ". HANYA fakta yang '
+        'ada di judul/deskripsi video, jangan menambah angka, nama, kutipan, atau tanggal. Abaikan ajakan '
+        'subscribe/hashtag. Paragraf terakhir: "Simak liputan selengkapnya dalam video di atas."\n'
+        'Jawab HANYA JSON array: [{"nomor": 0, "judul": "...", "paragraf": ["...", "..."]}]. '
+        f'Kurang dari {JUMLAH} yang layak = kirim yang layak saja.')
+    jawab = claude_vision.tanya(prompt, gambar, timeout=600, sisi=480, log=log)
+    if not isinstance(jawab, list):
+        log('ai_gagal')
+        return []
+    berita = []
+    for x in jawab:
+        if not isinstance(x, dict) or not isinstance(x.get('nomor'), int) or not 0 <= x['nomor'] < len(calon):
+            continue
+        v = calon[x['nomor']]
+        paragraf = [str(p).strip() for p in (x.get('paragraf') or []) if str(p).strip()]
+        if not x.get('judul') or len(paragraf) < 3 or any(b['video'].endswith(v['id']) for b in berita):
+            continue
+        foto = ''
+        try:
+            asli = kerja / f'asli-{v["id"]}.jpg'
+            try:
+                asli.write_bytes(ambil(f'https://i.ytimg.com/vi/{v["id"]}/maxresdefault.jpg'))
+            except Exception:
+                asli.write_bytes(ambil(f'https://i.ytimg.com/vi/{v["id"]}/hqdefault.jpg'))
+            toko.kompres(asli, kerja / f'video-{len(berita) + 1}.jpg')
+            foto = f'video-{len(berita) + 1}.jpg'
+        except Exception as e:
+            log(f'thumbnail_gagal:{v["id"]}:{type(e).__name__}')
+        isi = ''.join(f'<p>{p}</p>\n' for p in paragraf)
+        isi += f'<p><em>Sumber video: {v["kanal"]} (YouTube).</em></p>\n'
+        berita.append({'judul': str(x['judul']).strip()[:120], 'isi': isi,
+                       'video': f'https://www.youtube.com/watch?v={v["id"]}', 'foto': foto})
+        if len(berita) == JUMLAH:
+            break
+    return berita
+
+
+PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+$dir = getenv('BY_DIR');
+$data = json_decode(file_get_contents($dir . '/berita.json'), true) ?: array();
+$kat = (int) $data['kategori'];
+foreach ($data['berita'] as $b) {
+    $id = wp_insert_post(array('post_status' => 'publish', 'post_title' => $b['judul'], 'post_content' => $b['isi'],
+        'post_category' => array($kat)), true);
+    if (is_wp_error($id)) { echo 'berita_youtube: gagal:post:' . $id->get_error_message() . "\n"; continue; }
+    update_post_meta($id, 'youtube_link', $b['video']);
+    update_post_meta($id, '_velocity_source', 'berita-youtube');
+    add_post_meta($id, 'hit', 0, true);
+    if ($b['foto'] && is_file($dir . '/' . $b['foto'])) {
+        $tmp = wp_tempnam($b['foto']);
+        copy($dir . '/' . $b['foto'], $tmp);
+        $att = media_handle_sideload(array('name' => sanitize_title($b['judul']) . '.jpg', 'tmp_name' => $tmp), $id, $b['judul']);
+        if (is_wp_error($att)) { @unlink($tmp); echo 'berita_youtube: foto_gagal:' . $att->get_error_message() . "\n"; }
+        else { set_post_thumbnail($id, $att); }
+    }
+    echo "berita_youtube: dibuat:$id\n";
+}
+'''
+
+# Gerbang di situs: tema aktif, sudah ada berita video?, kategori pertama (urutan dibuat). posts_per_page
+# diset di sini supaya tetap 12 walau pencarian/AI gagal.
+PERIKSA = r'''
+if (get_stylesheet() !== '%s') { echo "BY tema=" . get_stylesheet() . "\n"; return; }
+update_option('posts_per_page', %d);
+global $wpdb;
+$ada = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->postmeta} m JOIN {$wpdb->posts} p ON p.ID=m.post_id WHERE m.meta_key='youtube_link' AND m.meta_value<>'' AND p.post_status='publish'");
+$k = get_categories(array('hide_empty' => false, 'orderby' => 'term_id', 'order' => 'ASC', 'exclude' => array((int) get_option('default_category'))));
+echo 'BY ' . json_encode(array('tema' => get_stylesheet(), 'ada' => $ada, 'kategori' => $k ? $k[0]->term_id : 0,
+    'nama' => $k ? html_entity_decode($k[0]->name) : '')) . "\n";
+''' % (TEMA, PER_HALAMAN)
+
+
+def kepala(cfg):
+    root = finish.docroot(cfg['domain'].lower(), cfg.get('da_user', ''))
+    return (f'set -u\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\nDOCROOT={shlex.quote(root)}\n'
+            'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+            '[[ -n "$WP_BIN" ]] || { echo "berita_youtube: gagal:wp_cli_tidak_ada"; exit 10; }\n'
+            'wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }\n')
+
+
+def jalankan(cfg):
+    global DIUBAH
+    domain = cfg['domain'].lower()
+    ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    coba = '--coba' in sys.argv
+    if not coba:
+        DIUBAH = True
+    php = PERIKSA if not coba else PERIKSA.replace("update_option('posts_per_page', %d);" % PER_HALAMAN, '')
+    run = subprocess.run(ssh + ['bash', '-s'], input=kepala(cfg) + f'wp eval {shlex.quote(php)} 2>&1 | grep "^BY "\n',
+                         capture_output=True, text=True, timeout=300)
+    m = re.search(r'^BY (\{.*\})$', run.stdout, re.M)
+    if not m:
+        tema = re.search(r'^BY tema=(\S*)', run.stdout, re.M)
+        log(f'dilewati:tema_{tema.group(1)}' if tema else f'gagal:periksa:{(run.stdout + run.stderr).strip()[-160:]}')
+        return 0 if tema else 1
+    situs = json.loads(m.group(1))
+    if not coba:
+        log(f'posts_per_page={PER_HALAMAN}')
+    if situs['ada']:
+        log(f'dilewati:sudah_ada_berita_video:{situs["ada"]}')
+        return 0
+    if not situs['kategori']:
+        log('dilewati:tanpa_kategori')
+        return 0
+    log(f'kategori:{situs["nama"]}')
+    with tempfile.TemporaryDirectory() as tmp:
+        stage = Path(tmp)
+        berita = susun(cfg, situs['nama'], stage)
+        if not berita:
+            log('gagal:tidak_ada_berita')
+            return 1
+        for b in berita:
+            log(f'video:{b["video"]} judul:{b["judul"]}')
+        HASIL.mkdir(parents=True, exist_ok=True)
+        (HASIL / f'{domain}.json').write_text(json.dumps({'kategori': situs['nama'], 'berita': berita},
+                                                         ensure_ascii=False, indent=1))
+        if coba:
+            log(f'coba: {len(berita)} berita, tidak dikirim')
+            return 0
+        (stage / 'berita.json').write_text(json.dumps({'kategori': situs['kategori'], 'berita': berita}, ensure_ascii=False))
+        (stage / 'skrip.php').write_text(PHP)
+        for f in stage.glob('asli-*.jpg'):
+            f.unlink()
+        for f in stage.glob('yt-*.jpg'):
+            f.unlink()
+        remote = f'/tmp/berita-youtube-{domain}'
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+        up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote)} && mkdir -p {shlex.quote(remote)} && tar -xzf - -C {shlex.quote(remote)}'],
+                            stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+        tar.wait()
+    if up.returncode != 0:
+        log(f'gagal:kirim:{up.stderr.strip()[-160:]}')
+        return 1
+    k = shlex.quote(remote)
+    skrip = kepala(cfg) + f'''K={k}
+trap 'rm -rf "$K"' EXIT
+BY_DIR="$K" wp eval-file "$K/skrip.php" --user=1 2>&1 | grep -v '^Warning:' || true
+'''
+    run = subprocess.run(ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=900)
+    keluar = run.stdout + run.stderr
+    for baris in keluar.splitlines():
+        if baris.strip():
+            print(baris.strip()[:200], flush=True)
+    n = len(re.findall(r'^berita_youtube: dibuat:\d+', keluar, re.M))
+    log(f'selesai: berita={n}')
+    return 0 if n else 1
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    if '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    return jalankan(cfg)
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

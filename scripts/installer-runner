@@ -287,6 +287,10 @@ tampilan_klasik() {
   /usr/bin/python3 "$SCRIPTS/paket-g-foto" --artikel "$MANIFEST" >> "$LOG" 2>&1 || true
   # Sisa artikel tanpa foto bank yang layak: foto klien bergilir atau sampul kategori.
   /usr/bin/python3 "$SCRIPTS/theme-paket-biasa" --foto-artikel "$MANIFEST" >> "$LOG" 2>&1 || true
+  # velocity-berita18 (user 2026-10-19, ime-news.id): arsip 12 tulisan + 3 berita video YouTube di kategori
+  # pertama. Sesudah artikel & foto (kategori sudah ada); tema lain & situs ter-deploy dilewati skripnya sendiri.
+  echo "[$(date -Is)] Berita YouTube" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/berita-youtube" "$MANIFEST" >> "$LOG" 2>&1 || true
 }
 # Berkas video klien di folder Drive diunggah ke YouTube (unlisted) lalu di-embed: seksi video
 # beranda (fse-apply --isi) atau halaman Galeri tema klasik (tampilan_klasik). Semua paket,

@@ -353,6 +353,13 @@
           return (bank ? bank[1] + ' foto bank' : '0 foto bank') + (sisa ? ' + ' + sisa[1] + ' foto klien/sampul' : '');
         },
         aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
+      // velocity-berita18 (user 2026-10-19, ime-news.id): arsip 12 tulisan + 3 berita video YouTube di
+      // kategori pertama (scripts/berita-youtube); tema lain dilewati skripnya sendiri.
+      { id: 'beritaYoutube', kol: 21, jalur: 2, nama: 'Berita YouTube', ket0: 'berita18: arsip 12 tulisan, 3 berita video YouTube di kategori pertama',
+        mulai: /\] Berita YouTube$/, selesai: /berita_youtube: (selesai|dilewati)/, gagal: /berita_youtube: gagal:/,
+        ketHasil: t => { const m = /berita_youtube: selesai: berita=(\d+)/.exec(t);
+          return m ? m[1] + ' berita video' : /berita_youtube: dilewati:tema_/.test(t) ? 'bukan berita18' : null; },
+        aktif: c => dan(tanpaDry(c), c.custom === null ? null : !c.custom) },
       { id: 'halaman', kol: 18, jalur: 0, nama: 'Halaman blok & menu', ket0: 'beranda + halaman dari menu referensi', mulai: /Paket custom: halaman blok & menu/,
         // Halaman susunan agen (fse-rencana/<domain>/claude/<slug>.html) menimpa hasil generator di
         // fse-apply --isi (log `fse: halaman_claude:<slug>`).
@@ -562,7 +569,7 @@
       ['mirip', 'permintaan', 'mirip / dilaporkan'],
       ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'],
       ['isi', 'landingIsi', 'landing', c => dan(tanpaDry(c), c.landing)], ['landingIsi', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'katalogProduk', 'Paket E/F', c => dan(tanpaDry(c), c.e === null ? null : c.e || c.f)], ['katalogProduk', 'fotoKlasik'],
-      ['paketTour', 'fotoKlasik', '', c => dan(tanpaDry(c), c.e === null ? null : !(c.e || c.f))], ['fotoKlasik', 'permintaan'],
+      ['paketTour', 'fotoKlasik', '', c => dan(tanpaDry(c), c.e === null ? null : !(c.e || c.f))], ['fotoKlasik', 'beritaYoutube'], ['beritaYoutube', 'permintaan'],
       ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['permintaan', 'bahasa', 'form: bahasa Inggris'], ['bahasa', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
