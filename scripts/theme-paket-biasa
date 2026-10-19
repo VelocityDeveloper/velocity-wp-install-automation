@@ -969,9 +969,11 @@ if (!empty($d['berita'])) {
 }
 // berita4 berberanda page-home.php (beranda statis) tetapi menunya sama dengan portal berita lain
 // (user 2026-10-09, info-luarbiasa.com): primary = Beranda + kategori, secondary = ikon home ala demo,
-// Tentang Kami, Redaksi, Pedoman Media Siber.
+// Tentang Kami, Redaksi, Pedoman Media Siber. berita11 sama-sama berberanda page-home.php: dulu terlewat,
+// tintarakyatglobal.com 2026-10-18 tetap bermenu baku Beranda/Tentang Kami/Galeri/Berita/Hubungi Kami.
 $b4 = get_stylesheet() === 'velocity-berita4';
-if ($berita_depan || $b4) {
+$beranda_statis = $b4 || get_stylesheet() === 'velocity-berita11';
+if ($berita_depan || $beranda_statis) {
     // Menu: hanya menu buatan installer (halaman baku) yang disusun ulang.
     $baku = ['beranda', 'home', 'tentang kami', 'galeri', 'berita', 'hubungi kami', 'kontak', 'layanan', 'redaksi',
              'pedoman media siber', 'privacy policy', 'kebijakan privasi'];
@@ -983,7 +985,7 @@ if ($berita_depan || $b4) {
     // (liputara.com 2026-10-11: Home + 8 rubrik turun dua baris di 1366 px). Lebar ditaksir per karakter:
     // biaya butir = panjang judul + 5 (padding); liputara berita2 Home + 7 rubrik = 123 muat, + 1 lagi = 135 tidak.
     $kat_menu = array_slice($kategori, 0, 12);
-    $judul_home = $b4 ? 'Beranda' : 'Home';
+    $judul_home = $beranda_statis ? 'Beranda' : 'Home';
     $biaya = fn($t) => mb_strlen($t) + 5;
     $muat = 123; $pakai = $biaya($judul_home); $kat_atas = [];
     if (array_sum(array_map(fn($k) => $biaya($k->name), $kat_menu)) + $pakai <= $muat) {
