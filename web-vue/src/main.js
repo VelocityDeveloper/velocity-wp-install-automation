@@ -78,23 +78,4 @@ router.onError((e, to) => {
 })
 router.afterEach((to) => { document.title = `${to.meta.judul || 'Dashboard'} | Local PC Velocity` })
 
-// Dibuka dari LAN/Tailscale → pindah ke halaman yang sama di dash.velocity.ai.id supaya login (Masuk dengan VD.net)
-// dan nama pelaku berlaku. Bila dash tak terjangkau (internet/tunnel mati) tetap di LAN. ?lan=1 = tetap di LAN untuk tab ini
-// (mis. unggah berkas >100 MB yang ditolak Cloudflare).
-const DASH = 'dash.velocity.ai.id'
-async function keDash() {
-  if (location.hostname === DASH) return false
-  try {
-    if (new URLSearchParams(location.search).has('lan')) sessionStorage.setItem('tetap-lan', '1')
-    if (sessionStorage.getItem('tetap-lan')) return false
-  } catch { /* penyimpanan diblokir: tetap coba pindah */ }
-  try {
-    await fetch(`https://${DASH}/__login`, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(2500) })
-  } catch {
-    return false
-  }
-  location.replace(`https://${DASH}${location.pathname}${location.search}${location.hash}`)
-  return true
-}
-
-keDash().then((pindah) => { if (!pindah) createApp(App).use(router).mount('#app') })
+createApp(App).use(router).mount('#app')

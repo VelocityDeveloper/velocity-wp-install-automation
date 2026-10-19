@@ -166,7 +166,34 @@ CLAIM_BY_RE = re.compile(r'^[a-z0-9:._-]{1,40}$')
 _claims_lock = threading.Lock()
 
 
+# IP publik kantor (akses dash.velocity.ai.id dari jaringan kantor tanpa batas request).
+# MyRepublic statis; Telkom dinamis -> IP keluar PC ini dicek ulang tiap 10 menit (pola site-finish _ip_kantor).
+# 36.65.0.93 = IndiBiz (Telkom) kantor, dikonfirmasi user 2026-10-19; ganti bila IP IndiBiz berubah.
+IP_KANTOR_TETAP = {'202.59.194.129', '36.65.0.93'}
+_ip_kantor_terdeteksi = set()
+
+
+def _pantau_ip_kantor():
+    while True:
+        for url in ('https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'curl/8'}), timeout=6) as r:
+                    ip = str(ipaddress.ip_address(r.read(64).decode().strip()))
+                _ip_kantor_terdeteksi.clear()
+                _ip_kantor_terdeteksi.add(ip)
+                break
+            except (OSError, ValueError):
+                continue
+        time.sleep(600)
+
+
+threading.Thread(target=_pantau_ip_kantor, daemon=True).start()
+
+
 def _rate_ok(ip: str) -> bool:
+    # LAN/Tailscale & IP publik kantor tanpa batas; akses publik lain (dash lewat Cloudflare) tetap dibatasi
+    if _is_local_net(ip) or ip in IP_KANTOR_TETAP or ip in _ip_kantor_terdeteksi:
+        return True
     now = time.time()
     lst = _rate.get(ip, [])
     lst = [t for t in lst if now - t < RATE_WINDOW]
