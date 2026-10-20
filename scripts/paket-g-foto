@@ -768,14 +768,17 @@ def kecilkan_jpeg(berkas, lebar=1200, maks=100 * 1024):
     200-325 KB di cybernasional24.com 2026-10-06). Ukuran turunan WordPress ikut kecil."""
     import io
     from PIL import Image
-    im = Image.open(berkas).convert('RGB')
-    if im.width > lebar:
-        im = im.resize((lebar, round(im.height * lebar / im.width)), Image.LANCZOS)
-    for q in range(82, 38, -4):
-        b = io.BytesIO()
-        im.save(b, 'JPEG', quality=q, optimize=True, progressive=True)
-        if b.tell() <= maks:
-            break
+    asli = Image.open(berkas).convert('RGB')
+    # Foto sangat detail (rak server, fasad kaca) tetap >100 KB di q42 1200 px (tribunnewsupdate.com
+    # 2026-10-20: 103–114 KB): kualitas tidak diturunkan di bawah 58, lebar dikecilkan 50 px per langkah.
+    for w in range(min(lebar, asli.width), 599, -50):
+        im = asli.resize((w, round(asli.height * w / asli.width)), Image.LANCZOS) if w < asli.width else asli
+        for q in range(82, 54, -4):
+            b = io.BytesIO()
+            im.save(b, 'JPEG', quality=q, optimize=True, progressive=True)
+            if b.tell() <= maks:
+                Path(berkas).write_bytes(b.getvalue())
+                return
     Path(berkas).write_bytes(b.getvalue())
 
 

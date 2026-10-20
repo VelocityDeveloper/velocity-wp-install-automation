@@ -805,22 +805,14 @@
   "slug": "velocity-berita5",
   "demo": "https://berita5.velocitydeveloper.com/",
   "areas": {
-   "main-sidebar": [
-    {
-     "jenis": "core",
-     "base": "calendar",
-     "opsi": {
-      "title": "Kalender"
-     }
-    }
-   ],
+   "main-sidebar": [],
    "footer-widget-1": [
     {
      "jenis": "core",
      "base": "recent-posts",
      "opsi": {
       "title": "Recent Posts",
-      "number": 3,
+      "number": 5,
       "show_date": false
      }
     }
@@ -828,25 +820,30 @@
    "footer-widget-2": [
     {
      "jenis": "core",
-     "base": "archives",
+     "base": "categories",
      "opsi": {
-      "title": "Archives",
+      "title": "Kategori Berita",
       "count": 0,
+      "hierarchical": 0,
       "dropdown": 0
      }
     }
    ],
    "footer-widget-3": [
     {
-     "jenis": "text",
-     "judul": "Facebook",
-     "isi": "<iframe src=\"https://www.facebook.com/plugins/page.php?href=https%3A%2F%2Fwww.facebook.com%2F290396974343354&tabs=timeline&width=340&height=300&small_header=true&adapt_container_width=true&hide_cover=false&show_facepile=false&appId\" width=\"100%\" height=\"300\" style=\"border:none;overflow:hidden\" scrolling=\"no\" frameborder=\"0\" allowfullscreen=\"true\"></iframe>",
-     "lewati": true,
-     "alasan": "custom_html embed halaman Facebook milik demo (id 290396974343354); ganti dengan FB klien bila ada, kalau tidak lewati"
+     "jenis": "statistik",
+     "judul": "Pengunjung"
     }
    ]
   },
-  "catatan": "Child mendefinisikan ulang justg_widgets_init: hanya main-sidebar + footer-widget-1..3 (DENGAN tanda hubung, footer 3 kolom). main-sidebar before_title membuka <div class='mt-4 mb-2'> yang ditutup after_widget -> setiap widget di main-sidebar WAJIB berjudul agar HTML tidak rusak. Isi sidebar lain di demo (tab, iklan_sidebar 300x250, posts sidebar 1 judul 'Hukum' posts4 5 tulisan, iklan_sidebar_2 300x250, posts sidebar 2 judul 'Ekonomi' posts3 5 tulisan) berasal dari Customizer lewat part-sidebar.php (hook justg_before_main_sidebar), bukan widget; kalender widget tampil di bawahnya. Facebook asli widget custom_html (base custom_html, kunci title/content) - dicatat sebagai text dengan lewati. Tidak ada widget kelas tema terdaftar yang dipakai demo."
+  "catatan": "Child mendefinisikan ulang justg_widgets_init: hanya main-sidebar + footer-widget-1..3 (DENGAN tanda hubung, footer 3 kolom). main-sidebar before_title membuka <div class='mt-4 mb-2'> yang ditutup after_widget -> setiap widget di main-sidebar WAJIB berjudul agar HTML tidak rusak. Isi sidebar lain di demo (tab, iklan_sidebar 300x250, posts sidebar 1 judul 'Hukum' posts4 5 tulisan, iklan_sidebar_2 300x250, posts sidebar 2 judul 'Ekonomi' posts3 5 tulisan) berasal dari Customizer lewat part-sidebar.php (hook justg_before_main_sidebar), bukan widget; kalender widget tampil di bawahnya. Facebook asli widget custom_html (base custom_html, kunci title/content) - dicatat sebagai text dengan lewati. Tidak ada widget kelas tema terdaftar yang dipakai demo. Susunan widget user 2026-10-20 (tribunnewsupdate.com) menggantikan demo: Main Sidebar kosong (kalender & FB demo dibuang; blok Customizer part-sidebar tetap tampil), Footer 1 Recent Posts, 2 Kategori Berita, 3 Pengunjung. latar & mod = background agak abu + Home Main 'Berita Terbaru', Kolom Kanan Posts 1 Terbaru / Posts 2 Populer (urut tayangan).",
+  "latar": "#e9edf2",
+  "mod": {
+   "title_posts_home_4": "Berita Terbaru",
+   "title_posts_sidebar_1": "Terbaru",
+   "title_posts_sidebar_2": "Populer",
+   "sortby_posts_sidebar_2": "view"
+  }
  },
  "velocity-berita6": {
   "slug": "velocity-berita6",
