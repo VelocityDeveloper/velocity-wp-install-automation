@@ -434,6 +434,10 @@ def periksa_beranda(domain, slug, data, adaptor):
             break
     milik_kita = {str(v).strip().lower() for v in data['teks'].values() if v}
     milik_kita |= {str(x.get('judul', '')).strip().lower() for d in data['daftar'].values() for x in d}
+    # Teks tetap yang ditulis adaptor sendiri (astarifoundation.org 2026-10-20: judul_konsultasi1
+    # "Konsultasi Online" sekaligus ada di `periksa`) bukan tanda mod gagal terpasang.
+    milik_kita |= {str(v).strip().lower() for v in (adaptor.get('mods') or {}).values()
+                   if isinstance(v, str) and '{{' not in v}
     for contoh in adaptor.get('periksa') or []:
         c = re.sub(r'\s+', ' ', html_mod.unescape(re.sub(r'<[^>]+>', ' ', str(contoh)))).strip()
         if len(c) >= 8 and c.lower() not in milik_kita and c.lower() in polos.lower():
