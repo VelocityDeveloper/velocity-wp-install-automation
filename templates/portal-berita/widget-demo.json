@@ -372,7 +372,11 @@
     }
    ]
   },
-  "catatan": "Tema anak mendefinisikan justg_widgets_init sendiri -> hanya main-sidebar (kolom kanan #right-sidebar col-md-3) dan secondary-sidebar (kolom kiri col-2 d-none d-md-block via left_sidebar() di index/archive/page/single); footer-widget-1..4 induk TIDAK terdaftar. Posts_Berita_14_Widget id_base posts_berita_14_widget, kunci instance: title, style ('1'-'5', dipakai sbg 'posts'+style; default 'style1' di kode = bug, jadi wajib isi angka), urutkan (recent|popular), kategori (term_id, tax_query field term_id), jumlah (string angka). Demo: House=posts4 (daftar judul ikon), 5, tanpa kategori (daftarnya sama dgn Recent; 'House' bukan kategori demo); Recent=posts2, 5, tanpa kategori; Hukum=posts3, 5, kategori hukum (dicek dari /category/hukum/ demo, urutan terbaru). Tabs_Berita_14_Widget id_base tabs_berita_14_widget, hanya kunci title (demo kosong). Tampilan posts2/posts3 menampilkan 'views' dari meta hit. media_image-3 banner vertikal 250x622 di secondary-sidebar (tidak pasti apakah iklan atau banner promosi; diperlakukan iklan). Judul 'Hukum' diganti {kat_nama}."
+  "catatan": "Tema anak mendefinisikan justg_widgets_init sendiri -> hanya main-sidebar (kolom kanan #right-sidebar col-md-3) dan secondary-sidebar (kolom kiri col-2 d-none d-md-block via left_sidebar() di index/archive/page/single); footer-widget-1..4 induk TIDAK terdaftar. Posts_Berita_14_Widget id_base posts_berita_14_widget, kunci instance: title, style ('1'-'5', dipakai sbg 'posts'+style; default 'style1' di kode = bug, jadi wajib isi angka), urutkan (recent|popular), kategori (term_id, tax_query field term_id), jumlah (string angka). Demo: House=posts4 (daftar judul ikon), 5, tanpa kategori (daftarnya sama dgn Recent; 'House' bukan kategori demo); Recent=posts2, 5, tanpa kategori; Hukum=posts3, 5, kategori hukum (dicek dari /category/hukum/ demo, urutan terbaru). Tabs_Berita_14_Widget id_base tabs_berita_14_widget, hanya kunci title (demo kosong). Tampilan posts2/posts3 menampilkan 'views' dari meta hit. media_image-3 banner vertikal 250x622 di secondary-sidebar (tidak pasti apakah iklan atau banner promosi; diperlakukan iklan). Judul 'Hukum' diganti {kat_nama}. latar & mod = background agak abu + Posts Home 5 (9 tulisan) Berita Terbaru semua kategori, instalasi baru (user 2026-10-21 medanspot.com).",
+  "latar": "#e9edf2",
+  "mod": {
+   "title_posts_home_5": "Berita Terbaru"
+  }
  },
  "velocity-berita15": {
   "slug": "velocity-berita15",

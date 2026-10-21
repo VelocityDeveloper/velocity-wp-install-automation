@@ -654,9 +654,11 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # velocity-berita3: Carousel 6, Posts Home 1–3 (1+5), 4 (2+3), 5 = 5 — lensajogjanews.com 2026-10-18 3 per rubrik kurang.
 # velocity-berita5: Carousel 6, Headline 3, Kiri Atas 5, Kiri Bawah 4, Footer 1–3 (3) berputar per rubrik; Main 11
 # semua kategori — tribunnewsupdate.com 2026-10-20 3 per rubrik kurang.
+# velocity-berita14: Home 1 carousel 5, Home 2 = 4, Home 3 (offset 1 + 4) = 5, Home 4 (1+2) = 3, Home 6 (1+3) = 4;
+# Home 5 semua kategori — medanspot.com 2026-10-21 3 per rubrik kurang.
 ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
                        'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6],
-                       'velocity-berita5': [6, 6, 6]}
+                       'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4]}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 

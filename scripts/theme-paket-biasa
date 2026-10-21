@@ -278,8 +278,10 @@ BERITA8_SOSMED = {'facebook': ('facebook.com', 'https://www.facebook.com/'), 'tw
 # Blok beranda yang dibiarkan "Semua Kategori" (nilai kosong) — user 2026-10-07, suarapurwakarta.com:
 # berita16 Home "Berita 3" (galeri) = semua kategori, Berita 1–4 & Berita Bawah 1–3 lainnya per kategori.
 # berita5 (user 2026-10-20, tribunnewsupdate.com): Posts Home Main (11 tulisan) & Kolom Kanan Terbaru/Populer = semua.
+# berita14 (user 2026-10-21, medanspot.com): Posts Home 5 (9 tulisan) = semua, satu rubrik 3 berita membuatnya kosong.
 BLOK_SEMUA_KATEGORI = {'velocity-berita16': ['cat_berita3'],
-                       'velocity-berita5': ['cat_posts_home_4', 'cat_posts_sidebar_1', 'cat_posts_sidebar_2']}
+                       'velocity-berita5': ['cat_posts_home_4', 'cat_posts_sidebar_1', 'cat_posts_sidebar_2'],
+                       'velocity-berita14': ['cat_posts_home_5']}
 # Tema yang blok kategorinya diisi berputar bila kategori lebih sedikit dari blok (kategori ke-1 lagi, dst.),
 # supaya Customizer Home terisi semua — berita5 tribunnewsupdate.com 2026-10-20 (3 rubrik, 7 blok).
 BLOK_KATEGORI_PUTAR = {'velocity-berita5'}
