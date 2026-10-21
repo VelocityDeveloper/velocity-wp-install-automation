@@ -119,6 +119,11 @@ def design_ref(text):
         m = SUB.search(line[label.end():])
         if m and m.group(1).lower() != 'www':
             return m.group(1).lower()
+        # Label kosong yang langsung disusul "PILIHANNYA BERIKUT INI:" -> baris
+        # sesudahnya daftar contoh (perusahaan1 dst.), bukan pilihan klien
+        # (mampirbalitravel.com 2026-10-21 terpasang perusahaan1 karena ini).
+        if 'pilihannya' in line[label.end():].lower():
+            continue
         # Nilai kadang jatuh ke baris berikutnya (hyperlink Word jadi paragraf
         # sendiri); sesudahnya form berisi daftar contoh, jadi berhenti di sana.
         for nxt in lines[i + 1:i + 5]:
