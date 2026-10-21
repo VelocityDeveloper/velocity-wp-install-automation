@@ -205,6 +205,15 @@
       // baru referensi desain + tema FSE; toko biasa: child theme -> VD Store -> konten AI, tanpa FSE.
       // Dua simpul berpenanda log sama, dibedakan cabang paketnya. Simpul toko custom di baris -1
       // supaya garis Paket G / Portal ke "Baca referensi" tidak menembus kotak.
+      // Velocity Donasi (permintaan user 2026-10-16, scripts/velocity-donasi): Paket G yang form-nya meminta
+      // donasi -> plugin + program contoh SEBELUM referensi & tema FSE. Tidak bergantung pada VD Store.
+      // Baris -2 supaya garis Paket G tanpa donasi ke "Baca referensi" tidak menembus kotak.
+      { id: 'donasi', kol: 7, jalur: -2, nama: 'Velocity Donasi', ket0: 'plugin, 3 program contoh, halaman Donasi Saya, rekening contoh',
+        mulai: /\] Velocity Donasi$/, selesai: /donasi: (selesai|gagal|dilewati)/, gagal: /donasi: gagal/,
+        ketHasil: t => { const m = /donasi: selesai: program=(\d+) contoh=(\d+) plugin=(\S+)/.exec(t);
+          if (/donasi: dilewati:situs_sudah_terpasang/.test(t)) return 'dilewati: situs lama';
+          return m ? m[1] + ' program (' + m[2] + ' contoh), plugin ' + m[3] : null; },
+        aktif: c => dan(tanpaDry(c), c.donasi) },
       { id: 'vdstoreCustom', kol: 7, jalur: -1, nama: 'VD Store', ket0: 'plugin, pengaturan, VD Ongkir & halaman toko', mulai: /\] VD Store$/,
         selesai: /vd_store: (selesai|gagal)|VD Store settings/, gagal: /vd_store: gagal/,
         ketHasil: t => (/halaman_toko:(Halaman berhasil|Semua halaman)/.test(t)
@@ -307,7 +316,7 @@
       // VD Gallery; mysahabatwisata.com 2026-10-01), berjalan tepat sesudah paket-tour, lalu
       // scripts/marketplace-biasa --beranda (velocity-marketplace-child, 2026-10-04), lalu scripts/velocity-iklan
       // (velocity-mp-child: plugin Velocity Iklan + pendaftaran Subscriber, 2026-10-12).
-      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing / marketplace', ket0: 'tour: plugin + CPT paket-tour · property2: listing, warna, sidebar, galeri · marketplace: slider ≥2 & blok kiri (banner), kategori, menu Produk · mp: plugin Velocity Iklan',
+      { id: 'paketTour', kol: 19, jalur: 2, nama: 'Paket tour / listing / marketplace', ket0: 'tour: plugin + CPT paket-tour (tour1: plugin selalu, tanpa paket di dokumen = 3 CONTOH) · property2: listing, warna, sidebar, galeri · marketplace: slider ≥2 & blok kiri (banner), kategori, menu Produk · mp: plugin Velocity Iklan',
         mulai: /\] Paket tour$/, selesai: /(paket_tour|listing_property): (selesai|dilewati)/,
         gagal: /paket_tour: (gagal|ai_gagal|plugin_gagal|plugin_tidak|cpt_tidak)|listing_property: (gagal|ai_gagal|cpt_tidak|cek_tema_gagal)|iklan: gagal/,
         ketHasil: t => {
@@ -328,7 +337,7 @@
       // plugin velocity-produk dari API ApiCo, bukan Meta Box/velocity-paket (scripts/velocity-produk, 2026-10-06).
       // Sesudah katalog produk (2026-10-08): pesan/data tambahan menyebut paket tour/wisata/trip atau
       // itinerary -> velocity-tour-travel dari API (v1.0.0) + paket klien/3 CONTOH (scripts/paket-tour mode E/F).
-      { id: 'katalogProduk', kol: 19, jalur: 3, nama: 'Katalog Velocity Produk + tour', ket0: 'E/F minta katalog: plugin velocity-produk, produk klien / 6 CONTOH, halaman Katalog di menu · lalu paket tour: velocity-tour-travel, paket klien / 3 CONTOH',
+      { id: 'katalogProduk', kol: 19, jalur: 3, nama: 'Katalog Velocity Produk + tour', ket0: 'E/F minta katalog (bukan velocity-spa: produk masuk CPT layanan): plugin velocity-produk, produk klien / 6 CONTOH, halaman Katalog di menu · lalu paket tour: velocity-tour-travel, paket klien / 3 CONTOH',
         mulai: /\] Katalog Velocity Produk$/, selesai: /tour: (selesai|dilewati)/, gagal: /katalog: gagal:|tour: gagal:/,
         ketHasil: t => {
           const bagian = [];
@@ -532,7 +541,8 @@
       ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'tahanF', 'Paket F tanpa referensi', c => c.tahanF], ['mode', 'server', 'dry run'],
       ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
       ['http', 'ssl'], ['ssl', 'paket'],
-      ['paket', 'referensi', 'G / Portal', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko)],
+      ['paket', 'referensi', 'G / Portal', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko && !c.donasi)],
+      ['paket', 'donasi', 'G + form donasi', c => dan(tanpaDry(c), c.donasi)], ['donasi', 'referensi'],
       ['paket', 'vdstoreCustom', 'Toko Online Custom'], ['vdstoreCustom', 'referensi'],
       ['paket', 'childF', 'Paket F'], ['paket', 'childE', 'Paket E'],
       ['paket', 'childToko', 'Toko Online Biasa'], ['paket', 'childLain', 'lainnya'], ['paket', 'childLanding', 'Landing Page Biasa'],
@@ -637,6 +647,8 @@
         // Toko Online Custom: VD Store dulu, lalu referensi desain & tema FSE. Toko online biasa:
         // child theme dari referensi form, lalu VD Store, lalu konten AI (tanpa FSE).
         tokoCustom: paket ? custom && tokoOnline : null,
+        // Paket G + form meminta donasi: runner mencetak `donasi: dilewati:<alasan>` bila tidak.
+        donasi: paket && paket !== 'paketg' ? false : /donasi: (plugin_aktif|selesai)/.test(teks) ? true : /donasi: dilewati/.test(teks) ? false : null,
         tokoBiasa: paket ? tokoOnline && !custom : null,
         market,
         installBaru: /\] Bersihkan tema & plugin bawaan/.test(teks) ? true : lewatFinishing ? false : null,

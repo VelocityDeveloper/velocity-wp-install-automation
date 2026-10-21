@@ -10,7 +10,10 @@ naik >= --ambang-cpu detik sejak pengecekan sebelumnya = aktif.
 Sesi yang menganggur >= --batas-jam jam dihentikan (SIGTERM). --jam-hentikan
 membatasi penghentian ke satu jam tertentu (default: setiap jalan).
 
-Tidak disentuh: bot Telegram (claude-tg, di-restart terpisah), job
+Sesi bot Telegram (claude-tg@<id>) yang diam >= --batas-jam-telegram jam
+di-stop lewat systemd; router menyalakannya lagi saat ada pesan masuk.
+
+Tidak disentuh: job
 otomatis `claude -p` yang selesai sendiri, dan proses di KECUALI
 (--kecualikan PID; dilepas --lepas-induk dari hook SessionStart "clear").
 """
@@ -19,7 +22,10 @@ import glob
 import json
 import os
 import signal
+import subprocess
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime
 
 STATE = "/var/lib/claude-sesi-diam/state.json"
@@ -133,16 +139,83 @@ def leluhur_claude():
     return None
 
 
+TG_ENV = "/root/.claude/channels/telegram/.env"
+PESAN_TG = ("💤 Sesi Claude kamu dimatikan karena diam lebih dari {jam} jam, supaya RAM PC kantor tidak habis.\n"
+            "Kirim pesan apa saja untuk menyalakannya lagi — percakapan terakhir dilanjutkan otomatis "
+            "(balasan pertama butuh ±30 detik).")
+
+
+def kabari_telegram(uid, jam):
+    """Kirim pemberitahuan sesi dimatikan ke user Telegram; galat hanya dicetak."""
+    try:
+        with open(TG_ENV) as f:
+            token = next(b.split("=", 1)[1].strip() for b in f if b.startswith("TELEGRAM_BOT_TOKEN="))
+        data = urllib.parse.urlencode({"chat_id": uid, "text": PESAN_TG.format(jam=f"{jam:g}")}).encode()
+        urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data, timeout=15).read()
+    except Exception as e:
+        print(f"kabari telegram {uid} gagal: {e}")
+
+
+def hentikan_telegram(batas_jam, uji):
+    """Stop unit claude-tg@<id> yang diam >= batas_jam; router menyalakannya lagi saat ada pesan.
+
+    Lewat systemctl stop, bukan SIGTERM: unit memakai Restart=always.
+    """
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = f.read().decode(errors="replace").split("\0")[:-1]
+            if not argv or os.path.basename(argv[0]) != "claude" or not any("telegram-session" in x for x in argv):
+                continue
+            with open(f"/proc/{pid}/stat") as f:
+                starttime = f.read().rsplit(")", 1)[1].split()[19]
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                env = dict(x.split("=", 1) for x in f.read().decode(errors="replace").split("\0") if "=" in x)
+        except OSError:
+            continue
+        state = env.get("TELEGRAM_STATE_DIR", "")
+        uid = os.path.basename(state)
+        if not uid.isdigit():
+            continue
+        try:
+            if os.listdir(os.path.join(state, "spool")):
+                continue  # ada pesan yang belum diambil
+        except OSError:
+            pass
+        mulai = BOOT + int(starttime) / TICK
+        # Dinyalakan saat boot (bukan karena chat) → nilai dari chat terakhir saja.
+        info = {k: v for k, v in info_sesi(pid, starttime).items() if k in ("status", "sessionId")}
+        terakhir = aktivitas_transkrip(argv, info) or 0
+        if mulai - BOOT > 900:
+            terakhir = max(terakhir, mulai)
+        diam = (time.time() - terakhir) / 3600
+        if diam < batas_jam:
+            if uji:
+                print(f"telegram {uid} pid={pid} diam={diam:.1f}j")
+            continue
+        print(f"hentikan telegram {uid} pid={pid} diam={diam:.1f}j")
+        if not uji:
+            subprocess.run(["systemctl", "--user", "stop", f"claude-tg@{uid}.service"],
+                           env={**os.environ, "XDG_RUNTIME_DIR": "/run/user/0"}, check=False)
+            kabari_telegram(uid, batas_jam)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batas-jam", type=float, default=6)
+    ap.add_argument("--batas-jam-telegram", type=float, default=2)
     ap.add_argument("--ambang-cpu", type=float, default=30, help="detik CPU per pengecekan agar dianggap aktif")
     ap.add_argument("--jam-hentikan", type=int, default=None, help="hanya hentikan pada jam ini (default: setiap jalan)")
     ap.add_argument("--hentikan-sekarang", action="store_true")
     ap.add_argument("--uji", action="store_true", help="tampilkan saja, jangan hentikan/simpan")
     ap.add_argument("--kecualikan", type=int, metavar="PID", help="jangan hentikan proses sesi ini")
     ap.add_argument("--lepas-induk", action="store_true", help="dari hook: lepas pengecualian sesi pemanggil")
+    ap.add_argument("--kabari-telegram", metavar="ID", nargs="+", help="kirim pemberitahuan sesi dimatikan saja")
     a = ap.parse_args()
+    if a.kabari_telegram:
+        for uid in a.kabari_telegram:
+            kabari_telegram(uid, a.batas_jam_telegram)
+        return
     if a.kecualikan:
         k = kunci_pid(a.kecualikan)
         print(ubah_kecuali(lambda d: d.__setitem__(k, time.strftime("%Y-%m-%d %H:%M"))))
@@ -192,6 +265,9 @@ def main():
         elif a.uji:
             print(f"pid={pid} diam={diam:.1f}j cpu={cpu:.0f}s {ringkas}")
         baru[kunci] = s
+
+    if hentikan:
+        hentikan_telegram(a.batas_jam_telegram, a.uji)
 
     if not a.uji:
         os.makedirs(os.path.dirname(STATE), exist_ok=True)

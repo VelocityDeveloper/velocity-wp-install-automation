@@ -19,3 +19,12 @@ aionbot
 brightbot
 keenablebot
 isonsearchbot
+# Ditambah 16 Okt 2026 (ukur access log Wulan): crawler AI luar negeri yang tak dipakai pengunjung Indonesia.
+qwenbot
+moonshotbot
+kimibot
+kimi-searchbot
+chatglm-spider
+deepseekbot
+grokbot
+cohere-ai

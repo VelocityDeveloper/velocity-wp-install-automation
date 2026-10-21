@@ -229,6 +229,31 @@ def history(rentang):
 BACKUP_STATUS = '/var/lib/velocity/backup/status.json'
 
 
+BACKUP_STAGING = '/home/.velocity-backup-staging'
+BACKUP_LOG = '/var/log/velocity-backup.log'
+
+
+def _progres_backup(st):
+    """Persen tahap arsip/unggah. Arsip: besar .gpg di staging dibanding arsip
+    sukses terakhir (perkiraan, isi PC berubah tiap hari). Unggah: baris statistik
+    rclone terakhir di log run ini (dicetak tiap menit)."""
+    try:
+        if st.get('phase') == 'arsip' and st.get('last_size'):
+            done = os.path.getsize(os.path.join(BACKUP_STAGING, os.path.basename(st.get('archive') or '')))
+            return {'done': done, 'total': st['last_size'], 'persen': min(99, int(done * 100 / st['last_size'])), 'perkiraan': True}
+        if st.get('phase') == 'unggah':
+            with open(BACKUP_LOG, 'rb') as f:
+                f.seek(max(0, os.path.getsize(BACKUP_LOG) - 200000))
+                ekor = f.read().decode(errors='replace').split(f"mulai {st.get('archive')}")[-1]
+            baris = [l for l in ekor.splitlines() if l.startswith('Transferred:') and 'B /' in l]
+            m = re.search(r'([\d.]+ \w+) / ([\d.]+ \w+), (\d+)%(?:, ([\d.]+ \S+/s))?(?:, ETA (\S+))?', baris[-1]) if baris else None
+            if m:
+                return {'teks': f'{m[1]} / {m[2]}', 'persen': int(m[3]), 'laju': m[4], 'eta': m[5], 'perkiraan': False}
+    except (OSError, ValueError, ZeroDivisionError):
+        pass
+    return None
+
+
 def backup_status():
     """Status backup harian ke Google Drive untuk panel dashboard.
 
@@ -261,6 +286,7 @@ def backup_status():
         out['next_run'] = None
     # Backup yang diam-diam berhenti jalan adalah mode gagal paling mahal: panel
     # tetap hijau karena run terakhir memang sukses, padahal isinya sudah basi.
+    out['progress'] = _progres_backup(out) if out.get('state') == 'running' else None
     last_ok = out.get('last_ok')
     out['stale'] = bool(last_ok and time.time() - last_ok > 48 * 3600)
     return out

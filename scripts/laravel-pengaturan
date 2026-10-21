@@ -250,26 +250,48 @@ def tambal_akun_tampilan(app):
          '\n                    <LihatSitusButton class="mr-1" />\n                    <AppearanceToggle class="mr-1" />\n\n'
          '                    <DropdownMenu>\n'),
     ])
-    tambal(app, 'tests/Feature/Settings/ProfileUpdateTest.php', [
-        (('re', r'    public function test_user_can_delete_their_account\(\).*\n    \}\n(?=\}\n)'),
-         "    public function test_users_cannot_delete_their_own_account()\n"
-         "    {\n"
-         "        // Installer Velocity: hapus akun sendiri dibuang supaya minimal satu super admin selalu ada.\n"
-         "        $user = User::factory()->create();\n\n"
-         "        $this->actingAs($user)\n"
-         "            ->delete('/settings/profile', ['password' => 'password'])\n"
-         "            ->assertMethodNotAllowed();\n\n"
-         "        $this->assertNotNull($user->fresh());\n"
-         "        $this->assertAuthenticatedAs($user);\n"
-         "    }\n\n"
-         "    public function test_appearance_settings_page_is_removed()\n"
-         "    {\n"
-         "        // Mode gelap lewat tombol di header, bukan Pengaturan > Tampilan.\n"
-         "        $this->actingAs(User::factory()->create())\n"
-         "            ->get('/settings/appearance')\n"
-         "            ->assertNotFound();\n"
-         "    }\n"),
-    ])
+    tes_profil = 'tests/Feature/Settings/ProfileUpdateTest.php'
+    # 20 Okt 2026: `laravel new --pest` kadang menghasilkan test Pest (fungsi test()), kadang kelas PHPUnit
+    if "\ntest('" in (app / tes_profil).read_text():
+        tambal(app, tes_profil, [
+            (('re', r"\ntest\('user can delete their account'.*\Z"),
+             "\ntest('users cannot delete their own account', function () {\n"
+             "    // Installer Velocity: hapus akun sendiri dibuang supaya minimal satu super admin selalu ada.\n"
+             "    $user = User::factory()->create();\n\n"
+             "    $this->actingAs($user)\n"
+             "        ->delete('/settings/profile', ['password' => 'password'])\n"
+             "        ->assertMethodNotAllowed();\n\n"
+             "    expect($user->fresh())->not->toBeNull();\n"
+             "    $this->assertAuthenticatedAs($user);\n"
+             "});\n\n"
+             "test('appearance settings page is removed', function () {\n"
+             "    // Mode gelap lewat tombol di header, bukan Pengaturan > Tampilan.\n"
+             "    $this->actingAs(User::factory()->create())\n"
+             "        ->get('/settings/appearance')\n"
+             "        ->assertNotFound();\n"
+             "});\n"),
+        ])
+    else:
+        tambal(app, tes_profil, [
+            (('re', r'    public function test_user_can_delete_their_account\(\).*\n    \}\n(?=\}\n)'),
+             "    public function test_users_cannot_delete_their_own_account()\n"
+             "    {\n"
+             "        // Installer Velocity: hapus akun sendiri dibuang supaya minimal satu super admin selalu ada.\n"
+             "        $user = User::factory()->create();\n\n"
+             "        $this->actingAs($user)\n"
+             "            ->delete('/settings/profile', ['password' => 'password'])\n"
+             "            ->assertMethodNotAllowed();\n\n"
+             "        $this->assertNotNull($user->fresh());\n"
+             "        $this->assertAuthenticatedAs($user);\n"
+             "    }\n\n"
+             "    public function test_appearance_settings_page_is_removed()\n"
+             "    {\n"
+             "        // Mode gelap lewat tombol di header, bukan Pengaturan > Tampilan.\n"
+             "        $this->actingAs(User::factory()->create())\n"
+             "            ->get('/settings/appearance')\n"
+             "            ->assertNotFound();\n"
+             "    }\n"),
+        ])
     tambal(app, 'tests/Feature/Auth/EmailVerificationTest.php', [
         ("route('appearance.edit')", "route('app-settings.edit')"),
     ])

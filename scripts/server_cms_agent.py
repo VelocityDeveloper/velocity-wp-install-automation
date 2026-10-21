@@ -3,7 +3,8 @@
 
 Dipakai halaman Server > CMS (installer_status.py → /api/servers/cms*). Pemanggil menambahkan satu baris
 `jalankan(<perintah base64 JSON>)` di akhir kode ini. Mencetak satu objek JSON di baris terakhir.
-Harus tetap jalan di Python 3.6 (CloudLinux 8 platform-python). HANYA BACA — tidak memasang/mengubah apa pun.
+Harus tetap jalan di Python 3.6 (CloudLinux 8 platform-python). Param `user` = hanya akun itu (tanpa cPGuard).
+HANYA BACA — tidak memasang/mengubah apa pun.
 
 Aksi:
 - inventaris: semua instalasi WordPress di /home/<akun>/domains/<domain>/public_html (sampai 2 folder ke
@@ -190,6 +191,8 @@ def inventaris(p):
     situs = []
     terpotong = False
     for user in akun_da():
+        if p.get('user') and user != p['user']:  # scan ulang satu akun sesudah perbaikan
+            continue
         dom = os.path.join(HOME, user, 'domains')
         try:
             domains = sorted(os.listdir(dom))
@@ -207,7 +210,7 @@ def inventaris(p):
                 item = instalasi(akar, user, d, sub)
                 if item:
                     situs.append(item)
-    return {'ok': True, 'situs': situs, 'terpotong': terpotong, 'cpguard': cpguard(),
+    return {'ok': True, 'situs': situs, 'terpotong': terpotong, 'cpguard': None if p.get('user') else cpguard(),
             'cpguard_jalan': cpguard_jalan(),
             'detik': round(time.time() - mulai, 1)}
 

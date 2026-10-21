@@ -3040,6 +3040,7 @@ if (taxonomy_exists('store_product_cat')) {
     }
 }
 vfse_keluar(array('tema' => get_stylesheet(), 'halaman' => $hal, 'sisa' => $sisa, 'kategori' => $kat, 'menu' => $menu,
+    'donasi' => post_type_exists('donasi'),
     'kategori_produk' => $kat_produk,
     'peta' => is_array($peta) ? $peta : null,
     'nav' => $nav, 'semua' => $halaman_id, 'home' => home_url('/'), 'depan' => (int) get_option('page_on_front'),
@@ -3345,6 +3346,20 @@ def faq_butir(sd, isi):
 
 
 def tautan_menu(info, sd, slugs_ada):
+    """Menu utama + butir Donasi (arsip /donasi/ plugin Velocity Donasi) bila belum ada, sebelum Kontak."""
+    menu = susun_tautan_menu(info, sd, slugs_ada)
+    if not info.get('donasi') or re.search(r'"url":"[^"]*/donasi/?"', menu):
+        return menu
+    donasi = blok('navigation-link', {'label': 'Donasi', 'url': info['home'] + 'donasi/', 'kind': 'custom',
+                                      'isTopLevelLink': True})
+    kontak = list(re.finditer(r'<!-- wp:navigation-link \{"label":"(?:Kontak|Hubungi|Contact)', menu))
+    if not kontak:
+        return f'{menu}\n\n{donasi}' if menu else donasi
+    i = kontak[-1].start()
+    return f'{menu[:i]}{donasi}\n\n{menu[i:]}'
+
+
+def susun_tautan_menu(info, sd, slugs_ada):
     """Menu utama: susunan menu klasik yang sudah disepakati (paket-g-setup) dibawa apa adanya."""
     if satu_halaman(info) and not (info.get('label_menu') or info.get('tanpa_halaman_manifest')):
         if jangkar_menu := menu_jangkar(info, sd):

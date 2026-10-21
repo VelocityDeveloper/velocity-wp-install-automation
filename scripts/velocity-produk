@@ -14,7 +14,7 @@ Gerbang (tidak lolos = "katalog: dilewati:<alasan>"):
   - paket bukan Paket E / Paket F; situs sudah ter-deploy (tanpa --paksa);
   - form tidak meminta katalog (menu Produk/Katalog/Price list, atau pesan tambahan menyebut
     katalog/daftar produk/data produk) DAN tidak ada folder produk berisi foto di folder klien;
-  - tema sudah punya katalog sendiri (CPT produk bawaan tema, store_product, paket-tour, property, mobil).
+  - tema sudah punya katalog sendiri (CPT produk bawaan tema, store_product, paket-tour, property, mobil; velocity-spa = CPT layanan).
 Isi: produk dari folder produk klien (pembacaan sama dengan scripts/toko-biasa: subfolder = produk,
 nama berkas = nama/harga, foto generik dikenali Claude; gambar < 100 KB), atau 6 produk CONTOH
 (judul "Contoh – ", meta _velocity_produk_contoh=1, foto Pexels) bila folder produk tidak ada.
@@ -148,6 +148,8 @@ $tour_ef = (bool) get_option('velocity_tour_ef');
 foreach (['produk', 'store_product', 'paket-tour', 'property', 'mobil'] as $cpt) {
     if (post_type_exists($cpt) && !($cpt === 'produk' && $vp) && !($cpt === 'paket-tour' && $tour_ef)) { echo "katalog_tema:$cpt\n"; }
 }
+// velocity-spa (user 2026-10-18): produk klien diinput ke CPT layanan bawaan child, tanpa velocity-produk.
+if (get_stylesheet() === 'velocity-spa' && post_type_exists('layanan')) { echo "katalog_tema:layanan\n"; }
 echo 'tema:' . get_stylesheet() . "\n";
 echo 'velocity_produk:' . ($vp ? 'aktif' : 'tidak') . "\n";
 '''

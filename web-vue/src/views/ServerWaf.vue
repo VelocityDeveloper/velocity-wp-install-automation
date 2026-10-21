@@ -254,7 +254,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
   <div class="halaman">
     <header class="kepala-halaman">
       <div>
-        <h1>WAF Server</h1>
+        <h1>WAF Server <span class="merek-guard">VelocityGuard</span></h1>
         <p class="redup">Velocity WAF — aturan ModSecurity pengganti cPGuard: blokir bot jahat, probe berkas sensitif, dan brute force WordPress di tiap server hosting.</p>
       </div>
       <div class="kepala-aksi">

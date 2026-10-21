@@ -51,6 +51,8 @@ Contoh ini hanya acuan FORMAT dan jauh lebih panjang dari yang diminta — janga
 
 {{KONTEN}}
 
+{{REFERENSI}}
+
 <catatan_diskusi>
 {{CATATAN}}
 </catatan_diskusi>

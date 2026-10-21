@@ -63,8 +63,8 @@ def jalan(cmd, batas=120):
 
 
 # Probe yang tak pernah dilakukan pengunjung asli (.env/.git, wp-config, dump/backup, PHP tersembunyi, null byte,
-# traversal, bot AI palsu) → kelompok 'berat' (bawaan blokir permanen). Harus sama dengan RE_BERAT di blok Perl.
-BERAT = ('7700201', '7700202', '7700203', '7700211', '7700301', '7700302', '7700106')
+# traversal, bot AI palsu, xmlrpc system.multicall) → kelompok 'berat' (bawaan blokir permanen). Harus sama dengan RE_BERAT di blok Perl.
+BERAT = ('7700201', '7700202', '7700203', '7700211', '7700301', '7700302', '7700106', '7700505')
 RE_BERAT = '/^(%s)$/' % '|'.join(BERAT)
 
 
@@ -108,7 +108,7 @@ def blok_perl(aturan, slot, sidik):
         '\tif (($globlogs{%s}{$lgfile}) and ($line =~ /^\\[[^\\]]+\\] \\[(?:\\S*:)?error\\] \\[client (\\S+)\\] ModSecurity: Access denied with code \\S+ .*?\\[id "(77\\d{5})"\\].*?\\[tag "velocity-waf"\\]/)) {' % slot,
         '\t\tmy ($ip, $id) = ($1, $2);',
         '\t\t$ip =~ s/^::ffff://;',
-        '\t\treturn 0 if $id =~ /^77007/;',
+        '\t\treturn 0 if $id =~ /^(?:77007\\d\\d|7700107|7700215)$/;',
     ] + cabang + ['\t\t' + akhir, '\t}', SELESAI])
 
 
@@ -163,8 +163,8 @@ def simulasi(aturan, interval):
                     continue
                 mode[m.group(3)] += 1
                 rid = m.group(4)
-                if rid in ('7700105',) or rid.startswith('77006') or rid.startswith('77007'):
-                    continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam
+                if rid in ('7700105', '7700107', '7700215') or rid.startswith('77006') or rid.startswith('77007'):
+                    continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam; 7700107 Meta: IP dipakai pratinjau FB/WA; 7700215 page/N artikel: IP residensial
                 per.setdefault(kelompok(rid), {}).setdefault(m.group(2), []).append(t)
     hasil = {}
     for k, a in aturan.items():
@@ -202,14 +202,16 @@ def cpguard_24j():
 
 
 def sumber_deny():
-    hit = {'cpguard': 0, 'lfd': 0, 'velocity': 0, 'dashboard': 0, 'lain': 0}
+    hit = {'directadmin': 0, 'cpguard': 0, 'lfd': 0, 'velocity': 0, 'dashboard': 0, 'lain': 0}
     total = 0
     for b in baca(CSF_DENY).splitlines():
         b = b.strip()
         if not b or b.startswith('#'):
             continue
         total += 1
-        if 'BFM:' in b or 'cPGuard' in b:
+        if '# BFM:' in b:  # Brute Force Monitor DirectAdmin (bukan cPGuard)
+            hit['directadmin'] += 1
+        elif 'cPGuard' in b:
             hit['cpguard'] += 1
         elif 'vwaf' in b or 'Velocity WAF' in b:
             hit['velocity'] += 1

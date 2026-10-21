@@ -85,6 +85,7 @@ const KOLOM = {
   baca: (o) => o.t.baca,
   output: (o) => o.t.output,
   sesi: (o) => o.sesi.length,
+  aktif: (o) => o.sesi.filter((s) => s.aktif).length,
   divisi: (o) => (o.divisi || 'zzz').toLowerCase(),
 }
 function urutkan(kolom) {
@@ -278,6 +279,7 @@ const stat = computed(() => [
 const KEPALA = [
   ['nama', 'Orang', ''], ['divisi', 'Divisi', 'sembunyi-hp'], ['total', 'Total', 'kanan'], ['masuk', 'Input + cache tulis', 'sembunyi-hp kanan'],
   ['baca', 'Cache baca', 'sembunyi-hp kanan'], ['output', 'Output', 'kanan'], ['sesi', 'Sesi', 'sembunyi-hp kanan'],
+  ['aktif', 'Sesi aktif', 'sembunyi-hp kanan'],
 ]
 // Kartu batas: warna meter ikut tingkat (biru < 70%, kuning < 90%, merah ≥ 90%)
 const tingkat = (p) => p >= 90 ? 'merah' : p >= 70 ? 'kuning' : 'biru'
@@ -471,8 +473,8 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!data && !galat"><td colspan="7" class="redup">Memuat…</td></tr>
-            <tr v-else-if="data && !orang.length"><td colspan="7" class="redup">Tidak ada pemakaian yang cocok dengan saringan ini.</td></tr>
+            <tr v-if="!data && !galat"><td colspan="8" class="redup">Memuat…</td></tr>
+            <tr v-else-if="data && !orang.length"><td colspan="8" class="redup">Tidak ada pemakaian yang cocok dengan saringan ini.</td></tr>
             <template v-for="o in orang" :key="o.nama">
               <tr class="baris" :class="{ terbuka: buka === o.nama }" tabindex="0" :aria-expanded="buka === o.nama"
                   @click="buka = buka === o.nama ? null : o.nama" @keydown.enter.prevent="buka = buka === o.nama ? null : o.nama">
@@ -492,9 +494,10 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                 <td class="sembunyi-hp kanan" :title="angka(o.t.baca)">{{ pendek(o.t.baca) }}</td>
                 <td class="kanan" :title="angka(o.t.output)">{{ pendek(o.t.output) }}</td>
                 <td class="sembunyi-hp kanan">{{ o.sesi.length }}</td>
+                <td class="sembunyi-hp kanan" title="Sesi yang prosesnya masih berjalan"><span v-if="KOLOM.aktif(o)" class="lencana hijau">{{ KOLOM.aktif(o) }}</span><span v-else class="redup">–</span></td>
               </tr>
               <tr v-if="buka === o.nama" class="rinci">
-                <td colspan="7">
+                <td colspan="8">
                   <div class="rinci-isi">
                     <div>
                       <h3>Per jalur</h3>

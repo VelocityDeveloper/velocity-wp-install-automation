@@ -14,6 +14,9 @@ Pilihan akun:
     panggilan langsung diulang di akun lain; stream-json diteruskan live, jadi hanya ditandai dan
     panggilan berikutnya yang pindah.
   - Kalau keduanya penuh, dipilih yang persennya lebih rendah.
+  - Kredit API habis ("Credit balance is too low", 20 Okt 2026): panggilan yang membawa
+    ANTHROPIC_API_KEY langsung diulang tanpa kunci itu (pakai paket langganan di atas), dan selama
+    KREDIT_JEDA berikutnya kunci API dilewati. Sesudah itu API dicoba lagi (gagalnya instan, $0).
 
 Tiap pilihan dicatat ke DATA/pilihan.jsonl (claude-pakai memakainya untuk membagi token installer
 per akun) dan status terakhir ke /brain/claude-akun.json (dashboard /token).
@@ -45,6 +48,9 @@ SEGAR = 180       # detik: umur maksimal data batas sebelum disegarkan
 BASI = 1800       # detik: data batas lebih tua dari ini tidak dipercaya (anggap akun masih bisa)
 POLA_LIMIT = re.compile(r"usage limit reached|hit your (?:usage )?limit|(?:5-hour|weekly|session) limit reached"
                         r"|limit reached\s*[·∙|]|out of (?:extra )?usage", re.I)
+POLA_KREDIT = re.compile(r"credit balance is too low", re.I)
+KREDIT = DATA / "api-kredit-habis.json"
+KREDIT_JEDA = 3600  # detik: lama kunci API dilewati sesudah kredit habis
 
 
 def baca(p, bawaan=None):
@@ -183,11 +189,21 @@ def terus(p):
         signal.signal(s, lambda n, _f: p.send_signal(n))
 
 
-def kena_limit(kode, out, err):
+def kena_limit(kode, out, err, pola=POLA_LIMIT):
     if kode == 0:
         return False
     teks = (out[-65536:] + b"\n" + err[-65536:]).decode("utf-8", "replace")
-    return bool(POLA_LIMIT.search(teks))
+    return bool(pola.search(teks))
+
+
+def kredit_habis(kode, out, err):
+    """Kunci API kehabisan saldo: tandai, buang kuncinya dari env -> panggilan diulang pakai paket."""
+    if not os.environ.get("ANTHROPIC_API_KEY") or not kena_limit(kode, out, err, POLA_KREDIT):
+        return False
+    DATA.mkdir(parents=True, exist_ok=True)
+    KREDIT.write_text(json.dumps({"sampai": time.time() + KREDIT_JEDA, "dicatat": time.time()}))
+    os.environ.pop("ANTHROPIC_API_KEY")
+    return True
 
 
 def main():
@@ -197,9 +213,16 @@ def main():
         os.execve(CLAUDE, [CLAUDE, *argv], env_akun(os.environ.get("CLAUDE_AKUN") or "1"))
     alir = "stream-json" in argv
     akun, alasan = pilih()
+    if os.environ.get("ANTHROPIC_API_KEY") and (baca(KREDIT) or {}).get("sampai", 0) > time.time():
+        os.environ.pop("ANTHROPIC_API_KEY")
+        alasan += "; kredit API habis, pakai paket langganan"
     catat(akun, alasan)
     if alir:
         kode, out, err = jalankan_alir(akun, argv)
+        if kredit_habis(kode, out, err):
+            # Kredit ditolak sebelum agen bekerja; pemanggil stream-json memakai event result terakhir
+            catat(akun, "ulang: kredit API habis; pakai paket langganan")
+            kode, out, err = jalankan_alir(akun, argv)
         if kena_limit(kode, out, err):
             tandai_habis(akun)
             catat(akun, alasan, "kena limit (stream-json, panggilan berikutnya pindah akun)")
@@ -210,6 +233,9 @@ def main():
     if sys.stdin is not None and not sys.stdin.isatty():
         masukan = sys.stdin.buffer.read() if select.select([sys.stdin], [], [], 3)[0] else b""
     kode, out, err = jalankan_tahan(akun, argv, masukan)
+    if kredit_habis(kode, out, err):
+        catat(akun, "ulang: kredit API habis; pakai paket langganan")
+        kode, out, err = jalankan_tahan(akun, argv, masukan)
     if kena_limit(kode, out, err):
         tandai_habis(akun)
         lain, alasan2 = pilih(kecuali=(akun,))

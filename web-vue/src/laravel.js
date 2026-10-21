@@ -92,6 +92,12 @@ const PESAN = {
   forbidden: 'Hanya bisa dari jaringan kantor/Tailscale.',
   payload_too_large: 'Terlalu besar (dokumen maks 25 MB).',
   contoh_belum_ada: 'Buat contoh tampilan dulu.',
+  url_tidak_sah: 'Link referensi tidak valid. Tulis alamat situs, mis. alibaba.com atau https://alibaba.com/produk.',
+  desain_belum_acc: 'Contoh tampilan belum di-ACC PM dan klien (tab Brief → Contoh tampilan → ACC desain).',
+  acc_cek_kosong: 'Centang dulu bahwa contoh sudah dicocokkan dengan rangkuman/referensi.',
+  acc_bukti_kosong: 'Tulis bukti persetujuan klien (siapa, lewat apa, kapan).',
+  acc_pm_dulu: 'ACC PM dulu sebelum mencatat ACC klien.',
+  peran_tidak_sah: 'Peran ACC tidak dikenal.',
   preview_belum_diatur: 'Server preview velocity.ai.id belum diatur (/etc/velocity/secrets/preview-velocity-ai.env).',
 }
 // Review dianggap mendesak (merah) bila agen tertahan gerbang review atau ada fitur menunggu lebih dari sehari

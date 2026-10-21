@@ -273,6 +273,32 @@
       ],
       "catatan": "Dibuat installer Laravel 2026-10-13. Update: /root/sabaktrade/deploy-dev.sh",
       "produksi": "https://sabaktrade.com"
+    },
+    {
+      "id": "website-utk-keperluan-pendaftara",
+      "nama": "website utk keperluan pendaftaran peserta road race",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8240,
+      "folder": "/home/website-utk-keperluan-pendaftara",
+      "layanan": [
+        "website-utk-keperluan-pendaftara-dev",
+        "website-utk-keperluan-pendaftara-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-20. Update: /root/website-utk-keperluan-pendaftara/deploy-dev.sh"
+    },
+    {
+      "id": "web-organisasi",
+      "nama": "web organisasi",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8230,
+      "folder": "/home/web-organisasi",
+      "layanan": [
+        "web-organisasi-dev",
+        "web-organisasi-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-20. Update: /root/web-organisasi/deploy-dev.sh"
     }
   ]
 }

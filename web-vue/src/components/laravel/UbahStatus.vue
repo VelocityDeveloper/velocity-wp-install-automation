@@ -15,9 +15,11 @@ watch(() => props.p, (p) => {
 async function simpan() {
   st.mengirim = true
   try {
-    await aksi(props.p.slug, 'status', { nilai: st.nilai, alasan: st.alasan.trim() })
+    const r = await aksi(props.p.slug, 'status', { nilai: st.nilai, alasan: st.alasan.trim() })
     emit('ubah')
-    emit('tutup')
+    // Status tersimpan; galat cabut/terbit ulang preview ditampilkan, dialog tetap terbuka
+    if (r?.galat_preview) st.galat = `Status tersimpan, tetapi preview gagal diperbarui: ${r.galat_preview}`
+    else emit('tutup')
   } catch (e) { st.galat = pesanGalat(e) } finally { st.mengirim = false }
 }
 </script>

@@ -79,8 +79,8 @@ def pecah(b):
 
 
 def sumber(ket):
-    if ket.startswith('BFM:'):
-        return 'cpguard'
+    if ket.startswith('BFM:'):  # Brute Force Monitor DirectAdmin (brute_ip.data: wordpress1=…), bukan cPGuard
+        return 'directadmin'
     # Velocity BFM = pemicu LFD kustom vwaf* (regex.custom.pm), termasuk yang jadi permanen lewat LF_PERMBLOCK
     if 'Velocity WAF' in ket or '(vwaf' in ket:
         return 'velocity'
@@ -359,7 +359,7 @@ def log(p):
         if ev['ip'] and ev['ip'] == kantor:
             ev['kantor'] = True
         out.append(ev)
-    # Blokir yang tidak lewat lfd (cPGuard BFM, dashboard, manual) — waktunya dari komentar csf.deny
+    # Blokir yang tidak lewat lfd (BFM DirectAdmin, dashboard, manual) — waktunya dari komentar csf.deny
     for d in daftar_deny():
         if d['sumber'] != 'lfd' and d['waktu'] and d['waktu'] >= batas:
             cc = RE_CC.search(d['ket'])

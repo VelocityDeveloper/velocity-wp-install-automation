@@ -21,7 +21,9 @@ def subfolder_dari_deskripsi(teks):
         m = SUBFOLDER_RE.search(baris)
         if m:
             # Deskripsi bisa berlanjut ke catatan lain: "sub folder x.com baru, tf jadi 1 ..."
-            nama = re.split(r'[,;]', m.group(1))[0]
+            nama = m.group(1).strip()
+            # Nama berkutip diikuti catatan: 'sub folder "redesign x.com". nego ...' (gunungmasbi.com).
+            nama = re.split(r'[,;"“”`]', nama.lstrip('"“\'‘`'))[0]
             nama = nama.strip().strip('"\'“”‘’`').strip().rstrip('/').strip()
             if nama and '/' not in nama and not nama.startswith('.'):
                 return nama

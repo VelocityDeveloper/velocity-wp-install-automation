@@ -48,7 +48,7 @@ const formatWaktu = (t, lengkap) => {
 }
 const puncakCpu = computed(() => titik.value.length ? Math.max(...titik.value.map((q) => q.cpu_max ?? q.cpu)) : 0)
 
-// Backup Google Drive
+// Backup sistem ke PC Backup
 const backup = pakaiPolling('/api/backup', 15000)
 const b = computed(() => backup.data.value)
 const statusBackup = computed(() => {
@@ -80,7 +80,7 @@ const LAYANAN = [
   { ke: '/paket', label: 'Package Manager', ket: 'Tema & plugin dari API Velocity.', ikon: 'paket' },
   { ke: '/ai', label: 'Manage Model', ket: 'Model AI untuk generate konten.', ikon: 'ai' },
   { url: '/n8n/', label: 'n8n', ket: 'Otomasi workflow dan integrasi aplikasi.', ikon: 'n8n' },
-  { url: 'http://192.168.20.40/phpmyadmin/', label: 'phpMyAdmin', ket: 'Kelola database MySQL/MariaDB (LAN/Tailscale).', ikon: 'database' },
+  { url: 'https://dash.velocity.ai.id/phpmyadmin', label: 'phpMyAdmin', ket: 'Kelola database MySQL/MariaDB (LAN/Tailscale).', ikon: 'database' },
   { url: '/files/', label: 'File Manager', ket: 'Penyimpanan dan berbagi file kantor.', ikon: 'berkas' },
   { url: '/newvdnet/', label: 'New VDNet', ket: 'CRM Velocity (dev :3005/:8005), belum untuk tim.', ikon: 'crm', dev: true },
 ]
@@ -199,7 +199,7 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 
       <section id="backup" class="kartu backup" aria-labelledby="judul-backup">
         <div class="kartu-judul">
-          <h2 id="judul-backup">Backup Google Drive</h2>
+          <h2 id="judul-backup">Backup ke PC Backup</h2>
           <span class="pil" :class="statusBackup.kelas">{{ statusBackup.teks }}</span>
         </div>
         <dl class="daftar-data">

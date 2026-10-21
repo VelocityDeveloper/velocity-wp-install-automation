@@ -10,6 +10,7 @@ import SaranPlatform from './SaranPlatform.vue'
 import DokumenKlien from './DokumenKlien.vue'
 import RangkumanKlien from './RangkumanKlien.vue'
 import ContohTampilan from './ContohTampilan.vue'
+import ReferensiDesain from './ReferensiDesain.vue'
 import PertanyaanKlien from './PertanyaanKlien.vue'
 import Ikon from '../Ikon.vue'
 import { aksi, pesanGalat, namaSaya, keNama } from '../../laravel.js'
@@ -116,10 +117,11 @@ const hitungKata = (t) => (t.trim() ? t.trim().split(/\s+/).length : 0)
       <p class="redup">{{ KONTEN.find((x) => x.kunci === konten).ket }}<template v-if="d.konten"> · ditandai {{ d.konten.oleh }}, {{ tanggalWaktu(d.konten.waktu) }}</template></p>
       <p v-if="statusKonten.teks" class="pesan-status" :class="statusKonten.kelas" role="status">{{ statusKonten.teks }}</p>
     </fieldset>
+    <ReferensiDesain :d="d" @ubah="emit('ubah')" />
     <DokumenKlien :d="d" @ubah="emit('ubah')" />
     <RangkumanKlien :d="d" :catatan-berubah="berubahCatatan" :simpan-catatan="simpanCatatanSaja" @ubah="emit('ubah')" />
     <details v-if="d.brief?.riwayat?.length" class="riwayat-versi">
-      <summary>Riwayat versi brief <span class="redup">(sekarang v{{ d.brief.versi }}; naik setiap catatan, dokumen klien, kebutuhan konten, PRD, DESIGN.md, relasi database, atau flowchart berubah)</span></summary>
+      <summary>Riwayat versi brief <span class="redup">(sekarang v{{ d.brief.versi }}; naik setiap catatan, dokumen klien, kebutuhan konten, referensi desain, PRD, DESIGN.md, relasi database, atau flowchart berubah)</span></summary>
       <ul>
         <li v-for="v in d.brief.riwayat" :key="v.versi">
           <b>v{{ v.versi }}</b> <span class="redup">{{ tanggalWaktu(v.waktu) }}</span> {{ v.oleh }}

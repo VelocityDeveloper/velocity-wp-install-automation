@@ -4,6 +4,7 @@
 HANYA MEMBACA: tidak menulis berkas, tidak mengubah layanan. Mencetak satu objek JSON.
 Harus tetap jalan di Python 3.6 (CloudLinux 8 platform-python).
 """
+import glob
 import json
 import os
 import re
@@ -44,6 +45,24 @@ def baca(path, default=''):
         return default
 
 
+def suhu_cpu():
+    """Suhu inti terpanas (°C) + batas panas/kritis dari sensor coretemp/k10temp; {} di VPS tanpa sensor."""
+    nilai, batas, kritis = [], [], []
+    for h in glob.glob('/sys/class/hwmon/hwmon*'):
+        if baca(h + '/name').strip() not in ('coretemp', 'k10temp', 'zenpower'):
+            continue
+        for f in glob.glob(h + '/temp*_input'):
+            for daftar, akhiran in ((nilai, '_input'), (batas, '_max'), (kritis, '_crit')):
+                try:
+                    daftar.append(int(baca(f[:-6] + akhiran)) / 1000)
+                except ValueError:
+                    pass
+    if not nilai:
+        return {}
+    return {'suhu': round(max(nilai), 1), 'suhu_batas': min(batas) if batas else None,
+            'suhu_kritis': min(kritis) if kritis else None}
+
+
 def sistem():
     out = {'hostname': os.uname()[1], 'kernel': os.uname()[2],
            'os': baca('/etc/redhat-release').strip() or nama_os()}
@@ -60,6 +79,7 @@ def sistem():
     total = sum(d) or 1
     out['cpu'] = round((total - d[3] - (d[4] if len(d) > 4 else 0)) * 100 / total, 1)
     out['iowait'] = round((d[4] if len(d) > 4 else 0) * 100 / total, 1)
+    out.update(suhu_cpu())
 
     mem = {}
     for baris in baca('/proc/meminfo').split('\n'):

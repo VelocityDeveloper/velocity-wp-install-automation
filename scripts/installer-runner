@@ -633,6 +633,12 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # situs yang sudah ter-deploy dilewati skripnya sendiri.
   echo "[$(date -Is)] Toko biasa: menu toko" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/toko-biasa" --menu "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Paket G + form meminta donasi (permintaan user 2026-10-16): plugin Velocity Donasi + program contoh
+  # SEBELUM referensi & tema FSE, supaya menu Donasi (fse-apply) & seksi program beranda (agen desain)
+  # ikut disusun. Tidak bergantung pada VD Store. Paket lain, form tanpa donasi & situs ter-deploy
+  # dilewati skripnya sendiri.
+  echo "[$(date -Is)] Velocity Donasi" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/velocity-donasi" "$MANIFEST" >> "$LOG" 2>&1 || true
   if paket_desain_custom; then
     jalur_tema
     paket_g_tema || true

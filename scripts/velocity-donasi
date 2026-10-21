@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Plugin Velocity Donasi untuk Paket G yang form-nya meminta fitur donasi (permintaan user 2026-10-16).
+
+  velocity-donasi <manifest>            pasang + isi (hanya bila lolos gerbang)
+  velocity-donasi --coba <manifest>     tampilkan alasan gerbang tanpa SSH
+  --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
+(butuh WP_INSTALL_SSH_KEY_FILE)
+
+Gerbang (tidak lolos = "donasi: dilewati:<alasan>"): paket bukan Paket G; situs sudah ter-deploy
+(tanpa --paksa); teks form klien tidak menyebut donasi/donatur/infaq/wakaf/zakat/sedekah/galang dana
+(saat dibuat: 1 dari 60 form Paket G, palemdas-indonesia.com "fitur mengikuti donasi.velocitydeveloper.com").
+Tidak bergantung pada VD Store. installer-runner memanggilnya SEBELUM referensi desain & tema FSE,
+supaya fse-apply (butir menu Donasi) dan agen desain (templates/desain-claude/donasi.md, seksi program
+di beranda) sudah melihat CPT `donasi`. Tampilan di velocity-fse: templates/tema-fse/inc/donasi.php.
+
+Isi:
+  - zip dari API plugin Velocity (slug velocity-donasi, ApiCo id 91). Plugin yang sudah ada tidak ditimpa.
+  - 3 program CONTOH (judul "Contoh – ", meta _velocity_donasi_contoh=1, target, foto Pexels < 100 KB)
+    sesuai bidang klien (Claude) bila belum ada program; program asli = contoh tidak dibuat.
+  - halaman "Donasi Saya" ([halaman-donatur], cek status invoice) + theme_mod halaman_donatur
+    (bawaan plugin = ID 42, sembarang halaman).
+  - rekening: theme_mod bank_velocitydonasi kosong -> BCA 123456789 a/n Rekening Contoh (sama dengan
+    aturan toko); rekening yang sudah diisi PM dipertahankan.
+  theme_mod ditulis ke velocity-fse DAN tema aktif saat ini: tema FSE baru diaktifkan sesudah langkah ini.
+Log "donasi: ...", ringkasan /var/lib/velocity/donasi/<domain>.json.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import claude_vision  # noqa: E402
+import client_form  # noqa: E402
+import plugin_api  # noqa: E402
+from folder_klien import folder_klien  # noqa: E402
+
+SLUG = 'velocity-donasi'
+JUMLAH_CONTOH = 3
+HASIL = Path('/var/lib/velocity/donasi')
+PEMICU = re.compile(r'donasi|donation|donatur|infa[qk]|wakaf|zakat|sedekah|shodaqoh|galang dana|penggalangan dana|crowdfunding', re.I)
+# True begitu skrip mengirim perubahan ke situs; hanya saat itu pemilik wp-content dirapikan.
+DIUBAH = False
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+toko = muat('toko_biasa', 'toko-biasa')
+finish = toko.finish
+
+
+def log(pesan):
+    print(f'donasi: {pesan}', flush=True)
+
+
+def alasan(cfg):
+    """'' = lolos, selain itu alasan dilewati. Kata pemicu dicetak supaya salah tangkap mudah dilihat."""
+    if re.sub(r'\s+', '', (cfg.get('paket') or '').lower()) != 'paketg':
+        return f'paket_{cfg.get("paket") or "kosong"}'
+    teks = client_form.read_client_form(folder_klien(cfg['domain'].lower())).get('text') or ''
+    m = PEMICU.search(teks)
+    if not m:
+        return 'form_tidak_meminta_donasi'
+    log(f'pemicu:"{teks[max(0, m.start() - 60):m.end() + 60].strip()}"'.replace('\n', ' '))
+    return ''
+
+
+def program_contoh(cfg):
+    domain = cfg['domain'].lower()
+    simpan = HASIL / domain / 'contoh.json'
+    try:
+        lama = json.loads(simpan.read_text())
+        if len(lama) >= JUMLAH_CONTOH:
+            return lama[:JUMLAH_CONTOH]
+    except (OSError, ValueError, TypeError):
+        pass
+    form = client_form.read_client_form(folder_klien(domain))
+    fields = {k: v for k, v in (form.get('fields') or {}).items()
+              if not re.search(r'password|sandi|login|user|alamat|nama anda|hp|telp|wa|email|bank|kodepos', k, re.I)}
+    prompt = (
+        f'Buat {JUMLAH_CONTOH} program penggalangan donasi CONTOH untuk situs "{cfg.get("site_title") or domain}".\n'
+        'Data form klien:\n' + '\n'.join(f'- {k}: {v}' for k, v in fields.items())[:2500] + '\n'
+        'Program harus wajar dijalankan lembaga ini (sesuai bidangnya), target dalam rupiah (angka bulat).\n'
+        'Jawab HANYA JSON array: [{"judul": "...", "kategori": "...", "target": 50000000, '
+        '"isi": "3 paragraf latar belakang, rencana penyaluran, ajakan", "kata_kunci_foto": "english keywords for stock photo"}]')
+    jawab = claude_vision.tanya(prompt, [], timeout=300, log=log)
+    if not isinstance(jawab, list) or not jawab:
+        jawab = [{'judul': f'Program Donasi {i}', 'kategori': 'Program', 'target': 10000000,
+                  'isi': 'Program contoh.', 'kata_kunci_foto': 'charity donation community'} for i in range(1, JUMLAH_CONTOH + 1)]
+    jawab = [x for x in jawab if isinstance(x, dict)][:JUMLAH_CONTOH]
+    foto = muat('paket_g_foto', 'paket-g-foto').Pexels()
+    kerja = HASIL / domain / 'contoh'
+    kerja.mkdir(parents=True, exist_ok=True)
+    program, terpakai = [], set()
+    for i, x in enumerate(jawab, 1):
+        gambar = ''
+        for calon in foto.cari(str(x.get('kata_kunci_foto') or x.get('judul') or ''))[:8]:
+            if not calon.get('url') or calon['url'] in terpakai:
+                continue
+            try:
+                tujuan = kerja / f'contoh-{i}.jpg'
+                with urllib.request.urlopen(urllib.request.Request(calon['url'], headers=toko.UA), timeout=60) as resp:
+                    tujuan.write_bytes(resp.read())
+                gambar = str(tujuan)
+                terpakai.add(calon['url'])
+                break
+            except Exception:
+                continue
+        target = x.get('target')
+        isi = '\n\n'.join(f'<p>{p.strip()}</p>' for p in str(x.get('isi') or '').split('\n') if p.strip())
+        program.append({'judul': 'Contoh – ' + str(x.get('judul') or f'Program {i}').strip()[:100],
+                        'kategori': str(x.get('kategori') or 'Program').strip()[:60],
+                        'target': int(target) if isinstance(target, (int, float)) and target > 0 else 10000000,
+                        'isi': '<p><em>Program CONTOH untuk pratinjau; judul, target, foto, dan isi akan diganti program '
+                               'asli lembaga.</em></p>\n\n' + isi,
+                        'gambar': gambar})
+    simpan.write_text(json.dumps(program, ensure_ascii=False, indent=1))
+    return program
+
+
+PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+if (!post_type_exists('donasi')) { echo "donasi: gagal:cpt_donasi_tidak_ada\n"; return; }
+$dir = getenv('DONASI_DIR');
+$data = json_decode(file_get_contents($dir . '/donasi.json'), true) ?: array();
+
+// ---- program contoh ----
+$q = array('post_type' => 'donasi', 'post_status' => 'any', 'numberposts' => -1, 'fields' => 'ids');
+$asli = get_posts($q + array('meta_query' => array(array('key' => '_velocity_donasi_contoh', 'compare' => 'NOT EXISTS'))));
+$contoh = get_posts($q + array('meta_key' => '_velocity_donasi_contoh', 'meta_value' => '1'));
+if ($asli) {
+    echo "donasi: contoh_dilewati:sudah_ada_program\n";
+} elseif ($contoh) {
+    echo "donasi: contoh_sudah_ada\n";
+} else {
+    foreach ($data['program'] as $p) {
+        $id = wp_insert_post(array('post_type' => 'donasi', 'post_status' => 'publish', 'post_title' => $p['judul'],
+            'post_content' => $p['isi']), true);
+        if (is_wp_error($id)) { echo 'donasi: gagal:program:' . $id->get_error_message() . "\n"; continue; }
+        update_post_meta($id, '_velocity_donasi_contoh', 1);
+        update_post_meta($id, 'target', (int) $p['target']);
+        if (!empty($p['kategori'])) { wp_set_object_terms($id, $p['kategori'], 'kategori-donasi'); }
+        if (!empty($p['foto']) && is_file($dir . '/' . $p['foto'])) {
+            $tmp = wp_tempnam($p['foto']);
+            copy($dir . '/' . $p['foto'], $tmp);
+            $att = media_handle_sideload(array('name' => sanitize_title($p['judul']) . '.jpg', 'tmp_name' => $tmp), $id, $p['judul']);
+            if (is_wp_error($att)) { @unlink($tmp); echo 'donasi: foto_gagal:' . $att->get_error_message() . "\n"; }
+            else { set_post_thumbnail($id, $att); update_post_meta($att, '_velocity_source', 'donasi:contoh'); }
+        }
+        echo "donasi: program_dibuat:$id\n";
+    }
+}
+
+// ---- halaman Donasi Saya ----
+$halaman = 0;
+foreach (get_pages(array('post_status' => 'publish')) as $pg) {
+    if (has_shortcode($pg->post_content, 'halaman-donatur')) { $halaman = $pg->ID; break; }
+}
+if (!$halaman) {
+    $halaman = wp_insert_post(array('post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Donasi Saya',
+        'post_name' => 'donasi-saya', 'post_content' => "<!-- wp:shortcode -->\n[halaman-donatur]\n<!-- /wp:shortcode -->"));
+    echo 'donasi: halaman_donatur_dibuat:' . (int) $halaman . "\n";
+}
+
+// ---- theme_mod (velocity-fse belum tentu aktif) ----
+$bank_contoh = array(array('namabank' => 'bca', 'nobank' => '123456789', 'atasnama' => 'Rekening Contoh'));
+foreach (array_unique(array('velocity-fse', get_stylesheet())) as $tema) {
+    $mods = get_option("theme_mods_$tema");
+    $mods = is_array($mods) ? $mods : array();
+    $hal = isset($mods['halaman_donatur']) ? (int) $mods['halaman_donatur'] : 0;
+    if (!$hal || get_post_status($hal) !== 'publish' || !has_shortcode((string) get_post_field('post_content', $hal), 'halaman-donatur')) {
+        $mods['halaman_donatur'] = (int) $halaman;
+    }
+    if (empty($mods['bank_velocitydonasi']) && empty($mods['banklain_velocitydonasi'])) {
+        $mods['bank_velocitydonasi'] = $bank_contoh;
+        echo "donasi: bank:contoh:$tema\n";
+    } else {
+        echo "donasi: bank:dipertahankan:$tema\n";
+    }
+    update_option("theme_mods_$tema", $mods);
+}
+$semua = get_posts(array('post_type' => 'donasi', 'post_status' => 'publish', 'numberposts' => -1, 'fields' => 'ids'));
+$contoh = get_posts(array('post_type' => 'donasi', 'post_status' => 'publish', 'numberposts' => -1, 'fields' => 'ids',
+    'meta_key' => '_velocity_donasi_contoh', 'meta_value' => '1'));
+echo 'donasi: halaman_donatur:' . (int) $halaman . "\n";
+echo 'donasi: total:' . count($semua) . ' contoh:' . count($contoh) . "\n";
+'''
+
+
+def kepala(cfg):
+    root = finish.docroot(cfg['domain'].lower(), cfg.get('da_user', ''))
+    return (f'set -u\nexport PATH="/usr/local/bin:/usr/bin:/bin:$PATH"\nDOCROOT={shlex.quote(root)}\n'
+            'WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done\n'
+            '[[ -n "$WP_BIN" ]] || { echo "donasi: gagal:wp_cli_tidak_ada"; exit 10; }\n'
+            'wp() { php -d memory_limit=512M "$WP_BIN" "$@" --path="$DOCROOT" --allow-root; }\n')
+
+
+def pasang(cfg):
+    global DIUBAH
+    domain = cfg['domain'].lower()
+    zip_path, versi = plugin_api.ambil_paket(SLUG, log=log)
+    if not zip_path:
+        log('gagal:paket_tidak_tersedia')
+        return 1
+    program = program_contoh(cfg)
+    with tempfile.TemporaryDirectory() as tmp:
+        stage = Path(tmp)
+        (stage / f'{SLUG}.zip').write_bytes(Path(zip_path).read_bytes())
+        kirim = []
+        for i, p in enumerate(program, 1):
+            foto = ''
+            if p.get('gambar') and Path(p['gambar']).is_file():
+                try:
+                    toko.kompres(p['gambar'], stage / f'program-{i}.jpg')
+                    foto = f'program-{i}.jpg'
+                except Exception as e:
+                    log(f'kompres_gagal:{Path(p["gambar"]).name}:{type(e).__name__}')
+            kirim.append({k: p[k] for k in ('judul', 'kategori', 'target', 'isi')} | {'foto': foto})
+        (stage / 'donasi.json').write_text(json.dumps({'program': kirim}, ensure_ascii=False))
+        (stage / 'skrip.php').write_text(PHP)
+        remote = f'/tmp/velocity-donasi-{domain}'
+        ssh = finish.ssh_command(cfg, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+        DIUBAH = True
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+        up = subprocess.run(ssh + [f'rm -rf {shlex.quote(remote)} && mkdir -p {shlex.quote(remote)} && tar -xzf - -C {shlex.quote(remote)}'],
+                            stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+        tar.wait()
+    if up.returncode != 0:
+        log(f'gagal:kirim:{up.stderr.strip()[-160:]}')
+        return 1
+    k = shlex.quote(remote)
+    skrip = kepala(cfg) + f'''K={k}
+trap 'rm -rf "$K"' EXIT
+if [[ -d "$DOCROOT/wp-content/plugins/{SLUG}" ]]; then
+  echo "donasi: plugin_dipertahankan:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else
+  wp plugin install "$K/{SLUG}.zip" 2>&1 | grep -v '^Warning:' | tail -1
+fi
+wp plugin is-active {SLUG} >/dev/null 2>&1 || wp plugin activate {SLUG} 2>&1 | grep -v '^Warning:' | tail -1
+if wp plugin is-active {SLUG} >/dev/null 2>&1; then echo "donasi: plugin_aktif:$(wp plugin get {SLUG} --field=version 2>/dev/null)"
+else echo "donasi: gagal:plugin_tidak_aktif"; exit 12; fi
+DONASI_DIR="$K" wp eval-file "$K/skrip.php" --user=1 2>&1 | grep -v '^Warning:' || true
+wp rewrite flush >/dev/null 2>&1
+'''
+    run = subprocess.run(ssh + ['bash', '-s'], input=skrip, capture_output=True, text=True, timeout=900)
+    keluar = run.stdout + run.stderr
+    for baris in keluar.splitlines():
+        if baris.strip():
+            print(baris.strip()[:200], flush=True)
+    # Kode keluar bisa 0 walau WP-CLI gagal diam-diam: yang dipercaya penanda di keluaran.
+    m = re.search(r'^donasi: total:(\d+) contoh:(\d+)', keluar, re.M)
+    if not re.search(r'^donasi: plugin_aktif:', keluar, re.M) or not m:
+        log('gagal:tidak_selesai')
+        return 1
+    hal = re.search(r'^donasi: halaman_donatur:(\d+)', keluar, re.M)
+    (HASIL / domain).mkdir(parents=True, exist_ok=True)
+    (HASIL / f'{domain}.json').write_text(json.dumps({
+        'plugin': versi, 'total': int(m.group(1)), 'contoh': int(m.group(2)),
+        'halaman_donatur': int(hal.group(1)) if hal else 0,
+        'bank_contoh': bool(re.search(r'^donasi: bank:contoh:', keluar, re.M))}, indent=1))
+    log(f'selesai: program={m.group(1)} contoh={m.group(2)} plugin={versi}')
+    return 0
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    cfg = finish.read_manifest(args[0])
+    domain = cfg.get('domain', '').lower()
+    if '--paksa' not in sys.argv:
+        import cari_logo
+        if cari_logo.sudah_terpasang(domain):
+            log('dilewati:situs_sudah_terpasang (pakai --paksa setelah disetujui user)')
+            return 0
+    sebab = alasan(cfg)
+    if sebab:
+        log(f'dilewati:{sebab}')
+        return 0
+    if '--coba' in sys.argv:
+        log('coba: lolos gerbang, tidak ada yang dikirim')
+        return 0
+    return pasang(cfg)
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        if DIUBAH:
+            # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

@@ -17,6 +17,8 @@ Langkah ini hanya berjalan kalau child theme aktif memakai post type paket-tour:
 - tiap paket jadi post paket-tour: harga mulai, durasi, lokasi, itinerary, fasilitas,
   kategori-paket (+ destinasi-paket/durasi-paket bila plugin mendaftarkannya; 1.0.0 belum),
   foto utama + galeri dari foto klien (≤100 KB)
+- velocity-tour1: dokumen tanpa paket tour (mis. isinya produk) / AI gagal -> 3 paket CONTOH seperti
+  mode E/F, jadi plugin selalu terpasang; tema tour lain tidak (user 2026-10-18)
 - nomor WhatsApp pemesanan (opsi no_pemesanan) diisi bila masih kosong; menu "Paket Tour"
 Post yang sudah disunting orang tidak ditimpa (_velocity_content_md5).
 
@@ -505,6 +507,7 @@ def jalankan(manifest, ef=False, coba=False):
     if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
         print('paket_tour: manifest_tidak_valid')
         return 2
+    tema = ''
     if not coba:
         if not Path(os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')).is_file():
             print('paket_tour: kunci SSH tidak ada')
@@ -522,9 +525,12 @@ def jalankan(manifest, ef=False, coba=False):
         if not ef and m.group(2) != '1':
             print(f'paket_tour: dilewati:tema_{m.group(1)}_tanpa_paket_tour')
             return 0
-        print(f'paket_tour: tema={m.group(1)}' + (' mode=ef' if ef else ''))
+        tema = m.group(1)
+        print(f'paket_tour: tema={tema}' + (' mode=ef' if ef else ''))
     data = minta_paket(manifest, cfg, domain)
-    if not data and ef:
+    # velocity-tour1 juga: plugin wajib terpasang walau dokumen berisi produk, bukan paket tour — beranda
+    # membaca paket-tour. Tema tour lain tetap seperti sebelumnya (user 2026-10-18).
+    if not data and (ef or tema == 'velocity-tour1'):
         print('paket_tour: dokumen_tanpa_paket -> contoh')
         data = paket_contoh(manifest, cfg, domain)
     if not data:

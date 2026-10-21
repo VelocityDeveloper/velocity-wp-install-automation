@@ -287,25 +287,35 @@ CONTOH_KATA = {'index.html': ('beranda', 'landing', 'halaman depan', 'halaman pu
                'dashboard.html': ('dashboard',)}
 
 
-def bahan_contoh(p, app_dir, fitur, f):
-    """Salin contoh tampilan terbaru ke docs/contoh/ (tidak di-commit) dan beri tahu agen halaman mana yang jadi acuan;
-    beri peringatan bila brief berubah sesudah contoh dibuat."""
+def halaman_contoh(p, fitur, f):
+    """Halaman contoh tampilan (index.html/dashboard.html) yang jadi acuan fitur ini, [] bila tak ada."""
     slug = p.get('slug')
     src = L.folder_contoh(slug) if slug else None
     if not src or not (src / 'index.html').is_file():
-        return ''
+        return []
     info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
     if info.get('platform', 'laravel') != 'laravel':
-        return ''
+        return []
     teks = ' '.join([f['judul'], f.get('deskripsi') or ''] + [k['teks'] for k in f['kriteria']]
                     + [h['halaman'] for h in f.get('halaman') or []]).lower()
     fondasi = fitur and fitur[0]['id'] == f['id'] or 'fondasi' in f['judul'].lower()
-    halaman = [n for n, kk in CONTOH_KATA.items() if (src / n).is_file() and (fondasi or any(k in teks for k in kk))]
+    return [n for n, kk in CONTOH_KATA.items() if (src / n).is_file() and (fondasi or any(k in teks for k in kk))]
+
+
+def bahan_contoh(p, app_dir, fitur, f):
+    """Salin contoh tampilan terbaru ke docs/contoh/ (tidak di-commit) dan beri tahu agen halaman mana yang jadi acuan;
+    beri peringatan bila brief berubah sesudah contoh dibuat."""
+    halaman = halaman_contoh(p, fitur, f)
     if not halaman:
         return ''
+    slug = p['slug']
+    src = L.folder_contoh(slug)
+    info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
     tujuan = app_dir / 'docs' / 'contoh'
     shutil.rmtree(tujuan, ignore_errors=True)
     shutil.copytree(src, tujuan)
+    if L.folder_referensi(slug).is_dir():
+        shutil.copytree(L.folder_referensi(slug), tujuan / 'referensi')
     exclude = app_dir / '.git' / 'info' / 'exclude'
     if exclude.parent.is_dir() and '/docs/contoh/' not in (exclude.read_text() if exclude.is_file() else ''):
         with exclude.open('a') as fh:
@@ -325,6 +335,22 @@ def bahan_contoh(p, app_dir, fitur, f):
     if usang:
         t += (f"\n⚠ Contoh ini dibuat SEBELUM perubahan brief berikut: {', '.join(usang)}. Bila bertentangan (warna, "
               'menu, isi seksi), ikuti Bahan dokumen di atas; sisanya tetap ikuti susunan contoh.\n')
+    # 15 Okt (user): referensi klien = acuan UTAMA, contoh Claude hanya pelengkap (kadang kurang tepat meniru)
+    peta = [x for x in (info.get('referensi') or {}).get('peta') or [] if x.get('halaman') in halaman]
+    if peta:
+        K = muat('laravel_kemiripan', HERE / 'laravel-kemiripan')
+        baris = []
+        for x in peta:
+            acuan = [K.gambar_sumber(slug, x['sumber'], hp) for hp in (False, True)]
+            acuan = [f"`docs/contoh/referensi/{g.name}`" if g.parent == L.folder_referensi(slug) else f"`docs/contoh/aset/{g.name}`"
+                     for g in dict.fromkeys(a for a in acuan if a)]
+            baris.append(f"- {L.CONTOH_HALAMAN[x['halaman']]} · **{x['blok']}** ← {x['sumber']} ({x.get('unsur') or '-'})"
+                         + (f": {', '.join(acuan)}" if acuan else ''))
+        t += ('\n### Referensi desain klien (ACUAN UTAMA — di atas contoh tampilan)\n\n'
+              'Klien memberi referensi untuk blok berikut. Untuk blok ini tiru REFERENSI (Read screenshot-nya, potong yang '
+              'panjang), bukan contoh tampilan, bila keduanya berbeda; blok lain ikuti contoh tampilan. Merek, teks, dan '
+              'warna brand tetap milik klien. Hasil landing akan dinilai otomatis kemiripannya dengan referensi ini.\n'
+              + '\n'.join(baris) + '\n')
     return t
 
 
@@ -554,6 +580,31 @@ def deploy_dev(slug, app, app_dir, port):
     return not galat
 
 
+def cek_kemiripan(DC, slug, fid, f, port):
+    """Landing aplikasi dev vs referensi klien (atau contoh ACC). Belum mirip -> fitur otomatis jadi revisi sekali
+    dengan daftar perbaikan, supaya PM/webmaster tak perlu mencocokkan sendiri (15 Okt)."""
+    K = muat('laravel_kemiripan', HERE / 'laravel-kemiripan')
+    log('cek kemiripan landing dengan referensi desain…')
+    k = K.nilai(DC, K.env_claude(DC), slug, 'app', f'http://127.0.0.1:{port}')
+    if not k:
+        return
+    otomatis = not k['lolos'] and k['arahan'] and not f.get('kemiripan_otomatis')
+
+    def ubah(fs):
+        x = next(x for x in fs if x['id'] == fid)
+        x['hasil']['kemiripan'] = {a: k[a] for a in ('waktu', 'skor', 'lolos', 'ambang', 'ringkasan', 'blok')}
+        if otomatis:
+            x['status'] = 'revisi'
+            x['kemiripan_otomatis'] = True
+            x.setdefault('revisi', []).append({'catatan': 'Tampilan belum mirip referensi desain klien (skor '
+                                               f"{k['skor']}/{k['ambang']}). Perbaiki:\n{k['arahan']}",
+                                               'oleh': 'Cek kemiripan otomatis', 'waktu': L.sekarang()})
+    L.ubah_fitur(slug, ubah)
+    if otomatis:
+        log(f"{fid} belum mirip referensi (skor {k['skor']}); diantrekan revisi otomatis sekali.")
+        L.catat(slug, 'Agen Claude', f"{fid} direvisi otomatis: skor kemiripan {k['skor']} di bawah {k['ambang']}")
+
+
 def main():
     hanya_deploy = sys.argv[2:] == ['--deploy']
     if len(sys.argv) not in (2, 3) or not L.ID_RE.match(sys.argv[1]) or (len(sys.argv) == 3 and not hanya_deploy):
@@ -575,7 +626,10 @@ def main():
         return 0 if lolos else 1
     DC = muat('desain_claude', HERE / 'desain-claude')
     env = dict(os.environ)
-    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+    # AGEN_PAKAI_PAKET=1: pakai login langganan Claude Code (OAuth) alih-alih saldo API, mis. saat kredit API habis
+    if os.environ.get('AGEN_PAKAI_PAKET') == '1':
+        env.pop('ANTHROPIC_API_KEY', None)
+    elif DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
         env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
     # Fitur yang tertinggal "jalan" dari run yang mati mendadak (mesin mati) diantrekan lagi dan ditandai terputus
     L.ubah_fitur(slug, lambda fs: [x.update(status='antre', terputus=True) for x in fs if x.get('status') == 'jalan'])
@@ -712,6 +766,8 @@ def main():
             akhir = 'gagal'
             break
         L.catat(slug, 'Agen Claude', f"{fid} selesai ({info.get('tes_lulus', 0)} tes lolos, commit {commit})")
+        if 'index.html' in halaman_contoh(p, fitur, f):
+            cek_kemiripan(DC, slug, fid, f, port)
     L.ubah_proyek(slug, lambda x: x['agen'].update(status=akhir, fitur=None, selesai=L.sekarang()))
     return 0 if akhir != 'gagal' else 1
 

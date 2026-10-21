@@ -66,6 +66,7 @@ const angkaPendek = (v) => (Math.abs(v) < 10 ? Math.round(v * 10) / 10 : Math.ro
 const persen = (v) => `${Math.round(v)}%`
 const GRAFIK = [
   { id: 'cpu', judul: 'CPU', seri: [{ kunci: 'cpu', label: 'CPU', warna: '#5b8cff' }], format: persen, persen: true },
+  { id: 'suhu', judul: 'Suhu CPU', ket: 'inti terpanas · garis putus = batas panas', seri: [{ kunci: 'suhu', label: 'Suhu', warna: '#cc7a33' }], format: (v) => `${Math.round(v)}°C`, ruang: 80, acuanSuhu: true, sejak: '17 Okt' },
   { id: 'load', judul: 'Load average', ket: 'rata 1 menit · garis putus = jumlah core', seri: [{ kunci: 'load', label: 'Load', warna: '#5b8cff' }], format: angkaPendek, acuanCore: true },
   { id: 'mem', judul: 'Memori', seri: [{ kunci: 'ram', label: 'RAM', warna: '#26a88e' }, { kunci: 'swap', label: 'Swap', warna: '#cc7a33' }], format: persen, persen: true },
   { id: 'net', judul: 'Web traffic', ket: 'Mbps · kartu jaringan utama', sumbu: angkaPendek, seri: [{ kunci: 'net_in', label: 'Masuk', warna: '#5b8cff' }, { kunci: 'net_out', label: 'Keluar', warna: '#cc7a33' }], format: (v) => `${angkaPendek(v)} Mbps`, ruang: 108 },
@@ -85,12 +86,17 @@ const GRAFIK_DISEMBUNYIKAN = { lokal: ['req'], backup: ['req', 'conn'] }
 function grafikServer(host, jenis) {
   const titik = titikGrafik(host)
   const core = (riwayat.data.value?.servers || []).find((r) => r.host === host)?.core || titik.at(-1)?.core
-  return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id)).map((gr) => {
+  const sis = servers.value.find((s) => s.host === host)?.sistem || {}
+  // VPS tanpa sensor suhu (mis. KVM) → grafik suhu tidak ditampilkan sama sekali
+  const tanpaSensor = sis.suhu == null && !titik.some((q) => q.suhu != null)
+  return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id) && !(gr.id === 'suhu' && tanpaSensor)).map((gr) => {
     // Seri tanpa data sama sekali (mis. Swap di server tanpa swap) tidak digambar
     const seri = gr.seri.filter((sr) => titik.some((q) => q[sr.kunci] != null))
-    const tinggi = Math.max(0, ...seri.map((sr) => puncak(titik, sr.kunci)), gr.acuanCore && core ? core : 0)
+    const acuan = gr.acuanCore && core ? { nilai: core, label: `${core} core` }
+      : gr.acuanSuhu && sis.suhu_batas ? { nilai: sis.suhu_batas, label: `${sis.suhu_batas}°C` } : null
+    const tinggi = Math.max(0, ...seri.map((sr) => puncak(titik, sr.kunci)), acuan?.nilai || 0)
     const satu = (sr) => `sekarang ${gr.format(nilaiAkhir(titik, sr.kunci) ?? 0)} · rata ${gr.format(rata(titik, sr.kunci))} · puncak ${gr.format(puncak(titik, sr.kunci))}`
-    return { ...gr, seri, ada: seri.length > 0, maks: gr.persen ? 100 : maksRapi(tinggi), acuan: gr.acuanCore && core ? { nilai: core, label: `${core} core` } : null,
+    return { ...gr, seri, ada: seri.length > 0, maks: gr.persen ? 100 : maksRapi(tinggi), acuan,
       ringkas: seri.length > 1 ? seri.map((sr) => `${sr.label}: ${satu(sr)}`) : seri.map(satu) }
   })
 }
@@ -147,6 +153,14 @@ function kelompokLayanan(s) {
   })
 }
 
+// Suhu CPU: sensor tanpa batas "max" (mis. AMD k10temp) memakai 80 °C
+const BATAS_SUHU = 80
+function tingkatSuhu(sis) {
+  if (sis.suhu == null) return ''
+  const batas = sis.suhu_batas || BATAS_SUHU
+  return sis.suhu >= batas ? 'bahaya' : sis.suhu >= batas - 10 ? 'waspada' : ''
+}
+
 // Aturan peringatan per server → { judul, teks, tingkat: bahaya|waspada|info }
 function periksa(s) {
   if (!s.ok) return [{ judul: 'Tidak tersambung', teks: s.error || 'SSH gagal', tingkat: 'bahaya' }]
@@ -169,6 +183,8 @@ function periksa(s) {
   if (sis.ram?.persen >= 90) tambah('waspada', `RAM ${sis.ram.persen}%`, 'memori hampir habis')
   if (sis.swap?.persen >= 80) tambah('waspada', `Swap ${sis.swap.persen}%`, 'memori sering ditukar ke disk')
   if (sis.iowait >= 20) tambah('waspada', `I/O wait ${sis.iowait}%`, 'disk jadi penghambat')
+  const ts = tingkatSuhu(sis)
+  if (ts) tambah(ts, `CPU ${Math.round(sis.suhu)}°C`, `batas panas ${sis.suhu_batas || BATAS_SUHU}°C, cek kipas/pendingin ruangan`)
   const fw = s.firewall
   const backup = s.jenis === 'backup'
   const pc = pcKantor(s)
@@ -376,7 +392,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
                   <GrafikGaris :titik="titikGrafik(terpilih.host)" :seri="gr.seri" :format-waktu="formatWaktu" :tinggi="170" :maks="gr.maks" :format="gr.format" :acuan="gr.acuan" :ruang-label="gr.ruang || 64" :format-sumbu="gr.sumbu || null" />
                   <small v-for="r in gr.ringkas" :key="r" class="redup ringkas-grafik">{{ r }}</small>
                 </template>
-                <p v-else class="redup kosong">Belum ada data di rentang ini; mulai tercatat sejak 12 Okt.</p>
+                <p v-else class="redup kosong">Belum ada data di rentang ini; mulai tercatat sejak {{ gr.sejak || '12 Okt' }}.</p>
               </div>
             </div>
             <p v-else class="redup">Riwayat belum ada. Pencatatan berjalan tiap 5 menit.</p>
@@ -389,6 +405,11 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
                 <div class="res-kepala"><span>CPU</span><b>{{ terpilih.sistem.cpu }}%</b></div>
                 <div class="meter" :class="tingkatPersen(terpilih.sistem.cpu)"><i :style="{ width: `${terpilih.sistem.cpu}%` }" /></div>
                 <small class="redup">{{ terpilih.sistem.cpu_core }} core · I/O wait {{ terpilih.sistem.iowait }}%</small>
+              </div>
+              <div v-if="terpilih.sistem.suhu != null" class="res">
+                <div class="res-kepala"><span>Suhu CPU</span><b>{{ Math.round(terpilih.sistem.suhu) }}°C</b></div>
+                <div class="meter" :class="tingkatSuhu(terpilih.sistem)"><i :style="{ width: `${Math.min(100, (terpilih.sistem.suhu / (terpilih.sistem.suhu_kritis || 100)) * 100)}%` }" /></div>
+                <small class="redup">inti terpanas · batas panas {{ terpilih.sistem.suhu_batas || BATAS_SUHU }}°C<template v-if="terpilih.sistem.suhu_kritis"> · kritis {{ terpilih.sistem.suhu_kritis }}°C</template></small>
               </div>
               <div class="res">
                 <div class="res-kepala"><span>Load (1 · 5 · 15 mnt)</span><b>{{ terpilih.sistem.load[1].toFixed(2) }}</b></div>

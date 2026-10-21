@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""VelocityGuard — daftar reputasi IP bersama (pengganti firewall IPDB cPGuard).
+
+  velocityguard-reputasi            ambil, pilih, kirim ke semua server (dipakai timer tiap 15 mnt)
+  velocityguard-reputasi --uji      ambil + pilih saja, cetak ringkasan (tanpa mengubah server)
+  velocityguard-reputasi --status   hitungan ipset & paket yang ditolak di tiap server
+  velocityguard-reputasi --copot    lepas aturan iptables, ipset, dan blok csfpre.sh di semua server
+  velocityguard-reputasi --uji-diri cek logika pilih/pengecualian
+
+Sumber: hit Velocity WAF ber-tag "eksploit" yang DITOLAK (Access denied; deteksi yang hanya dicatat seperti SQLi
+tidak dihitung) 24 jam terakhir di error.log LiteSpeed
+setiap server. IP dipilih bila >= MIN_HIT hit, atau menyasar >= 2 domain, atau terlihat di >= 2 server. IP dari ip-putih,
+Cloudflare, mesin pencari, Automattic, server sendiri, dan jaringan lokal tidak pernah dimasukkan.
+Di server: ipset hash:ip `velocityguard_rep` (timeout 7 hari, diperbarui tiap kali IP terlihat lagi) + satu aturan
+iptables DROP di awal INPUT; /usr/local/csf/bin/csfpre.sh membuat ulang keduanya setiap `csf -r`. Hanya IPv4.
+Server: setelan.json VelocityGuard `reputasi_server` (bawaan = `celah_server`).
+"""
+import ipaddress
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+AKAR = Path('/opt/velocity-wp-install-automation')
+sys.path.insert(0, str(AKAR / 'services'))
+import installer_status as ist  # noqa: E402
+
+GUARD_DIR = Path('/var/lib/velocity/velocityguard')
+SETELAN = GUARD_DIR / 'setelan.json'
+HASIL = GUARD_DIR / 'reputasi.json'
+RIWAYAT = GUARD_DIR / 'reputasi.jsonl'
+MIN_HIT = 3
+BATAS_DAFTAR = 50000  # lebih dari ini = ada yang salah, jangan kirim
+SET = 'velocityguard_rep'
+TTL = 7 * 86400
+PENGECUALIAN = [
+    # Cloudflare (situs di belakang CF bisa tercatat dengan IP edge CF)
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+    '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    # Googlebot, Bingbot, Automattic (Jetpack)
+    '66.249.64.0/19', '157.55.0.0/16', '40.77.0.0/16', '207.46.0.0/16', '192.0.64.0/18',
+    # lokal / khusus
+    '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16',
+    '224.0.0.0/3',
+]
+
+AMBIL = r'''
+import json, os, re, subprocess, time
+batas = time.time() - 86400
+d = '/usr/local/lsws/logs'
+berkas = [os.path.join(d, f) for f in os.listdir(d) if f.startswith('error.log') and os.path.getmtime(os.path.join(d, f)) >= batas]
+out = {}
+if berkas:
+    p = subprocess.run(['grep', '-haF', 'tag "eksploit"'] + berkas, stdout=subprocess.PIPE)
+    pola = re.compile(r'^\[(\w{3} \w{3} +\d+ [\d:]+)\.\d+ (\d{4})\] \[error\] \[client ([0-9.]+)\] ModSecurity: Access denied.*tag "velocity-waf".*\[hostname "([^"]+)"\]')
+    for b in p.stdout.decode('utf-8', 'replace').splitlines():
+        m = pola.match(b)
+        if not m:
+            continue
+        try:
+            t = time.mktime(time.strptime(m.group(1) + ' ' + m.group(2), '%a %b %d %H:%M:%S %Y'))
+        except ValueError:
+            continue
+        if t < batas:
+            continue
+        o = out.setdefault(m.group(3), [0, []])
+        o[0] += 1
+        if m.group(4) not in o[1] and len(o[1]) < 20:
+            o[1].append(m.group(4))
+print(json.dumps(out))
+'''
+
+PRE = f'''# VELOCITYGUARD-REPUTASI MULAI (scripts/velocityguard-reputasi; isi ipset diisi ulang timer dashboard)
+ipset create {SET} hash:ip family inet timeout {TTL} maxelem 262144 -exist
+iptables -C INPUT -m set --match-set {SET} src -j DROP 2>/dev/null || iptables -I INPUT 1 -m set --match-set {SET} src -j DROP
+# VELOCITYGUARD-REPUTASI SELESAI'''
+
+KIRIM = r'''
+set -e
+PRE=/usr/local/csf/bin/csfpre.sh
+if ! grep -q 'VELOCITYGUARD-REPUTASI MULAI' $PRE 2>/dev/null; then
+  [ -f $PRE ] || printf '#!/bin/sh\n' > $PRE
+  cat >> $PRE <<'EOF'
+@PRE@
+EOF
+  chmod 700 $PRE
+fi
+sh -c "$(sed -n '/VELOCITYGUARD-REPUTASI MULAI/,/VELOCITYGUARD-REPUTASI SELESAI/p' $PRE)"
+ipset restore -exist
+echo "isi=$(ipset list @SET@ -t | awk '/Number of entries/{print $4}')"
+'''.replace('@PRE@', PRE).replace('@SET@', SET)
+
+STATUS = f'''echo "isi=$(ipset list {SET} -t 2>/dev/null | awk '/Number of entries/{{print $4}}')"
+iptables -L INPUT 1 -v -n -x 2>/dev/null | grep -q {SET} && echo "aturan=ya paket=$(iptables -L INPUT 1 -v -n -x | awk '{{print $1}}')" || echo "aturan=tidak"
+grep -q 'VELOCITYGUARD-REPUTASI MULAI' /usr/local/csf/bin/csfpre.sh 2>/dev/null && echo csfpre=ya || echo csfpre=tidak'''
+
+COPOT = f'''while iptables -D INPUT -m set --match-set {SET} src -j DROP 2>/dev/null; do :; done
+ipset destroy {SET} 2>/dev/null || true
+f=/usr/local/csf/bin/csfpre.sh
+[ -f $f ] && sed -i '/VELOCITYGUARD-REPUTASI MULAI/,/VELOCITYGUARD-REPUTASI SELESAI/d' $f
+echo selesai'''
+
+
+def _rentang(daftar):
+    return [ipaddress.ip_network(x, strict=False) for x in daftar]
+
+
+def pengecualian(servers):
+    putih = [b.split('#')[0].strip() for b in (AKAR / 'waf' / 'ip-putih.txt').read_text().splitlines()]
+    return _rentang([x for x in PENGECUALIAN + putih + [s['host'] for s in servers] if x and ':' not in x])
+
+
+def pilih(per_server, kecuali):
+    """per_server: {host: {ip: [hit, [domain]]}} -> {ip: {hit, domain, server}} yang lolos ambang."""
+    gab = {}
+    for host, data in per_server.items():
+        for ip, (hit, dom) in data.items():
+            g = gab.setdefault(ip, {'hit': 0, 'domain': set(), 'server': set()})
+            g['hit'] += hit
+            g['domain'].update(dom)
+            g['server'].add(host)
+    hasil = {}
+    for ip, g in gab.items():
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if a.version != 4 or any(a in n for n in kecuali):
+            continue
+        if g['hit'] >= MIN_HIT or len(g['domain']) >= 2 or len(g['server']) >= 2:
+            hasil[ip] = {'hit': g['hit'], 'domain': len(g['domain']), 'server': len(g['server'])}
+    return hasil
+
+
+def ssh(srv, remote, masukan='', batas=180):
+    cmd = ist.perintah_server(srv, ist.ssh_key_file(), remote)
+    r = subprocess.run(cmd, input=masukan, capture_output=True, text=True, timeout=batas)
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
+    return r.stdout
+
+
+def daftar_server():
+    s = json.loads(SETELAN.read_text()) if SETELAN.exists() else {}
+    hosts = s.get('reputasi_server') or s.get('celah_server') or []
+    semua = []
+    for item in ist.load_servers():
+        if isinstance(item, dict):
+            srv, err = ist.clean_server(item)
+            if not err:
+                semua.append(srv)
+    return [x for x in semua if x['host'] in hosts], semua
+
+
+def uji_diri():
+    kec = _rentang(PENGECUALIAN + ['202.59.194.129'])
+    ps = {'a': {'1.2.3.4': [5, ['x.com']], '5.6.7.8': [1, ['x.com']], '9.9.9.9': [1, ['x.com', 'y.com']],
+                '172.69.1.1': [50, ['x.com']], '202.59.194.129': [9, ['x.com']], '66.249.66.1': [9, ['x.com']]},
+          'b': {'5.6.7.8': [1, ['z.com']], '2001:db8::1': [9, ['x.com']]}}
+    h = pilih(ps, kec)
+    assert set(h) == {'1.2.3.4', '5.6.7.8', '9.9.9.9'}, h
+    assert h['5.6.7.8']['server'] == 2 and h['1.2.3.4']['hit'] == 5
+    print('uji-diri OK')
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    if arg == '--uji-diri':
+        return uji_diri()
+    servers, semua = daftar_server()
+    if not servers:
+        raise SystemExit('tidak ada server di setelan reputasi_server/celah_server')
+    if arg in ('--status', '--copot'):
+        for srv in servers:
+            print(srv['name'], ssh(srv, STATUS if arg == '--status' else COPOT).strip().replace('\n', ' '))
+        return 0
+    per_server = {}
+    for srv in servers:
+        try:
+            per_server[srv['host']] = json.loads(ssh(srv, 'nice -n 10 python3 -', AMBIL, batas=600))
+        except Exception as e:  # noqa: BLE001
+            print(f"{srv['name']}: gagal ambil log ({e})", file=sys.stderr)
+    if not per_server:
+        raise SystemExit('semua server gagal dibaca — tidak ada yang dikirim')
+    terpilih = pilih(per_server, pengecualian(semua))
+    ringkas = {'waktu': time.strftime('%Y-%m-%d %H:%M:%S'), 'jumlah': len(terpilih),
+               'sumber': {h: len(d) for h, d in per_server.items()}, 'server': {}}
+    print(f"IP eksploit 24 jam per server: {ringkas['sumber']} -> terpilih {len(terpilih)}")
+    if arg == '--uji':
+        for ip, g in sorted(terpilih.items(), key=lambda x: -x[1]['hit'])[:15]:
+            print(f"  {ip} hit={g['hit']} domain={g['domain']} server={g['server']}")
+        return 0
+    if len(terpilih) > BATAS_DAFTAR:
+        raise SystemExit(f'{len(terpilih)} IP > batas {BATAS_DAFTAR} — tidak dikirim, periksa sumber')
+    isi = ''.join(f'add {SET} {ip} timeout {TTL}\n' for ip in sorted(terpilih))
+    for srv in servers:
+        try:
+            ringkas['server'][srv['name']] = ssh(srv, KIRIM, isi).strip().splitlines()[-1]
+        except Exception as e:  # noqa: BLE001
+            ringkas['server'][srv['name']] = f'gagal: {e}'
+        print(srv['name'], ringkas['server'][srv['name']])
+    GUARD_DIR.mkdir(parents=True, exist_ok=True)
+    HASIL.write_text(json.dumps(dict(ringkas, ip=terpilih), ensure_ascii=False))
+    with RIWAYAT.open('a') as f:
+        f.write(json.dumps(ringkas, ensure_ascii=False) + '\n')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

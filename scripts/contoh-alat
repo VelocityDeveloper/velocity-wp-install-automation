@@ -93,8 +93,7 @@ def potret(sasaran, hp):
 
 def ref(url, hp):
     if not re.match(r'^https?://', url):
-        print('ref: butuh URL lengkap')
-        return 2
+        url = 'https://' + url  # "alibaba.com" ditulis polos di catatan PM
     return jepret(url, 'ref-' + re.sub(r'[^a-z0-9]+', '-', url.lower().split('//', 1)[-1]).strip('-')[:60], hp)
 
 

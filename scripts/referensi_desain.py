@@ -135,10 +135,17 @@ def referensi_form(domain):
     Contoh isian template form (alamatWebContoh.com) dan tautan syarat & ketentuan
     Velocity bukan referensi."""
     sys.path.insert(0, str(HERE))
+    mf = Path('/home/project') / domain / f'{domain}.txt'
+    mf_teks = mf.read_text() if mf.is_file() else ''
+    # Manifest `referensi_desain=<url>` menang: brief di dokumen non-form (Keterangan.docx
+    # "Desain seperti = x.com", gunungmasbi.com 2026-10-17) tidak terbaca pengurai form.
+    m = re.search(r'^referensi_desain=(\S+)', mf_teks, re.M)
+    if m:
+        url = m.group(1) if re.match(r'https?://', m.group(1)) else 'https://' + m.group(1)
+        return {'url': url, 'catatan': 'ditetapkan di manifest', 'sumber': 'manifest'}
     # Redesign (scripts/redesign, keputusan user 2026-09-29): acuannya subfolder "redesign <domain>"
     # (brief.json), bukan FORM ISIAN pembuatan pertama. Brief tanpa URL = tanpa referensi.
-    if re.search(r'^redesign=', (Path('/home/project') / domain / f'{domain}.txt').read_text()
-                 if (Path('/home/project') / domain / f'{domain}.txt').is_file() else '', re.M):
+    if re.search(r'^redesign=', mf_teks, re.M):
         try:
             return dict(json.loads((REDESIGN_DIR / domain / 'brief.json').read_text()).get('referensi') or {})
         except (OSError, ValueError):

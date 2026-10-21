@@ -33,7 +33,7 @@ const PEMICU = {
   PS_LIMIT: 'Port scan', LF_DISTATTACK: 'Serangan terdistribusi', LF_DISTFTP: 'FTP terdistribusi', LF_WEBMIN: 'Webmin',
   wordpress: 'WordPress', mod_security: 'ModSecurity', exim: 'Exim', dovecot: 'Dovecot', pureftpd: 'FTP', sshd: 'SSH', directadmin: 'DirectAdmin',
 }
-const SUMBER = { lfd: 'LFD', cpguard: 'cPGuard', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban', ssh: 'SSH' }
+const SUMBER = { lfd: 'LFD', directadmin: 'DirectAdmin BFM', cpguard: 'cPGuard', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban', ssh: 'SSH' }
 
 const acara = computed(() => (log.data.value?.servers || []).flatMap((s) => (s.acara || []).map((e) => ({ ...e, host: s.host, name: s.name })))
   .sort((a, b) => b.t - a.t))
@@ -57,18 +57,18 @@ const tersaring = computed(() => {
 // PC kantor: seri pertama = fail2ban (pengganti LFD), tanpa cPGuard
 const SERI = computed(() => (props.pc
   ? [{ kunci: 'lfd', label: 'fail2ban', warna: '#5b8cff' }, { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' }]
-  : [{ kunci: 'lfd', label: 'LFD', warna: '#5b8cff' }, { kunci: 'cpguard', label: 'cPGuard', warna: '#cc7a33' }, { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' }]))
+  : [{ kunci: 'lfd', label: 'LFD', warna: '#5b8cff' }, { kunci: 'directadmin', label: 'DirectAdmin BFM', warna: '#cc7a33' }, { kunci: 'lain', label: 'Dashboard & manual', warna: '#26a88e' }]))
 const ember = computed(() => {
   const per = hari.value === 1 ? 3600 : 86400
   const now = Math.floor(Date.now() / 1000)
   const awal = (t) => (per === 3600 ? Math.floor(t / 3600) * 3600 : Math.floor(new Date(new Date(t * 1000).toDateString()).getTime() / 1000))
   const kunci = []
   for (let i = (hari.value === 1 ? 23 : 6); i >= 0; i--) kunci.push(awal(now - i * per))
-  const peta = Object.fromEntries(kunci.map((k) => [k, { tgl: k, nilai: { lfd: 0, cpguard: 0, lain: 0 } }]))
+  const peta = Object.fromEntries(kunci.map((k) => [k, { tgl: k, nilai: { lfd: 0, directadmin: 0, lain: 0 } }]))
   for (const e of acara.value) {
     if (e.jenis !== 'blokir') continue
     const b = peta[awal(e.t)]
-    if (b) b.nilai[e.sumber === 'lfd' || e.sumber === 'fail2ban' ? 'lfd' : e.sumber === 'cpguard' ? 'cpguard' : 'lain'] += 1
+    if (b) b.nilai[e.sumber === 'lfd' || e.sumber === 'fail2ban' ? 'lfd' : e.sumber === 'directadmin' ? 'directadmin' : 'lain'] += 1
   }
   return kunci.map((k) => peta[k])
 })

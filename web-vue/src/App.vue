@@ -28,7 +28,7 @@ const backupBerikut = computed(() => {
   const d = backup.data.value
   if (!d) return 'Memuat…'
   if (d.state === 'running') return `Sedang berjalan · tahap ${d.phase || '-'}`
-  return d.next_run ? `${new Date(d.next_run * 1000).toLocaleString('id-ID', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · Google Drive` : 'Jadwal belum diketahui'
+  return d.next_run ? `${new Date(d.next_run * 1000).toLocaleString('id-ID', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · PC Backup` : 'Jadwal belum diketahui'
 })
 
 const NAV = [
@@ -36,6 +36,10 @@ const NAV = [
   { grup: 'server', label: 'Server', ikon: 'server', anak: [
     { ke: '/server', label: 'Daftar Server', ikon: 'server', tepat: true },
     { ke: '/server/monitoring', label: 'Monitoring', ikon: 'pantau' },
+  ] },
+  // VelocityGuard = sistem keamanan server buatan sendiri pengganti cPGuard (alamat tetap /server/…)
+  { grup: 'velocityguard', label: 'VelocityGuard', ikon: 'perisai', anak: [
+    { ke: '/server/velocityguard', label: 'Celah & Insiden', ikon: 'perisai' },
     { ke: '/server/proteksi', label: 'Proteksi', ikon: 'perisai' },
     { ke: '/server/antivirus', label: 'Antivirus', ikon: 'virus' },
     { ke: '/server/waf', label: 'WAF', ikon: 'waf' },
@@ -62,7 +66,9 @@ const NAV = [
   ] },
   { grup: 'pcbackup', label: 'PC Backup', ikon: 'nas', anak: [
     { ke: '/pc-backup/status', label: 'Status Backup', ikon: 'cadangan' },
+    { ke: '/pc-backup/backup', label: 'Backup', ikon: 'nas' },
     { ke: '/pc-backup/berkas', label: 'File Manager', ikon: 'berkas' },
+    { ke: '/pc-backup/nextcloud', label: 'Nextcloud', ikon: 'awan' },
   ] },
   { grup: 'pantau', label: 'Pemantauan', ikon: 'pantau', anak: [
     { ke: '/notif-email', label: 'Notif Email', ikon: 'email' },
@@ -77,7 +83,7 @@ const grupBuka = ref({})
 const grupTerbuka = (n) => grupBuka.value[n.grup] ?? n.anak.some((a) => aktif(a.ke))
 const LAYANAN = [
   { url: '/n8n/', label: 'n8n', ikon: 'n8n' },
-  { url: 'http://192.168.20.40/phpmyadmin/', label: 'phpMyAdmin', ikon: 'database' },
+  { url: 'https://dash.velocity.ai.id/phpmyadmin', label: 'phpMyAdmin', ikon: 'database' },
   { url: '/newvdnet/', label: 'New VDNet', ikon: 'crm', dev: true },
 ]
 
@@ -158,7 +164,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', tutupEsc))
 
       <RouterLink to="/#backup" class="kartu-bawah">
         <span class="kb-ikon"><Ikon nama="cadangan" :ukuran="18" /></span>
-        <span><b>{{ backup.data.value?.state === 'running' ? 'Backup Google Drive' : 'Backup berikutnya' }}</b><small>{{ backupBerikut }}</small></span>
+        <span><b>{{ backup.data.value?.state === 'running' ? 'Backup sistem berjalan' : 'Backup berikutnya' }}</b><small>{{ backupBerikut }}</small></span>
       </RouterLink>
     </aside>
 

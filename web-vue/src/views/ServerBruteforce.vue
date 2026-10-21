@@ -68,7 +68,7 @@ const simBlokir = (s) => Object.values(s?.simulasi?.aturan || {}).reduce((a, x) 
 const total = computed(() => {
   const s = terpilih.value
   const deny = s.deny.total
-  const cpg = s.deny.sumber.cpguard
+  const cpg = s.deny.sumber.directadmin || 0
   return {
     deny, cpg, persenCpg: deny ? Math.round((cpg / deny) * 100) : 0,
     penuh: !!(limit(s) && deny >= limit(s)),
@@ -84,7 +84,8 @@ function titik(s) {
 }
 
 const SUMBER = [
-  { k: 'cpguard', label: 'cPGuard BFM', warna: '#cc7a33' },
+  { k: 'directadmin', label: 'DirectAdmin BFM', warna: '#cc7a33' },
+  { k: 'cpguard', label: 'cPGuard', warna: '#e0a050' },
   { k: 'lfd', label: 'LFD (login gagal)', warna: '#5b8cff' },
   { k: 'velocity', label: 'Velocity BFM', warna: '#26a88e' },
   { k: 'dashboard', label: 'Dashboard', warna: '#a679e6' },
@@ -195,7 +196,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${lokal.v
   <div class="halaman">
     <header class="kepala-halaman">
       <div>
-        <h1>Brute Force</h1>
+        <h1>Brute Force <span class="merek-guard">VelocityGuard</span></h1>
         <p class="redup">Pengganti BFM cPGuard: IP yang berulang kali ditolak Velocity WAF diblokir di firewall (CSF/LFD), plus deteksi login gagal SSH, DirectAdmin, FTP, dan email.</p>
       </div>
       <div class="kepala-aksi">
@@ -224,7 +225,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${lokal.v
       <div v-if="terpilih?.ok" class="ringkas">
         <div class="kartu tile">
           <span class="tile-ikon kuning"><Ikon nama="perisai" :ukuran="20" /></span>
-          <div><span class="redup">Blokir permanen dari cPGuard</span><b>{{ total.persenCpg }}%</b><small class="redup">{{ angka(total.cpg) }} dari {{ angka(total.deny) }} IP di csf.deny</small></div>
+          <div><span class="redup">Blokir permanen dari DirectAdmin BFM</span><b>{{ total.persenCpg }}%</b><small class="redup">{{ angka(total.cpg) }} dari {{ angka(total.deny) }} IP di csf.deny</small></div>
         </div>
         <div class="kartu tile">
           <span class="tile-ikon" :class="total.penuh ? 'merah' : 'hijau'"><Ikon :nama="total.penuh ? 'peringatan' : 'centang'" :ukuran="20" /></span>

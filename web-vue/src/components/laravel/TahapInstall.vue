@@ -48,6 +48,7 @@ const alamat = computed(() => alamatDev(inst.value.port, props.d.lan_ip))
 
     <p v-if="!jalurLaravel(d)" class="pesan-status">Platform yang dipilih bukan Laravel + Vue: install otomatis &amp; agen Claude tidak dipakai. Fitur dan estimasi di tab Estimasi menjadi pegangan webmaster.</p>
     <p v-else-if="!d.estimasi_kunci" class="pesan-status">Kunci estimasi dulu di tab Estimasi.</p>
+    <p v-else-if="!terinstall && !d.contoh?.acc?.sah" class="pesan-status waspada">Contoh tampilan belum di-ACC PM dan klien. Selesaikan di tab Brief → Contoh tampilan → ACC desain; agen meniru contoh itu.</p>
 
     <template v-if="!terinstall && jalurLaravel(d)">
       <div class="form">
@@ -60,7 +61,7 @@ const alamat = computed(() => alamatDev(inst.value.port, props.d.lan_ip))
         <dl class="pratinjau"><div v-for="[k, v] in pratinjau" :key="k"><dt>{{ k }}</dt><dd><code>{{ v }}</code></dd></div></dl>
         <label class="centang"><input v-model="lanjutAgen" type="checkbox"> Sesudah install, langsung serahkan ke agen Claude</label>
         <div class="aksi">
-          <button type="button" class="tombol" :disabled="!d.estimasi_kunci || !app || !!salahApp || !!d.job || !namaSaya.trim()" @click="install"><Ikon nama="installer" :ukuran="18" /> Run Install</button>
+          <button type="button" class="tombol" :disabled="!d.estimasi_kunci || !d.contoh?.acc?.sah || !app || !!salahApp || !!d.job || !namaSaya.trim()" @click="install"><Ikon nama="installer" :ukuran="18" /> Run Install</button>
           <button v-if="!namaSaya.trim()" type="button" class="isi-nama" @click="keNama">Masuk dulu →</button>
           <p v-if="status.teks" class="pesan-status" :class="status.kelas" role="status">{{ status.teks }}</p>
         </div>

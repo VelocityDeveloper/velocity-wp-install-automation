@@ -380,6 +380,7 @@ Disepakati user 2026-09-13 dari uji ptmitraajegselaras.com ("project paket G nan
 
 | # | Langkah | Hasil |
 |---|---|---|
+| 0 | `velocity-donasi <manifest>` | **Hanya Paket G yang form-nya menyebut donasi/donatur/infaq/wakaf/zakat/sedekah/galang dana** (permintaan user 2026-10-16), sebelum `paket_g_tema`, tidak bergantung pada VD Store: plugin Velocity Donasi dari API ApiCo (id 91), 3 program CONTOH (judul "Contoh – ", foto Pexels), halaman Donasi Saya (`[halaman-donatur]`), theme_mod `halaman_donatur` + rekening contoh (ditulis ke `theme_mods_velocity-fse`). fse-apply menambah butir menu Donasi (`/donasi/`), agen desain memakai `templates/desain-claude/donasi.md`, velocity-fse ≥1.29.1 (`inc/donasi.php`) membatasi Bootstrap plugin ke halaman donasi & menyediakan kartu program `vf-donasi-kartu`. Situs ter-deploy: `--paksa` dengan persetujuan user |
 | 1 | `compro-klien <domain>` | Company profile PDF → susunan bagian, prakata, warna, latar, logo, foto (`/var/lib/velocity/compro/<domain>/`). Tanpa PDF: dilewati |
 | 2 | `paket-g-konten <manifest>` | Isi contoh dari form + dokumen; disesuaikan dengan compro (layanan tertulis, slogan, prakata, motto) |
 | 3 | `fse-apply --tema <manifest>` | Pasang/aktifkan velocity-fse, data situs, palet, rubrik (sebelum konten AI) |

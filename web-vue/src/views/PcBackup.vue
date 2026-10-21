@@ -1,6 +1,6 @@
 <script setup>
-// Status PC Backup (Ubuntu + ZFS lewat Tailscale): server DirectAdmin MENGIRIM backup lewat FTPS (vsftpd,
-// user da-<server>) ke /srv/backup/directadmin/<server>; snapshot ZFS harian menjaga versi lama.
+// Status PC Backup (Ubuntu + ZFS lewat Tailscale): mesin, pool, disk, snapshot + backup sistem PC kantor.
+// Backup server DirectAdmin (rsync) ada di /pc-backup/backup; backup FTP bawaan DA tak dipakai lagi.
 // API: GET /api/fm/pc-backup[?segar=1] (services/pc_backup.py, data di-cache 60 dtk).
 import { ref, computed } from 'vue'
 import Ikon from '../components/Ikon.vue'
@@ -28,34 +28,6 @@ const durasi = (a, b) => {
   return s < 60 ? `${s} dtk` : s < 3600 ? `${Math.round(s / 60)} mnt` : `${(s / 3600).toFixed(1)} jam`
 }
 
-// Jadwal kirim dibaca langsung dari backup_crons.list DirectAdmin tiap server (d.da, cache 5 mnt)
-const da = (s) => d.value?.da?.[s.server]
-const salahTujuan = computed(() => Object.entries(d.value?.da || {}).flatMap(([server, x]) =>
-  (x.jadwal || []).filter((j) => !j.ke_pc).map((j) => ({ server, ...j }))))
-// Backup yang sedang berjalan di server DA + berkas yang sedang diterima PC Backup (persen per berkas)
-const berjalan = computed(() => Object.entries(d.value?.da || {}).filter(([, x]) => x.berjalan).map(([server, x]) => {
-  const b = x.berjalan
-  const s = pc.value?.server?.find((v) => v.server === server)
-  const masuk = b.terkirim ?? (s?.sedang_masuk?.berkas?.endsWith(b.berkas) ? s.sedang_masuk.ukuran : null)
-  return { server, ...b, terkirim: masuk, persenBerkas: masuk != null && b.ukuran ? Math.min(100, Math.round((masuk / b.ukuran) * 100)) : null,
-    persenUser: b.user_ke ? Math.round(((b.user_ke - 1) / b.user_total) * 100) : null, selesai: s?.sesi_terakhir?.ok, gagal: x.gagal_unggah?.length || 0 }
-}))
-// Perkiraan selesai: jam (hari ini tanpa tanggal) + sisa waktu
-const jamSelesai = (t) => {
-  if (!t) return null
-  const w = new Date(t * 1000)
-  const jam = w.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-  return w.toDateString() === new Date().toDateString() ? jam : `${w.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} ${jam}`
-}
-const sisaWaktu = (t) => (t ? durasi(Math.floor(Date.now() / 1000), t) : '')
-const laju = (b) => (b ? `${ukuranBerkas(b)}/dtk` : '')
-const tujuan = (j) => (j.tujuan === 'ftp' ? `${j.ftp_ip}${j.ftp_path || ''}` : `lokal ${j.ftp_path || ''}`)
-// append_to_path=dayofweek: DA menambah nama hari (Inggris) di belakang ftp_path
-const HARI_DA = { Sen: 'Monday', Sel: 'Tuesday', Rab: 'Wednesday', Kam: 'Thursday', Jum: 'Friday', Sab: 'Saturday', Min: 'Sunday' }
-const folderJadwal = (j) => {
-  const p = (j.ftp_path || '/').replace(/\/$/, '')
-  return j.append === 'dayofweek' ? j.hari.map((h) => `${p}/${HARI_DA[h] || h}`).join(', ') : p || '/'
-}
 // Kesehatan HDD: bahaya = SMART gagal / sektor pending / uncorrectable / error ZFS; waspada = sektor realokasi / panas
 function statusDisk(x) {
   if (x.sehat === false || x.pending > 0 || x.uncorrect > 0 || x.pool?.galat > 0 || (x.pool && x.pool.status !== 'ONLINE')) return ['bahaya', 'Bermasalah']
@@ -64,20 +36,21 @@ function statusDisk(x) {
   return ['baik', 'Sehat']
 }
 const diskBermasalah = computed(() => (pc.value?.disk || []).filter((x) => statusDisk(x)[0] === 'bahaya'))
-const LAYANAN = { smartmontools: 'SMART', vsftpd: 'FTPS', tailscaled: 'Tailscale', 'zfs-zed': 'ZFS', 'backup-snapshot.timer': 'Snapshot', ufw: 'Firewall' }
+const LAYANAN = { smartmontools: 'SMART', tailscaled: 'Tailscale', 'zfs-zed': 'ZFS', 'backup-snapshot.timer': 'Snapshot', 'zfs-scrub-mingguan.timer': 'Scrub', 'zfs-pulihkan.timer': 'Pemulih', ufw: 'Firewall' }
 const layananMati = computed(() => Object.entries(pc.value?.layanan || {}).filter(([, v]) => v !== 'active').map(([k]) => LAYANAN[k] || k))
 
-// Kiriman dianggap terlambat bila sesi terakhir > 26 jam lalu (jadwal harian + waktu kirim)
-function statusKirim(s) {
-  const t = s.sesi_terakhir
-  if (!t) return ['', 'Belum pernah']
-  // vsftpd hanya mencatat berkas yang sempat tersambung; DA juga mencatat berkas yang tak pernah sampai
-  const gagal = Math.max(t.gagal, da(s)?.gagal_unggah?.length || 0)
-  if (gagal && !t.ok) return ['bahaya', 'Gagal']
-  if (gagal) return ['waspada', `${gagal} gagal`]
-  if (Date.now() / 1000 - t.selesai > 26 * 3600) return ['waspada', 'Terlambat']
-  return ['baik', 'Sukses']
+// Backup server DA (rsync): run terakhir per server dari .status.json di PC Backup
+function statusRsync(x) {
+  if (x.berjalan) return ['waspada', 'Berjalan']
+  if (x.tahap === 'selesai') return ['baik', 'Sukses']
+  if (x.tahap === 'gagal') return x.akun_selesai === x.akun_total && x.akun_total ? ['waspada', 'Sebagian gagal'] : ['bahaya', 'Gagal']
+  return ['bahaya', 'Terhenti']
 }
+// Sama dengan PcRestore.vue: berkas 0–95%, DB 95–100%
+const persenRsync = (x) => x.tahap === 'db'
+  ? 95 + Math.round((x.db_selesai / (x.db_total || 1)) * 5)
+  : Math.min(95, Math.round((x.byte_selesai / (x.byte_total || 1)) * 95))
+const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-')
 
 // Backup sistem PC kantor (velocity-backup, harian 02:00) -> /srv/backup/pckantor; status dari server_stats.py
 const sistem = pakaiPolling('/api/backup', 15000)
@@ -96,7 +69,7 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
     <header class="kepala-halaman">
       <div>
         <h1>Status Backup</h1>
-        <p class="redup">Server DirectAdmin mengirim backup ke PC Backup lewat FTPS (Tailscale); snapshot ZFS harian menjaga versi lama 7 hari.</p>
+        <p class="redup">Kondisi PC Backup dan backup sistem PC kantor; snapshot ZFS harian menjaga versi lama 7 hari. Backup server DirectAdmin (rsync) ada di menu <RouterLink to="/pc-backup/backup">Backup</RouterLink>.</p>
       </div>
       <div class="aksi">
         <RouterLink to="/pc-backup/berkas" class="tombol garis kecil"><Ikon nama="berkas" :ukuran="15" /> File Manager</RouterLink>
@@ -116,11 +89,6 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
       <p v-if="diskBermasalah.length" class="peringatan bahaya" role="alert">
         Disk bermasalah: <template v-for="(x, i) in diskBermasalah" :key="x.nama">{{ i ? '; ' : '' }}{{ x.model }} ({{ x.nama }})</template>.
         Pool stripe: satu disk rusak = seluruh backup hilang. Siapkan pengganti.
-      </p>
-      <p v-if="salahTujuan.length" class="peringatan" role="alert">
-        Jadwal backup belum mengarah ke PC Backup ({{ d.ip_pc }}):
-        <template v-for="(j, i) in salahTujuan" :key="j.server + j.id">{{ i ? '; ' : ' ' }}<span class="kapital">{{ j.server }}</span> #{{ j.id }} ({{ j.hari.join('/') }}) ke {{ tujuan(j) }}</template>.
-        Ubah di DirectAdmin ▸ Admin Backup/Transfer.
       </p>
 
       <section class="ringkas" aria-label="Ringkasan">
@@ -170,82 +138,51 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
         </div>
         <p v-if="pc.zfs_scan" class="redup kecil">Scrub terakhir: {{ pc.zfs_scan }}</p>
         <div v-if="pc.zfs_rusak?.length" class="berkas-rusak">
-          <p class="galat"><b>{{ pc.zfs_rusak.length }} berkas rusak permanen</b> (blok gagal dibaca/checksum, tak bisa diperbaiki karena pool tanpa mirror).</p>
+          <p class="galat"><b>{{ pc.zfs_rusak.length }} berkas rusak permanen</b> (blok gagal dibaca/checksum). Berkas rsync dihapus otomatis 00:45 lalu disalin ulang dari server malam itu; snapshot &amp; arsip PC kantor hanya dicatat.</p>
           <ul class="kecil"><li v-for="f in pc.zfs_rusak" :key="f.berkas"><code>{{ f.berkas }}</code><span v-if="!f.aktif" class="redup"> · berkas sudah tak ada, tinggal di snapshot</span><span v-if="f.snapshot.length" class="redup"> · juga di snapshot {{ f.snapshot.join(', ') }}</span></li></ul>
         </div>
-      </section>
-
-      <section v-for="b in berjalan" :key="b.server" class="kartu berjalan" aria-live="polite">
-        <div class="kartu-judul">
-          <h2><span class="denyut" aria-hidden="true" />Backup berjalan · <span class="kapital">{{ b.server }}</span></h2>
-          <span class="redup">Mulai {{ b.mulai ? tanggalWaktu(b.mulai) : '-' }}<template v-if="b.mulai"> · {{ durasi(b.mulai, Math.floor(Date.now() / 1000)) }}</template></span>
-        </div>
-        <p class="perkiraan">
-          <span class="redup">Perkiraan selesai</span>
-          <strong>{{ b.eta_total ? `±${jamSelesai(b.eta_total)}` : 'Menghitung…' }}</strong>
-          <span v-if="b.eta_total" class="redup">{{ sisaWaktu(b.eta_total) }} lagi<template v-if="b.laju_efektif"> · rata-rata {{ laju(b.laju_efektif) }}</template></span>
-        </p>
-        <div class="kemajuan">
-          <div>
-            <span class="redup">User {{ b.user_ke ?? '-' }} dari {{ b.user_total }}<template v-if="b.user"> · {{ b.user }}</template></span>
-            <div class="meter jalan" role="meter" :aria-valuenow="b.persenUser || 0" aria-valuemin="0" aria-valuemax="100" aria-label="Kemajuan per user"><i :style="{ width: (b.persenUser || 0) + '%' }" /></div>
-            <span class="kecil">{{ b.selesai ?? 0 }} berkas terkirim ke PC Backup<template v-if="b.gagal"> · <span class="galat">{{ b.gagal }} gagal</span></template></span>
-          </div>
-          <div>
-            <span class="redup">{{ b.tahap === 'mengunggah' ? 'Mengunggah' : 'Mengemas' }} {{ b.berkas || '-' }}</span>
-            <div class="meter jalan" role="meter" :aria-valuenow="b.persenBerkas || 0" aria-valuemin="0" aria-valuemax="100" aria-label="Kemajuan berkas"><i :style="{ width: (b.persenBerkas || 0) + '%' }" /></div>
-            <span class="kecil">
-              <template v-if="b.terkirim != null">{{ ukuranBerkas(b.terkirim) }} dari {{ ukuranBerkas(b.ukuran) }} ({{ b.persenBerkas }}%)</template>
-              <template v-else>{{ ukuranBerkas(b.ukuran) }}{{ b.tahap === 'mengemas' ? ' sejauh ini' : '' }}</template>
-              <template v-if="b.tujuan"> · ke {{ b.tujuan === d.ip_pc ? 'PC Backup' : b.tujuan }}</template>
-            </span>
-            <span v-if="b.eta_berkas" class="kecil">Berkas ini selesai ±{{ jamSelesai(b.eta_berkas) }} ({{ sisaWaktu(b.eta_berkas) }} lagi) · {{ laju(b.laju) }}</span>
-          </div>
+        <div v-if="pc.pulih?.length" class="berkas-rusak">
+          <p><b>Riwayat pemulihan</b> <span class="redup kecil">berkas rsync rusak yang dihapus agar disalin ulang</span></p>
+          <ul class="kecil">
+            <li v-for="r in pc.pulih" :key="r.waktu">
+              {{ tanggalWaktu(r.waktu) }}: {{ r.dihapus.length }} dihapus<template v-if="r.gagal.length">, <span class="galat">{{ r.gagal.length }} gagal</span></template><template v-if="r.dicatat.length"> · {{ r.dicatat.length }} hanya dicatat</template>
+              <span v-if="r.batal" class="galat"> · {{ r.batal }}</span>
+              <details v-if="r.dihapus.length"><summary class="redup">Lihat berkas</summary><code v-for="f in r.dihapus" :key="f" class="baris-kode">{{ f }}</code></details>
+            </li>
+          </ul>
         </div>
       </section>
 
-      <section v-for="s in pc?.server || []" :key="s.server" class="kartu">
+      <section v-if="pc?.rsync?.length" class="kartu" aria-labelledby="judul-rsync">
         <div class="kartu-judul">
-          <h2><span class="kapital">{{ s.server }}</span> <span class="pil" :class="statusKirim(s)[0]">{{ statusKirim(s)[1] }}</span></h2>
-          <span class="redup">
-            FTP {{ s.user || 'belum ada user' }}<template v-if="s.dataset"> · {{ ukuranBerkas(s.dataset.terpakai) }}</template>
-            · <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}` } }">Buka folder</RouterLink>
-          </span>
+          <h2 id="judul-rsync">Backup server terakhir</h2>
+          <span class="redup">rsync tarik dari PC Backup · <RouterLink to="/pc-backup/backup">Lihat isi</RouterLink></span>
         </div>
-        <div class="blok-server">
-          <div>
-            <h3>Jadwal</h3>
-            <ul class="daftar">
-              <li v-for="j in da(s)?.jadwal || []" :key="j.id">
-                <span>{{ j.hari.join(', ') }} · {{ j.jam }}</span>
-                <span :class="j.ke_pc ? 'redup' : 'galat'">{{ j.ke_pc ? folderJadwal(j) : `ke ${tujuan(j)}` }}</span>
-              </li>
-            </ul>
-            <p v-if="da(s)?.galat" class="kecil galat">Jadwal DA tak terbaca: {{ da(s).galat }}</p>
-          </div>
-          <div>
-            <h3>Kiriman terakhir</h3>
-            <ul v-if="s.sesi_terakhir" class="daftar">
-              <li><span>{{ tanggalWaktu(s.sesi_terakhir.mulai) }}</span><span class="redup">{{ durasi(s.sesi_terakhir.mulai, s.sesi_terakhir.selesai) }}</span></li>
-              <li><span>{{ s.sesi_terakhir.ok }} berkas</span><span class="redup">{{ ukuranBerkas(s.sesi_terakhir.bytes) }}</span></li>
-            </ul>
-            <p v-else class="redup">Belum ada kiriman.</p>
-            <p v-if="s.gagal_terbaru.length" class="kecil galat">Gagal terakhir {{ tanggalWaktu(s.gagal_terbaru.at(-1).t) }}: {{ s.gagal_terbaru.at(-1).berkas }}</p>
-            <p v-if="da(s)?.gagal_unggah?.length" class="kecil galat">{{ da(s).gagal_unggah.length }} gagal unggah di backup DA terakhir</p>
-          </div>
-          <div>
-            <h3>Set backup</h3>
-            <ul class="daftar">
-              <li v-for="x in s.set" :key="x.nama">
-                <RouterLink :to="{ path: '/pc-backup/berkas', query: { path: `${d.akar}/directadmin/${s.server}/${x.nama}` } }">{{ x.nama }}</RouterLink>
-                <span class="redup" :title="x.terbaru ? `Terbaru ${tanggalWaktu(x.terbaru)}` : ''">{{ x.berkas ? `${x.berkas} berkas · ${ukuranBerkas(x.ukuran)}` : 'kosong' }}</span>
-              </li>
-            </ul>
-            <p v-if="!s.set.length" class="redup">Belum ada set.</p>
-          </div>
+        <div class="tabel-gulir">
+          <table class="tabel-disk">
+            <thead><tr><th>Server</th><th>Status</th><th>Mulai</th><th>Lama</th><th>Akun</th><th>DB</th><th title="Ukuran berkas akun di server (diperiksa rsync)">Data</th><th title="Dipakai dataset ZFS, termasuk snapshot">Tersimpan</th><th>Jadwal</th></tr></thead>
+            <tbody>
+              <tr v-for="x in pc.rsync" :key="x.server">
+                <td><b>{{ x.server }}</b></td>
+                <td><span class="pil" :class="statusRsync(x)[0]">{{ statusRsync(x)[1] }}</span>
+                  <template v-if="x.berjalan"><div class="meter jalan meter-rsync" role="progressbar" :aria-valuenow="persenRsync(x)" aria-valuemin="0" aria-valuemax="100" :aria-label="`Kemajuan backup ${x.server}`"><i :style="{ width: `${persenRsync(x)}%` }" /></div><span class="redup kecil">{{ persenRsync(x) }}% · {{ x.tahap === 'db' ? `DB ${x.db_selesai}/${x.db_total}` : `akun ${x.akun_selesai}/${x.akun_total}` }}</span></template></td>
+                <td>{{ tanggalWaktu(x.mulai) }}<br><span class="redup kecil">{{ waktuLalu(x.mulai) }}</span></td>
+                <td>{{ durasi(x.mulai, x.berjalan ? Math.floor(Date.now() / 1000) : x.selesai || x.diperbarui) }}<br><span class="redup kecil">{{ x.berjalan ? 'masih jalan' : `selesai ${jam(x.selesai)}` }}</span></td>
+                <td :class="{ galat: x.gagal.length }">{{ x.akun_selesai }}/{{ x.akun_total }}<template v-if="x.gagal.length"><br><span class="kecil">{{ x.gagal.length }} gagal</span></template></td>
+                <td :class="{ galat: x.db_gagal.length }">{{ x.db_selesai - x.db_gagal.length }}/{{ x.db_total }}<template v-if="x.db_gagal.length"><br><span class="kecil">{{ x.db_gagal.length }} gagal</span></template></td>
+                <td>{{ ukuranBerkas(x.byte_selesai) }}<br><span class="redup kecil">±{{ ukuranBerkas(x.laju) }}/dtk</span></td>
+                <td>{{ x.byte_tersimpan ? ukuranBerkas(x.byte_tersimpan) : '-' }}</td>
+                <td>{{ x.jadwal ? `Harian ${x.jadwal}` : '-' }}<br><span class="redup kecil">{{ x.berikutnya ? `berikutnya ${tanggalWaktu(x.berikutnya)}` : 'timer mati' }}</span></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+        <details v-if="pc.rsync.some((x) => x.gagal.length || x.db_gagal.length)" class="kecil">
+          <summary class="galat">Rincian yang gagal</summary>
+          <ul><li v-for="x in pc.rsync.filter((x) => x.gagal.length || x.db_gagal.length)" :key="x.server"><b>{{ x.server }}</b>: <template v-if="x.gagal.length">akun {{ x.gagal.join(', ') }}</template><template v-if="x.gagal.length && x.db_gagal.length"> · </template><template v-if="x.db_gagal.length">DB {{ x.db_gagal.join(', ') }}</template></li></ul>
+        </details>
+        <p class="redup kecil">Metode: PC Backup menarik <code>rsync -aH --delete</code> lewat SSH (kunci khusus, server hanya izinkan baca /home/&lt;user&gt;/ + data user DA), lalu <code>mariadb-dump</code> per DB dialirkan langsung (tanpa berkas di server, ulang 3x bila putus). Inkremental: hanya berkas berubah yang dikirim. Versi lama dijaga snapshot ZFS 23:00 (7 hari). Data = ukuran berkas akun yang diperiksa; laju = data ÷ lama.</p>
       </section>
-      <p v-if="pc && !pc.server?.length" class="redup">Belum ada server yang dibackup.</p>
 
       <section v-if="bs" class="kartu" :class="{ berjalan: bs.state === 'running' }">
         <div class="kartu-judul">
@@ -317,7 +254,6 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
 .stat strong { font-size: 24px; }
 .meter.waspada i { background: var(--waspada); }
 .meter.bahaya i { background: var(--bahaya); }
-.kapital { text-transform: capitalize; }
 .galat { color: var(--bahaya); overflow-wrap: anywhere; }
 .layanan { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
 .layanan li { display: flex; align-items: center; gap: 8px; }
@@ -337,8 +273,8 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
 .daftar a { color: var(--aksen-terang); }
 .kecil { font-size: 12px; }
 .diperbarui { margin: -6px 0 0; text-align: right; }
+.meter-rsync { margin: 6px 0 2px; min-width: 110px; }
 .berjalan { border-color: var(--aksen); }
-.kemajuan { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 18px; }
 .meter.jalan { height: 8px; }
 .meter.jalan i { min-width: 8px; background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .22) 0 8px, transparent 8px 16px), linear-gradient(90deg, var(--aksen), var(--aksen-terang)); background-size: 22.6px 22.6px, 100% 100%; animation: garis 1s linear infinite; }
 .denyut { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; background: var(--baik); vertical-align: middle; animation: denyut 1.6s ease-out infinite; }
@@ -347,7 +283,6 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
 @media (prefers-reduced-motion: reduce) { .meter.jalan i, .denyut { animation: none; } }
 .perkiraan { margin: 0 0 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .perkiraan strong { font-size: 24px; }
-.kemajuan > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .progres-sistem { display: grid; gap: 6px; margin-bottom: 18px; }
 .progres-sistem .perkiraan { margin: 0; }
 .progres-sistem p.kecil { margin: 0; }
@@ -358,6 +293,7 @@ const FASE = { prasyarat: 'Cek prasyarat', 'dump-database': 'Dump database', 'da
 .berkas-rusak { margin-top: 12px; }
 .berkas-rusak ul { margin: 6px 0 0; padding-left: 18px; }
 .berkas-rusak code { word-break: break-all; }
+.baris-kode { display: block; }
 .peringatan.bahaya { border-color: var(--bahaya); background: color-mix(in srgb, var(--bahaya) 10%, transparent); }
 .peringatan { margin: 0; padding: 12px 14px; border-radius: var(--radius-kecil); border: 1px solid var(--waspada); background: rgba(232, 181, 74, .1); color: var(--teks); font-size: 14px; }
 </style>

@@ -10,29 +10,39 @@ Aksi:
 - ringkas (baca): deteksi cPGuard 30 hari dari /opt/cpguard/app/data/scanner.db (pembanding selama
   cPGuard masih jalan), daftar akun DirectAdmin, isi karantina Velocity.
 - scan (baca): pindai berkas akun dengan tanda tangan VD.* di bawah (regex, Python murni). Hanya melapor.
-- karantina: pindahkan satu berkas ke KARANTINA/<id>/ + meta.json (pemilik, izin, waktu, sha256).
+- karantina: pindahkan satu berkas ke KARANTINA/<id>/ + meta.json (pemilik, izin, waktu, sha256); sha256 ikut dijawab.
 - kembalikan: pulihkan berkas karantina ke lokasi asal (pemilik & izin semula); gagal bila lokasi terisi.
 - hapus: hapus permanen satu entri karantina.
 - baca (baca): isi satu berkas di /home (path) atau salinan karantina (id), maks MAKS_LIHAT byte + sha256 utuh.
 - scan menerima 'aman' {path: sha256}: berkas yang ditandai aman dari dashboard dilewati selama isinya sama.
+- bukti_judi (baca): domain akun, status suspend, judul+teks beranda versi browser/Googlebot, potongan berkas temuan,
+  dan bila beranda masih berisi judi: sumber kemungkinan (scan penuh wp-content, tanda tingkat virus).
+- suspend / unsuspend: akun DirectAdmin (`directadmin suspend-user`), hanya dipanggil Judi AI / tombol dashboard.
 """
 import base64
+import glob
 import hashlib
 import json
 import os
 import pwd
+import html
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.request
 
 KARANTINA = '/root/velocity-karantina'
 HOME = '/home'
 CPG_DB = '/opt/cpguard/app/data/scanner.db'
 MAKS_BACA = 3 * 1024 * 1024
 MAKS_TEMUAN = 3000
+# Berkas besar yang hanya dibaca awal+akhir dan bersih tetap dicatat (bertag) supaya bisa dicek manual
+MAKS_BESAR = 2000
+MAKS_BESAR = 2000
 EKSTENSI = {'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'phar', 'inc', 'suspected',
             'html', 'htm', 'js', 'txt', 'htaccess', 'ico', 'png', 'jpg', 'jpeg', 'gif'}
 GAMBAR = {'ico', 'png', 'jpg', 'jpeg', 'gif'}
@@ -52,9 +62,12 @@ def r(pola, bendera=re.I):
 # tingkat 'virus' = keyakinan tinggi; 'curiga' = perlu dilihat manusia (bisa positif palsu).
 RE_EVAL_DEKODE = r(r'\b(?:eval|assert)\s*\(\s*(?:@\s*)?(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|hex2bin|rawurldecode|convert_uudecode)\s*\(')
 RE_EVAL_INPUT = r(r'\b(?:eval|assert|system|passthru|shell_exec|popen|proc_open|create_function)\s*\(\s*(?:@\s*)?(?:stripslashes\s*\(\s*|base64_decode\s*\(\s*|urldecode\s*\(\s*|trim\s*\(\s*)?\$_(?:POST|GET|REQUEST|COOKIE|SERVER\s*\[\s*[\'"]HTTP_)')
-RE_SHELL = r(r'FilesMan|b374k|c99shell|r57shell|IndoXploit|AnonymousFox|ALFA_DATA|\bWSOsetcookie\b|FoxAuto|0x1949|Mini\s*Shell\s*\d|BlackDragon|<title>\s*Gecko\s*\[', 0)
+RE_SHELL = r(r'FilesMan|b374k|c99shell|r57shell|IndoXploit|AnonymousFox|ALFA_DATA|\bWSOsetcookie\b|FoxAuto|0x1949|Mini\s*Shell\s*\d|BlackDragon|PHP\s+File\s+manager\s+ver\b|<title>\s*Gecko\s*\[', 0)
 RE_EKSEKUSI = r(r'\b(?:system|shell_exec|passthru|proc_open|popen|exec|eval|move_uploaded_file)\s*\(')
 RE_SUPERGLOBAL = r(r'\$_(?:POST|GET|REQUEST|FILES|COOKIE)\b')
+RE_KOMENTAR_PHP = re.compile(rb'/\*.*?\*/|//[^\n]*|#[^\n]*|<\?php|\?>', re.S)
+RE_JAGA_PHP = re.compile(rb"\s*if\s*\(\s*!\s*defined\s*\(\s*\\*['\"]\w+\\*['\"]\s*\)\s*\)\s*(?:exit|die)\s*(?:\(\s*\))?\s*;")
+RE_LISENSI_TERLARANG = r(r'\b(?:assert|create_function|file_put_contents|fwrite|fputs|curl_exec|include|require)(?:_once)?\s*\(|\bgzinflate\b|\bstr_rot13\b')
 RE_HACKED = r(r'<title>[^<]{0,60}hack(?:ed|3d)\s*by')
 RE_LOCALE = r(r'wp-locale-perf|Locale Performance Cache|wp-cachepress|craft-harvester-jet|widget-compat-helper|wp_locale_cache_\w+|locale-cache-(?:db|oc)\b|Anti-DB-wipe MU loader')
 # Botnet backlink "WP-LinkHelper" (folder wlh-*/class-wlh-*.php, panel cachelayer.top), dari karantina cPGuard Fahmi 14 Okt 2026
@@ -104,6 +117,12 @@ RE_WPLOAD = r(r'wp-load\.php')
 RE_PHP_TAG = r(r'<\?php\s|eval\s*\(\s*\$|base64_decode\s*\(|<script\s+language\s*=\s*[\'"]?php', re.I)
 RE_JS_CHAR = r(r'String\.fromCharCode\(\s*(?:\d+\s*,\s*){40,}')
 RE_JS_SUNTIK = r(r'document\.write|createElement\s*\(\s*[\'"]script|\.src\s*=')
+# Pengalih TDS (pleasewaitcenter dkk.): <script>.src = atob('aHR0c…') + referrer/judul halaman
+RE_SRC_ATOB = r(r'\.src\s*=\s*atob\s*\(\s*\\?[\'"]aHR0c')
+# Plugin/tema mencetak isi .txt dari situs luar di wp_footer/wp_head (footer-injector-kmaa26 → link judi)
+RE_HOOK_TAMPIL = r(r'add_action\s*\(\s*[\'"](?:wp_footer|wp_head)[\'"]')
+RE_URL_TXT = r(r'[\'"]https?://[^\'"\s]+\.txt[\'"]')
+RE_UNDUH = r(r'wp_remote_get|wp_safe_remote_get|file_get_contents|curl_exec')
 
 
 def potong(teks, m, lebar=90):
@@ -129,7 +148,20 @@ def eval_ambil_url(teks, path):
     return potong(teks, m) if m and RE_AMBIL_URL.search(teks) else None
 
 
+def lisensi_gianmr(teks, path):
+    """Modul lisensi tema GianMR (wpmedia/wpberita/bloggingpro-core lib/lcs.php) disamarkan goto oleh vendornya.
+    Dianggap sah hanya bila header vendor ada dan sesudah string \\x/oktal dibuka tidak ada fungsi eksekusi/tulis."""
+    if not path.endswith('-core/lib/lcs.php') or b'License from amember http api softsale module' not in teks[:600] \
+            or b'Gian MR' not in teks[:600]:
+        return False
+    buka = re.sub(rb'\\x([0-9a-fA-F]{2})', lambda m: bytes([int(m.group(1), 16)]), teks)
+    buka = re.sub(rb'\\([0-7]{3})', lambda m: bytes([int(m.group(1), 8) & 255]), buka)
+    return not RE_EKSEKUSI.search(buka) and not RE_LISENSI_TERLARANG.search(buka)
+
+
 def goto_samar(teks, path):
+    if lisensi_gianmr(teks, path):
+        return None
     n = len(RE_GOTO.findall(teks))
     return '%d pernyataan goto (kode disamarkan)' % n if n >= 60 else None
 
@@ -163,10 +195,170 @@ UPLOADS_SAH = ('/uploads/aios/', '/uploads/wflogs/', '/wp-content/wflogs/', '/up
                '/uploads/elementor/', '/uploads/wpo/', '/uploads/sucuri/')
 
 
+# Redux Framework menulis kelas kontrol Customizer kosong ke uploads/redux/ (positif palsu 19 Okt, sinarberita.id dkk.).
+# Hanya bila SELURUH isi berkas persis pola ini — satu baris tambahan tetap terdeteksi.
+RE_REDUX_KONTROL = re.compile(rb'\A<\?php\s*class\s+Redux_Customizer_Control_\w+\s+extends\s+Redux_Customizer_Control\s*\{'
+                              rb'\s*public\s+\$type\s*=\s*["\']redux-[\w-]+["\']\s*;\s*\}\s*\Z')
+
+
+RE_HTML_AKTIF = re.compile(rb'<\?|<%|<script|<iframe|<object|<embed|<form|http-equiv|\bon\w+\s*=|javascript:', re.I)
+
+
+# Berkas inti WordPress besar (block-editor.js, vips/worker.min.js, …) tidak dibaca scan → dicocokkan md5-nya dengan
+# checksum resmi api.wordpress.org per versi situs. Cocok = asli, tidak masuk daftar besar; gagal ambil = tetap dilaporkan.
+RE_INTI_WP = re.compile(r'^(/home/[^/]+/domains/[^/]+/(?:[^/]+/)*?)(wp-(?:includes|admin)/.+)$')
+_CHECKSUM_WP = {}
+# Hasil cocok checksum disimpan {path: [ukuran, mtime, ctime]} → scan berikutnya tak menghitung md5 ulang berkas yang sama
+INTI_CACHE = '/var/lib/velocity-av/inti-asli.json'
+_INTI_OK = None
+# Berkas di atas batas baca: hanya POTONG_BESAR awal + POTONG_BESAR akhir yang diperiksa (sisipan biasanya di ujung berkas)
+POTONG_BESAR = 262144
+
+
+def baca_sebagian(path, ukuran):
+    with open(path, 'rb') as f:
+        kepala = f.read(POTONG_BESAR)
+        f.seek(max(ukuran - POTONG_BESAR, POTONG_BESAR))
+        return kepala + b'\n' + f.read(POTONG_BESAR)
+
+
+def hash_berkas(path, algo='sha256'):
+    h = hashlib.new(algo)
+    with open(path, 'rb') as f:
+        for blok in iter(lambda: f.read(1048576), b''):
+            h.update(blok)
+    return h.hexdigest()
+
+
+def _inti_cache():
+    global _INTI_OK
+    if _INTI_OK is None:
+        try:
+            with open(INTI_CACHE) as f:
+                _INTI_OK = json.load(f)
+        except (OSError, ValueError):
+            _INTI_OK = {}
+    return _INTI_OK
+
+
+def simpan_inti_cache():
+    if not _INTI_OK:
+        return
+    try:
+        os.makedirs(os.path.dirname(INTI_CACHE), exist_ok=True)
+        with open(INTI_CACHE + '.tmp', 'w') as f:
+            json.dump(_INTI_OK, f, separators=(',', ':'))
+        os.replace(INTI_CACHE + '.tmp', INTI_CACHE)
+    except OSError:
+        pass
+
+
+def checksum_wp(akar):
+    try:
+        with open(akar + 'wp-includes/version.php', encoding='latin-1') as f:
+            versi = re.search(r"\$wp_version\s*=\s*'([\w.-]+)'", f.read()).group(1)
+    except (OSError, AttributeError):
+        return {}
+    if versi not in _CHECKSUM_WP:
+        _CHECKSUM_WP[versi] = {}
+        try:
+            req = urllib.request.Request('https://api.wordpress.org/core/checksums/1.0/?version=%s&locale=en_US' % versi,
+                                         headers={'User-Agent': 'VelocityGuard/1.0'})
+            data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode()).get('checksums')
+            if isinstance(data, dict):
+                _CHECKSUM_WP[versi] = data
+        except Exception:
+            pass
+    return _CHECKSUM_WP[versi]
+
+
+# Plugin dari wordpress.org (kirki-editor.min.js 5,9 MB dkk.): dicocokkan dengan downloads.wordpress.org/plugin-checksums
+# per slug + versi terpasang. Plugin premium/non-wp.org → 404 → tetap dilaporkan.
+RE_PLUGIN_WP = re.compile(r'^(/home/[^/]+/domains/[^/]+/(?:[^/]+/)*?wp-content/plugins/([^/]+)/)(.+)$')
+_CHECKSUM_PLUGIN = {}
+_VERSI_PLUGIN = {}
+RE_KEPALA_PLUGIN = re.compile(r'^[ \t/*#@]*Plugin Name\s*:', re.M | re.I)
+RE_VERSI_PLUGIN = re.compile(r'^[ \t/*#@]*Version\s*:\s*([\w.-]+)', re.M | re.I)
+
+
+def versi_plugin(folder):
+    if folder not in _VERSI_PLUGIN:
+        _VERSI_PLUGIN[folder] = None
+        for berkas in sorted(glob.glob(folder + '*.php')):
+            try:
+                with open(berkas, encoding='latin-1') as f:
+                    kepala = f.read(8192)
+            except OSError:
+                continue
+            m = RE_VERSI_PLUGIN.search(kepala)
+            if m and RE_KEPALA_PLUGIN.search(kepala):
+                _VERSI_PLUGIN[folder] = m.group(1)
+                break
+    return _VERSI_PLUGIN[folder]
+
+
+def checksum_plugin(folder, slug):
+    versi = versi_plugin(folder)
+    if not versi:
+        return {}
+    kunci = slug + '@' + versi
+    if kunci not in _CHECKSUM_PLUGIN:
+        _CHECKSUM_PLUGIN[kunci] = {}
+        try:
+            req = urllib.request.Request('https://downloads.wordpress.org/plugin-checksums/%s/%s.json' % (slug, versi),
+                                         headers={'User-Agent': 'VelocityGuard/1.0'})
+            data = json.loads(urllib.request.urlopen(req, timeout=15).read().decode()).get('files')
+            if isinstance(data, dict):
+                _CHECKSUM_PLUGIN[kunci] = {k: v.get('md5') for k, v in data.items() if isinstance(v, dict)}
+        except Exception:
+            pass
+    return _CHECKSUM_PLUGIN[kunci]
+
+
+# Berkas besar premium (bb-plugin dkk., tanpa API checksum) yang sudah dicek manual: daftar putih sha256 dari dashboard
+# {sha256: ukuran}. Hanya berkas berukuran persis sama yang di-hash, jadi murah. Tidak di-cache: hash dibuang = muncul lagi.
+def hash_asli(path, st, asli):
+    if not asli or st.st_size not in asli.values():
+        return False
+    try:
+        return asli.get(hash_berkas(path)) == st.st_size
+    except OSError:
+        return False
+
+
+def inti_wp_asli(path, st):
+    m = RE_INTI_WP.match(path)
+    mp = None if m else RE_PLUGIN_WP.match(path)
+    if not m and not mp:
+        return False
+    kunci = [st.st_size, int(st.st_mtime), int(st.st_ctime)]
+    cache = _inti_cache()
+    if cache.get(path) == kunci:
+        return True
+    md5 = checksum_wp(m.group(1)).get(m.group(2)) if m else checksum_plugin(mp.group(1), mp.group(2)).get(mp.group(3))
+    try:
+        if not md5 or hash_berkas(path, 'md5') != md5:
+            return False
+    except OSError:
+        return False
+    cache[path] = kunci
+    return True
+
+
 def php_di_uploads(teks, path):
     if '/wp-content/uploads/' not in path or any(x in path for x in UPLOADS_SAH):
         return None
-    if len(teks) < 120 and (b'Silence is golden' in teks or not teks.strip(b'<?ph \n\r\t/')):
+    if '/uploads/redux/' in path and RE_REDUX_KONTROL.match(teks):
+        return None
+    # Penjaga folder / template kosong (silence is golden, BWS Custom Code): hanya komentar + `if (!defined(..)) exit;`.
+    # Isi dinilai sebagai kode walau tanpa tag <? atau berbentuk &lt;?php: berkas lain bisa eval(file_get_contents(..)).
+    isi = html.unescape(teks.decode('latin-1')).encode('latin-1', 'replace')
+    if not RE_JAGA_PHP.sub(b'', RE_KOMENTAR_PHP.sub(b'', isi)).strip():
+        return None
+    # Penjaga folder ber-HTML (WP Content Copy Protection: komentar PHP, `?>`, lalu pesan "not authorized"):
+    # sah hanya bila blok PHP cuma komentar dan HTML sesudahnya statis — tanpa <? lagi, skrip, iframe, atau meta refresh.
+    kepala, tutup, ekor = isi.partition(b'?>')
+    if tutup and len(isi) < 4096 and not RE_KOMENTAR_PHP.sub(b'', kepala).strip() and not RE_HTML_AKTIF.search(ekor):
         return None
     return 'berkas PHP di wp-content/uploads'
 
@@ -181,6 +373,40 @@ def prepend(teks, path):
 def php_dalam_gambar(teks, path):
     m = RE_PHP_TAG.search(teks)
     return potong(teks, m) if m else None
+
+
+# Kasus kalandra 18 Okt (plugin palsu "semrush", lolos semua VD.*): eval('?>' . $hasil_unduhan) dan
+# include berkas sementara berisi unduhan (Gecko loader)
+RE_EVAL_TAG = r(r'\b(?:eval|assert)\s*\(\s*(?:@\s*)?[\'"]\?>[\'"]\s*\.\s*\$\w+')
+RE_INCLUDE_TMP = r(r'\b(?:include|require)(?:_once)?\s*\(?\s*stream_get_meta_data\s*\(')
+RE_UNDUH_APA = r(r'curl_exec\s*\(|file_get_contents\s*\(|stream_get_contents\s*\(|fopen\s*\(\s*[\'"]?https?:|\\x68\\x74\\x74\\x70|\\150\\164\\164\\160')
+RE_FM_OPS = [r(x) for x in (r'move_uploaded_file\s*\(', r'\bunlink\s*\(', r'\brename\s*\(', r'file_put_contents\s*\(',
+                             r'\b(?:scandir|opendir|readdir)\s*\(', r'\brmdir\s*\(|\bchmod\s*\(')]
+RE_WP_KONTEKS = r(r'\bwp_\w+\s*\(|\bABSPATH\b|\bdefined\s*\(\s*[\'"]WPINC|namespace\s+\w|\bclass\s+\w+\s+(?:extends|implements)\b')
+
+
+def rantai_chr(teks, path):
+    # Pustaka ber-namespace (doctrine/inflector: tabel aksen ISO-8859-1 chr(128) . chr(131) …) bukan webshell
+    m = RE_CHR_RANTAI.search(teks)
+    return potong(teks, m) if m and not re.search(rb'^\s*namespace\s+[\w\\]+\s*;', teks, re.M) else None
+
+
+def eval_tag_unduh(teks, path):
+    m = RE_EVAL_TAG.search(teks)
+    return potong(teks, m) if m and RE_UNDUH_APA.search(teks) else None
+
+
+def include_tmp_unduh(teks, path):
+    m = RE_INCLUDE_TMP.search(teks)
+    return potong(teks, m) if m and b'tmpfile' in teks.lower() and RE_UNDUH_APA.search(teks) else None
+
+
+def file_manager(teks, path):
+    # Webshell file manager mandiri: unggah + hapus/ganti nama + daftar folder dari input pengunjung, tanpa konteks WP/pustaka
+    if not RE_SUPERGLOBAL.search(teks) or RE_WP_KONTEKS.search(teks) or len(teks) > 400000:
+        return None
+    n = sum(1 for x in RE_FM_OPS if x.search(teks))
+    return '%d operasi berkas + input pengunjung (file manager mandiri)' % n if n >= 5 and RE_FM_OPS[0].search(teks) else None
 
 
 def uploader(teks, path):
@@ -198,13 +424,40 @@ def kata_judi(teks):
     return {re.sub(r'\s+', ' ', t.decode('utf-8', 'replace').lower()) for t in RE_JUDI.findall(teks)}
 
 
+# Daftar kata anti-spam (formidable/denylist/splorp-wp-comment.txt: 66 rb istilah per baris, termasuk "<a>" dan
+# "http://") bukan halaman judi — halaman/sisipan judi berupa paragraf/HTML panjang dengan tautan href
+RE_HREF = r(r'href\s*=')
+
+
+def daftar_kata(teks):
+    baris = teks.count(b'\n')
+    return baris >= 500 and len(teks) / baris <= 40 and len(RE_HREF.findall(teks)) <= 2
+
+
+RE_LLMS_KEPALA = re.compile(rb'Generated by (?:All in One SEO|Yoast SEO|Rank Math)[^\n]{0,80}llms\.txt', re.I)
+RE_LLMS_HOST = re.compile(rb'\]\(https?://([^/)\s]+)')
+
+
+def llms_seo(teks, path):
+    """llms.txt buatan plugin SEO = daftar judul pos situs sendiri (situs berita memuat judul berita judi).
+    Sah hanya bila header plugin ada dan SEMUA tautan menuju domain situs itu sendiri."""
+    if os.path.basename(path) not in ('llms.txt', 'llms-full.txt') or not RE_LLMS_KEPALA.search(teks[:400]):
+        return False
+    host = {h.lower().split(b':')[0] for h in RE_LLMS_HOST.findall(teks)}
+    return len({h[4:] if h.startswith(b'www.') else h for h in host}) == 1
+
+
 def judi(teks, path):
     # Berita boleh menyebut "judi online"; spam SEO memakai banyak istilah berbeda (6+ = halaman judi → judi_berat)
+    if daftar_kata(teks) or llms_seo(teks, path):
+        return None
     jenis = kata_judi(teks)
     return 'kata judi: ' + ', '.join(sorted(jenis)[:5]) if 3 <= len(jenis) < 6 else None
 
 
 def judi_berat(teks, path):
+    if daftar_kata(teks) or llms_seo(teks, path):
+        return None
     jenis = kata_judi(teks)
     return '%d kata judi: %s' % (len(jenis), ', '.join(sorted(jenis)[:6])) if len(jenis) >= 6 else None
 
@@ -262,6 +515,13 @@ def index_wp(teks, path):
     return 'index.php WordPress tidak standar (%d byte)' % len(teks)
 
 
+def suntik_remote(teks, path):
+    m = RE_URL_TXT.search(teks)
+    if m and RE_HOOK_TAMPIL.search(teks) and RE_UNDUH.search(teks) and RE_ECHO_VAR.search(teks):
+        return potong(teks, m)
+    return None
+
+
 def js_suntik(teks, path):
     m = RE_JS_CHAR.search(teks)
     return potong(teks, m) if m and RE_JS_SUNTIK.search(teks) else None
@@ -271,13 +531,16 @@ def js_suntik(teks, path):
 TANDA = [
     ('VD.PHP.EvalDekode', 'eval/assert atas hasil dekode', 'virus', 'php', cari(RE_EVAL_DEKODE), (b'eval', b'assert')),
     ('VD.PHP.EvalInput', 'Eksekusi input pengunjung', 'virus', 'php', cari(RE_EVAL_INPUT), (b'$_',)),
-    ('VD.Webshell.Nama', 'Webshell dikenal', 'virus', 'php', webshell, (b'filesman', b'b374k', b'c99shell', b'r57shell', b'indoxploit', b'anonymousfox', b'alfa_data', b'wsosetcookie', b'foxauto', b'0x1949', b'mini', b'blackdragon', b'gecko')),
+    ('VD.Webshell.Nama', 'Webshell dikenal', 'virus', 'php', webshell, (b'filesman', b'b374k', b'c99shell', b'r57shell', b'indoxploit', b'anonymousfox', b'alfa_data', b'wsosetcookie', b'foxauto', b'0x1949', b'mini', b'blackdragon', b'gecko', b'php file manager')),
+    ('VD.PHP.EvalUnduhTag', "eval('?>' . kode unduhan)", 'virus', 'php', eval_tag_unduh, (b'?>',)),
+    ('VD.PHP.IncludeUnduh', 'include berkas sementara berisi unduhan', 'virus', 'php', include_tmp_unduh, (b'stream_get_meta_data',)),
+    ('VD.Webshell.FileManager', 'File manager mandiri (webshell)', 'virus', 'php', file_manager, (b'move_uploaded_file',)),
     ('VD.Deface.HackedBy', 'Halaman deface "hacked by"', 'virus', 'web', cari(RE_HACKED), (b'hacked', b'hack3d')),
     ('VD.WP.PluginPalsu', 'Plugin samaran (Locale Perf / cachepress dkk.)', 'virus', 'php', cari(RE_LOCALE), (b'locale', b'cachepress', b'craft-harvester', b'widget-compat', b'anti-db-wipe')),
     ('VD.WP.LinkHelper', 'Botnet backlink WP-LinkHelper (wlh)', 'virus', 'php', cari(RE_WLH), (b'wlh_', b'wp-linkhelper')),
     ('VD.PHP.ArrayBase64', 'Payload base64 dipecah dalam array + eval', 'virus', 'php', array_b64, (b'eval', b'assert', b'create_function')),
     ('VD.Backlink.Rot13', 'Backlink tersembunyi str_rot13', 'virus', 'php', cari(RE_ROT13_URL), (b'str_rot13',)),
-    ('VD.PHP.RantaiChr', 'Rantai chr() (webshell disamarkan)', 'virus', 'php', cari(RE_CHR_RANTAI), (b'chr(',)),
+    ('VD.PHP.RantaiChr', 'Rantai chr() (webshell disamarkan)', 'virus', 'php', rantai_chr, (b'chr(',)),
     ('VD.WP.LoginPaksa', 'Login admin paksa via wp-load', 'virus', 'php', auth_paksa, (b'wp_set_auth_cookie',)),
     ('VD.Htaccess.Handler', 'Gambar/teks dieksekusi sebagai PHP', 'virus', {'htaccess'}, cari(RE_HANDLER), (b'php',)),
     ('VD.PHP.DalamGambar', 'Kode PHP di berkas gambar', 'virus', GAMBAR, php_dalam_gambar, (b'<?php', b'eval', b'base64_decode', b'<script')),
@@ -296,6 +559,8 @@ TANDA = [
     ('VD.PHP.DiUploads', 'PHP di folder uploads', 'curiga', 'php', php_di_uploads, None),
     ('VD.Htaccess.Prepend', 'auto_prepend_file di .htaccess', 'curiga', {'htaccess'}, prepend, (b'auto_',)),
     ('VD.SEO.Judi', 'Spam SEO judi', 'curiga', TEKS_JUDI, judi, GERBANG_JUDI),
+    ('VD.JS.AlihAtob', 'Pengalih TDS: script src dari atob()', 'virus', TEKS_JUDI | {'php', 'js'}, cari(RE_SRC_ATOB), (b'atob',)),
+    ('VD.WP.SuntikRemote', 'Cetak .txt situs luar di wp_footer/wp_head', 'virus', 'php', suntik_remote, (b'wp_footer', b'wp_head')),
     ('VD.JS.Suntik', 'JavaScript tersuntik (fromCharCode)', 'curiga', {'js'}, js_suntik, (b'fromcharcode',)),
 ]
 
@@ -361,6 +626,32 @@ TANDA_DB = [('VD.DB.JudiTersembunyi', 'Database: link judi tersembunyi', 'virus'
             ('VD.DB.JudiHalaman', 'Database: konten judi online (6+ istilah)', 'virus', judi_berat),
             ('VD.DB.Judi', 'Database: spam judi', 'curiga', judi)]
 
+# Admin siluman: akun administrator buatan plugin samaran (wp-cachepress: backup_manager/cache_sync/maria@<domain>)
+# dan alat pembobol (w2s_xxxx@wp2shell.invalid). Pola nama "Roger"/roger013@yahoo.com bisa milik orang asli → curiga.
+ADMIN_SILUMAN = {'backup_manager', 'cache_sync'}
+RE_ADMIN_EMAIL = re.compile(r'@(wordpress\.org|[\w.-]+\.invalid)$', re.I)
+RE_ADMIN_W2S = re.compile(r'^w2s_[0-9a-f]{6,}$')
+RE_ADMIN_NAMA = re.compile(r'^[A-Z][a-z]{2,11}$')
+RE_ADMIN_EMAIL_NAMA = r'^%s\d{1,4}@(gmail|yahoo|hotmail|outlook)\.com$'
+TANDA_ADMIN = [('VD.DB.AdminSiluman', 'Database: admin siluman (plugin samaran/pembobol)', 'virus'),
+               ('VD.DB.AdminCuriga', 'Database: admin baru pola nama+angka', 'curiga')]
+
+
+def admin_siluman(login, email, umur):
+    """(tanda, bukti) atau None. umur = umur akun dalam hari."""
+    if login in ADMIN_SILUMAN or RE_ADMIN_EMAIL.search(email) or RE_ADMIN_W2S.match(login) \
+            or (login == 'maria' and email.lower().startswith('maria@')):
+        return TANDA_ADMIN[0], '%s <%s>' % (login, email)
+    if umur <= 120 and RE_ADMIN_NAMA.match(login) and re.match(RE_ADMIN_EMAIL_NAMA % re.escape(login.lower()), email.lower()):
+        return TANDA_ADMIN[1], '%s <%s> · terdaftar %d hari lalu' % (login, email, umur)
+    return None
+
+
+def sql_admin(p):
+    return ("SELECT u.ID, UNIX_TIMESTAMP(u.user_registered), u.user_login, u.user_email FROM `%susers` u "
+            "JOIN `%susermeta` m ON m.user_id = u.ID AND m.meta_key = '%scapabilities' "
+            "AND m.meta_value LIKE '%%\"administrator\"%%' ORDER BY u.ID LIMIT 500" % (p, p, p))
+
 
 def wp_kredensial(path):
     try:
@@ -376,13 +667,29 @@ def wp_kredensial(path):
     return d
 
 
+def mysql_cnf(k):
+    """Berkas opsi sementara (0600) berisi sandi situs. MYSQL_PWD kalah oleh `password=` di /etc/my.cnf atau
+    /root/.my.cnf (Fahmi, Cahyadi: semua cek DB gagal). --defaults-file tidak membaca ~/.my.cnf; /etc/my.cnf
+    di-include dulu agar socket ikut, lalu sandi situs ditulis sesudahnya supaya menang. Hapus sesudah dipakai."""
+    pw = (k.get('DB_PASSWORD') or '').replace('\\', '\\\\').replace('"', '\\"')
+    fd, path = tempfile.mkstemp(prefix='vdav-', suffix='.cnf')
+    with os.fdopen(fd, 'w') as f:
+        if os.path.isfile('/etc/my.cnf'):
+            f.write('!include /etc/my.cnf\n')
+        f.write('[client]\npassword="%s"\n[mysqldump]\npassword="%s"\n' % (pw, pw))
+    return path
+
+
 def mysql_baris(k, sql):
     host, _, port = (k.get('DB_HOST') or 'localhost').partition(':')
-    cmd = ['mysql', '-B', '-N', '--connect-timeout=10', '-u', k['DB_USER'], '-h', host or 'localhost']
+    cnf = mysql_cnf(k)
+    cmd = ['mysql', '--defaults-file=' + cnf, '-B', '-N', '--connect-timeout=10', '-u', k['DB_USER'], '-h', host or 'localhost']
     if port.isdigit():
         cmd += ['-P', port]
-    env = dict(os.environ, MYSQL_PWD=k.get('DB_PASSWORD', ''))
-    r = subprocess.run(cmd + [k['DB_NAME'], '-e', sql], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=120)
+    try:
+        r = subprocess.run(cmd + [k['DB_NAME'], '-e', sql], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    finally:
+        os.unlink(cnf)
     if r.returncode:
         raise RuntimeError(r.stderr.decode('utf-8', 'replace')[:200])
     # Mode batch meng-escape \t \n \\ \0 di nilai kolom
@@ -438,6 +745,29 @@ def scan_db(user, wpconfig, hari, aman, hit):
                                'tingkat': tanda[0]['tingkat'], 'tanda': tanda,
                                'db': {'nama': k['DB_NAME'], 'tabel': p + tabel, 'id': kid, 'jenis': jenis,
                                       'judul': judul.decode('utf-8', 'replace')[:120]}})
+        # Admin siluman tanpa batas hari: akun lama tetap pintu masuk selama belum dihapus
+        try:
+            admin = mysql_baris(k, sql_admin(p))
+        except Exception:
+            admin = []
+        for b in admin:
+            if len(b) < 4:
+                continue
+            uid, waktu, login, email = b[0].decode(), b[1].decode(), b[2].decode('utf-8', 'replace'), b[3].decode('utf-8', 'replace')
+            w = int(waktu) if waktu.isdigit() else 0
+            cocok = admin_siluman(login, email, int((time.time() - w) / 86400) if w else 9999)
+            if not cocok:
+                continue
+            (tid, nama, tingkat), bukti = cocok
+            lokasi = '%s#db:%susers:%s' % (akar, p, uid)
+            sha = hashlib.sha256(('%s\n%s' % (login, email)).encode()).hexdigest()
+            if aman.get(lokasi) == sha:
+                hit['aman'] += 1
+                continue
+            temuan.append({'path': lokasi, 'user': user, 'ukuran': 0, 'mtime': w, 'ctime': w, 'sha256': sha, 'izin': '-',
+                           'tingkat': tingkat, 'tanda': [{'id': tid, 'nama': nama, 'tingkat': tingkat, 'bukti': bukti[:160]}],
+                           'db': {'nama': k['DB_NAME'], 'tabel': p + 'users', 'id': uid, 'jenis': 'administrator',
+                                  'judul': '%s <%s>' % (login, email), 'login': login, 'email': email}})
     return temuan
 
 
@@ -555,7 +885,7 @@ def scan_web(user, aman, hit, sisa):
     return temuan
 
 
-INFO_TANDA = [{'id': t[0], 'nama': t[1], 'tingkat': t[2]} for t in TANDA + TANDA_DB + TANDA_WEB]
+INFO_TANDA = [{'id': t[0], 'nama': t[1], 'tingkat': t[2]} for t in TANDA + TANDA_DB + TANDA_ADMIN + TANDA_WEB]
 
 
 def kemajuan(data):
@@ -580,16 +910,24 @@ def scan(p):
     sejak = time.time() - hari * 86400 if hari > 0 else 0
     mulai = time.time()
     aman = p.get('aman') or {}
-    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0, 'aman': 0, 'db': 0, 'db_gagal': 0, 'situs': 0, 'situs_gagal': 0}
+    putih = p.get('putih') or []
+    asli = p.get('asli') or {}
+    hit = {'berkas': 0, 'dibaca': 0, 'folder': 0, 'byte': 0, 'aman': 0, 'db': 0, 'db_gagal': 0, 'situs': 0, 'situs_gagal': 0,
+           'besar': 0, 'besar_gambar': 0, 'besar_inti': 0, 'besar_sebagian': 0}
+    besar = []
     periksa_db_aktif = p.get('db', True)
     periksa_web_aktif = p.get('web', True)
+    # berkas=False (scan harian bila watcher realtime aktif): berkas sudah diperiksa saat ditulis → hanya DB & beranda
+    periksa_berkas = p.get('berkas', True)
     temuan = []
     terpotong = None
     lapor = 0
     for ia, user in enumerate(daftar):
         akar = akar_akun(user)
-        wpconfig = []
-        for folder, dirs, files in os.walk(akar):
+        wpconfig = [] if periksa_berkas else sorted(set(glob.glob(os.path.join(akar, '*', 'public_html', 'wp-config.php'))
+                                                     + glob.glob(os.path.join(akar, '*', 'public_html', '*', 'wp-config.php'))
+                                                     + glob.glob(os.path.join(akar, '*', 'public_html', '*', '*', 'wp-config.php'))))
+        for folder, dirs, files in (os.walk(akar) if periksa_berkas else ()):
             dirs[:] = [d for d in dirs if d not in LEWATI and not os.path.islink(os.path.join(folder, d))]
             hit['folder'] += 1
             # Folder cache (halaman statis, gambar optimasi) hanya diperiksa PHP & .htaccess-nya
@@ -604,20 +942,33 @@ def scan(p):
                 if (ext not in EKSTENSI and not tersembunyi) or (di_cache and ext not in PHP and ext != 'htaccess'):
                     continue
                 path = os.path.join(folder, nama)
+                if putih and di_putih(path, putih):
+                    hit['aman'] += 1
+                    continue
                 try:
                     st = os.lstat(path)
                 except OSError:
                     continue
-                if not (st.st_mode & 0o170000 == 0o100000) or st.st_size == 0 or st.st_size > MAKS_BACA:
-                    continue
-                # Sisipan PHP di gambar biasanya berkas kecil; gambar besar dilewati agar scan tak membaca GB foto
-                if (ext in GAMBAR and st.st_size > 262144) or ((tersembunyi or ext in ('html', 'htm', 'js', 'txt')) and st.st_size > 1048576):
+                if not (st.st_mode & 0o170000 == 0o100000) or st.st_size == 0:
                     continue
                 if sejak and max(st.st_mtime, st.st_ctime) < sejak:
                     continue
+                # Sisipan PHP di gambar biasanya berkas kecil; gambar besar dilewati agar scan tak membaca GB foto
+                if ext in GAMBAR and st.st_size > 262144:
+                    hit['besar_gambar'] += 1
+                    continue
+                maks = 1048576 if tersembunyi or ext in ('html', 'htm', 'js', 'txt') else MAKS_BACA
+                sebagian = st.st_size > maks
+                if sebagian and not tersembunyi and (inti_wp_asli(path, st) or hash_asli(path, st, asli)):
+                    hit['besar_inti'] += 1
+                    continue
                 try:
-                    with open(path, 'rb') as f:
-                        teks = f.read()
+                    if sebagian:
+                        teks = baca_sebagian(path, st.st_size)
+                        hit['besar_sebagian'] += 1
+                    else:
+                        with open(path, 'rb') as f:
+                            teks = f.read()
                 except OSError:
                     continue
                 if tersembunyi:
@@ -627,15 +978,24 @@ def scan(p):
                 hit['dibaca'] += 1
                 hit['byte'] += len(teks)
                 tanda = periksa(path, ext, teks)
+                if sebagian and not tanda:
+                    hit['besar'] += 1
+                    if len(besar) < MAKS_BESAR:
+                        besar.append({'path': path, 'user': user, 'ukuran': st.st_size, 'mtime': int(st.st_mtime),
+                                      'ctime': int(st.st_ctime), 'izin': oct(st.st_mode & 0o777)[2:], 'batas': maks,
+                                      'sebagian': 'bersih'})
                 if tanda:
-                    sha = hashlib.sha256(teks).hexdigest()
+                    try:
+                        sha = hash_berkas(path) if sebagian else hashlib.sha256(teks).hexdigest()
+                    except OSError:
+                        continue
                     if aman.get(path) == sha:
                         hit['aman'] += 1
                         continue
                     temuan.append({'path': path, 'user': user, 'ukuran': st.st_size, 'mtime': int(st.st_mtime), 'sha256': sha,
                                    'ctime': int(st.st_ctime), 'izin': oct(st.st_mode & 0o777)[2:],
                                    'tingkat': 'virus' if any(t['tingkat'] == 'virus' for t in tanda) else 'curiga',
-                                   'tanda': tanda})
+                                   'tanda': tanda, **({'sebagian': True} if sebagian else {})})
                     if len(temuan) >= MAKS_TEMUAN:
                         terpotong = 'maks_temuan'
                         break
@@ -648,6 +1008,12 @@ def scan(p):
             if sekarang - mulai > batas:
                 terpotong = 'waktu_habis'
                 break
+        if not periksa_berkas and time.time() - lapor >= 2:
+            lapor = time.time()
+            kemajuan({'akun': user, 'ke': ia + 1, 'dari': len(daftar), 'temuan': len(temuan), **hit})
+        if not periksa_berkas and time.time() - mulai > batas:
+            terpotong = 'waktu_habis'
+            break
         if periksa_db_aktif and not terpotong and wpconfig:
             temuan.extend(scan_db(user, wpconfig, hari, aman, hit))
         if periksa_web_aktif and not terpotong:
@@ -656,8 +1022,9 @@ def scan(p):
                 terpotong = 'maks_temuan'
         if terpotong:
             break
+    simpan_inti_cache()
     return {'ok': True, 'akun': akun, 'hari': hari, 'detik': round(time.time() - mulai, 1), 'terpotong': terpotong,
-            'jumlah_akun': len(daftar), 'temuan': temuan, **hit}
+            'jumlah_akun': len(daftar), 'temuan': temuan, 'daftar_besar': besar, **hit}
 
 
 def cpguard():
@@ -715,6 +1082,15 @@ def ringkas(p):
             'karantina': daftar_karantina(), 'tanda': INFO_TANDA, 'waktu': int(time.time())}
 
 
+def di_putih(path, putih):
+    """Whitelist dashboard: [{'path', 'jenis': 'berkas'|'folder'}] — berkas persis, folder = semua isinya."""
+    for w in putih or ():
+        x = w.get('path') or ''
+        if x and (path == x or (w.get('jenis') == 'folder' and path.startswith(x.rstrip('/') + '/'))):
+            return True
+    return False
+
+
 def aman_path(path):
     """Hanya berkas biasa di /home/<akun>/domains/..., bukan symlink."""
     if not path or '\0' in path or not path.startswith(HOME + '/') or '/.' + './' in path + '/':
@@ -735,6 +1111,9 @@ def karantina(p):
     st = os.lstat(path)
     with open(path, 'rb') as f:
         isi = f.read()
+    # Karantina otomatis (ingat karantina) mengirim sha256 temuan: berkas yang sudah ditimpa isi lain tidak disentuh
+    if p.get('sha256') and hashlib.sha256(isi).hexdigest() != p['sha256']:
+        return {'ok': False, 'error': 'berkas_berubah'}
     kid = time.strftime('%Y%m%d-%H%M%S') + '-' + hashlib.sha1(path.encode()).hexdigest()[:8]
     tujuan = os.path.join(KARANTINA, kid)
     os.makedirs(tujuan, mode=0o700)
@@ -757,7 +1136,7 @@ def karantina(p):
             shutil.rmtree(tujuan, ignore_errors=True)
             return {'ok': False, 'error': 'salin_gagal'}
     os.remove(path)
-    return {'ok': True, 'id': kid, 'path': path}
+    return {'ok': True, 'id': kid, 'path': path, 'sha256': meta['sha256']}
 
 
 def entri(kid):
@@ -788,7 +1167,7 @@ def kembalikan(p):
     os.utime(sementara, (meta['mtime'], meta['mtime']))
     os.rename(sementara, path)
     shutil.rmtree(folder)
-    return {'ok': True, 'path': path}
+    return {'ok': True, 'path': path, 'sha256': meta.get('sha256')}
 
 
 def hapus(p):
@@ -797,6 +1176,151 @@ def hapus(p):
         return {'ok': False, 'error': 'karantina_tidak_ada'}
     shutil.rmtree(folder)
     return {'ok': True, 'path': meta['path']}
+
+
+# Bersihkan WP: karantina plugin samaran, hapus admin siluman (postingannya dialihkan ke admin asli), ganti salt
+# wp-config + hapus semua session_tokens. Semua lewat SQL/Python — tidak menjalankan PHP situs yang terinfeksi.
+# Cadangan (tabel users+usermeta, wp-config.php, daftar post yang dialihkan) di /root/velocity-bersih/<id>/.
+BERSIH = '/root/velocity-bersih'
+PLUGIN_SAMARAN = {'VD.WP.PluginPalsu', 'VD.WP.LinkHelper', 'VD.WP.LoginPaksa', 'VD.Webshell.Nama', 'VD.PHP.EvalInput'}
+KUNCI_SALT = ('AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT')
+
+
+def akar_wp(path):
+    """Folder WordPress (berisi wp-config.php) di /home/<akun>/domains/<domain>/public_html[/...]."""
+    asli = os.path.realpath(path or '')
+    bagian = asli[len(HOME) + 1:].split('/')
+    if '\0' in (path or '') or asli != os.path.normpath(path or '/') or not asli.startswith(HOME + '/') \
+            or len(bagian) < 4 or bagian[1] != 'domains' or bagian[3] != 'public_html':
+        return None, None
+    wpc = os.path.join(asli, 'wp-config.php')
+    if os.path.islink(wpc) or not os.path.isfile(wpc):
+        return None, None
+    return asli, bagian[0]
+
+
+def plugin_samaran(akar):
+    hasil = []
+    for sub in ('plugins', 'mu-plugins'):
+        dasar = os.path.join(akar, 'wp-content', sub)
+        for d, folder, fs in os.walk(dasar):
+            if d[len(dasar):].count('/') >= 2:  # plugin samaran = 1 berkas di akar folder plugin
+                folder[:] = []
+                continue
+            folder[:] = [x for x in folder if x not in ('node_modules', 'vendor')]
+            for f in fs:
+                path = os.path.join(d, f)
+                if ekstensi(f) != 'php' or os.path.islink(path) or os.path.getsize(path) > MAKS_BACA:
+                    continue
+                with open(path, 'rb') as fh:
+                    tanda = [x['id'] for x in periksa(path, 'php', fh.read()) if x['id'] in PLUGIN_SAMARAN]
+                if tanda:
+                    hasil.append((path, tanda))
+    return hasil
+
+
+def ganti_salt(wpc):
+    import secrets
+    abjad = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#%^&*()-_[]{}<>~+=,.;:/?|'
+    with open(wpc, 'rb') as f:
+        teks = f.read()
+    n = 0
+    for kunci in KUNCI_SALT:
+        baru = ''.join(secrets.choice(abjad) for _ in range(64)).encode()
+        teks, k = re.subn(rb"(define\s*\(\s*['\"]%s['\"]\s*,\s*)(['\"]).*?(?<!\\)\2" % kunci.encode(),
+                          lambda m: m.group(1) + b"'" + baru + b"'", teks, count=1, flags=re.S)
+        n += k
+    if n:
+        st = os.stat(wpc)
+        tmp = wpc + '.velocity-salt'
+        with open(tmp, 'wb') as f:
+            f.write(teks)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.replace(tmp, wpc)
+    return n
+
+
+def bersihkan_wp(p):
+    akar, user = akar_wp(p.get('akar'))
+    if not akar:
+        return {'ok': False, 'error': 'path_tidak_sah'}
+    k = wp_kredensial(os.path.join(akar, 'wp-config.php'))
+    if not k:
+        return {'ok': False, 'error': 'wp_config_tidak_terbaca'}
+    with open(os.path.join(akar, 'wp-config.php'), 'rb') as f:
+        if re.search(rb"define\s*\(\s*['\"](MULTISITE|WP_ALLOW_MULTISITE)['\"]\s*,\s*true", f.read(), re.I):
+            return {'ok': False, 'error': 'multisite_tidak_didukung'}
+    pr = k['prefix']
+    try:
+        hapus_id = sorted({int(x) for x in p.get('hapus_user') or []})[:50]
+        # turunkan_user: admin curiga (bisa saja milik klien) cukup jadi subscriber, tidak dihapus
+        turun_id = sorted({int(x) for x in p.get('turunkan_user') or []} - set(hapus_id))[:50]
+    except (TypeError, ValueError):
+        return {'ok': False, 'error': 'id_user_tidak_sah'}
+    admin = [int(b[0]) for b in mysql_baris(k, sql_admin(pr)) if b and b[0].isdigit()]
+    if hapus_id or turun_id:
+        minta = hapus_id + turun_id
+        ada = {int(b[0]) for b in mysql_baris(k, 'SELECT ID FROM `%susers` WHERE ID IN (%s)' % (pr, ','.join(map(str, minta))))}
+        if set(minta) - ada:
+            return {'ok': False, 'error': 'user_tidak_ada', 'id': sorted(set(minta) - ada)}
+    sisa = [i for i in admin if i not in hapus_id and i not in turun_id]
+    if (hapus_id or turun_id) and not sisa:
+        return {'ok': False, 'error': 'admin_asli_tidak_ada'}
+
+    bid = time.strftime('%Y%m%d-%H%M%S') + '-' + hashlib.sha1(akar.encode()).hexdigest()[:8]
+    cadangan = os.path.join(BERSIH, bid)
+    os.makedirs(cadangan, mode=0o700)
+    os.chmod(BERSIH, 0o700)
+    shutil.copy2(os.path.join(akar, 'wp-config.php'), os.path.join(cadangan, 'wp-config.php'))
+    host, _, port = (k.get('DB_HOST') or 'localhost').partition(':')
+    cnf = mysql_cnf(k)
+    cmd = ['mysqldump', '--defaults-file=' + cnf, '--single-transaction', '--skip-lock-tables', '-u', k['DB_USER'], '-h', host or 'localhost']
+    if port.isdigit():
+        cmd += ['-P', port]
+    try:
+        with open(os.path.join(cadangan, 'users.sql'), 'wb') as f:
+            r = subprocess.run(cmd + [k['DB_NAME'], pr + 'users', pr + 'usermeta'], stdout=f, stderr=subprocess.PIPE, timeout=300)
+    finally:
+        os.unlink(cnf)
+    if r.returncode or os.path.getsize(os.path.join(cadangan, 'users.sql')) < 100:
+        return {'ok': False, 'error': 'cadangan_gagal', 'pesan': r.stderr.decode('utf-8', 'replace')[:200], 'cadangan': cadangan}
+
+    lap = {'akar': akar, 'user': user, 'waktu': int(time.time()), 'oleh': str(p.get('oleh') or '')[:40],
+           'karantina': [], 'hapus_user': [], 'turun_user': [], 'dialihkan_ke': None, 'post_dialihkan': [], 'salt': 0, 'sesi': False}
+    try:
+        if p.get('plugin'):
+            for path, tanda in plugin_samaran(akar):
+                r = karantina({'path': path, 'oleh': p.get('oleh'), 'alasan': 'Bersihkan WP: ' + ', '.join(tanda)})
+                lap['karantina'].append({'path': path, 'tanda': tanda, 'ok': r.get('ok'), 'id': r.get('id'), 'sha256': r.get('sha256'), 'error': r.get('error')})
+        if hapus_id:
+            daftar = ','.join(map(str, hapus_id))
+            lap['hapus_user'] = [{'id': int(b[0]), 'login': b[1].decode('utf-8', 'replace'), 'email': b[2].decode('utf-8', 'replace')}
+                                 for b in mysql_baris(k, 'SELECT ID, user_login, user_email FROM `%susers` WHERE ID IN (%s)' % (pr, daftar))]
+            lap['dialihkan_ke'] = sisa[0]
+            lap['post_dialihkan'] = [[int(b[0]), int(b[1])] for b in mysql_baris(
+                k, 'SELECT ID, post_author FROM `%sposts` WHERE post_author IN (%s)' % (pr, daftar))]
+            mysql_baris(k, 'START TRANSACTION; UPDATE `{p}posts` SET post_author = {r} WHERE post_author IN ({d}); '
+                           'DELETE FROM `{p}usermeta` WHERE user_id IN ({d}); DELETE FROM `{p}users` WHERE ID IN ({d}); COMMIT'
+                        .format(p=pr, r=sisa[0], d=daftar))
+        if turun_id:
+            daftar = ','.join(map(str, turun_id))
+            lap['turun_user'] = [{'id': int(b[0]), 'login': b[1].decode('utf-8', 'replace'), 'email': b[2].decode('utf-8', 'replace')}
+                                 for b in mysql_baris(k, 'SELECT ID, user_login, user_email FROM `%susers` WHERE ID IN (%s)' % (pr, daftar))]
+            mysql_baris(k, "START TRANSACTION; UPDATE `{p}usermeta` SET meta_value = 'a:1:{{s:10:\"subscriber\";b:1;}}' "
+                           "WHERE user_id IN ({d}) AND meta_key = '{p}capabilities'; "
+                           "UPDATE `{p}usermeta` SET meta_value = '0' WHERE user_id IN ({d}) AND meta_key = '{p}user_level'; "
+                           "DELETE FROM `{p}usermeta` WHERE user_id IN ({d}) AND meta_key = 'session_tokens'; COMMIT".format(p=pr, d=daftar))
+        if p.get('salt'):
+            lap['salt'] = ganti_salt(os.path.join(akar, 'wp-config.php'))
+            mysql_baris(k, "DELETE FROM `%susermeta` WHERE meta_key = 'session_tokens'" % pr)
+            lap['sesi'] = True
+    except Exception as e:
+        lap['error'] = str(e)[:300]
+    with open(os.path.join(cadangan, 'laporan.json'), 'w') as f:
+        json.dump(lap, f)
+    lap['post_dialihkan'] = len(lap['post_dialihkan'])
+    return dict(lap, ok='error' not in lap, cadangan=cadangan, id=bid, path=akar)
 
 
 MAKS_LIHAT = 512 * 1024
@@ -829,7 +1353,253 @@ def baca(p):
             'biner': b'\0' in isi[:8192], 'isi': isi.decode('utf-8', 'replace')}
 
 
-AKSI = {'baca': baca, 'ringkas': ringkas, 'scan': scan, 'karantina': karantina, 'kembalikan': kembalikan, 'hapus': hapus}
+# Judi AI (services/server_judi.py): bukti per akun untuk dinilai AI di dashboard + suspend/unsuspend akun DirectAdmin.
+DA_BIN = '/usr/local/directadmin/directadmin'
+RE_TAG_BUANG = re.compile(rb'<(script|style|noscript|svg)\b.*?</\1\s*>', re.I | re.S)
+RE_JUDUL = re.compile(rb'<title[^>]*>(.*?)</title>', re.I | re.S)
+RE_POTONG_JUDI = r(r'slot|togel|judi|maxwin|gacor|casino|kasino|sbobet|toto|http_user_agent|googlebot|base64_decode|eval\s*\(')
+
+
+def teks_halaman(isi, maks=2500):
+    import html as _html
+    m = RE_JUDUL.search(isi)
+    judul = _html.unescape(re.sub(r'\s+', ' ', m.group(1).decode('utf-8', 'replace'))).strip()[:200] if m else ''
+    isi = RE_TAG_BUANG.sub(b' ', isi)
+    teks = _html.unescape(re.sub(rb'<[^>]+>', b' ', isi).decode('utf-8', 'replace'))
+    return judul, re.sub(r'\s+', ' ', teks).strip()[:maks]
+
+
+def status_suspend(user):
+    try:
+        with open('/usr/local/directadmin/data/users/%s/user.conf' % user, errors='replace') as f:
+            return any(b.strip() == 'suspended=yes' for b in f)
+    except OSError:
+        return False
+
+
+def akun_ada(user):
+    return bool(user) and re.match(r'^[a-z0-9_][a-z0-9_.-]{0,31}$', user) and any(a['user'] == user for a in akun_da())
+
+
+def cari_sumber(akar):
+    """Scan penuh wp-content (tanpa batas umur berkas) untuk penyuntik beranda: plugin lama tak masuk scan harian."""
+    hasil, n = [], 0
+    for sub in ('mu-plugins', 'plugins', 'themes'):
+        for d, folder, fs in os.walk(os.path.join(akar, 'wp-content', sub)):
+            folder[:] = [x for x in folder if x not in ('node_modules', 'vendor', 'cache')]
+            for f in fs:
+                ext = ekstensi(f)
+                if ext not in ('php', 'js') or n >= 30000:
+                    continue
+                path = os.path.join(d, f)
+                n += 1
+                try:
+                    if os.path.islink(path) or os.path.getsize(path) > MAKS_BACA:
+                        continue
+                    with open(path, 'rb') as fh:
+                        teks = fh.read()
+                except OSError:
+                    continue
+                tanda = [h for h in periksa(path, ext, teks) if h['tingkat'] == 'virus']
+                if tanda:
+                    hasil.append({'path': path, 'tanda': [h['id'] for h in tanda], 'bukti': tanda[0]['bukti'][:120]})
+                    if len(hasil) >= 10:
+                        return hasil
+    return hasil
+
+
+def bukti_judi(p):
+    user = p.get('user') or ''
+    if not akun_ada(user):
+        return {'ok': False, 'error': 'akun_tidak_dikenal'}
+    akun = next(a for a in akun_da() if a['user'] == user)
+    domain = [d for d in akun['domain'] if d not in ('default', 'sharedip', 'suspended')]
+    utama = [d for d in (p.get('domains') or []) if d in domain]
+    web = []
+    # hanya_berkas: batch lanjutan Analisis AI cukup isi berkas, beranda sudah diambil panggilan pertama
+    for d in [] if p.get('hanya_berkas') else (utama + [x for x in domain if x not in utama])[:3]:
+        if not os.path.isdir(os.path.join(akar_akun(user), d, 'public_html')):
+            continue
+        ip = ip_domain(user, d)
+        kb, ab, ib = ambil(d, ip, UA_BROWSER)
+        # Alih ke www/https domain sendiri → ambil halaman tujuannya (yang dilihat pengunjung)
+        tuju = host_url(ab) if kb[:1] == '3' and domain_sama(host_url(ab), d) else d
+        if tuju != d:
+            kb, ab, ib = ambil(tuju, ip, UA_BROWSER)
+        kg, ag, ig = ambil(tuju, ip, UA_GOOGLEBOT)
+        kh, ah, _ = ambil(tuju, ip, UA_HP, 'https://www.google.com/')
+        ab, ag, ah = [re.sub(r'[?&]vcek=\d+', '', x or '') for x in (ab, ag, ah)]
+        jb, jg = kata_judi(ib), kata_judi(ig)
+        judul, teks = teks_halaman(ib)
+        judul_bot, teks_bot = teks_halaman(ig)
+        beda = judul_bot != judul or len(jg - jb) >= 2 or (ag or '') != (ab or '')
+        sembunyi = bool(link_judi_sembunyi(ib + b'\n' + ig, ''))
+        masih = sembunyi or len(jb) >= 3 or len(jg) >= 3
+        web.append({'domain': d, 'kode': kb, 'alih': ab, 'judul': judul, 'teks': teks, 'judi_browser': len(jb),
+                    'beda_bot': beda, 'judul_bot': judul_bot if beda else '', 'teks_bot': teks_bot if beda else '',
+                    'alih_bot': ag, 'judi_bot': len(jg), 'judi_sembunyi': sembunyi,
+                    'sumber': cari_sumber(os.path.join(akar_akun(user), d, 'public_html')) if masih else [],
+                    'alih_hp': ah if ah and not domain_sama(host_url(ah), d) and host_url(ah) != host_url(ab) else ''})
+    berkas = []
+    for path in (p.get('paths') or [])[:15]:
+        asli = os.path.realpath(path)
+        if not asli.startswith('%s/%s/' % (HOME, user)) or os.path.islink(path) or not os.path.isfile(asli):
+            continue
+        with open(asli, 'rb') as f:
+            isi = f.read(262144)
+        teks = isi.decode('utf-8', 'replace')
+        bagian = [teks[:300]]
+        for m in RE_POTONG_JUDI.finditer(isi):
+            if len(bagian) >= 4:
+                break
+            awal = len(isi[:max(0, m.start() - 150)].decode('utf-8', 'replace'))
+            if awal > 300:
+                bagian.append('… ' + teks[awal:awal + 300])
+        berkas.append({'path': path, 'ukuran': os.path.getsize(asli), 'potongan': re.sub(r'\s+', ' ', ' '.join(bagian))[:1200]})
+    return {'ok': True, 'user': user, 'domain': domain, 'suspended': status_suspend(user), 'web': web, 'berkas': berkas}
+
+
+def ubah_suspend(p, jadi):
+    user = p.get('user') or ''
+    if not akun_ada(user):
+        return {'ok': False, 'error': 'akun_tidak_dikenal'}
+    if status_suspend(user) == jadi:
+        return {'ok': True, 'user': user, 'suspended': jadi, 'catatan': 'sudah'}
+    perintah = [DA_BIN, 'suspend-user', '--user=' + user, '--reason=abuse'] if jadi else [DA_BIN, 'unsuspend-user', '--user=' + user]
+    r = subprocess.run(perintah, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    if jadi and status_suspend(user) != jadi:
+        # Alasan 'abuse' tak dikenal di versi DA lain → ulang tanpa alasan
+        r = subprocess.run(perintah[:3], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    if status_suspend(user) != jadi:
+        return {'ok': False, 'error': 'da_gagal', 'pesan': r.stdout.decode('utf-8', 'replace')[-300:]}
+    return {'ok': True, 'user': user, 'suspended': jadi}
+
+
+def admin_masih_ada(path):
+    """Temuan admin siluman `<akar>#db:<prefix>users:<id>`: ada=False bila wp-config.php sudah hilang
+    atau user itu bukan administrator lagi (ditangani manual). tanda=None = tidak bisa dicek (DB galat)."""
+    akar, _, sisa = path.partition('#db:')
+    tabel, _, uid = sisa.rpartition(':')
+    if not uid.isdigit() or not tabel.endswith('users'):
+        return {'ada': True, 'tanda': None}
+    konfig = os.path.join(akar, 'wp-config.php')
+    if not os.path.isfile(konfig):
+        return {'ada': False}
+    k = wp_kredensial(konfig)
+    if not k or k['prefix'] + 'users' != tabel:
+        return {'ada': True, 'tanda': None}
+    try:
+        b = mysql_baris(k, sql_admin(k['prefix']).replace(' ORDER BY', ' WHERE u.ID = %s ORDER BY' % uid))
+    except Exception:
+        return {'ada': True, 'tanda': None}
+    return {'ada': True, 'tanda': None} if b else {'ada': False}
+
+
+def periksa_ulang(p):
+    """Baca ulang berkas temuan lama (hanya baca) dan periksa dengan tanda tangan VD.* saat ini.
+    Hasil per path: ada=False bila berkas sudah tidak ada, selain itu tanda (id) + sha256 isi sekarang."""
+    hasil = {}
+    putih = p.get('putih') or []
+    asli = p.get('asli') or {}
+    for path in (p.get('paths') or [])[:3000]:
+        if path.startswith(HOME + '/') and '#db:' in path:
+            hasil[path] = admin_masih_ada(path)
+            continue
+        if not path.startswith(HOME + '/') or '#' in path:
+            continue
+        if di_putih(path, putih):
+            hasil[path] = {'ada': os.path.lexists(path), 'tanda': [], 'putih': True}
+            continue
+        try:
+            st = os.lstat(path)
+        except OSError:
+            hasil[path] = {'ada': False}
+            continue
+        if not (st.st_mode & 0o170000 == 0o100000):
+            hasil[path] = {'ada': True, 'tanda': None}
+            continue
+        nama = os.path.basename(path)
+        ext = ekstensi(nama)
+        tersembunyi = ext not in EKSTENSI and nama.startswith('.')
+        # Batas baca sama dengan scan: di atas batas → awal + akhir saja
+        sebagian = st.st_size > (1048576 if tersembunyi or ext in ('html', 'htm', 'js', 'txt') else MAKS_BACA)
+        # Sama dengan scan: berkas inti WP besar yang cocok checksum resmi = asli
+        if sebagian and not tersembunyi and (inti_wp_asli(path, st) or hash_asli(path, st, asli)):
+            hasil[path] = {'ada': True, 'inti': True, 'tanda': []}
+            continue
+        try:
+            if sebagian:
+                teks, sha = baca_sebagian(path, st.st_size), hash_berkas(path)
+            else:
+                with open(path, 'rb') as f:
+                    teks = f.read()
+                sha = hashlib.sha256(teks).hexdigest()
+        except OSError:
+            hasil[path] = {'ada': True, 'tanda': None}
+            continue
+        if tersembunyi and b'<?php' in teks[:256]:
+            ext = 'php'
+        hasil[path] = {'ada': True, 'sha256': sha, 'tanda': [x['id'] for x in periksa(path, ext, teks)]}
+    simpan_inti_cache()
+    return {'ok': True, 'hasil': hasil}
+
+
+RT_DATA = '/var/lib/velocity-av'
+
+
+def realtime_setelan(p):
+    """Tulis setelan watcher realtime (mode laporan/otomatis + whitelist) persis seperti dikirim dashboard
+    (dashboard membandingkan sha256 isi berkas dengan `setelan` di detak)."""
+    isi = p.get('isi')
+    if not isinstance(isi, str) or len(isi) > 1000000:
+        return {'ok': False, 'error': 'isi_tidak_sah'}
+    json.loads(isi)
+    os.makedirs(RT_DATA, mode=0o700, exist_ok=True)
+    tmp = os.path.join(RT_DATA, 'setelan.json.tmp')
+    with open(tmp, 'w') as f:
+        f.write(isi)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, os.path.join(RT_DATA, 'setelan.json'))
+    return {'ok': True, 'sha256': hashlib.sha256(isi.encode()).hexdigest()[:12]}
+
+
+def realtime(p):
+    """Status watcher realtime (scripts/velocity_av_realtime.py) + temuan baru sejak offset byte temuan.jsonl."""
+    r = subprocess.run(['systemctl', 'is-active', 'velocity-av-realtime'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    out = {'ok': True, 'aktif': r.stdout.decode().strip()}
+    try:
+        with open(os.path.join(RT_DATA, 'detak.json')) as f:
+            out['detak'] = json.load(f)
+    except (OSError, ValueError):
+        out['detak'] = None
+    path = os.path.join(RT_DATA, 'temuan.jsonl')
+    try:
+        ukuran = os.path.getsize(path)
+    except OSError:
+        ukuran = 0
+    offset = int(p.get('offset') or 0)
+    if offset > ukuran:  # berkas diputar ke .1
+        offset = 0
+    baris = []
+    if ukuran > offset:
+        with open(path, 'rb') as f:
+            f.seek(offset)
+            data = f.read(2000000)
+        potong_di = data.rfind(b'\n') + 1
+        offset += potong_di
+        for b in data[:potong_di].splitlines():
+            try:
+                baris.append(json.loads(b.decode('utf-8', 'replace')))
+            except ValueError:
+                pass
+    out.update(temuan=baris[-500:], offset=offset)
+    return out
+
+
+AKSI = {'baca': baca, 'ringkas': ringkas, 'scan': scan, 'karantina': karantina, 'kembalikan': kembalikan, 'hapus': hapus,
+        'bersihkan_wp': bersihkan_wp,
+        'bukti_judi': bukti_judi, 'realtime': realtime, 'periksa_ulang': periksa_ulang,
+        'realtime_setelan': realtime_setelan, 'suspend': lambda p: ubah_suspend(p, True), 'unsuspend': lambda p: ubah_suspend(p, False)}
 
 
 def jalankan(kode):

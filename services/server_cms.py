@@ -6,7 +6,10 @@ Alur scan (POST /api/servers/cms/scan, thread latar):
 2. Setiap (jenis, slug) dicocokkan dengan basis data publik wpvulnerability.net (gratis, tanpa kunci API;
    feed Wordfence v3 wajib API key). Jawaban di-cache di VULN_DIR 24 jam; gagal ambil → pakai cache lama.
 3. Hasil per server disimpan di HASIL_DIR/<host>.json; GET hanya membaca berkas (tanpa SSH).
-Tidak ada perubahan apa pun di server klien — memperbarui plugin tetap dikerjakan manual/oleh tim.
+Scan tidak mengubah apa pun di server klien. Tombol "Perbaiki" (POST /api/servers/cms/perbaiki, per situs atau
+per akun; dialognya memanggil /perbaiki/cek dulu) menjalankan scripts/server_cms_perbaiki.py: pengaman (PHP web,
+kuota, Kirki MyISAM) → cadangan → WP-CLI update komponen rentan → pulihkan CSS Kirki → cek beranda
+(rollback plugin/tema bila 5xx), lalu scan ulang akun itu saja dan hasilnya digabung ke berkas hasil server.
 Scan otomatis harian per server (JADWAL, diatur di halaman CMS): kerentanan kritis/tinggi yang BARU dibanding
 hasil sebelumnya → Telegram tim server.
 """
@@ -24,6 +27,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_cms_agent.py'
+AGEN_PERBAIKI = AGEN.with_name('server_cms_perbaiki.py')
+BATAS_PERBAIKI = 3600
+MAKS_PERBAIKI = 30  # situs per sekali jalan (sama dengan batas di agen)
 CMS_DIR = Path('/var/lib/velocity/server-cms')
 HASIL_DIR = CMS_DIR / 'hasil'
 VULN_DIR = CMS_DIR / 'vuln'
@@ -182,11 +188,16 @@ def versi_wp_terbaru():
 
 # ---------- Scan ----------
 
-def _inventaris(srv, key):
-    sandi = base64.b64encode(json.dumps({'aksi': 'inventaris'}).encode()).decode()
-    cmd = ['ssh', '-i', str(key), '-p', str(srv['port']), '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-           '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
-           'command -v python3 >/dev/null && exec nice -n 15 ionice -c3 python3 - || exec /usr/libexec/platform-python -']
+def _ssh(srv, key):
+    return ['ssh', '-i', str(key), '-p', str(srv['port']), '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+            '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new', f"{srv['user']}@{srv['host']}",
+            'command -v python3 >/dev/null && exec nice -n 15 ionice -c3 python3 - || exec /usr/libexec/platform-python -']
+
+
+def _inventaris(srv, key, user=None):
+    perintah = {'aksi': 'inventaris', 'user': user} if user else {'aksi': 'inventaris'}
+    sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
+    cmd = _ssh(srv, key)
     try:
         r = subprocess.run(cmd, input=f"{AGEN.read_text()}\njalankan('{sandi}')\n", capture_output=True, text=True,
                            timeout=BATAS_SSH, check=False)
@@ -338,12 +349,10 @@ def _notif_baru(nama, lama, baru):
     tambah = [v for k, v in _kritis(baru).items() if k not in sebelum]
     if not tambah:
         return
-    baris = [f"• {'🔴' if t == 'kritis' else '🟠'} {html.escape(d)} — {html.escape(n)} {html.escape(str(ver))}: {html.escape(str(j)[:90])}"
-             for d, n, ver, t, j in tambah[:10]]
-    if len(tambah) > 10:
-        baris.append(f'… dan {len(tambah) - 10} lagi')
-    _kirim_tg('\n'.join([f'🛡️ <b>Kerentanan CMS baru di {html.escape(nama)}</b>', f'{len(tambah)} kerentanan kritis/tinggi baru', ''] + baris
-                         + ['', f'https://dash.velocity.ai.id/server/cms?s={urllib.parse.quote(nama)}', 'Perbarui plugin/tema terkait (manual).']))
+    kritis = sum(1 for v in tambah if v[3] == 'kritis')
+    _kirim_tg('\n'.join([f'🛡️ <b>VelocityGuard · Kerentanan CMS baru di {html.escape(nama)}</b>',
+                         f'{len(tambah)} kerentanan kritis/tinggi baru: {kritis} kritis, {len(tambah) - kritis} tinggi',
+                         '', f'https://dash.velocity.ai.id/server/cms?s={urllib.parse.quote(nama)}', 'Perbarui plugin/tema terkait (manual).']))
 
 
 def _mulai(servers, key, oleh, target, jadwal=False):
@@ -424,6 +433,156 @@ def scan_mulai(payload):
     job = _mulai(servers, key, oleh, target)
     if not job:
         return {'error': 'scan_sedang_jalan'}, 409
+    return job, 200
+
+
+# ---------- Perbaiki (mengubah situs klien) ----------
+
+def _rencana(data, user, minta):
+    """Saring permintaan halaman ke komponen yang benar-benar rentan menurut hasil scan tersimpan.
+    Slug dikembalikan ke nama folder asli (temuan menyimpan huruf kecil)."""
+    punya = {s['path']: s for s in (data or {}).get('situs') or [] if s.get('user') == user}
+    out = []
+    for m in minta if isinstance(minta, list) else []:
+        s = punya.get((m or {}).get('path')) if isinstance(m, dict) else None
+        if not s:
+            continue
+        rentan = {(x['jenis'], x['slug']) for x in s.get('temuan', []) if x['id'] and not x.get('ditutup')}
+        asli = {('plugin', p['slug'].lower()): p['slug'] for p in s['plugin']} | {('theme', x['slug'].lower()): x['slug'] for x in s['tema']}
+        plugin = sorted({asli[('plugin', str(x).lower())] for x in m.get('plugin') or []
+                         if ('plugin', str(x).lower()) in rentan and ('plugin', str(x).lower()) in asli})
+        tema = sorted({asli[('theme', str(x).lower())] for x in m.get('tema') or []
+                       if ('theme', str(x).lower()) in rentan and ('theme', str(x).lower()) in asli})
+        # Inti: 'minor' hanya bila versinya rentan; 'terbaru' bila lebih lama dari rilis terbaru; 'cek' = dialog menilai keduanya
+        mode = 'minor' if m.get('core') is True else m.get('core')
+        usang = (urai_versi(s['versi']) or ()) < (urai_versi((data or {}).get('wp_terbaru')) or ())
+        inti_rentan = ('core', s['versi']) in rentan
+        core = mode if (mode == 'minor' and inti_rentan) or (mode == 'terbaru' and usang) or (mode == 'cek' and (inti_rentan or usang)) else False
+        if plugin or tema or core:
+            out.append({'path': s['path'], 'domain': s['domain'], 'sub': s.get('sub') or '', 'plugin': plugin, 'tema': tema, 'core': core})
+    return out[:MAKS_PERBAIKI]
+
+
+def _gabung_akun(job, srv, user, inv):
+    """Ganti baris situs `user` di hasil server dengan hasil scan ulang akun itu, lalu hitung ulang ringkasan."""
+    baru, kamus_baru, galat = _cocokkan(job, {'situs': inv['situs']})
+    # Tanpa kunci tambahan: job berjalan (scan/perbaiki) selalu hanya satu, jadi berkas hasil tak ditulis bersamaan
+    lama = _baca_hasil(srv['host']) or {'host': srv['host'], 'server': srv['name'], 'situs': [], 'kerentanan': {}}
+    situs = [s for s in lama.get('situs') or [] if s.get('user') != user] + baru
+    kamus = {**(lama.get('kerentanan') or {}), **kamus_baru}
+    dipakai = {i for s in situs for x in s.get('temuan', []) for i in x['id']}
+    data = {**lama, 'situs': situs, 'kerentanan': {i: kamus[i] for i in dipakai if i in kamus},
+            'diambil': int(time.time()), 'oleh': f"{job['oleh']} (scan ulang akun {user})",
+            'wp_terbaru': versi_wp_terbaru() or lama.get('wp_terbaru')}
+    data['ringkas'] = _ringkas(data)
+    HASIL_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = HASIL_DIR / f".{srv['host']}.tmp"
+    tmp.write_text(json.dumps(data, separators=(',', ':')))
+    tmp.replace(HASIL_DIR / f"{srv['host']}.json")
+    return data, galat
+
+
+def _kerja_perbaiki(job, srv, key, rencana):
+    user = job['user']
+    try:
+        job['kemajuan'] = {'tahap': 'perbaiki', 'ke': 0, 'dari': len(rencana), 'domain': rencana[0]['domain']}
+        sandi = base64.b64encode(json.dumps({'aksi': 'perbaiki', 'user': user, 'situs': rencana, 'oleh': job['oleh']}).encode()).decode()
+        proses = subprocess.Popen(_ssh(srv, key), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        pengawas = threading.Timer(BATAS_PERBAIKI, proses.kill)
+        pengawas.start()
+        try:
+            proses.stdin.write(f"{AGEN_PERBAIKI.read_text()}\njalankan('{sandi}')\n")
+            proses.stdin.close()
+            akhir = None
+            for baris in proses.stdout:
+                try:
+                    obj = json.loads(baris)
+                except ValueError:
+                    continue
+                if 'situs' in obj and isinstance(obj['situs'], dict):
+                    job['situs'].append(obj['situs'])
+                    ke = obj.get('ke', len(job['situs']))
+                    job['kemajuan'] = {'tahap': 'perbaiki', 'ke': ke, 'dari': len(rencana),
+                                       'domain': rencana[min(ke, len(rencana) - 1)]['domain']}
+                else:
+                    akhir = obj
+            galat_ssh = proses.stderr.read()
+            proses.wait()
+        finally:
+            pengawas.cancel()
+        if not akhir or not akhir.get('ok'):
+            job['error'] = (akhir or {}).get('error') or ((galat_ssh or '').strip().splitlines() or [f'exit_{proses.returncode}'])[-1][:200]
+        # Scan ulang akun itu walau sebagian gagal, agar status di halaman sesuai keadaan sebenarnya
+        job['kemajuan'] = {'tahap': 'inventaris', 'ke': 0, 'dari': 1}
+        inv = _inventaris(srv, key, user)
+        if not inv.get('ok'):
+            raise RuntimeError(f"scan ulang gagal: {inv.get('error')}")
+        data, galat = _gabung_akun(job, srv, user, inv)
+        sisa = [s for s in data['situs'] if s.get('user') == user]
+        job.update(status='gagal' if job.get('error') else 'selesai', selesai=int(time.time()), galat_api=len(galat),
+                   hasil=[{'host': srv['host'], 'server': srv['name'], 'ok': True, **data['ringkas']}],
+                   akun={'situs': len(sisa), 'rentan': sum(1 for s in sisa if any(x['id'] for x in s['temuan']))})
+    except Exception as e:  # noqa: BLE001
+        job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])
+    _catat({k: job.get(k) for k in ('id', 'jenis', 'mulai', 'selesai', 'oleh', 'target', 'user', 'status', 'error', 'hasil', 'akun', 'situs', 'galat_api')})
+
+
+def _validasi_perbaiki(payload):
+    """(srv, user, rencana, None) atau (None, None, None, (galat, kode))."""
+    srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
+    if not srv:
+        return None, None, None, ({'error': 'server_tidak_dikenal'}, 400)
+    user = str(payload.get('user') or '')
+    if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', user):
+        return None, None, None, ({'error': 'akun_tidak_sah'}, 400)
+    rencana = _rencana(_baca_hasil(srv['host']), user, payload.get('situs'))
+    if not rencana:
+        return None, None, None, ({'error': 'tidak_ada_yang_diperbaiki'}, 400)
+    return srv, user, rencana, None
+
+
+def perbaiki_cek(payload):
+    """POST /api/servers/cms/perbaiki/cek: pengaman (PHP web, kuota, MyISAM Kirki, CSS Kirki) per situs tanpa
+    mengubah apa pun — ditampilkan di dialog konfirmasi. Agen yang sama mengulang pemeriksaan saat perbaikan."""
+    srv, user, rencana, galat = _validasi_perbaiki(payload)
+    if galat:
+        return galat
+    key = _ssh_key_file()
+    if not key:
+        return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
+    sandi = base64.b64encode(json.dumps({'aksi': 'cek', 'user': user, 'situs': rencana}).encode()).decode()
+    try:
+        r = subprocess.run(_ssh(srv, key), input=f"{AGEN_PERBAIKI.read_text()}\njalankan('{sandi}')\n", capture_output=True,
+                           text=True, timeout=300, check=False)
+        hasil = json.loads((r.stdout or '').strip().splitlines()[-1])
+    # 422, bukan 502/504: Cloudflare/gerbang dash mengganti body 5xx dengan halaman galatnya sendiri (JSON hilang)
+    except subprocess.TimeoutExpired:
+        return {'error': 'timeout'}, 422
+    except (ValueError, IndexError):
+        return {'error': ((r.stderr or '').strip().splitlines() or [f'exit_{r.returncode}'])[-1][:200]}, 422
+    if not hasil.get('ok'):
+        return hasil, 422
+    return {**hasil, 'rencana': rencana}, 200
+
+
+def perbaiki_mulai(payload):
+    """POST /api/servers/cms/perbaiki {server, user, situs: [{path, plugin:[slug], tema:[slug], core}], oleh}."""
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
+    if not oleh:
+        return {'error': 'invalid_oleh'}, 400
+    srv, user, rencana, galat = _validasi_perbaiki(payload)
+    if galat:
+        return galat
+    key = _ssh_key_file()
+    if not key:
+        return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
+    job = {'id': time.strftime('%Y%m%d-%H%M%S'), 'jenis': 'perbaiki', 'mulai': int(time.time()), 'oleh': oleh, 'status': 'berjalan',
+           'target': srv['host'], 'server': [srv['name']], 'user': user, 'rencana': rencana, 'situs': []}
+    with _kunci:
+        if any(j['status'] == 'berjalan' for j in _job.values()):
+            return {'error': 'scan_sedang_jalan'}, 409
+        _job[job['id']] = job
+    threading.Thread(target=_kerja_perbaiki, args=(job, srv, key, rencana), daemon=True).start()
     return job, 200
 
 

@@ -18,6 +18,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -87,8 +88,14 @@ SKEMA = {
     },
     'contoh': {
         # HTML ditulis agen langsung ke folder kerja (Write), bukan lewat JSON — lihat buat_contoh()
-        'type': 'object', 'required': ['nama_aplikasi', 'catatan'],
-        'properties': {'nama_aplikasi': {'type': 'string'}, 'catatan': {'type': 'array', 'items': {'type': 'string'}}},
+        'type': 'object', 'required': ['nama_aplikasi', 'catatan', 'referensi'],
+        'properties': {'nama_aplikasi': {'type': 'string'}, 'catatan': {'type': 'array', 'items': {'type': 'string'}},
+                       # Peta referensi desain (15 Okt): blok mana meniru acuan mana -> agen Install & cek kemiripan
+                       'referensi': {'type': 'array', 'items': {
+                           'type': 'object', 'required': ['halaman', 'blok', 'sumber', 'unsur'],
+                           'properties': {'halaman': {'type': 'string', 'enum': ['index.html', 'dashboard.html']},
+                                          'blok': {'type': 'string'}, 'sumber': {'type': 'string'},
+                                          'unsur': {'type': 'string'}}}}},
     },
     'estimasi': {
         'type': 'object', 'required': ['fitur', 'tambahan'],
@@ -324,6 +331,42 @@ KONTEN_TEKS = {
 }
 
 
+def baris_ref(r):
+    return f"- {r['url']}" + (' (PM)' if r.get('asal') == 'pm' else '') + (f" — {r['ket']}" if r.get('ket') else '')
+
+
+def teks_referensi(slug, p, jenis):
+    """Situs yang disebut catatan/dokumen (L.situs_referensi) -> blok {{REFERENSI}} di susun & contoh (15 Okt, project-011)."""
+    info = L.info_referensi(slug, p)
+    ref = info['situs']
+    if info['diserahkan']:
+        return ('## Referensi desain\n\nKlien MENYERAHKAN desain ke tim (ditandai PM): tidak ada situs acuan; susun sendiri '
+                'sesuai brand & jenis aplikasi. Gambar di dokumen klien tetap boleh dilihat untuk warna/logo.\n\n')
+    if jenis == 'contoh':
+        # Gambar di dalam Word/PDF klien (screenshot situs, sketsa) bisa jadi referensi desain juga (15 Okt)
+        dok = L.gambar_dok_referensi(slug)
+        teks = ''
+        if ref:
+            teks += ('## Situs yang disebut di bahan (WAJIB diperiksa)\n\n' + '\n'.join(baris_ref(r) for r in ref)
+                     + '\n\nLink yang ditambahkan PM (bertanda PM) pasti referensi tampilan: ikuti keterangannya (mis. hanya blok '
+                     'tertentu). Situs yang berperan sebagai referensi/pembanding tampilan WAJIB dibuka dengan `ref` (desktop DAN '
+                     '`--hp`) SEBELUM menulis HTML, lalu susunannya ditiru (urutan seksi, header & pencarian, kategori, kartu '
+                     'produk/layanan) — merek, logo, dan teksnya tidak. Situs yang jelas bukan referensi tampilan (layanan pihak '
+                     'ketiga, domain klien sendiri) boleh dilewati; sebut alasannya di `catatan`.\n\n')
+        if dok:
+            teks += ('## Gambar di dalam dokumen klien (WAJIB dilihat)\n\n' + '\n'.join(
+                f"- `{L.folder_referensi(slug) / d['berkas']}` (dari \"{d['asal']}\")" for d in dok)
+                + '\n\nRead semuanya. Yang berupa contoh tampilan/sketsa/screenshot situs = referensi desain: tiru susunannya. '
+                'Foto produk/logo/dokumen biasa bukan referensi.\n\n')
+        return teks
+    if not ref:
+        return ''
+    daftar = '\n'.join(baris_ref(r) for r in ref)
+    return ('## Situs yang disebut di bahan\n\n' + daftar + '\n\nBila ada yang berperan sebagai referensi tampilan, DESIGN.md '
+            'WAJIB punya bagian `## Referensi desain`: situsnya, halaman mana yang meniru (mis. beranda versi PC), dan unsur '
+            'yang ditiru (susunan seksi, header, kartu, kepadatan). Token warna tetap mengikuti brand klien.')
+
+
 def teks_konten(p):
     mode = (p.get('konten') or {}).get('mode')
     if mode in KONTEN_TEKS:
@@ -408,6 +451,7 @@ def prompt_untuk(slug, jenis, p):
         ganti.update({**est, '{{PRD}}': L.baca_teks(slug, 'PRD.md'), '{{DESIGN}}': L.baca_teks(slug, 'DESIGN.md'),
                       '{{DATABASE}}': L.baca_teks(slug, 'DATABASE.md') or '(belum ada)'})
     ganti['{{KONTEN}}'] = teks_konten(p)
+    ganti['{{REFERENSI}}'] = teks_referensi(slug, p, jenis)
     ganti['{{CAKUPAN}}'] = CAKUPAN
     for k, v in ganti.items():
         t = t.replace(k, v)
@@ -433,14 +477,14 @@ def rapikan_html(html):
     return html + '\n'
 
 
-def agen_contoh(DC, env, kerja, prompt, skema, giliran, menit, dok=None):
+def agen_contoh(DC, env, kerja, prompt, skema, giliran, menit, dok=()):
     """Claude bekerja di folder kerja contoh: Read/Write/Edit + Bash hanya contoh-alat (foto Pexels, screenshot)."""
     perintah = [DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
                 '--tools', 'Read,Write,Edit,Bash', '--permission-mode', 'acceptEdits',
                 '--allowedTools', f'Bash({ALAT_CONTOH}:*)', '--max-turns', str(giliran),
                 '--json-schema', json.dumps(skema)]
-    if dok:
-        perintah += ['--add-dir', str(dok)]
+    for d in dok or []:
+        perintah += ['--add-dir', str(d)]
     try:
         run = subprocess.run(perintah, input=prompt, capture_output=True, text=True, timeout=menit * 60, env=env,
                              cwd=str(kerja))
@@ -462,6 +506,28 @@ def siapkan_kerja(slug, salin_lama):
         if not (kerja / tujuan).exists():
             shutil.copy2(L.folder_dok(slug) / nama, kerja / tujuan)
     return kerja
+
+
+def cek_referensi(slug, kerja):
+    """Situs referensi yang disebut bahan vs yang benar-benar dibuka agen (screenshot .potret/ref-*). -> {situs, dibuka}
+    Screenshot utuhnya (bukan potongan -y) disimpan di referensi/ untuk agen Install & cek kemiripan."""
+    situs = [r['domain'] for r in L.situs_referensi(slug)]
+    utuh = [x for x in (kerja / '.potret').glob('ref-*.png') if not re.search(r'-y\d+-\d+$', x.stem)] \
+        if (kerja / '.potret').is_dir() else []
+    if utuh:
+        ref = L.folder_referensi(slug)
+        ref.mkdir(parents=True, exist_ok=True)
+        for x in ref.glob('ref-*.png'):
+            x.unlink()
+        for x in utuh:
+            shutil.copy2(x, ref / x.name)
+    potret = ' '.join(x.name for x in utuh)
+    dibuka = [s for s in situs if s.replace('.', '-') in potret]
+    if situs:
+        log(f"Situs referensi di bahan: {', '.join(situs)} · dibuka: {', '.join(dibuka) or 'TIDAK ADA'}")
+        if not dibuka:
+            log('PERINGATAN: tidak satu pun situs referensi dibuka. Cek kesesuaian desain sebelum ACC.')
+    return {'situs': situs, 'dibuka': dibuka}
 
 
 def rapikan_kerja(kerja):
@@ -487,7 +553,7 @@ def buat_contoh(DC, env, opus, slug, p, prompt, dari):
     log(f"Claude ({opus}) {JUDUL_KERJA['contoh']} — mode agen: foto Pexels + cek tampilan desktop/HP.")
     log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 6–15 menit.')
     mulai = time.time()
-    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA['contoh'], 90, 40, L.folder_dok(slug))
+    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA['contoh'], 90, 40, [L.folder_dok(slug), L.folder_referensi(slug)])
     if hasil is None:
         return 1
     catat_pemakaian(DC, slug, 'contoh', hasil)
@@ -509,6 +575,7 @@ def buat_contoh(DC, env, opus, slug, p, prompt, dari):
     for x in kerja.iterdir():  # hanya halaman + aset/ yang terbit
         if x.name not in L.CONTOH_HALAMAN and x.name not in ('aset', '.potret'):
             shutil.rmtree(x) if x.is_dir() else x.unlink()
+    referensi = cek_referensi(slug, kerja)
     rapikan_kerja(kerja)
     d = L.folder_contoh(slug)
     if d.is_dir():
@@ -519,7 +586,8 @@ def buat_contoh(DC, env, opus, slug, p, prompt, dari):
         'nama_aplikasi': data['nama_aplikasi'], 'platform': platform, 'catatan': catatan,
         'aset': sorted(x.name for x in (d / 'aset').iterdir()), 'waktu': L.sekarang(), 'model': opus,
         'arahan': (L.baca_json(L.folder(slug) / 'proyek.json', {}) or {}).get('contoh_arahan') or '',
-        'brief_versi': dari,
+        'brief_versi': dari, 'referensi': {**referensi, 'peta': [x for x in data.get('referensi') or []
+                                                                   if x.get('halaman') in L.CONTOH_HALAMAN]},
     })
     biaya = round(float(hasil.get('total_cost_usd') or 0), 2)
     ukuran = ', '.join(f"{L.CONTOH_HALAMAN[n]} {(d / n).stat().st_size // 1024} KB" for n in L.CONTOH_HALAMAN if (d / n).is_file())
@@ -530,6 +598,7 @@ def buat_contoh(DC, env, opus, slug, p, prompt, dari):
         log(f'  • {c}')
     L.catat(slug, 'Claude', 'membuat contoh tampilan ' + ('landing page + dashboard' if platform == 'laravel'
                                                           else 'beranda situs WordPress'))
+    perbaiki_kemiripan(DC, env, opus, slug, p)
     if L.konfig_preview():
         log('Menerbitkan ke server preview…')
         t = L.terbitkan_contoh(slug)
@@ -537,6 +606,36 @@ def buat_contoh(DC, env, opus, slug, p, prompt, dari):
     else:
         log(f'Server preview belum diatur ({L.CONTOH_ENV}); contoh hanya bisa dilihat di dashboard.')
     return 0
+
+
+KEMIRIPAN_MAKS = 2
+
+
+def perbaiki_kemiripan(DC, env, opus, slug, p, putaran=KEMIRIPAN_MAKS):
+    """Nilai contoh vs referensi; belum mirip -> revisi otomatis dari daftar perbaikan, maks `putaran` kali, berhenti
+    bila skor tak naik. Hasil terakhir di contoh.json `kemiripan` (dibaca PM di blok ACC)."""
+    K = muat('laravel_kemiripan', HERE / 'laravel-kemiripan')
+    log('')
+    log('Cek kemiripan contoh dengan referensi desain klien…')
+    k = K.nilai(DC, env, slug, 'contoh')
+    for i in range(putaran):
+        if not k or k['lolos'] or not k['arahan']:
+            break
+        log(f'Belum mirip; Claude memperbaiki otomatis (putaran {i + 1}/{putaran})…')
+        acuan = ', '.join(f'`{x}`' for x in sorted(L.folder_referensi(slug).glob('*.png')) if not x.stem.endswith('-hp'))
+        if revisi_contoh(DC, env, opus, slug, p, 'semua', arahan='Perbaiki agar lebih mirip referensi desain klien'
+                         + (f' (gambar acuan, Read dulu: {acuan})' if acuan else '') + ':\n' + k['arahan']) != 0:
+            break
+        lama, k = k, K.nilai(DC, env, slug, 'contoh')
+        if k and k['skor'] <= lama['skor']:
+            log('Skor tidak naik; putaran otomatis dihentikan.')
+            break
+    info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
+    if k:
+        info['kemiripan'] = {x: k[x] for x in ('waktu', 'skor', 'lolos', 'ambang', 'ringkasan', 'blok')}
+    else:
+        info.pop('kemiripan', None)
+    L.tulis_json(L.folder(slug) / 'contoh.json', info)
 
 
 def catat_pemakaian(DC, slug, jenis, hasil):
@@ -609,11 +708,13 @@ SKEMA_REVISI = {
 }
 
 
-def revisi_contoh(DC, env, opus, slug, p, halaman):
+def revisi_contoh(DC, env, opus, slug, p, halaman, arahan=None):
     """Revisi contoh tampilan yang sudah ada: Claude menyunting HTML di salinan kerja dengan alat Edit (potongan kecil),
-    bukan membuat ulang kedua halaman dari nol — keluaran jauh lebih sedikit (permintaan user 10 Okt: hemat token)."""
+    bukan membuat ulang kedua halaman dari nol — keluaran jauh lebih sedikit (permintaan user 10 Okt: hemat token).
+    arahan diisi = putaran otomatis dari cek kemiripan (tanpa terbit & tanpa nilai ulang di sini)."""
+    otomatis = arahan is not None
     asal = L.folder_contoh(slug)
-    arahan = (p.get('contoh_arahan') or '').strip()
+    arahan = arahan if otomatis else (p.get('contoh_arahan') or '').strip()
     target = [n for n in L.CONTOH_HALAMAN if (asal / n).is_file() and halaman in ('semua', n)]
     if not arahan or not target:
         log('GAGAL: revisi butuh contoh yang sudah ada dan arahan PM')
@@ -633,7 +734,8 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
     log(f'Arahan: {arahan[:300]}')
     log('Mode revisi: hanya bagian yang diminta disunting, lalu dicek di browser. Biasanya 2–6 menit.')
     mulai = time.time()
-    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA_REVISI, 50, 25)
+    hasil = agen_contoh(DC, env, kerja, prompt, SKEMA_REVISI, 50, 25,
+                        [L.folder_referensi(slug)] if L.folder_referensi(slug).is_dir() else [])
     if hasil is None:
         return 1
     catat_pemakaian(DC, slug, 'contoh_revisi', hasil)
@@ -660,7 +762,7 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
     kerja.rename(asal)
     info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
     catatan = [str(c) for c in data.get('catatan') or []]
-    info.update(catatan=catatan, waktu=L.sekarang(), arahan=arahan,
+    info.update(catatan=catatan, waktu=L.sekarang(), arahan=info.get('arahan', '') if otomatis else arahan,
                 aset=sorted(x.name for x in (asal / 'aset').iterdir()),
                 revisi=(info.get('revisi') or []) + [{'waktu': L.sekarang(), 'halaman': berubah, 'arahan': arahan,
                                                       'biaya_usd': biaya}])
@@ -669,7 +771,11 @@ def revisi_contoh(DC, env, opus, slug, p, halaman):
         f"{', '.join(L.CONTOH_HALAMAN[n] for n in berubah)}.")
     for c in catatan:
         log(f'  • {c}')
-    L.catat(slug, 'Claude', 'merevisi contoh tampilan (' + ', '.join(L.CONTOH_HALAMAN[n] for n in berubah) + ')')
+    L.catat(slug, 'Claude', ('memperbaiki kemiripan contoh dengan referensi (' if otomatis else 'merevisi contoh tampilan (')
+            + ', '.join(L.CONTOH_HALAMAN[n] for n in berubah) + ')')
+    if otomatis:
+        return 0
+    perbaiki_kemiripan(DC, env, opus, slug, p, putaran=0)
     if L.konfig_preview():
         log('Menerbitkan ke server preview…')
         t = L.terbitkan_contoh(slug)

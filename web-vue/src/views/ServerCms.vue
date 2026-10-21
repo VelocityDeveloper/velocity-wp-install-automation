@@ -2,7 +2,9 @@
 // Kerentanan CMS / WordPress (sub-menu Server): versi inti, plugin, dan tema setiap instalasi WP di server hosting
 // dicocokkan dengan basis data publik wpvulnerability.net. Data: GET /api/servers/cms (ringkas, tanpa SSH),
 // GET /api/servers/cms?server=<host> (detail), POST /api/servers/cms/scan (SSH hanya baca + cocokkan; thread latar).
-// cPGuard "CMS Threat" (cms.db) ditampilkan sebagai pembanding selama cPGuard masih jalan. Hanya melapor.
+// cPGuard "CMS Threat" (cms.db) ditampilkan sebagai pembanding selama cPGuard masih jalan.
+// Tombol Perbaiki (per situs / per akun) → dialog daftar pekerjaan → POST /api/servers/cms/perbaiki
+// (cadangan, WP-CLI update komponen rentan, rollback bila beranda 5xx, lalu scan ulang akun itu).
 import PilihServer from '../components/PilihServer.vue'
 import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
@@ -10,6 +12,7 @@ import Ikon from '../components/Ikon.vue'
 import PelakuAkun from '../components/PelakuAkun.vue'
 import { namaAkun } from '../akun.js'
 import Info from '../components/Info.vue'
+import Dialog from '../components/Dialog.vue'
 import { konfirmasi } from '../konfirmasi.js'
 import { minta, kirim, pakaiPolling, tanggalWaktu, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
@@ -35,6 +38,13 @@ const PESAN = {
   kunci_ssh_installer_tidak_ada: 'Kunci SSH installer tidak ditemukan di PC dashboard.',
   forbidden: 'Ditolak: hanya bisa dijalankan dari halaman dashboard ini.',
   timeout: 'Server tidak menjawab (timeout).',
+  akun_tidak_sah: 'Nama akun tidak sah.',
+  tidak_ada_yang_diperbaiki: 'Tidak ada komponen rentan yang bisa diperbarui (hasil scan mungkin sudah berubah; muat ulang).',
+  wp_cli_tidak_tersedia: 'WP-CLI/PHP tidak tersedia di server.',
+  path_tidak_sah: 'Path situs tidak sah.',
+  wp_config_tidak_terbaca: 'wp-config.php tidak terbaca.',
+  cadangan_db_gagal: 'Cadangan database gagal — situs tidak diubah.',
+  akun_disuspend: 'Akun hosting sedang disuspend (database terkunci) — tidak dikerjakan.',
 }
 const pesanGalat = (e) => PESAN[e] || e || 'gagal'
 const pesan = reactive({ teks: '', galat: false })
@@ -109,13 +119,19 @@ watch(berjalan, (now, dulu) => {
     muatDetail()
     riwayat.muatUlang()
     const j = job.value
-    if (j?.status === 'gagal') Object.assign(pesan, { teks: `Scan gagal: ${j.error}`, galat: true })
+    if (j?.jenis === 'perbaiki') {
+      const n = j.situs?.length || 0
+      const gagal = (j.situs || []).filter((h) => !h.ok).length
+      Object.assign(pesan, { teks: `Perbaikan akun ${j.user} ${j.status === 'gagal' ? `bermasalah: ${pesanGalat(j.error)}` : 'selesai'} — ${n - gagal}/${n} situs berhasil${j.akun ? `; sesudah scan ulang ${j.akun.rentan} dari ${j.akun.situs} situs akun ini masih rentan` : ''}.`, galat: j.status === 'gagal' || !!gagal })
+    } else if (j?.status === 'gagal') Object.assign(pesan, { teks: `Scan gagal: ${j.error}`, galat: true })
     else if (j) Object.assign(pesan, { teks: `Scan selesai${j.galat_api ? ` (${j.galat_api} komponen gagal dicek ke basis data kerentanan — dicoba lagi di scan berikutnya)` : ''}.`, galat: !!j.galat_api })
   }
 })
 const labelKemajuan = computed(() => {
   const k = job.value?.kemajuan
   if (!k) return 'Menyiapkan…'
+  if (k.tahap === 'perbaiki') return `Memperbaiki ${k.domain} (${k.ke}/${k.dari} situs selesai) — cadangan, update, cek beranda…`
+  if (job.value?.jenis === 'perbaiki' && k.tahap === 'inventaris') return `Scan ulang akun ${job.value.user}…`
   return k.tahap === 'inventaris'
     ? `Membaca instalasi WordPress di server (${k.ke}/${k.dari} server selesai)…`
     : `Mencocokkan ${angka(k.dari)} komponen dengan basis data kerentanan (${angka(k.ke)}/${angka(k.dari)})…`
@@ -123,6 +139,7 @@ const labelKemajuan = computed(() => {
 const persenKemajuan = computed(() => {
   const k = job.value?.kemajuan
   if (!k || !k.dari) return 3
+  if (job.value?.jenis === 'perbaiki') return k.tahap === 'perbaiki' ? 3 + (k.ke / k.dari) * 80 : k.tahap === 'inventaris' ? 85 : 88 + (k.ke / k.dari) * 12
   return k.tahap === 'inventaris' ? (k.ke / k.dari) * 40 + 3 : 43 + (k.ke / k.dari) * 57
 })
 
@@ -241,6 +258,105 @@ function versiAman(v) {
   return angkaVersi.reduce((a, b) => (lebihLama(a, b) ? b : a))
 }
 
+// ---- Perbaiki kerentanan (mengubah situs klien) ----
+// Plugin/tema rentan diperbarui ke rilis terbaru (kecuali yang ditutup di wordpress.org); inti WP hanya update minor
+// di cabang yang sama. Backend menyaring ulang daftar ini dengan hasil scan tersimpan.
+function rencanaSitus(s) {
+  const r = { s, plugin: [], tema: [], core: null, lewat: [] }
+  for (const t of s.temuan) {
+    if (!t.id.length) continue
+    if (t.jenis === 'core') { r.core = { dari: t.versi, cabang: t.versi.split('.').slice(0, 2).join('.'), rentan: true }; continue }
+    const item = { slug: t.slug, nama: t.nama || t.slug, dari: t.versi, ke: versiAman(t.id.map((i) => kamus.value[i]).filter(Boolean)) }
+    if (t.ditutup) r.lewat.push({ ...item, alasan: 'ditutup di wordpress.org — tidak disentuh, cek manual dulu (jangan langsung dihapus)' })
+    else (t.jenis === 'plugin' ? r.plugin : r.tema).push(item)
+  }
+  if (!r.core && intiUsang(s)) r.core = { dari: s.versi, cabang: s.versi.split('.').slice(0, 2).join('.'), rentan: false }
+  return r
+}
+const bisaDiperbaiki = (r) => r.plugin.length || r.tema.length || r.core?.rentan
+// Situs/akun yang sedang dikerjakan job perbaikan berjalan (termasuk tahap scan ulang) → tombolnya jadi loading
+const jobPerbaiki = computed(() => (berjalan.value && job.value?.jenis === 'perbaiki' && job.value.target === terpilih.value?.host ? job.value : null))
+const sedangDiperbaiki = (s) => !!jobPerbaiki.value?.rencana?.some((r) => r.path === s.path)
+const labelLoading = computed(() => (jobPerbaiki.value?.kemajuan?.tahap === 'perbaiki' ? 'Memperbaiki…' : 'Scan ulang…'))
+const MAKS_PERBAIKI = 30
+// inti: {path: 'lewati'|'minor'|'terbaru'} — bawaan minor bila inti rentan, lewati bila hanya usang
+const perb = reactive({ buka: false, user: '', satu: false, daftar: [], cek: null, memeriksa: false, galatCek: '', blokir: '', pilih: new Set(), inti: {} })
+// Kunci centang satu komponen; hanya yang dicentang ikut dikirim
+const kunciKomp = (path, jenis, slug) => `${path}|${jenis}|${slug}`
+const isiKomp = (r) => [...r.plugin.map((x) => ['plugin', x.slug]), ...r.tema.map((x) => ['theme', x.slug])]
+const modeInti = (r) => (r.core ? perb.inti[r.s.path] || 'lewati' : 'lewati')
+function alihPilih(k) { const n = new Set(perb.pilih); n.has(k) ? n.delete(k) : n.add(k); perb.pilih = n }
+const situsAkun = (user) => situs.value.filter((s) => s.user === user && s.ids.length).map(rencanaSitus).filter(bisaDiperbaiki)
+const dipilih = (r, j, sl) => perb.pilih.has(kunciKomp(r.s.path, j, sl))
+const kirimanSitus = (semua = false) => perb.daftar.slice(0, MAKS_PERBAIKI)
+  .map((r) => ({ path: r.s.path, plugin: r.plugin.map((x) => x.slug).filter((sl) => semua || dipilih(r, 'plugin', sl)),
+    tema: r.tema.map((x) => x.slug).filter((sl) => semua || dipilih(r, 'theme', sl)),
+    core: semua ? (r.core ? 'cek' : false) : (modeInti(r) === 'lewati' ? false : modeInti(r)) }))
+  .filter((x) => x.plugin.length || x.tema.length || x.core)
+// Dialog dibuka → pengaman diperiksa di server (hanya baca): PHP web vs syarat wordpress.org, sisa kuota, Kirki di tabel MyISAM
+async function bukaPerbaiki(s, akun) {
+  const daftar = akun ? situsAkun(s.user) : [rencanaSitus(s)].filter(bisaDiperbaiki)
+  const pilih = new Set(daftar.flatMap((r) => isiKomp(r).map(([j, sl]) => kunciKomp(r.s.path, j, sl))))
+  const inti = Object.fromEntries(daftar.filter((r) => r.core).map((r) => [r.s.path, r.core.rentan ? 'minor' : 'lewati']))
+  Object.assign(perb, { buka: true, user: s.user, satu: !akun, daftar, cek: null, memeriksa: true, galatCek: '', blokir: '', pilih, inti })
+  try {
+    const r = await kirim('/api/servers/cms/perbaiki/cek', { server: terpilih.value.host, user: s.user, situs: kirimanSitus(true) })
+    if (perb.user === s.user) {
+      perb.cek = r
+      // Yang ditolak pengaman tidak dicentang (dan tidak bisa dicentang)
+      perb.pilih = new Set([...perb.pilih].filter((k) => { const [path, j, sl] = k.split('|'); return putusan(path, j, sl)?.ok !== false }))
+      for (const [path, m] of Object.entries(perb.inti)) if (m !== 'lewati' && putusan(path, 'core', m)?.ok === false) perb.inti[path] = 'lewati'
+    }
+  } catch (e) {
+    perb.galatCek = pesanGalat(e.message)
+    // Akun tersuspend: agen pasti menolak → jangan biarkan ada yang tercentang
+    if (e.message === 'akun_disuspend') { perb.blokir = perb.galatCek; perb.pilih = new Set(); perb.inti = {} }
+  } finally {
+    perb.memeriksa = false
+  }
+}
+const cekSitus = (path) => perb.cek?.situs?.find((x) => x.path === path)
+// Keputusan pengaman satu komponen: { ok, alasan } atau undefined (belum/gagal diperiksa)
+// Plugin/tema yang hanya terhalang cabang WP ikut lolos bila inti situs itu dipilih 'terbaru'
+const lolosTerbaru = (path, k) => !k.ok && k.wp_butuh && perb.inti[path] === 'terbaru' && terbaru.value && !lebihLama(terbaru.value, k.wp_butuh)
+function putusan(path, jenis, slug) {
+  const k = cekSitus(path)?.keputusan?.find((x) => x.jenis === jenis && x.slug.toLowerCase() === slug.toLowerCase())
+  return k && lolosTerbaru(path, k) ? { ...k, ok: true } : k
+}
+// Ganti mode inti: komponen yang terbuka/tertutup karena syarat WP ikut dicentang/dilepas
+function gantiInti(r, mode) {
+  perb.inti[r.s.path] = mode
+  const n = new Set(perb.pilih)
+  for (const k of cekSitus(r.s.path)?.keputusan || []) {
+    if (!k.wp_butuh || k.jenis === 'core') continue
+    const kunci = kunciKomp(r.s.path, k.jenis, (k.jenis === 'plugin' ? r.plugin : r.tema).find((x) => x.slug.toLowerCase() === k.slug.toLowerCase())?.slug || k.slug)
+    lolosTerbaru(r.s.path, k) ? n.add(kunci) : n.delete(kunci)
+  }
+  perb.pilih = n
+}
+const jumlahKomp = computed(() => perb.daftar.slice(0, MAKS_PERBAIKI).reduce((n, r) => n + isiKomp(r).filter(([j, sl]) => dipilih(r, j, sl)).length
+  + (modeInti(r) !== 'lewati' ? 1 : 0), 0))
+async function jalankanPerbaiki() {
+  if (!oleh.value.trim()) { Object.assign(pesan, { teks: PESAN.invalid_oleh, galat: true }); perb.buka = false; return }
+  proses.value = true
+  try {
+    await kirim('/api/servers/cms/perbaiki', {
+      server: terpilih.value.host, user: perb.user, oleh: oleh.value.trim(),
+      situs: kirimanSitus(),
+    })
+    perb.buka = false
+    Object.assign(pesan, { teks: `Perbaikan akun ${perb.user} dimulai.`, galat: false })
+    await cms.muatUlang()
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  } finally {
+    proses.value = false
+  }
+}
+// Hasil job perbaikan terakhir (berjalan atau selesai) untuk server terpilih
+const hasilPerbaiki = computed(() => (job.value?.jenis === 'perbaiki' && job.value.target === terpilih.value?.host ? job.value : null))
+const statusKomp = { Updated: 'diperbarui', 'Up to date': 'sudah terbaru', Error: 'gagal' }
+
 // ---- cPGuard pembanding ----
 const cpg = computed(() => detail.value?.cpguard)
 const cpgSitus = computed(() => {
@@ -268,8 +384,8 @@ const cacheHasil = new Map()
   <div class="halaman">
     <header class="kepala-halaman">
       <div>
-        <h1>Kerentanan CMS</h1>
-        <p class="redup">Versi WordPress, plugin, dan tema setiap situs klien dicocokkan dengan basis data kerentanan publik. Hanya melapor — pembaruan tetap dikerjakan tim.</p>
+        <h1>Kerentanan CMS <span class="merek-guard">VelocityGuard</span></h1>
+        <p class="redup">Versi WordPress, plugin, dan tema setiap situs klien dicocokkan dengan basis data kerentanan publik. Tombol <b>Perbaiki</b> memperbarui komponen rentan per situs/akun (dengan cadangan) lalu scan ulang akun itu.</p>
       </div>
       <div class="kepala-aksi">
         <div class="nama-saya"><span class="redup">Dicatat sebagai</span><PelakuAkun id="nama-cms" /></div>
@@ -284,7 +400,8 @@ const cacheHasil = new Map()
       <div v-if="berjalan" class="kemajuan kartu" role="status">
         <span class="putar besar" aria-hidden="true" />
         <div>
-          <b>Scan CMS {{ job.target === 'semua' ? 'semua server' : job.server.join(', ') }}</b>
+          <b v-if="job.jenis === 'perbaiki'">Perbaiki akun {{ job.user }} · {{ job.server.join(', ') }}</b>
+          <b v-else>Scan CMS {{ job.target === 'semua' ? 'semua server' : job.server.join(', ') }}</b>
           <span class="redup"> · {{ job.oleh }} · {{ durasi(job) }}</span>
           <div class="redup kecil-teks">{{ labelKemajuan }}</div>
           <div class="garis-jalan"><span :style="{ width: `${persenKemajuan}%` }" /></div>
@@ -292,6 +409,35 @@ const cacheHasil = new Map()
       </div>
 
       <p v-if="pesan.teks" class="pesan-status" :class="pesan.galat ? 'bahaya' : 'baik'" role="status">{{ pesan.teks }}</p>
+
+      <section v-if="hasilPerbaiki?.situs?.length" class="kartu hasil-perb" aria-label="Hasil perbaikan">
+        <div class="kartu-judul"><h2><Ikon nama="perisai" :ukuran="16" /> Hasil perbaikan akun {{ hasilPerbaiki.user }}
+          <small class="redup">{{ hasilPerbaiki.oleh }} · {{ tanggalWaktu(hasilPerbaiki.mulai) }}</small></h2></div>
+        <div v-for="h in hasilPerbaiki.situs" :key="h.path" class="perb-situs">
+          <div class="rinci-kepala">
+            <span class="titik" :class="h.ok ? 'baik' : 'bahaya'" aria-hidden="true" />
+            <b>{{ relatif(h.path) || h.domain }}</b>
+            <span v-if="h.error" class="lencana merah">{{ pesanGalat(h.error) }}</span>
+            <span v-if="h.dikembalikan" class="lencana merah">BERANDA ERROR → PLUGIN/TEMA DIKEMBALIKAN</span>
+            <small class="redup">beranda {{ h.http_sebelum ?? '-' }} → {{ h.http_sesudah ?? '-' }}<template v-if="h.http_akhir"> → {{ h.http_akhir }}</template></small>
+          </div>
+          <ul class="daftar-vuln">
+            <li v-for="(l, i) in h.langkah || []" :key="i">
+              <span class="lencana" :class="l.ok ? 'hijau' : 'merah'">{{ l.langkah }}</span>
+              <template v-if="l.komponen?.length"><span v-for="k in l.komponen" :key="k.slug" class="komp">{{ k.slug }} <span class="redup">{{ k.dari }} → {{ k.ke }} · {{ statusKomp[k.status] || k.status }}</span></span></template>
+              <small v-else class="redup">{{ l.pesan }}</small>
+            </li>
+          </ul>
+          <ul v-if="h.cek?.keputusan?.some((k) => !k.ok)" class="daftar-vuln">
+            <li v-for="k in h.cek.keputusan.filter((x) => !x.ok)" :key="k.jenis + k.slug" class="redup"><span class="lencana kuning">dilewati</span> {{ k.slug }} — {{ k.alasan }}</li>
+          </ul>
+          <small v-if="h.kosong" class="redup blok">Semua komponen dilewati pengaman — situs tidak diubah.</small>
+          <small v-if="h.inti_dikembalikan" class="merah-teks blok">Inti WordPress dikembalikan ke versi sebelumnya (berkas); database tetap versi baru.</small>
+          <small v-if="h.css_dipulihkan" class="hijau-teks blok">CSS Kirki ({{ h.css_dipulihkan.join(', ') }}) hilang sesudah update tema → dipulihkan ke CSS Tambahan.</small>
+          <small v-if="h.cadangan" class="redup">Cadangan: <code>{{ h.cadangan }}</code></small>
+          <small v-if="h.pesan" class="merah-teks blok">{{ h.pesan }}</small>
+        </div>
+      </section>
 
       <PilihServer v-if="terpilih" :servers="servers" :model-value="terpilih?.name" :titik="tingkatServer(terpilih)" :teks="(s) => s.name + (s.ringkas?.rentan ? ` · ${s.ringkas.rentan} rentan` : '')" @update:model-value="pilih = $event" />
 
@@ -381,6 +527,8 @@ const cacheHasil = new Map()
                         <span v-if="s.temuan.filter((x) => x.id.length || x.ditutup).length > 4" class="redup">+{{ s.temuan.filter((x) => x.id.length || x.ditutup).length - 4 }}</span>
                       </td>
                       <td class="kanan">
+                        <button v-if="sedangDiperbaiki(s)" type="button" class="tombol kecil" disabled aria-busy="true"><span class="putar" aria-hidden="true" /> {{ labelLoading }}</button>
+                        <button v-else-if="bisaDiperbaiki(rencanaSitus(s))" type="button" class="tombol kecil" :disabled="proses || berjalan" @click="bukaPerbaiki(s, false)"><Ikon nama="perisai" :ukuran="14" /> Perbaiki</button>
                         <button v-if="s.temuan.length" type="button" class="tombol garis kecil" :aria-expanded="buka.has(s.path)" @click="alihBuka(s.path)">{{ buka.has(s.path) ? 'Tutup' : 'Rincian' }}</button>
                       </td>
                     </tr>
@@ -388,6 +536,8 @@ const cacheHasil = new Map()
                       <td colspan="5">
                         <div class="rinci-isi">
                         <p class="redup kecil-teks"><code>{{ s.path }}</code><template v-if="s.mu_plugin.length"> · mu-plugins: {{ s.mu_plugin.join(', ') }}</template></p>
+                        <button v-if="jobPerbaiki?.user === s.user" type="button" class="tombol garis kecil" disabled aria-busy="true"><span class="putar" aria-hidden="true" /> {{ labelLoading }} akun {{ s.user }}</button>
+                        <button v-else-if="situsAkun(s.user).length > 1" type="button" class="tombol garis kecil" :disabled="proses || berjalan" @click="bukaPerbaiki(s, true)"><Ikon nama="perisai" :ukuran="14" /> Perbaiki semua situs akun {{ s.user }} ({{ situsAkun(s.user).length }})</button>
                         <div v-for="t in s.temuan" :key="t.jenis + t.slug" class="rinci-komp">
                           <div class="rinci-kepala">
                             <span class="lencana abu">{{ JENIS[t.jenis] }}</span>
@@ -479,7 +629,8 @@ const cacheHasil = new Map()
               <li v-for="r in riwayatServer" :key="r.id">
                 <span class="titik" :class="r.status === 'selesai' ? 'baik' : 'bahaya'" aria-hidden="true" />
                 <div>
-                  <b>{{ r.target === 'semua' ? 'Semua server' : (r.hasil?.[0]?.server || r.target) }}</b>
+                  <b>{{ r.jenis === 'perbaiki' ? `Perbaiki akun ${r.user} · ` : '' }}{{ r.target === 'semua' ? 'Semua server' : (r.hasil?.[0]?.server || r.target) }}</b>
+                  <span v-if="r.jenis === 'perbaiki' && r.situs" class="redup kecil-teks"> {{ r.situs.filter((h) => h.ok).length }}/{{ r.situs.length }} situs berhasil<template v-if="r.akun"> · sisa rentan {{ r.akun.rentan }}/{{ r.akun.situs }}</template></span>
                   <span v-if="r.status !== 'selesai'" class="lencana merah">GAGAL · {{ r.error }}</span>
                   <small class="redup blok">{{ r.oleh }} · {{ durasi(r) }}<template v-for="h in r.hasil || []" :key="h.host"> · {{ h.server }}: {{ h.ok ? `${h.rentan}/${h.situs} rentan` : `gagal (${pesanGalat(h.error)})` }}</template></small>
                 </div>
@@ -493,6 +644,50 @@ const cacheHasil = new Map()
         </template>
       </section>
     </template>
+
+    <Dialog :buka="perb.buka" :judul="perb.satu ? `Perbaiki ${perb.daftar[0] ? alamat(perb.daftar[0].s) : ''}` : `Perbaiki akun ${perb.user}`" lebar="680px" @tutup="perb.buka = false">
+      <p class="kecil-teks">Yang akan dikerjakan di <b>{{ terpilih?.name }}</b> ({{ perb.daftar.length }} situs, {{ jumlahKomp }} komponen dicentang):</p>
+      <ol class="kecil-teks langkah-perb">
+        <li>Pengaman: komponen dilewati bila butuh PHP/WordPress lebih tinggi dari PHP web situs, kuota akun tak cukup, atau Kirki di tabel MyISAM.</li>
+        <li>Cadangan database + folder plugin/tema terkait ke <code>/root/velocity-cadangan/&lt;domain&gt;/cms-perbaiki-*</code> (gagal → situs dilewati).</li>
+        <li>Update lewat WP-CLI sebagai pemilik akun: plugin/tema ke rilis terbaru, inti WP hanya update minor di cabangnya.</li>
+        <li>Beranda dicek sebelum & sesudah; bila jadi error 5xx, plugin/tema dikembalikan dari cadangan. CSS Kirki yang hilang sesudah update tema dipulihkan ke CSS Tambahan.</li>
+        <li>Scan ulang akun <b>{{ perb.user }}</b> agar status di halaman ini terbaru.</li>
+      </ol>
+      <p v-if="perb.memeriksa" class="redup kecil-teks" role="status"><span class="putar" aria-hidden="true" /> Memeriksa PHP web, kuota, dan tabel database di server…</p>
+      <p v-else-if="perb.blokir" class="pesan-status bahaya" role="alert"><b>{{ perb.blokir }}</b> Aktifkan akun di DirectAdmin dulu bila memang perlu diperbaiki.</p>
+      <p v-else-if="perb.galatCek" class="pesan-status bahaya">Pemeriksaan awal gagal ({{ perb.galatCek }}). Pengaman tetap dijalankan ulang saat perbaikan.</p>
+      <p v-else-if="perb.cek?.kuota?.batas" class="kecil-teks">Kuota akun: <b>{{ angka(perb.cek.kuota.pakai) }} / {{ angka(perb.cek.kuota.batas) }} MB</b> <span class="redup">(kebutuhan per komponen = perkiraan)</span></p>
+      <p v-if="perb.daftar.length > MAKS_PERBAIKI" class="pesan-status bahaya">Maksimal {{ MAKS_PERBAIKI }} situs sekali jalan — {{ perb.daftar.length - MAKS_PERBAIKI }} situs terakhir tidak ikut.</p>
+      <div class="daftar-perb">
+        <div v-for="r in perb.daftar.slice(0, MAKS_PERBAIKI)" :key="r.s.path" class="perb-situs">
+          <b>{{ alamat(r.s) }}</b>
+          <small v-if="cekSitus(r.s.path)" class="redup blok">PHP web {{ cekSitus(r.s.path).php || 'tak diketahui' }}<template v-if="cekSitus(r.s.path).php_sumber"> ({{ cekSitus(r.s.path).php_sumber }})</template> · beranda {{ cekSitus(r.s.path).http || 'tak terjangkau' }}<template v-if="r.tema.length && cekSitus(r.s.path).kirki_css"> · CSS Kirki dipulihkan bila hilang sesudah update tema</template></small>
+          <small v-if="cekSitus(r.s.path)?.error" class="merah-teks blok">{{ pesanGalat(cekSitus(r.s.path).error) }}</small>
+          <ul class="kecil-teks">
+            <li v-if="r.core" :class="{ lewat: modeInti(r) === 'lewati' }">
+              <span class="pilih-inti"><span class="lencana abu">Inti WP</span> {{ r.core.dari }}<template v-if="!r.core.rentan"> <span class="redup">(tidak rentan, usang)</span></template> →
+                <select :value="modeInti(r)" :disabled="!!perb.blokir || perb.memeriksa" :aria-label="`Update inti WordPress ${alamat(r.s)}`" @change="gantiInti(r, $event.target.value)">
+                  <option value="lewati">Lewati</option>
+                  <option value="minor" :disabled="!r.core.rentan || putusan(r.s.path, 'core', 'minor')?.ok === false">Minor {{ r.core.cabang }}.x (aman)</option>
+                  <option value="terbaru" :disabled="putusan(r.s.path, 'core', 'terbaru')?.ok === false">Terbaru {{ terbaru }}</option>
+                </select></span>
+              <span v-for="m in ['minor', 'terbaru']" v-show="putusan(r.s.path, 'core', m)?.ok === false" :key="m" class="kuning-teks blok">{{ m === 'minor' ? 'Minor' : 'Terbaru' }} tidak bisa: {{ putusan(r.s.path, 'core', m)?.alasan }}</span>
+              <small v-if="modeInti(r) === 'terbaru'" class="redup blok">Berkas inti dicadangkan & dikembalikan bila beranda error. Tema/plugin lama bisa berubah tampilan tanpa error — cek situsnya sesudah selesai.</small></li>
+            <li v-for="x in [...r.plugin.map((y) => ({ ...y, j: 'plugin' })), ...r.tema.map((y) => ({ ...y, j: 'theme' }))]" :key="x.j + x.slug" :class="{ lewat: putusan(r.s.path, x.j, x.slug)?.ok === false }"><label class="pilih-komp">
+              <input type="checkbox" :checked="dipilih(r, x.j, x.slug)" :disabled="!!perb.blokir || putusan(r.s.path, x.j, x.slug)?.ok === false" @change="alihPilih(kunciKomp(r.s.path, x.j, x.slug))">
+              <span><span class="lencana abu">{{ x.j === 'plugin' ? 'Plugin' : 'Tema' }}</span> {{ x.nama }} <span class="redup">{{ x.dari }} → {{ x.ke ? `terbaru (≥ ${x.ke})` : 'terbaru' }}</span>
+              <span v-if="putusan(r.s.path, x.j, x.slug)?.ok === false" class="kuning-teks">— dilewati: {{ putusan(r.s.path, x.j, x.slug).alasan }}</span></span></label></li>
+            <li v-for="x in r.lewat" :key="'l' + x.slug" class="redup"><s>{{ x.nama }} {{ x.dari }}</s> — dilewati: {{ x.alasan }}</li>
+          </ul>
+        </div>
+      </div>
+      <p class="redup kecil-teks">Plugin premium tanpa sumber update atau situs yang kuotanya penuh bisa gagal; hasil per situs tampil sesudah selesai.</p>
+      <div class="aksi-dialog">
+        <button type="button" class="tombol garis" @click="perb.buka = false">Batal</button>
+        <button type="button" class="tombol bahaya" :disabled="proses || berjalan || perb.memeriksa || !jumlahKomp" @click="jalankanPerbaiki">Jalankan perbaikan</button>
+      </div>
+    </Dialog>
   </div>
 </template>
 
@@ -578,6 +773,21 @@ tr.dibuka td { border-bottom-color: transparent; }
 .tabel-wadah { position: relative; overflow-x: auto; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--teks); overflow-wrap: anywhere; }
+.langkah-perb { margin: 6px 0 12px; padding-left: 20px; display: grid; gap: 4px; }
+.daftar-perb { max-height: 46vh; overflow-y: auto; border: 1px solid var(--garis); border-radius: 10px; padding: 4px 12px; }
+.perb-situs { padding: 8px 0; border-top: 1px solid var(--garis); font-size: 13.5px; overflow-wrap: anywhere; }
+.perb-situs:first-child { border-top: 0; }
+.perb-situs ul { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.perb-situs li.lewat > .lencana, .perb-situs li.lewat > .redup { opacity: .55; }
+.perb-situs li .kuning-teks { margin-left: 4px; }
+.tombol[aria-busy="true"] { opacity: .85; }
+.pilih-inti { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pilih-inti select { font: inherit; font-size: 12.5px; padding: 3px 6px; }
+.pilih-komp { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.pilih-komp input { flex: none; }
+li.lewat .pilih-komp { cursor: default; }
+.aksi-dialog { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.kanan .tombol + .tombol { margin-left: 6px; }
 @media (prefers-reduced-motion: reduce) { .putar { animation: none; } .garis-jalan span { transition: none; } }
 @media (max-width: 900px) { .ringkas { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) {

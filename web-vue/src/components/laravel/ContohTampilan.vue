@@ -85,6 +85,30 @@ async function terbitkan() {
     emit('ubah')
   } catch (e) { status.value = { kelas: 'bahaya', teks: pesanGalat(e) } } finally { menerbitkan.value = false }
 }
+// ACC desain (15 Okt): PM 1 klik (keterangan opsional) + klien menekan "Setujui desain ini" di halaman preview → Install
+// terbuka. Kecocokan dengan referensi dinilai otomatis (contoh.kemiripan), PM tak perlu mencocokkan sendiri.
+const acc = computed(() => c.value?.acc || {})
+const terpasang = computed(() => ['jalan', 'ok'].includes(props.d.install?.status))
+const sahPeran = (k) => !!acc.value[k] && !acc.value[k].gugur
+const ketPm = ref('')
+const peta = computed(() => c.value?.referensi?.peta || [])
+const mirip = computed(() => c.value?.kemiripan)
+const skorBlok = (x) => mirip.value?.blok?.find((b) => b.halaman === x.halaman && b.blok === x.blok && b.sumber === x.sumber)
+const situsRef = computed(() => (props.d.referensi || []).map((r) => r.domain))
+// Contoh lama (sebelum 15 Okt) tak punya catatan referensi; contoh baru: referensi disebut tapi tak satu pun dibuka
+const refTerlewat = computed(() => situsRef.value.length && (c.value?.referensi ? !c.value.referensi.dibuka?.length : true))
+const menyimpanAcc = ref(false)
+async function simpanAcc(peran, setuju) {
+  status.value = { kelas: '', teks: '' }
+  if (!setuju && !(await konfirmasi({ judul: `Batalkan ACC ${peran === 'pm' ? 'PM' : 'klien'}?`, tombol: 'Batalkan', kelas: 'waspada',
+    teks: peran === 'pm' ? 'Install terkunci lagi sampai PM ACC ulang.' : 'Install terkunci lagi sampai klien menekan Setujui lagi di halaman preview.' }))) return
+  menyimpanAcc.value = true
+  try {
+    await aksi(props.d.slug, 'acc_desain', { peran, setuju, catatan: ketPm.value })
+    ketPm.value = ''
+    emit('ubah')
+  } catch (e) { status.value = { kelas: 'bahaya', teks: pesanGalat(e) } } finally { menyimpanAcc.value = false }
+}
 async function salin() {
   try { await navigator.clipboard.writeText(urlKlien.value) } catch { return }
   tersalin.value = true
@@ -136,16 +160,74 @@ async function salin() {
       </div>
 
       <div v-if="perangkat === 'pc'" ref="bingkai" class="bingkai-pc" :style="{ height: `${TINGGI_PC * skala}px` }">
-        <iframe :src="src" :title="`Pratinjau ${halaman}`" sandbox="allow-scripts" loading="lazy"
+        <iframe :src="src" :title="`Pratinjau ${halaman}`" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" loading="lazy"
           :style="{ width: `${LEBAR_PC}px`, height: `${TINGGI_PC}px`, transform: `scale(${skala})` }" />
       </div>
       <div v-else class="bingkai-hp">
-        <iframe :src="src" :title="`Pratinjau ${halaman} versi HP`" sandbox="allow-scripts" loading="lazy" />
+        <iframe :src="src" :title="`Pratinjau ${halaman} versi HP`" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" loading="lazy" />
       </div>
 
       <div v-if="c.catatan?.length" class="hasil-claude">
         <b>Catatan Claude untuk PM</b>
         <ul><li v-for="(x, i) in c.catatan" :key="i">{{ x }}</li></ul>
+      </div>
+
+      <div v-if="!bedaPlatform" class="acc" role="group" aria-labelledby="h-acc">
+        <div class="kartu-judul">
+          <h3 id="h-acc">ACC desain</h3>
+          <span class="pil" :class="acc.sah ? 'baik' : 'waspada'">{{ acc.sah ? 'disetujui PM & klien' : 'belum lengkap' }}</span>
+        </div>
+        <p class="redup kecil">Wajib sebelum Install: agen meniru referensi klien (bila ada) lalu contoh ini. Contoh dibuat ulang atau direvisi → ACC gugur dan harus diulang.</p>
+        <p v-if="refTerlewat" class="pesan-status waspada">
+          Bahan menyebut situs referensi <b>{{ situsRef.join(', ') }}</b>, tetapi {{ c.referensi ? 'Claude tidak membukanya' : 'contoh ini dibuat sebelum situs referensi diperiksa otomatis' }}.
+          Buat ulang contoh supaya referensi dipetakan dan dinilai otomatis.
+        </p>
+
+        <div class="peta">
+          <div class="kartu-judul">
+            <b>Referensi desain</b>
+            <span v-if="mirip" class="pil" :class="mirip.lolos ? 'baik' : 'waspada'">kemiripan {{ mirip.skor }}/100 · {{ mirip.lolos ? 'lolos' : `di bawah ${mirip.ambang}` }}</span>
+          </div>
+          <p v-if="!peta.length" class="redup kecil">Tidak ada referensi dari klien — contoh tampilan ini menjadi acuan desain.</p>
+          <template v-else>
+            <p class="redup kecil">Acuan utama agen saat Install. Kemiripan dinilai otomatis; yang belum mirip sudah diperbaiki Claude sampai 2 putaran.</p>
+            <ul>
+              <li v-for="(x, i) in peta" :key="i">
+                <span class="skor" :class="!skorBlok(x) ? '' : skorBlok(x).skor >= mirip.ambang ? 'baik' : 'waspada'">{{ skorBlok(x)?.skor ?? '–' }}</span>
+                <span><b>{{ x.blok }}</b> <span class="redup">· {{ x.halaman === 'index.html' ? 'Landing' : 'Dashboard' }}</span><br>
+                  <span class="kecil">meniru <a v-if="/^https?:/.test(x.sumber)" :href="x.sumber" target="_blank" rel="noopener">{{ x.sumber.replace(/^https?:\/\//, '') }}</a><template v-else>{{ x.sumber }}</template> — {{ x.unsur }}</span>
+                  <span v-if="skorBlok(x)?.beda?.length && skorBlok(x).skor < mirip.ambang" class="redup kecil"><br>Beda: {{ skorBlok(x).beda.join('; ') }}</span></span>
+              </li>
+            </ul>
+            <p v-if="mirip?.ringkasan" class="kecil">{{ mirip.ringkasan }}</p>
+          </template>
+        </div>
+
+        <div class="langkah-acc">
+          <b>1. PM</b>
+          <template v-if="sahPeran('pm')">
+            <span>✓ {{ acc.pm.oleh }} · {{ waktuLalu(acc.pm.waktu) }}<span v-if="acc.pm.catatan" class="redup"><br>“{{ acc.pm.catatan }}”</span></span>
+            <button v-if="!terpasang" type="button" class="tombol garis kecil" :disabled="menyimpanAcc || !namaSaya.trim()" @click="simpanAcc('pm', false)">Batalkan</button>
+          </template>
+          <template v-else>
+            <span v-if="acc.pm?.gugur" class="redup kecil">ACC {{ acc.pm.oleh }} gugur karena contoh berubah.</span>
+            <textarea v-model="ketPm" rows="2" maxlength="1000" aria-label="Keterangan PM (opsional)" :disabled="terpasang"
+              placeholder="Keterangan untuk webmaster/agen (opsional), mis. warna hijau tua dipertahankan, menu Promo menyusul"></textarea>
+            <button type="button" class="tombol kecil" :disabled="menyimpanAcc || terpasang || !namaSaya.trim()" @click="simpanAcc('pm', true)">ACC PM</button>
+          </template>
+        </div>
+
+        <div class="langkah-acc">
+          <b>2. Klien</b>
+          <template v-if="sahPeran('klien')">
+            <span>✓ {{ acc.klien.oleh }} menekan Setujui di halaman preview · {{ waktuLalu(acc.klien.waktu) }}</span>
+            <button v-if="!terpasang" type="button" class="tombol garis kecil" :disabled="menyimpanAcc || !namaSaya.trim()" @click="simpanAcc('klien', false)">Batalkan</button>
+          </template>
+          <span v-else class="redup">
+            <span v-if="acc.klien?.gugur">Persetujuan klien sebelumnya gugur karena contoh berubah. </span>
+            {{ urlKlien ? 'Menunggu klien menekan tombol hijau “Setujui desain ini” di tautan preview yang dikirim.' : 'Terbitkan contoh dulu, lalu kirim tautannya ke klien; klien menekan “Setujui desain ini” di halaman itu.' }}
+          </span>
+        </div>
       </div>
     </template>
 
@@ -216,6 +298,20 @@ async function salin() {
 .arahan textarea { margin-top: 8px; width: 100%; font: inherit; font-size: 13.5px; }
 .aksi { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .aksi .tombol { display: inline-flex; align-items: center; gap: 8px; }
+.acc { margin-top: 14px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--garis); display: grid; gap: 10px; }
+.acc h3 { margin: 0; font-size: 15px; }
+.acc > p { margin: 0; }
+.langkah-acc { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; }
+.langkah-acc > b { flex: none; width: 64px; }
+.langkah-acc input:not([type]) { flex: 1 1 240px; min-width: 0; font: inherit; font-size: 13.5px; }
+.langkah-acc textarea { flex: 1 1 280px; min-width: 0; font: inherit; font-size: 13.5px; resize: vertical; }
+.peta { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--latar-2, rgba(127,127,127,.06)); }
+.peta p { margin: 0; }
+.peta ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.peta li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; }
+.peta .skor { flex: none; min-width: 34px; text-align: center; font-weight: 700; border-radius: 8px; padding: 3px 6px; background: rgba(127,127,127,.15); }
+.peta .skor.baik { background: #dcfce7; color: #166534; }
+.peta .skor.waspada { background: #fef3c7; color: #92400e; }
 .pesan-status { margin: 10px 0 0; }
 .pesan-status.waspada { color: var(--waspada); margin: 0 0 12px; }
 </style>

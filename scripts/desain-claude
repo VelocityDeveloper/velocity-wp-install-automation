@@ -54,6 +54,7 @@ ALAT = HERE / 'desain-claude-alat'
 TEMA = ROOT / 'templates' / 'tema-fse'
 TUGAS = ROOT / 'templates' / 'desain-claude' / 'tugas.md'
 TOKO = ROOT / 'templates' / 'desain-claude' / 'toko-vd-store.md'
+DONASI = ROOT / 'templates' / 'desain-claude' / 'donasi.md'
 BERITA = ROOT / 'templates' / 'desain-claude' / 'berita.md'
 # Blok ala page builder (keputusan user 2026-09-26): seksi halaman disusun dari Velocity Blocks
 # (vb/*) yang dipasang fse-apply --tema, supaya klien bisa drag-drop, pilih ikon & tautan di kanvas.
@@ -172,7 +173,8 @@ foreach (get_pages(array('post_status' => 'publish')) as $p) {
 }
 $logo = (int) get_option('site_logo');
 // Toko ber-VD Store (bukan WooCommerce): aturan produk store_product disisipkan ke prompt.
-vfse_keluar(array('vd_store' => defined('WP_STORE_VERSION') && !class_exists('WooCommerce'), 'tema' => get_stylesheet(), 'palet' => $palet, 'situs' => $situs, 'foto' => $foto,
+// Plugin Velocity Donasi (scripts/velocity-donasi): aturan program donasi disisipkan ke prompt.
+vfse_keluar(array('vd_store' => defined('WP_STORE_VERSION') && !class_exists('WooCommerce'), 'donasi' => post_type_exists('donasi'), 'tema' => get_stylesheet(), 'palet' => $palet, 'situs' => $situs, 'foto' => $foto,
     'halaman' => $halaman, 'logo' => $logo ? wp_get_attachment_url($logo) : '', 'nama' => get_bloginfo('name'),
     'slogan' => get_bloginfo('description'), 'home' => home_url('/')));
 '''
@@ -282,7 +284,7 @@ footer & `gaya.css` sudah kamu susun di tahap tema: pertahankan dan lanjutkan da
 }
 
 
-def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False):
+def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False, donasi=False):
     blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
     blok_tema += ', Velocity Blocks: ' + ', '.join(j['name'] for j in blok_vb(cfg))
     target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
@@ -298,6 +300,8 @@ def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False):
     prompt = prompt.replace('{{TOKO}}', TOKO.read_text() if FA.toko_custom(cfg) and vd_store else '')
     # Portal berita (keputusan user 2026-09-28): beranda dinamis per rubrik + kolom samping.
     prompt = prompt.replace('{{BERITA}}', BERITA.read_text() if portal_berita(domain) else '')
+    # Plugin Velocity Donasi terpasang (Paket G + form meminta donasi, permintaan user 2026-10-16).
+    prompt = prompt.replace('{{DONASI}}', DONASI.read_text() if donasi else '')
     for k, v in ganti.items():
         prompt = prompt.replace(k, v)
     return prompt
@@ -641,7 +645,7 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
         simpan_tema_lama(folder)
     log(f'agen mulai (skor awal {awal}, maks {putaran} putaran / {menit} menit)')
     kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url'],
-                                                                         bool(bahan.get('vd_store'))))
+                                                                         bool(bahan.get('vd_store')), bool(bahan.get('donasi'))))
     catat_pemakaian(domain, hasil)
     minta = hasil.get('permintaan_per_model') or {}
     log(f"agen selesai kode={kode} menit={durasi} model={','.join(hasil.get('modelUsage') or minta) or '-'} "

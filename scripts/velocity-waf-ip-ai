@@ -5,6 +5,7 @@ Dipakai aturan Velocity WAF 7700106: UA bot AI pencarian (bot-ai-pencarian.txt) 
 Satu sumber gagal / kosong → berkas TIDAK diubah (lebih baik daftar lama daripada bot asli ikut terblokir).
 Berkas berubah → sidik WAF berubah → dashboard Server > WAF menandai "Perlu diperbarui"; pasang ulang manual.
 """
+import ipaddress
 import json
 import sys
 import urllib.request
@@ -23,7 +24,13 @@ def ambil(url):
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; velocity-waf-ip-ai)'})
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.load(r)
-    return [p.get('ipv4Prefix') or p.get('ipv6Prefix') for p in data.get('prefixes', []) if p.get('ipv4Prefix') or p.get('ipv6Prefix')]
+    return [polos(p.get('ipv4Prefix') or p.get('ipv6Prefix')) for p in data.get('prefixes', []) if p.get('ipv4Prefix') or p.get('ipv6Prefix')]
+
+
+def polos(prefiks):
+    # mod_security2 (Apache) menolak "x.x.x.x/32" di @ipMatchFromFile -> IP tunggal ditulis tanpa mask
+    n = ipaddress.ip_network(prefiks, strict=False)
+    return str(n.network_address) if n.prefixlen == n.max_prefixlen else str(n)
 
 
 def main():

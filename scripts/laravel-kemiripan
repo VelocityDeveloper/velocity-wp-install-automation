@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Skor kemiripan tampilan vs referensi desain klien, per blok (permintaan user 15 Okt 2026: preview Claude kadang
+kurang tepat & PM tak perlu mencocokkan manual).
+
+  laravel-kemiripan <project-NNN> contoh            contoh tampilan (proyek/<id>/contoh) vs referensi
+  laravel-kemiripan <project-NNN> app <url-dasar>   aplikasi dev hasil Install (landing) vs referensi / contoh
+
+Acuan = peta referensi di contoh.json (`referensi.peta`: halaman, blok, sumber, unsur) yang disusun agen contoh;
+sumber situs -> referensi/ref-<situs>[-hp].png, sumber gambar -> referensi/dok-N.png atau contoh/aset/gambar-N.
+Tanpa peta: mode contoh dilewati; mode app membandingkan dengan contoh yang sudah di-ACC.
+Screenshot dipotong per 1600px lalu dinilai Claude (Read gambar saja). Hasil: proyek/<id>/kemiripan-<mode>.json.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+AMBANG = 75
+POTONG = 1600
+MAKS_POTONGAN = {False: 3, True: 1}  # desktop: 3 potongan teratas, HP: layar pertama
+
+SKEMA = {
+    'type': 'object', 'required': ['blok', 'ringkasan'],
+    'properties': {
+        'ringkasan': {'type': 'string'},
+        'blok': {'type': 'array', 'items': {
+            'type': 'object', 'required': ['no', 'skor', 'beda', 'perbaikan'],
+            'properties': {'no': {'type': 'integer'}, 'skor': {'type': 'integer', 'minimum': 0, 'maximum': 100},
+                           'beda': {'type': 'array', 'items': {'type': 'string'}}, 'perbaikan': {'type': 'string'}}}},
+    },
+}
+
+
+def muat(nama, path):
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+L = muat('laravel_proyek', HERE / 'laravel_proyek.py')
+
+
+def log(pesan):
+    print(pesan, flush=True)
+
+
+def potong(png, awalan, hp):
+    from PIL import Image
+    hasil = []
+    with Image.open(png) as g:
+        for i in range(MAKS_POTONGAN[hp]):
+            y = i * POTONG
+            if y >= g.height:
+                break
+            t = png.with_name(f'{awalan}-{i + 1}.png')
+            g.crop((0, y, g.width, min(g.height, y + POTONG))).convert('RGB').save(t)
+            hasil.append(t)
+    return hasil
+
+
+def jepret(url, tujuan, hp):
+    subprocess.run(['node', str(HERE / 'potret-halaman'), url, str(tujuan)] + (['--hp'] if hp else []),
+                   capture_output=True, text=True, timeout=200)
+    return tujuan.is_file()
+
+
+def gambar_sumber(slug, sumber, hp):
+    """Path screenshot/gambar acuan untuk satu sumber peta, atau None."""
+    s = (sumber or '').strip()
+    ref = L.folder_referensi(slug)
+    if s == 'contoh':
+        return None
+    nama = Path(s).name
+    for kandidat in (ref / nama, L.folder_contoh(slug) / 'aset' / nama):
+        if nama and kandidat.is_file() and kandidat.suffix.lower() in L.DOK_GAMBAR:
+            return kandidat
+    dom = re.sub(r'^https?://', '', s.lower()).split('/')[0].removeprefix('www.')
+    if '.' not in dom:
+        return None
+    for g in sorted(ref.glob(f"ref-{dom.replace('.', '-')}*.png"), key=lambda x: len(x.name)):
+        if g.name.endswith('-hp.png') == hp:
+            return g
+    return None
+
+
+def peta_untuk(slug, mode):
+    info = L.baca_json(L.folder(slug) / 'contoh.json', {}) or {}
+    peta = [x for x in (info.get('referensi') or {}).get('peta') or [] if x.get('halaman') in L.CONTOH_HALAMAN]
+    if mode == 'app':
+        # shortcut: dashboard aplikasi butuh login, jadi hanya landing (/) yang dinilai; tambah login otomatis bila perlu
+        peta = [x for x in peta if x['halaman'] == 'index.html']
+        if not peta and (L.folder_contoh(slug) / 'index.html').is_file():
+            peta = [{'halaman': 'index.html', 'blok': 'seluruh halaman', 'sumber': 'contoh',
+                     'unsur': 'susunan seksi, hero, kartu, warna, kepadatan sesuai contoh yang sudah di-ACC'}]
+    return peta
+
+
+def nilai(DC, env, slug, mode, url_dasar=None):
+    """-> dict hasil (juga disimpan) atau None bila tak ada yang bisa dinilai."""
+    peta = peta_untuk(slug, mode)
+    if not peta:
+        log('Kemiripan: tidak ada peta referensi; dilewati.')
+        return None
+    kerja = L.folder(slug) / f'.kemiripan-{mode}'
+    shutil.rmtree(kerja, ignore_errors=True)
+    kerja.mkdir(parents=True)
+    hasil_png = {}
+    for n in dict.fromkeys(x['halaman'] for x in peta):
+        url = f"{url_dasar.rstrip('/')}/" if mode == 'app' else (L.folder_contoh(slug) / n).as_uri()
+        for hp in (False, True):
+            t = kerja / f"hasil-{n.split('.')[0]}{'-hp' if hp else ''}.png"
+            if jepret(url, t, hp):
+                hasil_png[(n, hp)] = potong(t, t.stem, hp)
+    if not hasil_png:
+        log('Kemiripan: halaman hasil gagal dipotret; dilewati.')
+        return None
+    blok, potongan_acuan = [], {}
+    for i, x in enumerate(peta, 1):
+        acuan = {}
+        for hp in (False, True):
+            if x['sumber'] == 'contoh':
+                t = kerja / f"contoh{'-hp' if hp else ''}.png"
+                if (False, hp) not in potongan_acuan and jepret((L.folder_contoh(slug) / 'index.html').as_uri(), t, hp):
+                    potongan_acuan[(False, hp)] = potong(t, t.stem, hp)
+                acuan[hp] = potongan_acuan.get((False, hp)) or []
+                continue
+            g = gambar_sumber(slug, x['sumber'], hp)
+            if g and (not hp or g.name.startswith('ref-')):
+                kunci = (str(g), hp)
+                if kunci not in potongan_acuan:
+                    salin = kerja / f'acuan-{i}{"-hp" if hp else ""}{g.suffix.lower()}'
+                    shutil.copy2(g, salin)
+                    potongan_acuan[kunci] = potong(salin, salin.stem, hp)
+                acuan[hp] = potongan_acuan[kunci]
+        if not acuan.get(False) and not acuan.get(True):
+            log(f"Kemiripan: acuan blok {x.get('blok')} ({x['sumber']}) tidak ditemukan; dilewati.")
+            continue
+        blok.append({**x, 'no': i, 'acuan': acuan})
+    if not blok:
+        return None
+    baris = []
+    for b in blok:
+        baris.append(f"### Blok {b['no']}: {b.get('blok')} di {L.CONTOH_HALAMAN[b['halaman']]} — unsur yang ditiru: {b.get('unsur') or '-'}")
+        for hp in (False, True):
+            label = 'HP' if hp else 'desktop'
+            if b['acuan'].get(hp):
+                baris.append(f'- Acuan {label}: ' + ', '.join(f'`{p}`' for p in b['acuan'][hp]))
+            if hasil_png.get((b['halaman'], hp)):
+                baris.append(f'- Hasil {label}: ' + ', '.join(f'`{p}`' for p in hasil_png[(b['halaman'], hp)]))
+    prompt = f"""Anda penilai desain. Bandingkan HASIL tampilan dengan ACUAN desain klien, per blok di bawah.
+Gambar sudah dipotong per {POTONG}px dari atas (potongan 1 = paling atas). Read SEMUA gambar yang disebut.
+
+Nilai kemiripan tiap blok 0–100 HANYA pada unsur yang disebut (susunan/urutan seksi, tata letak kolom, komposisi
+header & pencarian, bentuk kartu, kepadatan, gaya visual). Merek, logo, teks, foto, dan warna brand klien BOLEH
+berbeda dan tidak mengurangi skor. Bila blok acuan tidak tampak di hasil sama sekali, skor ≤ 30.
+Skala: 90+ hampir sama, 75–89 mirip dengan beda kecil, 50–74 beda jelas, <50 tidak meniru.
+
+`beda`: maks 4 perbedaan konkret. `perbaikan`: satu paragraf instruksi perbaikan yang bisa langsung dikerjakan
+(sebut seksi & apa yang diubah). Kosongkan `perbaikan` bila skor ≥ {AMBANG}. `ringkasan`: 1 kalimat untuk PM.
+
+{chr(10).join(baris)}
+"""
+    perintah = [DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+                '--tools', 'Read', '--max-turns', '40', '--json-schema', json.dumps(SKEMA)]
+    mulai = time.time()
+    try:
+        run = subprocess.run(perintah, input=prompt, capture_output=True, text=True, timeout=900, env=env, cwd=str(kerja))
+        keluar = json.loads(run.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'Kemiripan GAGAL: {type(e).__name__}: {str(e)[:300]}')
+        return None
+    data = keluar.get('structured_output')
+    if not isinstance(data, dict) or keluar.get('is_error'):
+        log(f"Kemiripan GAGAL: {str(keluar.get('result') or 'tanpa keluaran')[:300]}")
+        return None
+    per_no = {x['no']: x for x in data['blok']}
+    hasil = {'waktu': L.sekarang(), 'mode': mode, 'ambang': AMBANG, 'ringkasan': data['ringkasan'],
+             'biaya_usd': round(float(keluar.get('total_cost_usd') or 0), 2), 'blok': []}
+    for b in blok:
+        n = per_no.get(b['no']) or {}
+        hasil['blok'].append({'halaman': b['halaman'], 'blok': b.get('blok'), 'sumber': b['sumber'],
+                              'skor': int(n.get('skor') or 0), 'beda': n.get('beda') or [],
+                              'perbaikan': n.get('perbaikan') or ''})
+    hasil['skor'] = round(sum(x['skor'] for x in hasil['blok']) / len(hasil['blok']))
+    hasil['lolos'] = all(x['skor'] >= AMBANG for x in hasil['blok'])
+    hasil['arahan'] = '\n'.join(f"- {x['blok']} ({L.CONTOH_HALAMAN[x['halaman']]}, skor {x['skor']}): {x['perbaikan']}"
+                                for x in hasil['blok'] if x['skor'] < AMBANG and x['perbaikan'])
+    L.tulis_json(L.folder(slug) / f'kemiripan-{mode}.json', hasil)
+    shutil.rmtree(kerja, ignore_errors=True)
+    log(f"Kemiripan {mode}: skor {hasil['skor']} ({'lolos' if hasil['lolos'] else 'BELUM mirip'}, ambang {AMBANG}) "
+        f"dalam {round(time.time() - mulai)} dtk, setara API ${hasil['biaya_usd']}.")
+    for x in hasil['blok']:
+        log(f"  • {x['blok']} [{x['halaman']}] {x['skor']}" + (f" — {'; '.join(x['beda'][:2])}" if x['skor'] < AMBANG else ''))
+    return hasil
+
+
+def env_claude(DC):
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
+        env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
+    return env
+
+
+def main():
+    a = sys.argv[1:]
+    if len(a) < 2 or not L.ID_RE.match(a[0]) or a[1] not in ('contoh', 'app') or (a[1] == 'app') != (len(a) == 3):
+        print(__doc__)
+        return 2
+    DC = muat('desain_claude', HERE / 'desain-claude')
+    h = nilai(DC, env_claude(DC), a[0], a[1], a[2] if len(a) == 3 else None)
+    return 0 if h is None or h['lolos'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

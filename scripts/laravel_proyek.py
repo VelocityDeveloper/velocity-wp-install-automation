@@ -310,9 +310,10 @@ def catat(slug, oleh, aksi):
 # `brief_versi` (permintaan user 2026-09-30: memastikan brief sudah update atau belum). Keluaran yang dibuat dari brief
 # (saran, rangkuman, contoh, estimasi) mencatat versi bahannya; bila bagian yang dibacanya berubah sesudah itu → usang.
 BAGIAN_BRIEF = {'catatan': 'catatan', 'dokumen': 'dokumen klien', 'prd': 'PRD.md', 'design': 'DESIGN.md',
-                'database': 'relasi database', 'flowchart': 'flowchart', 'konten': 'kebutuhan konten'}
+                'database': 'relasi database', 'flowchart': 'flowchart', 'konten': 'kebutuhan konten',
+                'referensi': 'referensi desain'}
 BAHAN_KELUARAN = {'saran': ('catatan', 'dokumen'), 'rangkuman': ('catatan', 'dokumen', 'konten'),
-                  'contoh': ('catatan', 'dokumen', 'prd', 'design'), 'estimasi': ('prd', 'design', 'database', 'konten')}
+                  'contoh': ('catatan', 'dokumen', 'prd', 'design', 'referensi'), 'estimasi': ('prd', 'design', 'database', 'konten')}
 
 # Kebutuhan konten halaman publik (permintaan user 2026-10-01, dari fastcek: hero/FAQ/cara order tertulis di kode,
 # klien tak bisa mengubah tanpa developer). PM MENANDAI di tahap Brief (proyek.json `konten`); laravel-brief
@@ -535,6 +536,8 @@ def detail(slug):
         'rangkuman': info_rangkuman(slug),
         'contoh': info_contoh(slug),
         'contoh_platform': platform_contoh(slug),
+        'referensi': situs_referensi(slug, p),
+        'referensi_desain': info_referensi(slug, p),
         'dokumen': daftar_dok(slug),
         'brief': info_versi_brief(slug, p),
         'kalibrasi': kalibrasi_agen(),
@@ -861,6 +864,13 @@ def simpan(slug, payload):
                         if mode else x.pop('konten', None))
             diubah.append('kebutuhan konten: ' + (KONTEN_MODE[mode] if mode else 'belum ditandai'))
             berubah_brief.append('konten')
+    if 'referensi' in payload:
+        r = bersihkan_referensi(payload['referensi'])
+        lama = {k: (p.get('referensi_desain') or {}).get(k) or ([] if k != 'diserahkan' else False) for k in r}
+        if r != lama:
+            ubah_proyek(slug, lambda x: x.update(referensi_desain={**r, 'oleh': oleh, 'waktu': sekarang()}))
+            diubah.append('referensi desain')
+            berubah_brief.append('referensi')
     if diubah:
         v = naik_versi_brief(slug, oleh, berubah_brief) if berubah_brief else 0
         catat(slug, oleh, 'menyimpan ' + ', '.join(diubah) + (f' (brief v{v})' if v else ''))
@@ -899,7 +909,27 @@ def ubah_status(slug, payload):
     else:
         ubah_proyek(slug, lambda p: p.update(status={'nilai': nilai, 'alasan': alasan, 'oleh': oleh, 'waktu': sekarang()}))
     catat(slug, oleh, f'mengubah status project jadi {STATUS_PROYEK[nilai]}' + (f' — {alasan}' if alasan and nilai != 'aktif' else ''))
-    return {'status_proyek': nilai}
+    return {'status_proyek': nilai, 'galat_preview': atur_preview_status(slug, nilai, oleh)}
+
+
+# Preview contoh tampilan (19 Okt, permintaan user): Ditunda/Batal → folder publik dicabut (kantor tetap lihat pratinjau
+# di dash); Aktif/Selesai → terbit ulang dengan kode yang sama, link lama hidup lagi. Gagal tidak membatalkan status.
+def atur_preview_status(slug, nilai, oleh):
+    data = baca_json(folder(slug) / 'contoh.json', {}) or {}
+    terbit = data.get('terbit') or {}
+    if nilai in ('ditunda', 'batal'):
+        if not terbit.get('ok'):
+            return ''
+        galat = cabut_preview(slug)
+        if not galat:
+            data['terbit'] = {**terbit, 'ok': False, 'dicabut': sekarang()}
+            tulis_json(folder(slug) / 'contoh.json', data)
+            catat(slug, oleh, 'mencabut preview contoh tampilan dari publik')
+        return galat
+    if terbit.get('dicabut') and info_contoh(slug):
+        hasil = terbitkan_contoh(slug, oleh)
+        return '' if hasil['ok'] else hasil['galat']
+    return ''
 
 
 # Hapus project (permintaan user 2026-10-05: project ujicoba menumpuk di daftar). Hanya project yang BELUM diinstall
@@ -1041,6 +1071,8 @@ def mulai_install(slug, payload):
     if not jalur_laravel(slug):
         # Estimasi berlaku untuk semua platform; install & agen otomatis hanya jalur Laravel + Vue
         raise ValueError('khusus_laravel')
+    if not info_acc(slug, p)['sah']:
+        raise ValueError('desain_belum_acc')
     inst = install_state(slug)
     if inst.get('status') in ('jalan', 'ok'):
         raise ValueError('sudah_diinstall')
@@ -1391,7 +1423,193 @@ def info_contoh(slug):
     return {**data, 'platform': data.get('platform') or 'laravel', 'platform_kini': platform_contoh(slug),
             'halaman': [{'nama': n, 'label': CONTOH_HALAMAN[n], 'ukuran': (folder_contoh(slug) / n).stat().st_size}
                         for n in ada],
-            'bisa_terbit': bool(konfig_preview())}
+            'bisa_terbit': bool(konfig_preview()), 'acc': info_acc(slug)}
+
+
+# Situs referensi desain (15 Okt, project-011: catatan "referensi alibaba.com" tanpa https diabaikan contoh tampilan).
+# Domain ditulis polos pun dikenali; email (@gmail.com), nama berkas (.md/.jpg), domain klien & Velocity dibuang.
+REF_TLD = r'(?:com|net|org|id|co|io|app|biz|info|me|my|sg|asia|store|shop|online|site|dev|ai)(?:\.(?:id|uk|au|my|sg))?'
+REF_RE = re.compile(r'(?<![@\w.-])(?:https?://)?((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+' + REF_TLD + r')(?![\w-])(/[^\s)\]>"\'<,]*)?', re.I)
+REF_ABAIKAN = ('velocitydeveloper.', 'velocity.ai.id', 'velocitydatacenter.', 'gmail.com', 'yahoo.', 'wa.me', 'whatsapp.com',
+               'duitku.com', 'wordpress.org', 'namadomain.com')
+
+
+def _ref_terdeteksi(slug, p):
+    teks = baca_teks(slug, 'catatan.md') + '\n' + bahan_dok(slug)[0]
+    sendiri = [str(p.get(k) or '').lower().removeprefix('www.') for k in ('domain', 'onprogress')]
+    hasil = []
+    for m in REF_RE.finditer(teks):
+        dom = m.group(1).lower().removeprefix('www.')
+        if any(a in dom for a in REF_ABAIKAN) or dom in sendiri or any(h['domain'] == dom for h in hasil):
+            continue
+        hasil.append({'domain': dom, 'url': f'https://{dom}{(m.group(2) or "").rstrip(".")}', 'ket': '', 'asal': 'bahan'})
+    return hasil
+
+
+# Field "Referensi desain" di tab Brief (15 Okt): PM menambah link + keterangan, menghapus link yang salah terdeteksi,
+# atau menandai desain diserahkan ke tim. proyek.json `referensi_desain` {tambahan[{url, ket}], abaikan[domain], diserahkan}.
+REF_MAKS = 8
+
+
+def info_referensi(slug, p=None):
+    """-> {situs (yang dipakai agen), terdeteksi, tambahan, abaikan, diserahkan, oleh, waktu}"""
+    p = p if p is not None else baca_json(folder(slug) / 'proyek.json', {})
+    r = p.get('referensi_desain') or {}
+    abaikan = r.get('abaikan') or []
+    terdeteksi = _ref_terdeteksi(slug, p)
+    tambahan = [{'domain': REF_RE.match(x['url'].lower()).group(1).removeprefix('www.'), 'url': x['url'],
+                 'ket': x.get('ket') or '', 'asal': 'pm'} for x in r.get('tambahan') or []]
+    situs = [] if r.get('diserahkan') else (tambahan + [x for x in terdeteksi if x['domain'] not in abaikan
+                                                         and all(t['domain'] != x['domain'] for t in tambahan)])[:REF_MAKS]
+    return {'situs': situs, 'terdeteksi': terdeteksi, 'tambahan': tambahan, 'abaikan': abaikan,
+            'diserahkan': bool(r.get('diserahkan')), 'oleh': r.get('oleh'), 'waktu': r.get('waktu')}
+
+
+def situs_referensi(slug, p=None):
+    """-> [{domain, url, ket, asal}] yang wajib dibuka agen: tambahan PM + yang terdeteksi di catatan/dokumen klien."""
+    return info_referensi(slug, p)['situs']
+
+
+def bersihkan_referensi(x):
+    x = x if isinstance(x, dict) else {}
+    tambahan = []
+    for t in (x.get('tambahan') or [])[:REF_MAKS]:
+        url = ' '.join(str((t or {}).get('url') or '').split())
+        m = REF_RE.fullmatch(url.lower())
+        if not m:
+            raise ValueError('url_tidak_sah')
+        url = url if url.lower().startswith(('http://', 'https://')) else 'https://' + url
+        tambahan.append({'url': url[:300], 'ket': ' '.join(str(t.get('ket') or '').split())[:200]})
+    abaikan = [str(d).lower()[:100] for d in (x.get('abaikan') or [])[:30] if str(d).strip()]
+    return {'tambahan': tambahan, 'abaikan': abaikan, 'diserahkan': bool(x.get('diserahkan'))}
+
+
+def folder_referensi(slug):
+    """Gambar acuan desain: ref-<situs>[-hp].png (screenshot situs referensi saat contoh dibuat) + dok-N.* (gambar
+    di dalam Word/PDF klien). Tidak ikut terbit; dipakai agen Install & cek kemiripan."""
+    return folder(slug) / 'referensi'
+
+
+def gambar_dok_referensi(slug, maks=12):
+    """Ambil gambar yang tertanam di .docx/.pdf klien -> referensi/dok-N.*; gambar kecil (ikon, logo mini) dibuang."""
+    from PIL import Image
+    d = folder_referensi(slug)
+    for x in d.glob('dok-*'):
+        x.unlink()
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / '.tmp'
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    calon = []
+    for x in daftar_dok(slug):
+        src = folder_dok(slug) / x['nama']
+        ext = src.suffix.lower()
+        try:
+            if ext == '.docx':
+                with zipfile.ZipFile(src) as z:
+                    for i, n in enumerate(m for m in z.namelist() if m.startswith('word/media/')):
+                        if Path(n).suffix.lower() in DOK_GAMBAR:
+                            t = tmp / f'{len(calon)}-{i}{Path(n).suffix.lower()}'
+                            t.write_bytes(z.read(n))
+                            calon.append((t, x['nama']))
+            elif ext == '.pdf':
+                awal = tmp / f'pdf{len(calon)}'
+                subprocess.run(['pdfimages', '-png', '-l', '20', str(src), str(awal)], capture_output=True, timeout=120)
+                calon += [(t, x['nama']) for t in sorted(tmp.glob(f'{awal.name}-*.png'))]
+        except (OSError, zipfile.BadZipFile, subprocess.SubprocessError):
+            continue
+    hasil = []
+    for t, asal in calon:
+        try:
+            with Image.open(t) as g:
+                if g.width < 300 or g.height < 200:
+                    continue
+                g.thumbnail((1600, 4000))
+                tujuan = d / f'dok-{len(hasil) + 1}.png'
+                g.convert('RGB').save(tujuan)
+                hasil.append({'berkas': tujuan.name, 'asal': asal})
+        except OSError:
+            continue
+        if len(hasil) >= maks:
+            break
+    shutil.rmtree(tmp, ignore_errors=True)
+    return hasil
+
+
+# ACC desain (15 Okt): PM (1 klik, keterangan opsional) + klien (tombol "Setuju" di halaman preview velocity.ai.id)
+# sebelum Install. ACC terikat ke versi contoh (contoh.json `waktu`): contoh dibuat ulang/direvisi -> ACC gugur.
+def info_acc(slug, p=None):
+    p = p if p is not None else baca_json(folder(slug) / 'proyek.json', {})
+    waktu = (baca_json(folder(slug) / 'contoh.json', {}) or {}).get('waktu')
+    acc = p.get('acc_desain') or {}
+    hasil = {}
+    for peran in ('pm', 'klien'):
+        if acc.get(peran):
+            hasil[peran] = {**acc[peran], 'gugur': acc[peran].get('contoh_waktu') != waktu}
+    hasil['sah'] = bool(waktu) and all(hasil.get(k) and not hasil[k]['gugur'] for k in ('pm', 'klien'))
+    return hasil
+
+
+def _simpan_acc(slug, peran, data):
+    contoh = baca_json(folder(slug) / 'contoh.json', {})
+
+    def ubah(p):
+        acc = p.setdefault('acc_desain', {})
+        if data is None:
+            acc.pop(peran, None)
+        else:
+            acc[peran] = {**data, 'waktu': sekarang(), 'contoh_waktu': contoh.get('waktu'),
+                          'brief_versi': contoh.get('brief_versi')}
+    ubah_proyek(slug, ubah)
+
+
+def acc_desain(slug, payload):
+    """Dari dash: PM menyetujui/membatalkan ACC-nya; ACC klien hanya bisa dibatalkan (setuju lewat halaman preview)."""
+    oleh = _teks(payload, 'oleh', True)
+    peran = payload.get('peran')
+    setuju = bool(payload.get('setuju'))
+    if peran not in ('pm', 'klien') or (peran == 'klien' and setuju):
+        raise ValueError('peran_tidak_sah')
+    if not info_contoh(slug):
+        raise ValueError('contoh_belum_ada')
+    if install_state(slug).get('status') in ('jalan', 'ok'):
+        raise ValueError('sudah_diinstall')
+    catatan = str(payload.get('catatan') or '').strip()[:1000]
+    _simpan_acc(slug, peran, {'oleh': oleh, 'catatan': catatan} if setuju else None)
+    label = {'pm': 'PM', 'klien': 'klien'}[peran]
+    catat(slug, oleh, (f'ACC desain {label}' + (f': {catatan[:120]}' if catatan else '')) if setuju
+          else f'membatalkan ACC desain {label}')
+    return info_acc(slug)
+
+
+KODE_CONTOH_RE = re.compile(r'^[a-z0-9-]{3,60}$')
+
+
+def slug_dari_kode(kode):
+    if not KODE_CONTOH_RE.match(kode or ''):
+        return None
+    for f in PROYEK.glob('project-*/proyek.json'):
+        if (baca_json(f, {}) or {}).get('contoh_kode') == kode:
+            return f.parent.name
+    return None
+
+
+def setuju_klien(kode, payload, ip=''):
+    """Publik (velocity.ai.id/preview-setuju): GET payload None -> status; POST -> klien menyetujui contoh versi ini.
+    Kode preview (slug + 6 hex acak) sudah jadi rahasia tautan yang dikirim PM ke klien."""
+    slug = slug_dari_kode(kode)
+    if not slug or not info_contoh(slug):
+        raise ValueError('tidak_ada')
+    if payload is not None:
+        if status_proyek(baca_json(folder(slug) / 'proyek.json', {})) != 'aktif':
+            raise ValueError('proyek_nonaktif')
+        if install_state(slug).get('status') in ('jalan', 'ok'):
+            raise ValueError('sudah_diinstall')
+        nama = ' '.join(str(payload.get('nama') or '').split())[:80] or 'Klien'
+        _simpan_acc(slug, 'klien', {'oleh': nama, 'via': 'tombol Setuju di preview', 'ip': ip})
+        catat(slug, nama, 'menyetujui contoh tampilan lewat tombol Setuju di halaman preview')
+    k = info_acc(slug).get('klien')
+    return {'setuju': bool(k and not k['gugur']), 'oleh': k['oleh'] if k else '', 'waktu': k['waktu'] if k else None}
 
 
 def path_contoh(slug, nama):
@@ -1430,6 +1648,42 @@ def kode_contoh(slug):
     return (baca_json(folder(slug) / 'proyek.json', {}) or {}).get('contoh_kode') or kode
 
 
+# Tombol "Setuju" klien, hanya di salinan yang terbit (pratinjau di dash tidak memuatnya). Kode = folder preview.
+SETUJU_HTML = """<div id="vd-setuju" style="position:fixed;left:12px;bottom:56px;z-index:2147483647;max-width:calc(100vw - 24px);
+font:500 13px/1.35 system-ui,sans-serif;color:#0f172a;background:#fff;border:1px solid #cbd5e1;border-radius:14px;
+box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px 10px"><button type="button" id="vd-setuju-buka" style="border:0;
+border-radius:999px;background:#16a34a;color:#fff;font:600 13px system-ui;padding:8px 14px;cursor:pointer">Setujui desain ini</button>
+<form id="vd-setuju-form" hidden style="width:260px;max-width:100%"><div style="display:grid;gap:6px"><b>Setujui desain ini?</b>
+<span style="color:#475569">Tim kami akan mulai mengerjakan sesuai tampilan ini.</span>
+<input id="vd-setuju-nama" maxlength="80" placeholder="Nama Anda (opsional)" aria-label="Nama Anda" style="font:inherit;
+padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px"><span style="display:flex;gap:6px"><button type="submit"
+style="border:0;border-radius:8px;background:#16a34a;color:#fff;font:600 13px system-ui;padding:7px 12px;cursor:pointer">Ya, setuju</button>
+<button type="button" id="vd-setuju-batal" style="border:1px solid #cbd5e1;border-radius:8px;background:#fff;font:inherit;
+padding:7px 12px;cursor:pointer">Batal</button></span></div></form><span id="vd-setuju-pesan" role="status"></span></div>
+<script>(function(){var K="__KODE__",U="/preview-setuju",w=document.getElementById("vd-setuju"),b=document.getElementById("vd-setuju-buka"),
+f=document.getElementById("vd-setuju-form"),m=document.getElementById("vd-setuju-pesan");
+function hasil(d){if(d&&d.setuju){b.hidden=true;f.hidden=true;m.textContent="\\u2713 Desain disetujui"+(d.oleh&&d.oleh!=="Klien"?" oleh "+d.oleh:"")+". Terima kasih.";
+m.style.color="#166534";m.style.fontWeight="600"}}
+function galat(){m.textContent="Gagal mengirim. Coba lagi atau kabari tim kami lewat WhatsApp.";m.style.color="#b91c1c"}
+fetch(U+"?kode="+K).then(function(r){return r.json()}).then(hasil).catch(function(){});
+b.onclick=function(){b.hidden=true;f.hidden=false;m.textContent=""};
+document.getElementById("vd-setuju-batal").onclick=function(){f.hidden=true;b.hidden=false};
+f.onsubmit=function(e){e.preventDefault();fetch(U+"?kode="+K,{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({nama:document.getElementById("vd-setuju-nama").value})}).then(function(r){if(!r.ok)throw 0;return r.json()}).then(hasil).catch(galat)};
+})();</script>
+"""
+
+
+def pasang_setuju(tujuan, kode):
+    for n in CONTOH_HALAMAN:
+        p = Path(tujuan) / n
+        if p.is_file():
+            html = p.read_text()
+            k = html.lower().rfind('</body>')
+            if k >= 0 and 'id="vd-setuju"' not in html:
+                p.write_text(html[:k] + SETUJU_HTML.replace('__KODE__', kode) + html[k:])
+
+
 def terbitkan_contoh(slug, oleh='Claude'):
     """rsync folder contoh/ ke server preview (lokal velocity.ai.id). -> {'ok', 'url', 'waktu', 'galat'} (juga disimpan di contoh.json)."""
     if not info_contoh(slug):
@@ -1448,7 +1702,10 @@ def terbitkan_contoh(slug, oleh='Claude'):
             Path(tujuan).mkdir(parents=True, exist_ok=True)
             r = subprocess.run(['rsync', '-rt', '--delete', '--chmod=D755,F644', f'{folder_contoh(slug)}/', tujuan],
                                capture_output=True, text=True, timeout=120)
+            if not r.returncode:
+                pasang_setuju(tujuan, kode)
         else:
+            # shortcut: tombol Setuju hanya dipasang di preview lokal (velocity.ai.id); host jauh perlu pasang_setuju lewat ssh
             # mkdir lewat ssh dulu (rsync --mkpath butuh rsync ≥3.2.3 di VPS)
             r = subprocess.run(ssh + [login, f"mkdir -p '{tujuan}'"], capture_output=True, text=True, timeout=40)
         if not r.returncode and not preview_lokal(k):
@@ -1530,9 +1787,10 @@ AKSI_POST = {
     'pilih_platform': pilih_platform, 'hapus_dokumen': hapus_dok, 'tanya': tandai_pertanyaan,
     'rangkuman': lambda s, b: mulai_brief(s, b, 'rangkuman'),
     'contoh': lambda s, b: mulai_brief(s, b, 'contoh'), 'terbitkan_contoh': aksi_terbitkan_contoh,
+    'acc_desain': acc_desain,
 }
 KODE_GALAT = {'server_tidak_dikenal': 404, 'server_selalu_nyala': 409, 'systemctl_gagal': 500, 'sedang_berjalan': 409, 'slug_dipakai': 409, 'folder_exists': 409, 'sudah_diinstall': 409,
-              'sudah_dikunci': 409, 'proyek_nonaktif': 409, 'konfirmasi_salah': 400, 'preview_belum_diatur': 503, 'payload_too_large': 413, 'db_root_missing': 503, 'no_port': 503, 'tidak_ada': 404}
+              'sudah_dikunci': 409, 'proyek_nonaktif': 409, 'konfirmasi_salah': 400, 'url_tidak_sah': 400, 'preview_belum_diatur': 503, 'payload_too_large': 413, 'db_root_missing': 503, 'no_port': 503, 'tidak_ada': 404}
 
 
 def handle(metode, path, query, payload):

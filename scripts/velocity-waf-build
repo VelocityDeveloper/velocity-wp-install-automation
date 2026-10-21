@@ -28,8 +28,8 @@ def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, ai_p
     versi = hashlib.sha1((teks + ''.join((AKAR / d).read_text() for d in DATA)).encode()).hexdigest()[:10]
     ganti = {
         '@MODE@': mode, '@DIR@': direktori, '@VERSI@': f'{versi} ({time.strftime("%Y-%m-%d")})',
-        '@AKSI429@': aksi(429), '@AKSI403@': aksi(403), '@AKSI406@': aksi(406),
-        '@AKSIAICARI@': aksi(429) if ai_pencarian == 'blokir' else 'pass',
+        '@AKSI429@': aksi(429), '@AKSI403@': aksi(403), '@AKSI406@': aksi(406), '@AKSI410@': aksi(410),
+        '@AKSIAICARI@': aksi(429) + ',log' if ai_pencarian == 'blokir' else 'pass,nolog',
         '@XMLRPC_MAKS@': str(int(xmlrpc)), '@LOGIN_MAKS@': str(int(login)),
         '@SEO@': '' if seo else '# (crawler SEO tidak diblokir) ', '@AI@': '' if ai else '# (crawler AI tidak diblokir) ',
     }

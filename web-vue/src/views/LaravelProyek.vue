@@ -15,8 +15,8 @@ import TahapReview from '../components/laravel/TahapReview.vue'
 import PeringatanReview from '../components/laravel/PeringatanReview.vue'
 import UbahStatus from '../components/laravel/UbahStatus.vue'
 import HapusProyek from '../components/laravel/HapusProyek.vue'
-import { minta, tanggalWaktu } from '../api.js'
-import { namaSaya, STATUS_PROYEK, TAHAP, indeksTahap, aksi, pesanGalat, tabUrl, reviewMendesak, jalurLaravel } from '../laravel.js'
+import { minta, kirim, tanggalWaktu } from '../api.js'
+import { namaSaya, STATUS_PROYEK, TAHAP, indeksTahap, aksi, pesanGalat, tabUrl, reviewMendesak, jalurLaravel, alamatDev } from '../laravel.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +29,7 @@ async function muat() {
   try {
     d.value = await minta(`/api/laravel/p/${id.value}`)
     galat.value = ''
+    if (d.value.app) muatServer()
   } catch (e) {
     galat.value = e.message === 'tidak_ada' ? 'Project tidak ditemukan.' : e.message
   }
@@ -92,6 +93,23 @@ async function aktifkan() {
   mengaktifkan.value = true
   try { await aksi(id.value, 'status', { nilai: 'aktif' }); muat() } catch (e) { galat.value = pesanGalat(e) } finally { mengaktifkan.value = false }
 }
+// Server dev app ini (id server = nama aplikasi di config/local-projects.json); mati sesudah diam 24 jam / PC restart
+const srv = ref(null)
+const srvLanIp = ref('')
+const menyalakan = ref(false)
+async function muatServer() {
+  try {
+    const r = await minta('/api/laravel/server')
+    srv.value = (r.server || []).find((s) => s.id === d.value?.app) || null
+    srvLanIp.value = r.lan_ip || ''
+  } catch { /* status server opsional di halaman ini */ }
+}
+async function nyalakanDev() {
+  menyalakan.value = true
+  try {
+    srv.value = await kirim(`/api/laravel/server/${srv.value.id}/nyala`, { oleh: namaSaya.value.trim() })
+  } catch (e) { galat.value = pesanGalat(e) } finally { menyalakan.value = false; muatServer() }
+}
 async function simpanIdentitas() {
   try {
     await aksi(id.value, 'identitas', { ...ident })
@@ -123,6 +141,8 @@ async function simpanIdentitas() {
           <a v-if="d.contoh?.terbit?.ok" class="tombol kecil" :href="d.contoh.terbit.url" target="_blank" rel="noopener"><Ikon nama="luar" :ukuran="16" /> Preview klien</a>
           <button v-else type="button" class="tombol garis kecil" @click="keContoh"><Ikon nama="claude" :ukuran="16" /> {{ d.contoh ? 'Contoh tampilan' : 'Buat contoh tampilan' }}</button>
           <button v-if="d.contoh" type="button" class="tombol garis kecil" @click="keContoh">Kelola contoh</button>
+          <button v-if="srv?.kondisi === 'mati'" type="button" class="tombol kecil" :disabled="menyalakan" @click="nyalakanDev">{{ menyalakan ? 'Menyalakan…' : 'Aktifkan dev' }}</button>
+          <a v-else-if="srv?.port && srv.kondisi !== 'tidak_ada'" class="tombol garis kecil" :href="alamatDev(srv.port, srvLanIp)" target="_blank" rel="noopener"><Ikon nama="luar" :ukuran="16" /> Buka dev :{{ srv.port }}</a>
           <button type="button" class="tombol garis kecil" @click="statusBuka = true">Status: {{ STATUS_PROYEK[d.status_proyek || 'aktif']?.label }}</button>
           <button v-if="!terinstall" type="button" class="tombol garis kecil" @click="bukaIdentitas"><Ikon nama="sunting" :ukuran="16" /> Ubah identitas / relasi</button>
           <button v-if="!d.app && !d.install?.status" type="button" class="tombol bahaya kecil" @click="hapusBuka = true"><Ikon nama="sampah" :ukuran="16" /> Hapus</button>

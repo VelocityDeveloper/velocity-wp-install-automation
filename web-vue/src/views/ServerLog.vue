@@ -103,7 +103,7 @@ const galat = computed(() => [
   <div class="halaman">
     <header class="kepala-halaman">
       <div>
-        <h1>Log</h1>
+        <h1>Log <span class="merek-guard">VelocityGuard</span></h1>
         <p class="redup">Semua log keamanan server dalam satu tabel: WAF (Velocity &amp; cPGuard), firewall LFD/CSF, brute force, dan login SSH. Saring dengan tag atau kata kunci.</p>
       </div>
     </header>

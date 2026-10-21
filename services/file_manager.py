@@ -13,6 +13,7 @@ import mimetypes
 import os
 import shutil
 import stat
+import subprocess
 import threading
 import time
 import zipfile
@@ -21,6 +22,8 @@ from ipaddress import ip_address, ip_network
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pc_backup
+import pc_restore
+import pc_nextcloud
 
 PORT = 9123
 LAN_NETWORKS = tuple(map(ip_network, ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')))
@@ -402,6 +405,8 @@ AKSI = {
     '/api/fm/zip': buat_zip,
     '/api/fm/unzip': ekstrak_zip,
     '/api/fm/chmod': chmod,
+    '/api/fm/restore': pc_restore.mulai,
+    '/api/fm/restore/backup-sekarang': pc_restore.backup_sekarang,
 }
 
 
@@ -431,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
     def jalankan(self, fungsi):
         try:
             self.json_response(200, fungsi())
-        except Galat as e:
+        except (Galat, pc_restore.Galat) as e:
             self.json_response(e.status, {'error': e.kode})
         except FileNotFoundError:
             self.json_response(404, {'error': 'tidak_ditemukan'})
@@ -461,6 +466,12 @@ class Handler(BaseHTTPRequestHandler):
             self.jalankan(lambda: info(jalur(q.get('path', ''))))
         elif path == '/api/fm/pc-backup':
             self.jalankan(lambda: pc_backup.status(q.get('segar') == '1'))
+        elif path == '/api/fm/pc-backup/nextcloud':
+            self.jalankan(lambda: pc_nextcloud.status(q.get('segar') == '1'))
+        elif path == '/api/fm/restore':
+            self.jalankan(lambda: pc_restore.daftar(q.get('server'), q.get('versi')))
+        elif path == '/api/fm/restore/tugas':
+            self.jalankan(lambda: pc_restore.tugas(q.get('id')))
         elif path == '/api/fm/unduh':
             self.unduh(q.get('path', ''), q.get('lihat') == '1')
         else:
@@ -474,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(e.status, {'error': e.kode})
             return
         except IsADirectoryError:
-            self.json_response(400, {'error': 'bukan_berkas'})
+            self.unduh_folder(p)
             return
         except OSError:
             self.json_response(404, {'error': 'tidak_ditemukan'})
@@ -494,6 +505,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Disposition', f"{'inline' if lihat else 'attachment'}; filename*=UTF-8''{quote(nama)}")
             self.end_headers()
             shutil.copyfileobj(f, self.wfile, POTONGAN)
+
+    def unduh_folder(self, p):
+        # Folder dialirkan sebagai .tar.gz (gzip -1: cepat, ukuran tak diketahui di muka → koneksi ditutup di akhir)
+        induk, nama = os.path.split(p.rstrip('/'))
+        proses = subprocess.Popen(['tar', '-C', induk or '/', '-I', 'gzip -1', '-cf', '-', '--', nama],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/gzip')
+            self.send_header('Connection', 'close')
+            self.send_header('Content-Disposition', f"attachment; filename*=UTF-8''{quote(nama or 'root')}.tar.gz")
+            self.end_headers()
+            shutil.copyfileobj(proses.stdout, self.wfile, POTONGAN)
+        except OSError:
+            pass  # pengunduh membatalkan
+        finally:
+            proses.kill()
+            proses.wait()
 
     def do_PUT(self):
         # Unggah: badan permintaan = isi berkas mentah. ?path=<folder>&nama=<relatif, boleh a/b/c.txt>&timpa=1

@@ -302,7 +302,7 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
           <span class="ku-tgl redup">Mulai {{ tglPendek(u.mulai) }} · hari ke-{{ Math.max(hariSejak(u.mulai) + 1, 1) }}</span>
           <span class="ku-kondisi" :class="{ redup: !terakhir(u) }">{{ terakhir(u)?.isi || 'Belum ada catatan kondisi.' }}</span>
           <span v-if="sorotKartu(u).length" class="ku-sorot">
-            <span v-for="x in sorotKartu(u)" :key="x.label" class="ku-chip" :class="{ buruk: x.buruk }">{{ x.label }} <b>{{ fmt(x.nilai) }}</b></span>
+            <span v-for="x in sorotKartu(u)" :key="x.label" class="ku-chip" :class="{ buruk: x.buruk, baik: x.baik }">{{ x.label }} <b>{{ fmt(x.nilai) }}</b></span>
           </span>
           <span class="ku-bawah">
             <span v-if="terakhir(u)" class="redup"><span class="oleh" :class="{ claude: terakhir(u).jenis === 'claude' }">{{ terakhir(u).oleh }}</span> · {{ tglPendek(terakhir(u).waktu) }}</span>
@@ -375,9 +375,9 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
                   <small>{{ a.satuan }}</small>
                 </span>
               </li>
-              <li v-for="x in m.sorot" :key="x.label" class="sorot">
+              <li v-for="x in m.sorot" :key="x.label" class="sorot" :class="{ baik: x.baik }">
                 <span class="a-label">{{ x.label }}</span>
-                <span class="a-nilai"><b :class="{ 'tren-buruk': x.buruk }">{{ fmt(x.nilai) }}</b></span>
+                <span class="a-nilai"><b :class="{ 'tren-buruk': x.buruk, 'tren-baik': x.baik }">{{ fmt(x.nilai) }}</b></span>
               </li>
             </ul>
             <div v-if="m.orang" class="tabel-wadah">
@@ -437,12 +437,15 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
             </div>
             <div v-for="tb in m.tabel || []" :key="tb.judul" class="tabel-wadah">
               <p class="redup">{{ tb.judul }}</p>
-              <table class="tabel orang">
-                <thead><tr><th v-for="c in tb.kolom" :key="c">{{ c }}</th></tr></thead>
+              <table class="tabel orang" :class="{ berdetail: tb.detail }">
+                <thead><tr><th v-for="(c, j) in tb.kolom" :key="c" :class="{ kanan: tb.kanan?.includes(j) }">{{ c }}</th></tr></thead>
                 <tbody>
-                  <tr v-for="(b, i) in tb.baris" :key="i">
-                    <td v-for="(c, j) in b" :key="j">{{ typeof c === 'number' ? angka(c) : c }}</td>
-                  </tr>
+                  <template v-for="(b, i) in tb.baris" :key="i">
+                    <tr :class="{ 'ada-detail': tb.detail?.[i] }">
+                      <td v-for="(c, j) in b" :key="j" :class="{ kanan: tb.kanan?.includes(j) }">{{ typeof c === 'number' ? angka(c) : c }}</td>
+                    </tr>
+                    <tr v-if="tb.detail?.[i]" class="detail"><td :colspan="tb.kolom.length"><div class="detail-isi">{{ tb.detail[i] }}</div></td></tr>
+                  </template>
                 </tbody>
               </table>
             </div>
@@ -656,6 +659,8 @@ button.angka:hover, button.angka.aktif { border-color: var(--aksen-terang); }
 .ku-chip { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: var(--kartu-2); color: var(--teks-3); }
 .ku-chip b { color: var(--teks-kuat); margin-left: 2px; }
 .ku-chip.buruk b { color: var(--bahaya); }
+.ku-chip.baik { background: rgba(52, 199, 123, .12); }
+.ku-chip.baik b { color: var(--baik); }
 .ku-bawah { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; font-size: 12px; }
 .ku-basi { color: var(--waspada); font-weight: 600; }
 .ku-buka { margin-left: auto; color: var(--aksen-terang); font-weight: 600; }
@@ -700,6 +705,7 @@ button.angka:hover, button.angka.aktif { border-color: var(--aksen-terang); }
 .metrik-ringkas { margin: 0 0 10px; font-size: 13.5px; color: var(--teks-2); }
 .angka-daftar { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
 .angka-daftar li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--kartu-2); cursor: default; }
+.angka-daftar li.baik { background: rgba(52, 199, 123, .12); box-shadow: inset 0 0 0 1px rgba(52, 199, 123, .35); }
 .a-label { font-size: 12px; color: var(--teks-3); }
 .a-nilai { font-size: 13px; color: var(--teks-3); }
 .a-nilai s { text-decoration: none; }
@@ -711,6 +717,12 @@ button.angka:hover, button.angka.aktif { border-color: var(--aksen-terang); }
 .orang { margin-top: 10px; font-size: 13px; }
 .orang td { padding: 7px 10px; }
 .orang tr.minim td { color: var(--waspada); }
+.orang .kanan { text-align: right; }
+.berdetail td { white-space: nowrap; }
+.berdetail tr.ada-detail td { border-bottom: 0; padding-bottom: 2px; }
+.berdetail tr.detail td { white-space: normal; padding-top: 0; font-size: 12px; line-height: 1.5; color: var(--teks-3); }
+/* HP: tabel digeser ke samping, rangkuman tetap terbaca selebar layar */
+@media (max-width: 700px) { .detail-isi { position: sticky; left: 10px; max-width: calc(100vw - 112px); } }
 .daftar-kecil { margin: 10px 0 0; padding-left: 18px; font-size: 13px; color: var(--teks-2); display: grid; gap: 2px; }
 .tanpa-metrik { margin: 0; }
 .seri { display: flex; align-items: flex-end; gap: 4px; height: 110px; margin-top: 10px; padding-top: 4px; }

@@ -195,8 +195,8 @@ async function kirimDialog() {
 }
 
 // ---- Detail server ----
-const SUMBER = { cpguard: 'cPGuard', velocity: 'Velocity WAF', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban' }
-const KELAS_SUMBER = { cpguard: 'ungu', velocity: 'teal', lfd: 'biru', dashboard: 'hijau', manual: 'abu', fail2ban: 'biru' }
+const SUMBER = { directadmin: 'DirectAdmin BFM', cpguard: 'cPGuard', velocity: 'Velocity WAF', lfd: 'LFD', dashboard: 'Dashboard', manual: 'Manual', fail2ban: 'fail2ban' }
+const KELAS_SUMBER = { directadmin: 'ungu', cpguard: 'ungu', velocity: 'teal', lfd: 'biru', dashboard: 'hijau', manual: 'abu', fail2ban: 'biru' }
 // Tab Sementara: blokir Velocity WAF (pemicu LFD vwaf*) masuk csf.tempban, bukan csf.deny
 const sumberSementara = ref('')
 watch(pilih, () => { sumberSementara.value = '' })
@@ -330,7 +330,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
   <div class="halaman">
     <header class="kepala-halaman">
       <div>
-        <h1>Proteksi Server</h1>
+        <h1>Proteksi Server <span class="merek-guard">VelocityGuard</span></h1>
         <p class="redup">Firewall CSF & deteksi brute force (LFD) di server hosting, serta firewalld/ufw di PC kantor (bertag): blokir, lepas, whitelist IP, dan atur ambang blokir.</p>
       </div>
       <div class="kepala-aksi">

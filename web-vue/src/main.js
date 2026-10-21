@@ -13,6 +13,7 @@ const ServerWaf = () => import('./views/ServerWaf.vue')
 const ServerBruteforce = () => import('./views/ServerBruteforce.vue')
 const ServerCms = () => import('./views/ServerCms.vue')
 const ServerCpguard = () => import('./views/ServerCpguard.vue')
+const ServerGuard = () => import('./views/ServerGuard.vue')
 const ServerLog = () => import('./views/ServerLog.vue')
 const Installer = () => import('./views/Installer.vue')
 const Susulan = () => import('./views/Susulan.vue')
@@ -28,6 +29,8 @@ const NotifEmail = () => import('./views/NotifEmail.vue')
 const Report = () => import('./views/Report.vue')
 const Berkas = () => import('./views/Berkas.vue')
 const PcBackup = () => import('./views/PcBackup.vue')
+const PcRestore = () => import('./views/PcRestore.vue')
+const PcNextcloud = () => import('./views/PcNextcloud.vue')
 const VelocityUpdate = () => import('./views/VelocityUpdate.vue')
 const Profil = () => import('./views/Profil.vue')
 const Security = () => import('./views/Security.vue')
@@ -36,13 +39,14 @@ const routes = [
   { path: '/', name: 'beranda', component: Beranda, meta: { judul: 'Dashboard' } },
   { path: '/server', name: 'server', component: Server, meta: { judul: 'Server' } },
   { path: '/server/monitoring', component: ServerMonitor, meta: { judul: 'Monitoring Server' } },
-  { path: '/server/proteksi', component: ServerProteksi, meta: { judul: 'Proteksi Server' } },
-  { path: '/server/antivirus', component: ServerAntivirus, meta: { judul: 'Antivirus Server' } },
-  { path: '/server/waf', component: ServerWaf, meta: { judul: 'WAF Server' } },
-  { path: '/server/bruteforce', component: ServerBruteforce, meta: { judul: 'Brute Force' } },
-  { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS' } },
+  { path: '/server/proteksi', component: ServerProteksi, meta: { judul: 'Proteksi · VelocityGuard' } },
+  { path: '/server/antivirus', component: ServerAntivirus, meta: { judul: 'Antivirus · VelocityGuard' } },
+  { path: '/server/waf', component: ServerWaf, meta: { judul: 'WAF · VelocityGuard' } },
+  { path: '/server/bruteforce', component: ServerBruteforce, meta: { judul: 'Brute Force · VelocityGuard' } },
+  { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS · VelocityGuard' } },
   { path: '/server/cpguard', component: ServerCpguard, meta: { judul: 'Kesiapan Copot cPGuard' } },
-  { path: '/server/log', component: ServerLog, meta: { judul: 'Log Server' } },
+  { path: '/server/log', component: ServerLog, meta: { judul: 'Log · VelocityGuard' } },
+  { path: '/server/velocityguard', component: ServerGuard, meta: { judul: 'VelocityGuard' } },
   { path: '/security', component: Security, meta: { judul: 'Security' } },
   // Installer bersub-menu per jenis aplikasi; alamat lama /installer & /installer/susulan dialihkan
   { path: '/installer', redirect: '/installer/wordpress' },
@@ -60,6 +64,9 @@ const routes = [
   { path: '/pc-backup', redirect: '/pc-backup/status' },
   { path: '/pc-backup/status', component: PcBackup, meta: { judul: 'Status Backup' } },
   { path: '/pc-backup/berkas', component: Berkas, meta: { judul: 'File Manager PC Backup' } },
+  { path: '/pc-backup/backup', component: PcRestore, meta: { judul: 'Backup' } },
+  { path: '/pc-backup/nextcloud', component: PcNextcloud, meta: { judul: 'Nextcloud' } },
+  { path: '/pc-backup/restore', redirect: '/pc-backup/backup' },
   { path: '/report', component: Report, meta: { judul: 'Report Harian' } },
   { path: '/notif-email', component: NotifEmail, meta: { judul: 'Notif Email' } },
   { path: '/brain', component: Brain, meta: { judul: 'Claude Brain' } },

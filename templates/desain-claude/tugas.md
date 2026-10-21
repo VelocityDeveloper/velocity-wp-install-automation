@@ -46,6 +46,7 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
      atribut. Jangan memakai `!important` pada warna, padding, atau ukuran yang bisa diatur klien.
 
 {{TOKO}}
+{{DONASI}}
 {{BERITA}}
 ## Yang boleh kamu tulis (hanya di folder kerja ini: `{{FOLDER}}`)
 

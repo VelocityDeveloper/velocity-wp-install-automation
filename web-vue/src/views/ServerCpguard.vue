@@ -60,16 +60,16 @@ const FUNGSI = [
   },
   {
     k: 'firewall', label: 'Firewall CSF / LFD', pengganti: 'CSF + halaman Proteksi', ke: '/server/proteksi', wajib: true,
-    ket: 'CSF/LFD tetap jalan tanpa cPGuard. Blokir "BFM:" milik cPGuard di csf.deny tidak diperbarui lagi sesudah dicopot.',
+    ket: 'CSF/LFD tetap jalan tanpa cPGuard. Blokir "BFM:" di csf.deny berasal dari Brute Force Monitor DirectAdmin (tetap jalan tanpa cPGuard).',
     cek: ({ b, m }) => {
       if (!b?.ok) return { status: 'belum', teks: 'Data CSF belum terbaca' }
       if (!b.lfd_aktif) return { status: 'belum', teks: 'LFD tidak aktif', langkah: 'Hidupkan LFD' }
       if (b.csf?.TESTING === '1') return { status: 'belum', teks: 'CSF masih mode TESTING' }
       const d = b.deny || {}
       const limit = Number(b.csf?.DENY_IP_LIMIT) || 0
-      const porsi = d.total ? Math.round((d.sumber?.cpguard || 0) * 100 / d.total) : 0
+      const porsi = d.total ? Math.round((d.sumber?.directadmin || 0) * 100 / d.total) : 0
       if (limit && d.total >= limit * 0.95) return { status: 'sebagian', teks: `csf.deny hampir penuh (${angka(d.total)}/${angka(limit)})`, langkah: 'Naikkan DENY_IP_LIMIT atau bersihkan' }
-      return { status: 'siap', teks: `LFD aktif · csf.deny ${angka(d.total)}/${angka(limit)} (${porsi}% dari cPGuard)` }
+      return { status: 'siap', teks: `LFD aktif · csf.deny ${angka(d.total)}/${angka(limit)} (${porsi}% dari DirectAdmin BFM)` }
     },
   },
   {

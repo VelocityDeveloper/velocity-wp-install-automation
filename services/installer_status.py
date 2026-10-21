@@ -74,6 +74,7 @@ AI_PERAN = (
     ('foto', 'Pemilihan foto contoh', 'paket-g-foto'),
     ('fse', 'FSE builder: gaya beranda portal berita', 'fse-apply'),
     ('tema', 'Pembaca child-theme paket biasa', 'theme-paket-biasa'),
+    ('judi', 'VelocityGuard Judi AI: nilai situs judi / diretas (antivirus)', 'server_judi'),
 )
 # Fungsi yang TIDAK memakai model endpoint di halaman ini. Desain FSE paket custom ber-referensi
 # dikerjakan agen Claude Code (scripts/desain-claude, keputusan user 2026-09-18/19): modelnya
@@ -203,6 +204,11 @@ def _rate_ok(ip: str) -> bool:
     lst.append(now)
     _rate[ip] = lst
     return True
+
+
+def _lolos_batas(handler) -> bool:
+    # Pengguna yang login dash (cookie vd_dash sah) tanpa batas: IP IndiBiz kantor dinamis
+    return sesi_dash.dari_cookie(handler.headers.get('Cookie')) is not None or _rate_ok(rate_ip(handler))
 
 
 def client_ip(handler: BaseHTTPRequestHandler) -> str:
@@ -978,10 +984,10 @@ def _antivirus_ssh(srv, key, perintah, prioritas_rendah=False):
     return cmd, f"{ANTIVIRUS_AGEN.read_text()}\njalankan('{sandi}')\n"
 
 
-def _antivirus_satu(srv, key, perintah, batas=90):
+def _antivirus_satu(srv, key, perintah, batas=90, prioritas_rendah=False):
     hasil = {'host': srv['host'], 'name': srv['name']}
     try:
-        cmd, masukan = _antivirus_ssh(srv, key, perintah)
+        cmd, masukan = _antivirus_ssh(srv, key, perintah, prioritas_rendah)
         r = subprocess.run(cmd, input=masukan, capture_output=True, text=True, timeout=batas, check=False)
     except subprocess.TimeoutExpired:
         return {**hasil, 'ok': False, 'error': 'timeout'}
@@ -1022,6 +1028,43 @@ def _aman_baca():
         return {}
 
 
+# Setelan per server (tab Scan & Karantina): mode karantina otomatis watcher realtime + whitelist berkas/folder.
+# Whitelist berlaku di watcher, scan (agen melewatinya), periksa ulang, dan tampilan (temuan lama jadi "aman").
+ANTIVIRUS_RT_SETELAN = ANTIVIRUS_DIR / 'realtime-setelan.json'  # {host: {mode, putih: [{path, jenis, oleh, t, alasan}]}}
+ANTIVIRUS_FP = ANTIVIRUS_DIR / 'laporan-fp.jsonl'
+
+
+def _rt_setelan_baca():
+    try:
+        return json.loads(ANTIVIRUS_RT_SETELAN.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _rt_setelan(host, semua=None):
+    s = (semua if semua is not None else _rt_setelan_baca()).get(host) or {}
+    return {'mode': s.get('mode') if s.get('mode') in ('laporan', 'otomatis') else 'laporan', 'putih': list(s.get('putih') or [])}
+
+
+def _putih_server(host):
+    return [{'path': w['path'], 'jenis': w.get('jenis') or 'berkas'} for w in _rt_setelan(host)['putih']]
+
+
+def _rt_isi(host):
+    """Isi setelan.json untuk watcher (urutan tetap → sha sama dengan detak.setelan)."""
+    st = _rt_setelan(host)
+    isi = json.dumps({'mode': st['mode'], 'putih': _putih_server(host)}, sort_keys=True, separators=(',', ':'))
+    return isi, hashlib.sha256(isi.encode()).hexdigest()[:12]
+
+
+def _cocok_putih(path, putih):
+    for w in putih:
+        x = w.get('path') or ''
+        if x and (path == x or (w.get('jenis') == 'folder' and path.startswith(x.rstrip('/') + '/'))):
+            return w
+    return None
+
+
 def _cocok_aman(t, e):
     # Hasil scan lama belum menyimpan sha256 → pakai mtime + ukuran saat ditandai
     if t.get('sha256'):
@@ -1029,16 +1072,384 @@ def _cocok_aman(t, e):
     return t.get('mtime') == e.get('mtime') and t.get('ukuran') == e.get('ukuran')
 
 
+def _aman_sesudah(job, t, e):
+    # Halaman/baris DB tidak punya sha tetap: ditandai aman sesudah scan ini selesai = temuan scan lama sudah ditangani.
+    # Scan sesudah tanda aman tetap dicocokkan per sha256, jadi infeksi ulang tetap terlihat.
+    return bool((t.get('web') or t.get('db')) and (e.get('waktu') or 0) > (job.get('selesai') or job.get('mulai') or 0))
+
+
+def _fp_sha(aman):
+    """sha256 berkas yang dilaporkan positif palsu (entri aman beralasan "positif palsu: …") di server mana pun.
+    Berkas kembar (isi persis sama) di akun/server lain ikut aman; batal aman di berkas asal mencabutnya."""
+    out = {}
+    for host, daftar in aman.items():
+        for path, e in daftar.items():
+            if e.get('sha256') and str(e.get('alasan') or '').startswith('positif palsu'):
+                out.setdefault(e['sha256'], dict(e, kembar=path, kembar_host=host, alasan=f"positif palsu, isi sama dengan {path}"))
+    return out
+
+
 def _temuan_aman(job, aman):
     daftar = aman.get(job.get('host'), {})
-    return [dict(t, aman=daftar[t['path']]) if t.get('path') in daftar and _cocok_aman(t, daftar[t['path']]) else t
-            for t in job.get('temuan') or []]
+    fp = _fp_sha(aman)
+    putih = _rt_setelan(job.get('host'))['putih']
+    hitam = _hitam_baca()
+    nilai_ai = server_judi.analisis_baca().get(job.get('host')) or {}
+    out = []
+    for t in job.get('temuan') or []:
+        w = _cocok_putih(t.get('path') or '', putih) if putih else None
+        if w:
+            t = dict(t, aman={'oleh': w.get('oleh'), 'waktu': w.get('t'), 'alasan': f"whitelist {w.get('jenis')}", 'putih': w['path']})
+        elif t.get('path') in daftar and (_cocok_aman(t, daftar[t['path']]) or _aman_sesudah(job, t, daftar[t['path']])):
+            t = dict(t, aman=daftar[t['path']])
+        elif t.get('sha256') in fp:
+            t = dict(t, aman=fp[t['sha256']])
+        elif t.get('sha256') in hitam:
+            t = dict(t, hitam=hitam[t['sha256']])
+        n = nilai_ai.get(t.get('path'))
+        if n and n.get('sha256') == t.get('sha256'):  # saran Analisis AI untuk isi yang sama
+            t = dict(t, ai=n)
+        out.append(t)
+    return out
 
 
-def _scan_ringkas(job, aman=None):
-    """Job tanpa daftar temuan (untuk daftar scan); temuan yang ditandai aman tidak dihitung."""
-    out = {k: v for k, v in job.items() if k != 'temuan'}
-    t = [x for x in _temuan_aman(job, _aman_baca() if aman is None else aman) if not x.get('aman')]
+# Ingat karantina: sha256 berkas yang pernah dikarantina manual (atau lewat Bersihkan WP), berlaku semua server.
+# Berkas berisi persis sama muncul lagi di scan/realtime → dikarantina otomatis; berkas penting (inti WP, index.php,
+# wp-config.php, .htaccess, temuan DB/beranda) hanya diberi label `hitam`. Kembalikan, laporan positif palsu dan
+# tandai aman mengeluarkan sha dari daftar.
+ANTIVIRUS_HITAM = ANTIVIRUS_DIR / 'hitam.json'  # {sha256: {tanda, path, server, host, oleh, t}}
+HITAM_OLEH = 'Otomatis ingat karantina'
+
+
+def _hitam_baca():
+    try:
+        return json.loads(ANTIVIRUS_HITAM.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _hitam_ubah(tambah=None, buang=()):
+    """tambah {sha256: info}, buang [sha256]. Jangan dipanggil sambil memegang _antivirus_tulis."""
+    tambah = {k: v for k, v in (tambah or {}).items() if k}
+    buang = [k for k in buang if k]
+    if not tambah and not buang:
+        return
+    with _antivirus_tulis:
+        data = _hitam_baca()
+        data.update(tambah)
+        for k in buang:
+            data.pop(k, None)
+        ANTIVIRUS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = ANTIVIRUS_HITAM.with_suffix('.tmp')
+        tmp.write_text(json.dumps(data, separators=(',', ':')))
+        tmp.replace(ANTIVIRUS_HITAM)
+
+
+def _hitam_info(srv, path, oleh, tanda):
+    return {'tanda': str(tanda or '')[:200], 'path': path, 'server': srv['name'], 'host': srv['host'], 'oleh': oleh, 't': int(time.time())}
+
+
+def _hitam_penting(path):
+    return '#' in path or '/wp-admin/' in path or '/wp-includes/' in path or path.rsplit('/', 1)[-1] in ('index.php', 'wp-config.php', '.htaccess')
+
+
+def _hitam_terapkan(srv, key, temuan, sumber):
+    """Karantina otomatis temuan (hasil _temuan_aman) yang isinya sama dengan karantina sebelumnya.
+    Mengembalikan set path yang berhasil dikarantina; notif Telegram + insiden bila path yang sama terinfeksi lagi."""
+    ditindak = []
+    for t in temuan:
+        h = t.get('hitam')
+        if not h or t.get('aman') or (t.get('karantina') or {}).get('ok') or _hitam_penting(t.get('path') or ''):
+            continue
+        alasan = (f"isi sama dengan karantina {time.strftime('%d-%m-%Y', time.localtime(h.get('t') or 0))} "
+                  f"oleh {h.get('oleh')}: {h.get('tanda') or '-'}")[:200]
+        r = _antivirus_satu(srv, key, {'aksi': 'karantina', 'path': t['path'], 'sha256': t['sha256'], 'oleh': HITAM_OLEH,
+                                       'alasan': alasan}, 60)
+        with _antivirus_tulis, ANTIVIRUS_RIWAYAT.open('a') as f:
+            f.write(json.dumps({'t': int(time.time()), 'oleh': HITAM_OLEH, 'aksi': 'karantina', 'server': srv['name'], 'host': srv['host'],
+                                'path': t['path'], 'id': r.get('id'), 'alasan': f'{sumber} · {alasan}'[:300], 'ok': bool(r.get('ok')),
+                                'error': r.get('error')}, separators=(',', ':')) + '\n')
+        if r.get('ok'):
+            ditindak.append((t, h))
+    if not ditindak:
+        return set()
+    _cache_antivirus.hapus()
+    baris = []
+    for t, h in ditindak[:10]:
+        asal = 'infeksi ulang path sama' if h.get('path') == t['path'] else f"asal {h.get('server')}: {(h.get('path') or '').replace('/home/', '', 1)}"
+        baris.append(f"• <code>{html.escape(t['path'].replace('/home/', '', 1))}</code> — {html.escape(asal)}")
+    if len(ditindak) > 10:
+        baris.append(f'… dan {len(ditindak) - 10} lagi')
+    ulang = sorted({t['path'].split('/')[2] for t, h in ditindak if h.get('path') == t['path']})
+    for akun in ulang:
+        try:
+            berkas = [t['path'] for t, h in ditindak if t['path'].split('/')[2] == akun]
+            velocityguard.insiden_simpan({
+                'id': 'ulang-' + hashlib.sha1(f"{srv['host']}:{akun}".encode()).hexdigest()[:8], 'oleh': HITAM_OLEH,
+                'tanggal': time.strftime('%Y-%m-%d'), 'status': 'terbuka', 'server': srv['name'],
+                'judul': f"Infeksi ulang akun {akun} ({srv['name']})",
+                'penyebab': 'Berkas yang sudah dikarantina muncul lagi di path yang sama: ' + ', '.join(berkas[:20]),
+                'perbaikan': 'Dikarantina otomatis (ingat karantina). Celah belum ditutup: cek plugin/tema rentan (CMS), '
+                             'admin siluman (Bersihkan WP), sandi FTP/cPanel, cron.'})
+        except Exception as e:
+            print(f'insiden infeksi ulang: {e}', file=sys.stderr)
+    teks = [f"🔁 <b>VelocityGuard · Ingat karantina {html.escape(srv['name'])}</b> ({html.escape(sumber)})",
+            f"{len(ditindak)} berkas dikarantina otomatis — isinya sama dengan berkas yang pernah dikarantina.", ''] + baris
+    if ulang:
+        teks += ['', f"⚠️ Path sama terinfeksi lagi ({html.escape(', '.join(ulang))}) → celah belum ditutup, tercatat di Celah & Insiden."]
+    teks += ['', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(srv['name'])}&tab=karantina"]
+    try:
+        kirim_telegram_server('\n'.join(teks))
+    except Exception as e:
+        print(f'telegram ingat karantina: {e}', file=sys.stderr)
+    return {t['path'] for t, h in ditindak}
+
+
+# Periksa ulang: berkas temuan lama dibaca lagi di server (agen aksi periksa_ulang, hanya baca) dengan VD.* saat ini.
+# Temuan yang kini bersih (aturan diperbaiki / berkas dibersihkan) atau berkasnya hilang diberi `kini` dan tidak
+# dihitung/ditampilkan lagi di "Semua scan". Diulang bila sidik agen berubah, ada path baru, atau tiap ULANG_SELANG.
+ANTIVIRUS_ULANG = ANTIVIRUS_DIR / 'ulang.json'  # {host: {sidik, t, hasil: {path: {ada, tanda, sha256, t}}}}
+ULANG_SELANG = 24 * 3600  # sekali sehari (scan harian membawa temuan baru → dicek saat itu juga); cepat = tombol Cek ulang per akun
+# Daftar "dilewati karena besar" scan lama diperiksa ulang dengan aturan agen sekarang (checksum inti WP, baca awal+akhir).
+# Terpisah dari ulang.json: berkas besar dibaca penuh untuk md5/sha256 → job lama, prioritas rendah.
+ANTIVIRUS_BESAR_ULANG = ANTIVIRUS_DIR / 'besar-ulang.json'  # {host: {sidik, t, hasil: {path: {ada, inti?, tanda, t}}}}
+
+
+def _ulang_baca():
+    try:
+        return json.loads(ANTIVIRUS_ULANG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+_bersih_cache = [None, {}]
+
+
+def _dibersihkan():
+    """Bersihkan WP sukses dari riwayat: {(host, akar): [(t, {id admin dihapus} | None)]} (None = riwayat lama tanpa daftar id)."""
+    try:
+        mtime = ANTIVIRUS_RIWAYAT.stat().st_mtime
+    except OSError:
+        return {}
+    if _bersih_cache[0] != mtime:
+        data = {}
+        for b in ANTIVIRUS_RIWAYAT.read_text().splitlines():
+            try:
+                r = json.loads(b)
+            except ValueError:
+                continue
+            if r.get('aksi') == 'bersihkan_wp' and r.get('ok'):
+                ids = r.get('hapus_user')
+                ids = None if ids is None else ids + (r.get('turun_user') or [])  # diturunkan = bukan admin lagi
+                data.setdefault((r.get('host'), r.get('path')), []).append((r.get('t') or 0, None if ids is None else {str(x) for x in ids}))
+        _bersih_cache[:] = [mtime, data]
+    return _bersih_cache[1]
+
+
+def _besar_ulang_baca():
+    try:
+        return json.loads(ANTIVIRUS_BESAR_ULANG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _besar_kini(job, besar_ulang):
+    """Buang dari daftar besar berkas yang sesudah scan ini dinilai ulang hilang atau inti WP asli.
+    Yang bersih dibaca awal+akhir tetap tampil dengan tag `sebagian: 'bersih'` (dicek manual), yang bertanda membawa `tanda`."""
+    hasil = (besar_ulang.get(job.get('host')) or {}).get('hasil') or {}
+    waktu = job.get('selesai') or job.get('mulai') or 0
+    sisa = []
+    for b in job.get('besar') or []:
+        r = hasil.get(b.get('path'))
+        if r and r.get('t', 0) > waktu:
+            if not r.get('ada') or r.get('inti'):
+                continue
+            if r.get('tanda'):
+                b = dict(b, tanda=r['tanda'])
+            elif r.get('tanda') == []:
+                b = dict(b, sebagian='bersih')
+        sisa.append(b)
+    buang = len(job.get('besar') or []) - len(sisa)
+    if buang and isinstance(job.get('hasil'), dict):
+        job['hasil'] = dict(job['hasil'], besar=max((job['hasil'].get('besar') or 0) - buang, len(sisa)))
+    job['besar'] = sisa
+    return job
+
+
+def _temuan_admin(t):
+    return bool(t.get('db')) and any(x['id'].startswith('VD.DB.Admin') for x in t.get('tanda') or [])
+
+
+def _temuan_kini(job, temuan, ulang):
+    hasil = (ulang.get(job.get('host')) or {}).get('hasil') or {}
+    waktu = job.get('selesai') or job.get('mulai') or 0
+    bersih = _dibersihkan()
+    out = []
+    for t in temuan:
+        r = hasil.get(t.get('path'))
+        if _temuan_admin(t):
+            # Admin siluman yang sudah dihapus lewat Bersihkan WP sesudah scan ini → ditangani
+            if any(w > waktu and (ids is None or str(t['db'].get('id')) in ids)
+                   for w, ids in bersih.get((job.get('host'), t['path'].split('#')[0]), ())):
+                t = dict(t, kini='dibersihkan')
+            # Ditangani manual: periksa ulang dapati wp-config.php hilang / user bukan admin lagi
+            elif r and r.get('t', 0) > waktu and not r.get('ada'):
+                t = dict(t, kini='admin_hilang')
+        elif r and not t.get('db') and not t.get('web') and r.get('t', 0) > waktu:
+            if not r.get('ada'):
+                t = dict(t, kini='hilang')
+            elif r.get('tanda') == []:
+                t = dict(t, kini='bersih')
+        out.append(t)
+    return out
+
+
+def _scan_yatim():
+    """Saat layanan start: job berstatus 'berjalan' di berkas = sisa proses lama yang mati (restart di tengah scan).
+    Ditulis permanen sebagai gagal/terputus — tampilan sudah begitu, tapi pembaca berkas mentah masih melihat 'berjalan'."""
+    for b in (ANTIVIRUS_DIR / 'scan').glob('*.json'):
+        try:
+            job = json.loads(b.read_text())
+        except (OSError, ValueError):
+            continue
+        if job.get('status') == 'berjalan' and b.stem not in _scan_jalan:
+            job.update(status='gagal', error='terputus', selesai=job.get('selesai') or int(b.stat().st_mtime))
+            job.pop('pid', None)
+            _scan_simpan(job)
+
+
+def _sidik_agen():
+    return hashlib.sha256(ANTIVIRUS_AGEN.read_bytes()).hexdigest()[:12]
+
+
+def _ulang_paths():
+    """{host: set(path)} temuan semua scan selesai yang bisa diperiksa ulang (berkas + admin siluman DB)."""
+    per_host = {}
+    for j in antivirus_scan_daftar()['scan']:
+        # Jangan saring pakai jumlah_temuan: angka itu sudah dikurangi hasil periksa ulang ("kini hilang/bersih"),
+        # jadi scan yang temuannya semua hilang keluar dari daftar → status hilangnya lenyap → muncul lagi.
+        if j.get('status') != 'selesai':
+            continue
+        try:
+            job = json.loads((ANTIVIRUS_DIR / 'scan' / f"{j['id']}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        per_host.setdefault(j['host'], set()).update(
+            t['path'] for t in job.get('temuan') or []
+            if (not t.get('db') and not t.get('web') and '#' not in t['path']) or _temuan_admin(t))
+    return per_host
+
+
+def antivirus_cek_ulang(payload):
+    """Tombol Cek ulang per akun: periksa ulang temuan satu akun sekarang (hanya baca), gabung ke ulang.json."""
+    srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}, 400
+    akun = str(payload.get('akun') or '')
+    if not re.fullmatch(r'[a-z0-9_.-]{1,40}', akun):
+        return {'error': 'akun_tidak_sah'}, 400
+    paths = sorted(p for p in _ulang_paths().get(srv['host']) or () if p.startswith(f'/home/{akun}/'))
+    if not paths:
+        return {'ok': True, 'diperiksa': 0}, 200
+    r = _antivirus_satu(srv, ssh_key_file(), {'aksi': 'periksa_ulang', 'paths': paths[:3000], 'putih': _putih_server(srv['host'])}, 180)
+    if not r.get('ok'):
+        return {'error': r.get('error') or 'agen_gagal'}, 502
+    sekarang = int(time.time())
+    with _antivirus_tulis:
+        ulang = _ulang_baca()
+        ulang.setdefault(srv['host'], {}).setdefault('hasil', {}).update(
+            {p: dict(v, t=sekarang) for p, v in (r.get('hasil') or {}).items()})
+        tmp = ANTIVIRUS_ULANG.with_suffix('.tmp')
+        tmp.write_text(json.dumps(ulang, separators=(',', ':')))
+        tmp.replace(ANTIVIRUS_ULANG)
+    return {'ok': True, 'diperiksa': len(paths)}, 200
+
+
+def _ulang_jalan():
+    while True:
+        try:
+            key = ssh_key_file()
+            sidik = _sidik_agen()
+            ulang = _ulang_baca()
+            per_host = _ulang_paths()
+            for srv in _daftar_server() if key else []:
+                paths = sorted(per_host.get(srv['host']) or ())
+                u = ulang.get(srv['host']) or {}
+                sidik = _sidik_agen() + _rt_isi(srv['host'])[1]  # whitelist berubah → periksa ulang juga
+                lama = u.get('hasil') or {}
+                if not paths or (u.get('sidik') == sidik and time.time() - (u.get('t') or 0) < ULANG_SELANG
+                                 and all(x in lama for x in paths)):
+                    continue
+                r = _antivirus_satu(srv, key, {'aksi': 'periksa_ulang', 'paths': paths[:3000], 'putih': _putih_server(srv['host'])}, 180)
+                if not r.get('ok'):
+                    continue
+                sekarang = int(time.time())
+                ulang[srv['host']] = {'sidik': sidik, 't': sekarang,
+                                      'hasil': {p: dict(v, t=sekarang) for p, v in (r.get('hasil') or {}).items()}}
+                with _antivirus_tulis:
+                    tmp = ANTIVIRUS_ULANG.with_suffix('.tmp')
+                    tmp.write_text(json.dumps(ulang, separators=(',', ':')))
+                    tmp.replace(ANTIVIRUS_ULANG)
+            _besar_ulang(key)
+        except Exception as e:
+            print(f'antivirus periksa ulang: {e}', file=sys.stderr)
+        time.sleep(600)
+
+
+# Hash berkas besar yang sudah dicek manual asli (plugin premium tanpa API checksum, mis. bb-plugin vendor-bb-forms.js).
+# Berlaku semua server; berkas dengan sha256 + ukuran persis sama tidak masuk daftar "Dilewati karena besar".
+ANTIVIRUS_HASH_ASLI = ANTIVIRUS_DIR / 'hash-asli.json'  # {sha256: {ukuran, contoh, catatan, oleh, t}}
+
+
+def _hash_asli():
+    try:
+        return {k: v['ukuran'] for k, v in json.loads(ANTIVIRUS_HASH_ASLI.read_text()).items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def _besar_ulang(key):
+    if not key:
+        return
+    asli = _hash_asli()
+    # Daftar putih hash berubah → daftar besar dinilai ulang juga
+    sidik = _sidik_agen() + hashlib.sha256(json.dumps(asli, sort_keys=True).encode()).hexdigest()[:8]
+    data = _besar_ulang_baca()
+    per_host = {}
+    for j in antivirus_scan_daftar()['scan']:
+        if j.get('status') != 'selesai':
+            continue
+        try:
+            job = json.loads((ANTIVIRUS_DIR / 'scan' / f"{j['id']}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        per_host.setdefault(j['host'], set()).update(b['path'] for b in job.get('besar') or [] if b.get('path'))
+    for srv in _daftar_server():
+        paths = sorted(per_host.get(srv['host']) or ())
+        u = data.get(srv['host']) or {}
+        lama = u.get('hasil') or {}
+        # Berkas besar jarang berubah: ulang hanya bila agen berubah atau ada path baru
+        if not paths or (u.get('sidik') == sidik and all(x in lama for x in paths)):
+            continue
+        r = _antivirus_satu(srv, key, {'aksi': 'periksa_ulang', 'paths': paths[:3000], 'putih': _putih_server(srv['host']),
+                                       'asli': asli}, 1800, prioritas_rendah=True)
+        if not r.get('ok'):
+            print(f"antivirus periksa ulang besar {srv['name']}: {r.get('error')}", file=sys.stderr)
+            continue
+        sekarang = int(time.time())
+        data[srv['host']] = {'sidik': sidik, 't': sekarang,
+                             'hasil': {p: dict(v, t=sekarang) for p, v in (r.get('hasil') or {}).items()}}
+        with _antivirus_tulis:
+            tmp = ANTIVIRUS_BESAR_ULANG.with_suffix('.tmp')
+            tmp.write_text(json.dumps(data, separators=(',', ':')))
+            tmp.replace(ANTIVIRUS_BESAR_ULANG)
+
+
+def _scan_ringkas(job, aman=None, ulang=None):
+    """Job tanpa daftar temuan (untuk daftar scan); temuan yang ditandai aman / kini bersih tidak dihitung."""
+    out = {k: v for k, v in job.items() if k not in ('temuan', 'besar')}
+    t = [x for x in _temuan_kini(job, _temuan_aman(job, _aman_baca() if aman is None else aman), _ulang_baca() if ulang is None else ulang)
+         if not x.get('aman') and not x.get('kini')]
     out['jumlah_temuan'] = len(t)
     out['jumlah_virus'] = sum(1 for x in t if x.get('tingkat') == 'virus')
     return out
@@ -1054,8 +1465,13 @@ def _scan_simpan(job):
 
 def _scan_kerja(job, srv, key):
     batas_job = job.get('batas') or ANTIVIRUS_BATAS_SCAN
-    perintah = {'aksi': 'scan', 'akun': job['akun'], 'hari': job['hari'], 'batas': batas_job - 120, 'penuh': job.get('jadwal') == 'mingguan',
-                'aman': {p: e['sha256'] for p, e in _aman_baca().get(srv['host'], {}).items()}}
+    perintah = {'aksi': 'scan', 'akun': job['akun'], 'hari': job['hari'], 'batas': batas_job - 120, 'penuh': job.get('jadwal') == 'mingguan' or bool(job.get('penuh')),
+                'aman': {p: e['sha256'] for p, e in _aman_baca().get(srv['host'], {}).items()},
+                # Watcher realtime hidup → berkas sudah diperiksa saat ditulis; harian cukup DB & beranda
+                'berkas': not (job.get('jadwal') == 'harian' and realtime_aktif(srv['host'])),
+                'putih': _putih_server(srv['host']), 'asli': _hash_asli()}
+    if not perintah['berkas']:
+        job['ringan'] = True
     akhir = None
     try:
         cmd, masukan = _antivirus_ssh(srv, key, perintah, prioritas_rendah=True)
@@ -1085,20 +1501,28 @@ def _scan_kerja(job, srv, key):
     except ValueError:
         data = {'ok': False, 'error': 'dihentikan' if job.get('dihentikan') else (galat[-1][:200] if galat else 'tanpa_hasil')}
     if data.get('ok'):
-        job.update(status='selesai', temuan=data.pop('temuan', []), hasil=data)
+        job.update(status='selesai', temuan=data.pop('temuan', []), besar=data.pop('daftar_besar', []), hasil=data)
     else:
         job.update(status='gagal', error=data.get('error') or 'gagal', pesan=data.get('pesan'))
     _scan_simpan(job)
     with _scan_kunci:
         _scan_jalan.pop(job['id'], None)
+    ditindak = set()
+    if job['status'] == 'selesai':
+        try:
+            ditindak = _hitam_terapkan(srv, key, _temuan_aman(job, _aman_baca()), f"scan {job.get('jadwal') or 'oleh ' + str(job.get('oleh'))}")
+        except Exception as e:
+            print(f'ingat karantina: {e}', file=sys.stderr)
     if job.get('jadwal'):
         try:
-            _antivirus_notif(job)
+            _antivirus_notif(job, ditindak)
         except Exception as e:  # notifikasi gagal tak boleh mengganggu hasil scan
             print(f'antivirus notif gagal: {e}', file=sys.stderr)
+        if job['status'] == 'selesai' and server_judi.setelan_server(srv['host'])['aktif']:
+            server_judi.proses({**job, 'temuan': _temuan_aman(job, _aman_baca())}, srv)
 
 
-def _scan_mulai(srv, key, akun, hari, oleh, jadwal=None):
+def _scan_mulai(srv, key, akun, hari, oleh, jadwal=None, penuh=False):
     with _scan_kunci:
         if any(j['host'] == srv['host'] for j in _scan_jalan.values()):
             return None
@@ -1106,6 +1530,8 @@ def _scan_mulai(srv, key, akun, hari, oleh, jadwal=None):
                'akun': akun, 'hari': hari, 'oleh': oleh, 'mulai': int(time.time()), 'status': 'berjalan', 'kemajuan': None}
         if jadwal:
             job.update(jadwal=jadwal, batas=ANTIVIRUS_BATAS_MINGGUAN if jadwal == 'mingguan' else ANTIVIRUS_BATAS_SCAN)
+        elif penuh:  # full scan manual semua akun semua berkas: batas sama dengan mingguan
+            job.update(penuh=True, batas=ANTIVIRUS_BATAS_MINGGUAN)
         _scan_jalan[job['id']] = job
     _scan_simpan(job)  # tercatat walau layanan di-restart di tengah scan (tampil 'terputus')
     threading.Thread(target=_scan_kerja, args=(job, srv, key), daemon=True).start()
@@ -1161,6 +1587,9 @@ def _antivirus_jadwal_jalan():
                     j = data.get(srv['host']) or {}
                     # Minggu tanpa mingguan aktif → tetap jalankan harian
                     pakai = jenis if j.get(jenis) else ('harian' if jenis == 'mingguan' and j.get('harian') else None)
+                    # penuh_sekali = "YYYY-MM-DD": full scan sekali di jam jadwal hari itu, menggantikan harian
+                    if j.get('penuh_sekali') == tanda:
+                        pakai = 'mingguan'
                     if not pakai or not key or (j.get('terakhir') or {}).get(pakai) == tanda:
                         continue
                     job = _scan_mulai(srv, key, 'semua', 0 if pakai == 'mingguan' else 1, f'Jadwal {pakai}', pakai)
@@ -1168,6 +1597,8 @@ def _antivirus_jadwal_jalan():
                         with _antivirus_tulis:
                             data = _antivirus_jadwal_baca()
                             data.setdefault(srv['host'], {}).setdefault('terakhir', {})[pakai] = tanda
+                            if data[srv['host']].pop('penuh_sekali', None) == tanda:
+                                data[srv['host']]['terakhir']['harian'] = tanda
                             _antivirus_jadwal_tulis(data)
         except Exception as e:
             print(f'jadwal antivirus: {e}', file=sys.stderr)
@@ -1177,7 +1608,10 @@ def _antivirus_jadwal_jalan():
 def kirim_telegram_server(teks):
     """Kirim ke tim server (bot & daftar chat pemantau server); dipakai antivirus & CMS terjadwal."""
     env = dict(b.split('=', 1) for b in ANTIVIRUS_TG.read_text().splitlines() if '=' in b and not b.startswith('#'))
-    for chat in [c.strip() for c in env.get('TELEGRAM_CHAT_ID', '').split(',') if c.strip()]:
+    # Fungsi ini hanya dipakai VelocityGuard (antivirus, CMS, Judi AI, celah, positif palsu) → penerima khususnya ikut;
+    # program lain yang memakai berkas env sama (kasus support, pengawas server/IP LAN) hanya TELEGRAM_CHAT_ID
+    chat_id = env.get('TELEGRAM_CHAT_ID', '') + ',' + env.get('TELEGRAM_CHAT_ID_VELOCITYGUARD', '')
+    for chat in dict.fromkeys(c.strip() for c in chat_id.split(',') if c.strip()):
         data = urllib.parse.urlencode({'chat_id': chat, 'text': teks, 'parse_mode': 'HTML', 'disable_web_page_preview': 'true'}).encode()
         try:
             urllib.request.urlopen(f"https://api.telegram.org/bot{env['TELEGRAM_BOT_TOKEN']}/sendMessage", data, timeout=20).read()
@@ -1185,23 +1619,141 @@ def kirim_telegram_server(teks):
             print(f'telegram server {chat}: {e}', file=sys.stderr)
 
 
-def _antivirus_notif(job):
-    temuan = [t for t in _temuan_aman(job, _aman_baca()) if not t.get('aman')]
+def _antivirus_notif(job, lewati=()):
+    # lewati = path yang sudah dikarantina otomatis (ingat karantina, dikabarkan pesan sendiri)
+    temuan = [t for t in _temuan_aman(job, _aman_baca()) if not t.get('aman') and t.get('path') not in lewati]
     virus = [t for t in temuan if t.get('tingkat') == 'virus']
     nama = f"scan {job['jadwal']}"
     if job.get('status') != 'selesai':
-        teks = f"⚠️ <b>Antivirus {html.escape(job['server'])}</b>: {nama} gagal ({html.escape(str(job.get('error')))})."
+        teks = f"⚠️ <b>VelocityGuard · Antivirus {html.escape(job['server'])}</b>: {nama} gagal ({html.escape(str(job.get('error')))})."
     elif virus:
-        baris = [f"• <code>{html.escape(t['path'].replace('/home/', '', 1))}</code> — {html.escape(', '.join(x['id'] for x in t['tanda']))}" for t in virus[:10]]
-        if len(virus) > 10:
-            baris.append(f'… dan {len(virus) - 10} lagi')
-        teks = '\n'.join([f"🦠 <b>Virus di {html.escape(job['server'])}</b> ({nama})",
-                          f"{len(virus)} virus, {len(temuan) - len(virus)} curiga", ''] + baris +
-                         ['', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(job['server'])}",
+        teks = '\n'.join([f"🦠 <b>VelocityGuard · Virus di {html.escape(job['server'])}</b> ({nama})",
+                          f"{len(virus)} virus, {len(temuan) - len(virus)} curiga",
+                          '', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(job['server'])}",
                           'Belum ada berkas yang diubah — karantina manual dari dashboard.'])
     else:
         return
     kirim_telegram_server(teks)
+
+
+# Realtime: watcher fanotify di server (scripts/velocity_av_realtime.py, dipasang velocity-av-realtime-pasang).
+# Tiap REALTIME_SELANG temuan baru ditarik lewat agen aksi `realtime` → job "Realtime" per server per hari
+# (id <tgl>-000000-<sha1 host>, ikut daftar scan & "Semua scan"), virus → Telegram tim server.
+ANTIVIRUS_REALTIME = ANTIVIRUS_DIR / 'realtime.json'  # {host: {aktif, detak, offset, diambil, galat}}
+REALTIME_SELANG = 120
+REALTIME_CEK_MATI = 600  # server tanpa watcher dicek tiap 10 mnt (terlihat tak lama sesudah dipasang)
+REALTIME_BASI = 900  # detak lebih tua → dianggap mati, scan harian kembali memeriksa berkas
+
+
+def _realtime_baca():
+    try:
+        return json.loads(ANTIVIRUS_REALTIME.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def realtime_aktif(host):
+    r = _realtime_baca().get(host) or {}
+    return r.get('aktif') == 'active' and time.time() - ((r.get('detak') or {}).get('t') or 0) < REALTIME_BASI
+
+
+def _realtime_job(srv, temuan):
+    sid = f"{time.strftime('%Y%m%d')}-000000-{hashlib.sha1(srv['host'].encode()).hexdigest()[:6]}"
+    try:
+        job = json.loads((ANTIVIRUS_DIR / 'scan' / f'{sid}.json').read_text())
+    except (OSError, ValueError):
+        job = {'id': sid, 'host': srv['host'], 'server': srv['name'], 'akun': 'realtime', 'hari': 0, 'oleh': 'Realtime',
+               'status': 'selesai', 'temuan': [], 'besar': [], 'hasil': {'ok': True, 'akun': 'realtime', 'hari': 0}}
+    indeks = {t['path']: i for i, t in enumerate(job['temuan'])}
+    for t in temuan:
+        if t['path'] in indeks:
+            job['temuan'][indeks[t['path']]] = t
+        else:
+            indeks[t['path']] = len(job['temuan'])
+            job['temuan'].append(t)
+    # mulai = event terakhir: karantina sesudahnya menyembunyikan temuan di "Semua scan", infeksi ulang muncul lagi
+    job['mulai'] = job['selesai'] = max([job.get('selesai') or 0] + [t.get('t') or 0 for t in temuan])
+    _scan_simpan(job)
+
+
+def _rt_dorong(srv, key, sha_server=None):
+    """Kirim setelan.json ke watcher bila isinya beda dengan yang dipakai server (dibaca watcher tiap 60 dtk)."""
+    isi, sha = _rt_isi(srv['host'])
+    if sha_server == sha:
+        return {'ok': True, 'sama': True}
+    return _antivirus_satu(srv, key, {'aksi': 'realtime_setelan', 'isi': isi}, 60)
+
+
+def antivirus_realtime_atur(payload):
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
+    if not oleh:
+        return {'error': 'invalid_oleh'}, 400
+    srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}, 400
+    mode = payload.get('mode')
+    if mode not in ('laporan', 'otomatis'):
+        return {'error': 'mode_tidak_sah'}, 400
+    with _antivirus_tulis:
+        data = _rt_setelan_baca()
+        data.setdefault(srv['host'], {})['mode'] = mode
+        _rt_setelan_tulis(data)
+        with ANTIVIRUS_RIWAYAT.open('a') as f:
+            f.write(json.dumps({'t': int(time.time()), 'oleh': oleh, 'aksi': 'realtime_mode', 'server': srv['name'],
+                                'host': srv['host'], 'alasan': f'karantina otomatis {mode}', 'ok': True}, separators=(',', ':')) + '\n')
+    key = ssh_key_file()
+    r = _rt_dorong(srv, key) if key and realtime_aktif(srv['host']) else {'ok': True}
+    return {'ok': True, 'setelan': _rt_setelan(srv['host']), 'terkirim': bool(r.get('ok'))}, 200
+
+
+def _rt_setelan_tulis(data):
+    ANTIVIRUS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = ANTIVIRUS_RT_SETELAN.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, separators=(',', ':')))
+    tmp.replace(ANTIVIRUS_RT_SETELAN)
+
+
+def _realtime_sinkron():
+    while True:
+        try:
+            key = ssh_key_file()
+            data = _realtime_baca()
+            for srv in _daftar_server() if key else []:
+                st = data.setdefault(srv['host'], {})
+                sekarang = time.time()
+                if st.get('aktif') != 'active' and sekarang - (st.get('diambil') or 0) < REALTIME_CEK_MATI:
+                    continue
+                r = _antivirus_satu(srv, key, {'aksi': 'realtime', 'offset': st.get('offset') or 0}, 60)
+                st['diambil'] = int(sekarang)
+                if not r.get('ok'):
+                    st['galat'] = r.get('error')
+                    continue
+                st.update(aktif=r.get('aktif'), detak=r.get('detak'), offset=r.get('offset') or 0, galat=None)
+                if r.get('aktif') == 'active':
+                    _rt_dorong(srv, key, (r.get('detak') or {}).get('setelan'))
+                baru = [t for t in r.get('temuan') or [] if not t.get('path', '').startswith('/home/velocity-av-uji/')]
+                if not baru:
+                    continue
+                _realtime_job(srv, baru)
+                ditindak = set()
+                try:
+                    ditindak = _hitam_terapkan(srv, key, _temuan_aman({'host': srv['host'], 'temuan': baru}, _aman_baca()), 'realtime')
+                except Exception as e:
+                    print(f'ingat karantina realtime: {e}', file=sys.stderr)
+                try:
+                    otomatis = [t for t in baru if (t.get('karantina') or {}).get('ok')]
+                    _antivirus_notif({'host': srv['host'], 'server': srv['name'], 'status': 'selesai', 'temuan': baru,
+                                      'jadwal': f'realtime · {len(otomatis)} dikarantina otomatis' if otomatis else 'realtime'}, ditindak)
+                except Exception as e:
+                    print(f'antivirus realtime notif: {e}', file=sys.stderr)
+            with _antivirus_tulis:
+                ANTIVIRUS_DIR.mkdir(parents=True, exist_ok=True)
+                tmp = ANTIVIRUS_REALTIME.with_suffix('.tmp')
+                tmp.write_text(json.dumps(data, separators=(',', ':')))
+                tmp.replace(ANTIVIRUS_REALTIME)
+        except Exception as e:
+            print(f'antivirus realtime: {e}', file=sys.stderr)
+        time.sleep(REALTIME_SELANG)
 
 
 def antivirus_scan_mulai(payload):
@@ -1218,12 +1770,15 @@ def antivirus_scan_mulai(payload):
         hari = int(payload.get('hari') or 0)
     except (TypeError, ValueError):
         hari = -1
-    if hari not in ANTIVIRUS_HARI or (akun == 'semua' and hari == 0):
+    penuh = payload.get('penuh') is True and akun == 'semua'
+    if penuh:
+        hari = 0
+    if hari not in ANTIVIRUS_HARI or (akun == 'semua' and hari == 0 and not penuh):
         return {'error': 'hari_tidak_sah'}, 400
     key = ssh_key_file()
     if not key:
         return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
-    job = _scan_mulai(srv, key, akun, hari, oleh)
+    job = _scan_mulai(srv, key, akun, hari, oleh, penuh=penuh)
     if not job:
         return {'error': 'scan_sedang_jalan'}, 409
     return _scan_ringkas(job), 200
@@ -1245,6 +1800,7 @@ def antivirus_scan_henti(payload):
 def antivirus_scan_daftar(batas=60):
     out = []
     aman = _aman_baca()
+    ulang = _ulang_baca()
     try:
         berkas = sorted((ANTIVIRUS_DIR / 'scan').glob('*.json'), reverse=True)[:batas]
     except OSError:
@@ -1257,7 +1813,7 @@ def antivirus_scan_daftar(batas=60):
             continue
         if job.get('status') == 'berjalan' and not jalan:
             job = {**job, 'status': 'gagal', 'error': 'terputus'}
-        out.append(_scan_ringkas(job, aman))
+        out.append(_scan_ringkas(job, aman, ulang))
     return {'scan': out}
 
 
@@ -1270,13 +1826,33 @@ def antivirus_scan_detail(sid):
         job = json.loads((ANTIVIRUS_DIR / 'scan' / f'{sid}.json').read_text())
     except (OSError, ValueError):
         return {'error': 'scan_tidak_ada'}
-    job['temuan'] = _temuan_aman(job, _aman_baca())
+    job['temuan'] = _temuan_kini(job, _temuan_aman(job, _aman_baca()), _ulang_baca())
+    _besar_kini(job, _besar_ulang_baca())
     return {**job, 'status': 'gagal', 'error': 'terputus'} if job.get('status') == 'berjalan' else job
+
+
+def antivirus_scan_gabung(host):
+    """Temuan semua scan selesai satu server jadi satu job (path sama → scan terbaru), tanpa berkas yang
+    dikarantina sesudah scan penemunya. Dipakai Judi AI "nilai semua yang belum ditangani"."""
+    srv_av = next((s for s in (server_antivirus().get('servers') or []) if s.get('host') == host), {})
+    dikarantina = {k.get('path'): k.get('waktu') or 0 for k in srv_av.get('karantina') or []}
+    temuan, n = {}, 0
+    for j in antivirus_scan_daftar()['scan']:  # terbaru dulu
+        if j.get('host') != host or j.get('status') != 'selesai':
+            continue
+        d = antivirus_scan_detail(j['id'])
+        n += 1
+        for t in d.get('temuan') or []:
+            if t.get('path') not in temuan and not t.get('kini') and not dikarantina.get(t.get('path'), 0) > d.get('mulai', 0):
+                temuan[t['path']] = t
+    if not n:
+        return {'error': 'scan_tidak_ada'}
+    return {'id': 'semua', 'host': host, 'status': 'selesai', 'gabung': n, 'temuan': list(temuan.values())}
 
 
 def antivirus_aksi(payload):
     aksi = payload.get('aksi')
-    if aksi not in ('karantina', 'kembalikan', 'hapus', 'aman', 'batal_aman'):
+    if aksi not in ('karantina', 'kembalikan', 'hapus', 'aman', 'batal_aman', 'putih', 'batal_putih', 'laporan_fp', 'bersihkan_wp', 'lupakan'):
         return {'error': 'aksi_tidak_dikenal'}, 400
     oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
     if not oleh:
@@ -1288,31 +1864,138 @@ def antivirus_aksi(payload):
     if not key:
         return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
     perintah = {'aksi': aksi, 'oleh': oleh}
+    if aksi == 'lupakan':  # keluarkan satu sha dari daftar ingat karantina (tanpa SSH)
+        sha = str(payload.get('sha256') or '')
+        h = _hitam_baca().get(sha)
+        if not h:
+            return {'ok': False, 'error': 'bukan_hitam'}, 200
+        _hitam_ubah(buang=[sha])
+        with _antivirus_tulis, ANTIVIRUS_RIWAYAT.open('a') as f:
+            f.write(json.dumps({'t': int(time.time()), 'oleh': oleh, 'aksi': 'lupakan', 'server': h.get('server'), 'host': h.get('host'),
+                                'path': h.get('path'), 'alasan': f"sha256 {sha[:12]}… {str(payload.get('alasan') or '')[:150]}".strip(),
+                                'ok': True}, separators=(',', ':')) + '\n')
+        return {'ok': True, 'path': h.get('path')}, 200
+    if aksi in ('putih', 'batal_putih', 'laporan_fp'):
+        return _antivirus_putih_fp(srv, key, aksi, payload, oleh)
     if aksi in ('aman', 'batal_aman'):
         perintah['path'] = str(payload.get('path') or '')
         perintah['alasan'] = str(payload.get('alasan') or '')[:200]
-        hasil = _antivirus_tandai(srv, key, aksi, perintah['path'], oleh, perintah['alasan'])
+        hasil = _antivirus_tandai(srv, key, aksi, perintah['path'], oleh, perintah['alasan'], str(payload.get('sha256') or ''))
     elif aksi == 'karantina':
         perintah['path'] = str(payload.get('path') or '')
         perintah['alasan'] = str(payload.get('alasan') or '')[:200]
+    elif aksi == 'bersihkan_wp':
+        hapus_user = payload.get('hapus_user') or []
+        turunkan_user = payload.get('turunkan_user') or []
+        if not all(isinstance(d, list) and len(d) <= 50 and all(str(x).isdigit() for x in d) for d in (hapus_user, turunkan_user)):
+            return {'error': 'id_user_tidak_sah'}, 400
+        perintah.update(akar=str(payload.get('akar') or ''), hapus_user=[int(x) for x in hapus_user],
+                        turunkan_user=[int(x) for x in turunkan_user],
+                        plugin=bool(payload.get('plugin')), salt=bool(payload.get('salt')))
+        perintah['path'] = perintah['akar']
     else:
         perintah['id'] = str(payload.get('id') or '')
     if aksi not in ('aman', 'batal_aman'):
-        hasil = _antivirus_satu(srv, key, perintah, 60)
+        # mysqldump users/usermeta bisa lama di situs besar
+        hasil = _antivirus_satu(srv, key, perintah, 360 if aksi == 'bersihkan_wp' else 60)
+    if hasil.get('ok') and aksi == 'karantina':
+        _hitam_ubah({hasil.get('sha256'): _hitam_info(srv, hasil.get('path') or perintah['path'], oleh, perintah['alasan'])})
+    elif hasil.get('ok') and aksi == 'kembalikan':
+        _hitam_ubah(buang=[hasil.get('sha256')])
+    elif aksi == 'bersihkan_wp':
+        _hitam_ubah({k.get('sha256'): _hitam_info(srv, k['path'], oleh, 'Bersihkan WP: ' + ', '.join(k.get('tanda') or []))
+                     for k in hasil.get('karantina') or [] if k.get('ok')})
+    if aksi == 'bersihkan_wp':
+        perintah['alasan'] = (f"hapus {len(hasil.get('hapus_user') or [])} admin, jadi subscriber {len(hasil.get('turun_user') or [])}, karantina {len(hasil.get('karantina') or [])} berkas, "
+                              f"salt {hasil.get('salt') or 0}/8 · cadangan {hasil.get('cadangan') or '-'}")
     with _antivirus_tulis:
         ANTIVIRUS_DIR.mkdir(parents=True, exist_ok=True)
         with ANTIVIRUS_RIWAYAT.open('a') as f:
             f.write(json.dumps({'t': int(time.time()), 'oleh': oleh, 'aksi': aksi, 'server': srv['name'], 'host': srv['host'],
                                 'path': hasil.get('path') or perintah.get('path'), 'id': hasil.get('id') or perintah.get('id'),
-                                'alasan': perintah.get('alasan'), 'ok': bool(hasil.get('ok')), 'error': hasil.get('error')},
+                                'alasan': perintah.get('alasan'), 'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
+                                **({'hapus_user': [u.get('id') for u in hasil.get('hapus_user') or []],
+                                    'turun_user': [u.get('id') for u in hasil.get('turun_user') or []]} if aksi == 'bersihkan_wp' and hasil.get('ok') else {})},
                                separators=(',', ':')) + '\n')
     _cache_antivirus.hapus()
     return hasil, 200
 
 
-def _antivirus_tandai(srv, key, aksi, path, oleh, alasan):
-    """Tandai/batalkan aman. sha256 diambil langsung dari server saat ditandai (isi yang dicek user)."""
-    if aksi == 'aman':
+def _antivirus_putih_fp(srv, key, aksi, payload, oleh):
+    """putih: whitelist berkas/folder (+ kembalikan dari karantina bila `id`); batal_putih; laporan_fp: catat laporan
+    positif palsu (Telegram tim server) + kembalikan + tandai aman (terikat isi berkas)."""
+    path = str(payload.get('path') or '')
+    kid = str(payload.get('id') or '')
+    alasan = str(payload.get('alasan') or '')[:300]
+    hasil = {'ok': True, 'path': path}
+    if aksi == 'putih':
+        jenis = 'folder' if payload.get('jenis') == 'folder' else 'berkas'
+        if jenis == 'folder':
+            path = path.rstrip('/')
+        bagian = path.split('/')
+        # Folder minimal /home/<akun>/domains/<domain>/<sesuatu> — tidak boleh seluruh akun/domain
+        if not path.startswith('/home/') or '..' in bagian or len(bagian) < (7 if jenis == 'folder' else 6) or bagian[3] != 'domains':
+            return {'ok': False, 'error': 'path_tidak_sah'}, 200
+        if kid:
+            hasil = _antivirus_satu(srv, key, {'aksi': 'kembalikan', 'id': kid, 'oleh': oleh}, 60)
+            if not hasil.get('ok'):
+                return hasil, 200
+            _hitam_ubah(buang=[hasil.get('sha256')])
+        with _antivirus_tulis:
+            data = _rt_setelan_baca()
+            st = data.setdefault(srv['host'], {})
+            st['putih'] = [w for w in st.get('putih') or [] if w['path'] != path] + [
+                {'path': path, 'jenis': jenis, 'oleh': oleh, 't': int(time.time()), 'alasan': alasan}]
+            _rt_setelan_tulis(data)
+    elif aksi == 'batal_putih':
+        with _antivirus_tulis:
+            data = _rt_setelan_baca()
+            st = data.setdefault(srv['host'], {})
+            sisa = [w for w in st.get('putih') or [] if w['path'] != path]
+            if len(sisa) == len(st.get('putih') or []):
+                return {'ok': False, 'error': 'bukan_putih'}, 200
+            st['putih'] = sisa
+            _rt_setelan_tulis(data)
+    else:  # laporan_fp
+        r = _antivirus_satu(srv, key, {'aksi': 'baca', 'id': kid}, 60) if kid else {}
+        meta = {'path': r.get('path') or path, 'sha256': r.get('sha256') or payload.get('sha256'), 'alasan_deteksi': payload.get('tanda') or ''}
+        if kid:
+            hasil = _antivirus_satu(srv, key, {'aksi': 'kembalikan', 'id': kid, 'oleh': oleh}, 60)
+            if not hasil.get('ok'):
+                return hasil, 200
+            path = hasil.get('path') or meta['path']
+        _hitam_ubah(buang=[meta['sha256'], hasil.get('sha256')])
+        tandai = _antivirus_tandai(srv, key, 'aman', path, oleh, f'positif palsu: {alasan}'[:200], str(payload.get('sha256') or ''))
+        with _antivirus_tulis, ANTIVIRUS_FP.open('a') as f:
+            f.write(json.dumps({'t': int(time.time()), 'host': srv['host'], 'server': srv['name'], 'oleh': oleh,
+                                'catatan': alasan, **meta}, separators=(',', ':')) + '\n')
+        try:
+            kirim_telegram_server(f"🟡 <b>VelocityGuard · Laporan positif palsu {html.escape(srv['name'])}</b> oleh {html.escape(oleh)}\n"
+                                  f"<code>{html.escape(path.replace('/home/', '', 1))}</code>\nAturan: {html.escape(str(meta['alasan_deteksi']))}\n"
+                                  f"Catatan: {html.escape(alasan or '-')}\nBerkas dikembalikan & ditandai aman — perbaiki aturan VD.*.")
+        except Exception as e:
+            print(f'telegram fp: {e}', file=sys.stderr)
+        hasil = {'ok': bool(tandai.get('ok')), 'path': path, 'error': tandai.get('error')}
+    with _antivirus_tulis:
+        with ANTIVIRUS_RIWAYAT.open('a') as f:
+            f.write(json.dumps({'t': int(time.time()), 'oleh': oleh, 'aksi': aksi, 'server': srv['name'], 'host': srv['host'],
+                                'path': path, 'id': kid or None, 'alasan': alasan or (payload.get('jenis') if aksi == 'putih' else None),
+                                'ok': bool(hasil.get('ok')), 'error': hasil.get('error')}, separators=(',', ':')) + '\n')
+    if aksi != 'laporan_fp' and realtime_aktif(srv['host']):
+        threading.Thread(target=_rt_dorong, args=(srv, key), daemon=True).start()
+    _cache_antivirus.hapus()
+    return hasil, 200
+
+
+def _antivirus_tandai(srv, key, aksi, path, oleh, alasan, sha_db=''):
+    """Tandai/batalkan aman. sha256 diambil langsung dari server saat ditandai (isi yang dicek user).
+    Temuan database (`<akar>#db:<tabel>:<id>`) tak bisa dibaca agen → sha256 dari temuan scan (sha isi entri)."""
+    if aksi == 'aman' and '#db:' in path:
+        if not re.fullmatch(r'[0-9a-f]{64}', sha_db or ''):
+            return {'ok': False, 'error': 'sha_tidak_sah', 'path': path}
+        r = {'path': path}
+        entri = {'sha256': sha_db, 'mtime': None, 'ukuran': None, 'oleh': oleh, 'waktu': int(time.time()), 'alasan': alasan}
+    elif aksi == 'aman':
         r = _antivirus_satu(srv, key, {'aksi': 'baca', 'path': path}, 60)
         if not r.get('ok'):
             return {'ok': False, 'error': r.get('error') or 'gagal', 'path': path}
@@ -1328,6 +2011,8 @@ def _antivirus_tandai(srv, key, aksi, path, oleh, alasan):
         tmp = ANTIVIRUS_AMAN.with_suffix('.tmp')
         tmp.write_text(json.dumps(aman, separators=(',', ':')))
         tmp.replace(ANTIVIRUS_AMAN)
+    if aksi == 'aman':
+        _hitam_ubah(buang=[entri['sha256']])
     return {'ok': True, 'path': path}
 
 
@@ -1492,7 +2177,7 @@ BFM_RIWAYAT = BFM_DIR / 'riwayat.jsonl'
 BFM_SETELAN = BFM_DIR / 'setelan.json'
 BFM_TTL = 300
 BFM_ATURAN = {  # kunci → (label, ambang bawaan, durasi bawaan detik [1 = permanen], aktif bawaan)
-    'berat': ('Eksploit berat (.env, wp-config, dump, traversal)', 3, 1, True),
+    'berat': ('Eksploit berat (.env, wp-config, dump, traversal, xmlrpc multicall)', 3, 1, True),
     'eksploit': ('Eksploit & probe', 5, 86400, True),
     'bot': ('Scanner / bot jahat', 10, 86400, True),
     'crawler': ('Crawler SEO', 30, 21600, False),  # kunci lama dipertahankan agar setelan.json tetap berlaku
@@ -1660,13 +2345,22 @@ def bfm_riwayat(batas=300):
 import server_cms  # noqa: E402
 import sesi_dash  # noqa: E402
 server_cms.pasang(lambda: _daftar_server(), lambda: ssh_key_file(), kirim_telegram_server)
+# Judi AI: penilai temuan judi sesudah scan antivirus terjadwal (tab Judi AI), logika di services/server_judi.py
+import server_judi  # noqa: E402
+server_judi.pasang(lambda: _daftar_server(), lambda: ssh_key_file(), kirim_telegram_server, _antivirus_satu)
+# Deteksi lonjakan request per domain + penilaian AI (mode deteksi), logika di services/server_lonjakan.py
+import server_lonjakan  # noqa: E402
+server_lonjakan.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
+# VelocityGuard: laporan celah harian, kandidat virtual patch, catatan insiden (services/velocityguard.py)
+import velocityguard  # noqa: E402
+velocityguard.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
 
 
 # Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h).
 # Data dicatat scripts/server-usage-catat (timer 5 mnt); dirata-rata per ember agar ±300 titik per server.
 USAGE_RIWAYAT = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
 RENTANG_USAGE = {'1j': (3600, 300), '24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200)}
-USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out')
+USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out', 'suhu')
 
 
 _riwayat_cache = {}
@@ -1738,8 +2432,9 @@ def _riwayat_urai(rentang):
 
 
 # Sampel pemakaian satu server (dipakai scripts/server-usage-catat tiap 5 mnt & mode Live /api/servers/live).
-# RESOURCE_CMD + baris tambahan, hanya baca: /proc, df, .rtreport LiteSpeed, ss.
+# RESOURCE_CMD + baris tambahan, hanya baca: /proc, df, .rtreport LiteSpeed, ss, sensor suhu CPU (hwmon).
 USAGE_CMD = RESOURCE_CMD + r'''
+for h in /sys/class/hwmon/hwmon*; do case "$(cat $h/name 2>/dev/null)" in coretemp|k10temp|zenpower) cat $h/temp*_input 2>/dev/null;; esac; done | sort -n | tail -1 | sed 's/^/T /'
 rt=/tmp/lshttpd/.rtreport; [ -r $rt ] && { echo "W $(grep -m1 '^REQ_RATE \[\]' $rt)"; echo "K $(grep -m1 '^MAXCONN' $rt)"; }
 echo "E $(ss -Htn state established '( sport = :80 or sport = :443 )' 2>/dev/null | wc -l)"
 dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p'); [ -n "$dev" ] && echo "N $(grep -E "^ *$dev:" /proc/net/dev | tr ':' ' ')"
@@ -1768,6 +2463,8 @@ def usage_sampel(srv, key):
                     out['conn'] = int(plain.group(1)) + int(ssl.group(1))
             elif kode == 'E':
                 out['established'] = int(isi.strip() or 0)
+            elif kode == 'T':
+                out['suhu'] = round(int(isi) / 1000, 1)  # inti CPU terpanas, °C
             elif kode == 'N':
                 p = isi.split()  # iface rx_bytes … (kolom ke-9 dari data = tx_bytes)
                 out['net'] = {'rx': int(p[1]), 'tx': int(p[9])}
@@ -1781,7 +2478,7 @@ def usage_titik(r):
     """Kolom riwayat dari hasil usage_sampel (tanpa net_in/net_out: butuh selisih counter)."""
     return dict(cpu=r.get('cpu'), ram=(r.get('ram') or {}).get('persen'), swap=(r.get('swap') or {}).get('persen'),
                 disk=max((d['persen'] for d in r.get('disks') or []), default=None), load=(r.get('load') or [None])[0],
-                core=r.get('cpu_core'), req=r.get('req'), conn=r.get('conn', r.get('established')))
+                core=r.get('cpu_core'), req=r.get('req'), conn=r.get('conn', r.get('established')), suhu=r.get('suhu'))
 
 
 def usage_net(net, lama, now, maks_dt):
@@ -3020,6 +3717,8 @@ def set_ai_pemakaian(peran, model_id):
     model_id = str(model_id or '')
     if model_id and not any(m.get('id') == model_id for m in data.get('models', [])):
         return None, 'model_not_found'
+    if peran == 'judi' and model_id and not next(m for m in data['models'] if m.get('id') == model_id).get('endpoint'):
+        return None, 'model_tanpa_endpoint'  # server_judi memanggil /chat/completions langsung
     pemakaian = {k: v for k, v in (data.get('pemakaian') or {}).items() if v}
     if model_id:
         pemakaian[peran] = model_id
@@ -3484,6 +4183,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _preview_setuju(self, parsed, payload):
+        """Tombol "Setuju" klien di halaman preview velocity.ai.id (publik, tanpa login): hanya kode preview
+        acak yang dikirim PM ke klien yang bisa dipakai (laravel_proyek.setuju_klien)."""
+        kode = (parse_qs(parsed.query).get('kode') or [''])[0]
+        try:
+            self._send_json(laravel_proyek.setuju_klien(kode, payload, rate_ip(self)))
+        except ValueError as e:
+            self._send_json({'error': str(e)}, laravel_proyek.KODE_GALAT.get(str(e), 400))
+
     def do_GET(self):
         ip = client_ip(self) or 'unknown'
         parsed = urlparse(self.path)
@@ -3494,12 +4202,15 @@ class Handler(BaseHTTPRequestHandler):
         baca_bagan = path == '/api/installer' and 'domain' in parse_qs(parsed.query)
         # Halaman project Laravel memantau log & status tiap 2-3 detik selama agen/installer berjalan
         baca_bagan = baca_bagan or path.startswith('/api/laravel/p/')
-        if not baca_bagan and not _rate_ok(rate_ip(self)):
+        if not baca_bagan and not _lolos_batas(self):
             self._send_json({'error': 'rate_limited'}, 429)
             return
 
         if path == '/health':
             self._send_json({'status': 'ok'})
+            return
+        if path == '/api/preview-setuju':
+            self._preview_setuju(parsed, None)
             return
         if path == '/api/servers':
             if not _check_auth(self):
@@ -3547,6 +4258,8 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(parsed.query)
             if path == '/api/servers/antivirus':
                 self._send_json({**server_antivirus('segar' in q), 'aman': _aman_baca(), 'jadwal': _antivirus_jadwal_baca(),
+                                 'realtime': _realtime_baca(), 'hitam': _hitam_baca(),
+                                 'sidik_agen': _sidik_agen(), 'rt_setelan': _rt_setelan_baca(),
                                  'jam_jadwal': '%02d:%02d' % ANTIVIRUS_JAM_JADWAL})
             elif path == '/api/servers/antivirus/scan':
                 sid = (q.get('id') or [''])[0]
@@ -3555,6 +4268,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(antivirus_baca(*((q.get(k) or [''])[0] for k in ('server', 'path', 'id'))))
             else:
                 self._send_json(antivirus_riwayat())
+            return
+        if path in ('/api/servers/guard/celah', '/api/servers/guard/insiden'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            if path == '/api/servers/guard/insiden':
+                self._send_json(velocityguard.insiden())
+            else:
+                self._send_json(velocityguard.celah((parse_qs(parsed.query).get('tanggal') or [''])[0]))
+            return
+        if path == '/api/servers/lonjakan':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_lonjakan.riwayat((parse_qs(parsed.query).get('server') or [''])[0]))
+            return
+        if path == '/api/servers/judi':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_judi.ringkasan((parse_qs(parsed.query).get('server') or [''])[0]))
             return
         if path in ('/api/servers/cms', '/api/servers/cms/riwayat'):
             if not _check_auth(self):
@@ -3735,21 +4469,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         ip = client_ip(self) or 'unknown'
-        if not _rate_ok(rate_ip(self)):
+        if not _lolos_batas(self):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
+        if path == '/api/preview-setuju':
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                payload = json.loads(self.rfile.read(min(max(length, 0), 4096)) or b'{}')
+            except (ValueError, OSError):
+                payload = None
+            if not isinstance(payload, dict):
+                self._send_json({'error': 'invalid_json'}, 400)
+                return
+            self._preview_setuju(urlparse(self.path), payload)
+            return
         # Check allowed paths (including dynamic ones)
         allowed_static = ('/api/installer/run', '/api/installer/generate', '/api/installer/claim',
                           '/api/installer/release', '/api/packages/sync',
                           '/api/servers', '/api/servers/delete', '/api/servers/default', '/api/servers/test',
                           '/api/servers/firewall/aksi',
                           '/api/servers/antivirus/scan', '/api/servers/antivirus/henti', '/api/servers/antivirus/aksi',
-                          '/api/servers/antivirus/jadwal',
+                          '/api/servers/antivirus/jadwal', '/api/servers/antivirus/realtime', '/api/servers/antivirus/cek_ulang',
+                          '/api/servers/judi/setelan', '/api/servers/judi/nilai', '/api/servers/judi/aksi', '/api/servers/judi/henti', '/api/servers/judi/bersihkan',
                           '/api/servers/waf/aksi', '/api/servers/waf/setelan',
                           '/api/servers/bfm/aksi', '/api/servers/bfm/setelan',
                           '/api/servers/cms/scan',
-                          '/api/servers/cms/jadwal',
+                          '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek',
+                          '/api/servers/guard/celah/scan', '/api/servers/guard/insiden',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
         is_allowed = path in allowed_static or path.startswith('/api/ai/models/') or path.startswith('/api/laravel/')
@@ -3839,17 +4586,44 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
                 fn = {'/api/servers/antivirus/scan': antivirus_scan_mulai, '/api/servers/antivirus/henti': antivirus_scan_henti,
-                      '/api/servers/antivirus/aksi': antivirus_aksi, '/api/servers/antivirus/jadwal': antivirus_jadwal_atur}[path]
+                      '/api/servers/antivirus/aksi': antivirus_aksi, '/api/servers/antivirus/jadwal': antivirus_jadwal_atur,
+                      '/api/servers/antivirus/realtime': antivirus_realtime_atur,
+                      '/api/servers/antivirus/cek_ulang': antivirus_cek_ulang}[path]
                 obj, kode = fn(payload)
                 self._send_json(obj, kode)
                 return
-            if path in ('/api/servers/cms/scan', '/api/servers/cms/jadwal'):
-                # Scan hanya membaca server (SSH ke semua server hosting): Origin tetap wajib sama dengan Host
+            if path.startswith('/api/servers/judi/'):
+                # Suspend akun & karantina di server produksi: Origin wajib sama dengan Host
                 origin = urlparse(self.headers.get('Origin') or '').netloc
                 if origin and origin != (self.headers.get('Host') or ''):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
-                obj, kode = (server_cms.scan_mulai if path == '/api/servers/cms/scan' else server_cms.jadwal_atur)(payload)
+                if path == '/api/servers/judi/nilai':
+                    obj, kode = server_judi.nilai_mulai(payload, lambda sid: antivirus_scan_gabung(payload.get('server'))
+                                                        if sid == 'semua' else antivirus_scan_detail(sid))
+                else:
+                    obj, kode = {'/api/servers/judi/setelan': server_judi.setelan_atur,
+                                 '/api/servers/judi/henti': server_judi.henti,
+                                 '/api/servers/judi/bersihkan': server_judi.bersihkan_riwayat}.get(path, server_judi.aksi)(payload)
+                self._send_json(obj, kode)
+                return
+            if path in ('/api/servers/guard/celah/scan', '/api/servers/guard/insiden'):
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = (velocityguard.celah_mulai if path == '/api/servers/guard/celah/scan' else velocityguard.insiden_simpan)(payload)
+                self._send_json(obj, kode)
+                return
+            if path in ('/api/servers/cms/scan', '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek'):
+                # Scan hanya membaca server; perbaiki MENGUBAH situs klien (update plugin/tema/inti). Origin wajib = Host
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = {'/api/servers/cms/scan': server_cms.scan_mulai, '/api/servers/cms/jadwal': server_cms.jadwal_atur,
+                             '/api/servers/cms/perbaiki': server_cms.perbaiki_mulai,
+                             '/api/servers/cms/perbaiki/cek': server_cms.perbaiki_cek}[path](payload)
                 self._send_json(obj, kode)
                 return
             if path.startswith('/api/servers/bfm/'):
@@ -4010,7 +4784,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         ip = client_ip(self) or 'unknown'
-        if not _rate_ok(rate_ip(self)):
+        if not _lolos_batas(self):
             self._send_json({'error': 'rate_limited'}, 429)
             return
         path = urlparse(self.path).path
@@ -4049,6 +4823,11 @@ if __name__ == '__main__':
             except Exception:
                 pass
     threading.Thread(target=panaskan, daemon=True).start()
+    _scan_yatim()
     threading.Thread(target=_antivirus_jadwal_jalan, daemon=True).start()
+    threading.Thread(target=_realtime_sinkron, daemon=True).start()
+    threading.Thread(target=_ulang_jalan, daemon=True).start()
     threading.Thread(target=server_cms.jadwal_jalan, daemon=True).start()
+    threading.Thread(target=velocityguard.jadwal_jalan, daemon=True).start()
+    threading.Thread(target=server_lonjakan.jalan, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', 9121), Handler).serve_forever()

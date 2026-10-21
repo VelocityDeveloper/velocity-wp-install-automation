@@ -7,7 +7,7 @@ Description: Block theme (Full Site Editing) bawaan installer Velocity untuk pak
 Requires at least: 6.6
 Tested up to: 7.1
 Requires PHP: 7.4
-Version: 1.29.0
+Version: 1.29.1
 License: GPLv2 or later
 Text Domain: velocity-fse
 */
@@ -3205,3 +3205,24 @@ body.vf-tampilan-2 .wps-price-range input[type="range"] { accent-color: var(--wp
 	.vf-daftar-berita__foto { flex-basis: 100%; }
 	.vf-daftar-berita__ringkas { display: none; }
 }
+
+/* Kartu program Velocity Donasi (inc/donasi.php): arsip /donasi/ & Query Loop postType donasi. */
+.vf-donasi-kartu {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+	background: var(--wp--preset--color--putih);
+	border: 1px solid var(--wp--preset--color--garis);
+	border-radius: var(--vf-kartu-radius, 15px);
+}
+.vf-donasi-kartu__foto { display: block; aspect-ratio: 16 / 10; overflow: hidden; }
+.vf-donasi-kartu__foto img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.vf-donasi-kartu__isi { display: flex; flex: 1; flex-direction: column; gap: .6rem; padding: 1.1rem 1.2rem 1.3rem; }
+.vf-donasi-kartu__judul { margin: 0; font-size: 1.1rem; line-height: 1.35; }
+.vf-donasi-kartu__judul a { color: var(--wp--preset--color--ink); text-decoration: none; }
+.vf-donasi-kartu__progres { height: 7px; overflow: hidden; background: var(--wp--preset--color--latar); border-radius: 99px; }
+.vf-donasi-kartu__progres span { display: block; height: 100%; background: var(--wp--preset--color--primary); border-radius: inherit; }
+.vf-donasi-kartu__angka, .vf-donasi-kartu__akhir { margin: 0; font-size: .9rem; color: var(--wp--preset--color--abu); }
+.vf-donasi-kartu__angka strong { color: var(--wp--preset--color--primary); font-variant-numeric: tabular-nums; }
+.vf-donasi-kartu__tombol { margin-top: auto; align-self: flex-start; }

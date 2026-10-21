@@ -5,7 +5,7 @@ const jawab = (ya) => { k.buka = false; k.selesai?.(ya); k.selesai = null }
 </script>
 
 <template>
-  <Dialog :buka="k.buka" :judul="k.judul" :kelas="k.kelas" @tutup="jawab(false)">
+  <Dialog atas :buka="k.buka" :judul="k.judul" :kelas="k.kelas" @tutup="jawab(false)">
     <p class="teks">{{ k.teks }}</p>
     <div class="aksi-dialog">
       <button type="button" class="tombol garis" autofocus @click="jawab(false)">Batal</button>

@@ -3,7 +3,7 @@
 // fokus kembali ke pemicu saat ditutup.
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 
-const props = defineProps({ buka: Boolean, judul: String, kelas: { type: String, default: '' }, lebar: { type: String, default: '480px' } })
+const props = defineProps({ buka: Boolean, judul: String, kelas: { type: String, default: '' }, lebar: { type: String, default: '480px' }, atas: Boolean })
 const emit = defineEmits(['tutup'])
 const kotak = ref(null)
 let pemicu = null
@@ -29,7 +29,7 @@ onBeforeUnmount(() => { if (props.buka && pemicu) pemicu.focus() })
 
 <template>
   <Teleport to="body">
-    <div v-if="buka" class="latar-dialog" @click.self="emit('tutup')" @keydown="tombol">
+    <div v-if="buka" class="latar-dialog" :class="{ atas }" @click.self="emit('tutup')" @keydown="tombol">
       <div ref="kotak" class="dialog" :class="kelas" :style="{ width: `min(${lebar}, 100%)` }" role="dialog" aria-modal="true" :aria-label="judul">
         <div class="dialog-kepala">
           <h2>{{ judul }}</h2>
@@ -45,6 +45,7 @@ onBeforeUnmount(() => { if (props.buka && pemicu) pemicu.focus() })
 
 <style scoped>
 .latar-dialog { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(4, 6, 16, .72); overflow-y: auto; }
+.latar-dialog.atas { z-index: 70; } /* konfirmasi yang dibuka dari dalam dialog lain */
 .dialog { max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px 22px 22px; border-radius: var(--radius); background: var(--kartu); border: 1px solid var(--garis); box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
 .dialog.bahaya { border-color: rgba(255, 107, 107, .5); }
 .dialog.waspada { border-color: rgba(232, 181, 74, .5); }

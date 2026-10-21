@@ -15,6 +15,14 @@ SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
     "id:7700101,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scanner/bot jahat'"
 @SEO@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-seo.txt" \
 @SEO@    "id:7700102,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler SEO'"
+# Scraper tanpa nama lewat proxy residensial (UA persis ini, ±2 hit per IP). Aturan terpisah (bukan bot-seo.txt, lihat
+# catatan di sana) dan nolog: tak dihitung BFM agar IP rumahan/CGNAT pengunjung asli tak ikut diblokir CSF.
+@SEO@SecRule REQUEST_HEADERS:User-Agent "@streq mozilla/5.0 (compatible; crawler)" \
+@SEO@    "id:7700109,phase:1,t:none,t:lowercase,@AKSI429@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scraper UA generik (compatible; crawler)'"
+# Crawler AI Meta: IP-nya dipakai bersama facebookexternalhit (pratinjau link FB/WA) → hanya ditolak di WAF,
+# id terpisah agar tidak dihitung Brute Force (blokir IP CSF akan mematikan pratinjau share).
+@AI@SecRule REQUEST_HEADERS:User-Agent "@contains meta-externalagent" \
+@AI@    "id:7700107,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI Meta (tanpa blokir IP)'"
 @AI@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai.txt" \
 @AI@    "id:7700103,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI'"
 # Bot AI pencarian PALSU: UA ChatGPT-User/OAI-SearchBot/PerplexityBot dari IP di luar daftar resmi (probe .env dsb.).
@@ -22,8 +30,14 @@ SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
     "id:7700106,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Bot AI pencarian palsu (IP bukan milik OpenAI/Perplexity)',chain"
     SecRule REMOTE_ADDR "!@ipMatchFromFile @DIR@/ip-ai-pencarian.txt" "t:none"
+# Bot AI pencarian asli tak butuh REST API/oEmbed (±1.300 request PHP/hari di detikperkara) → ditolak tanpa log:
+# nolog agar tak dihitung BFM (IP OpenAI dipakai juga untuk ChatGPT-User membuka halaman) dan tak meramaikan log.
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
-    "id:7700104,phase:1,t:none,t:lowercase,@AKSIAICARI@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Bot AI pencarian'"
+    "id:7700108,phase:1,t:none,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Bot AI pencarian ke REST API/oEmbed (tanpa log)',chain"
+    SecRule REQUEST_FILENAME "@beginsWith /wp-json/" "t:none,t:lowercase"
+# Mode catat: lolos tanpa log (request sah, hanya meramaikan log); mode blokir: ditolak dan dicatat.
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
+    "id:7700104,phase:1,t:none,t:lowercase,@AKSIAICARI@,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Bot AI pencarian'"
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/klien-skrip.txt" \
     "id:7700105,phase:1,t:none,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Klien HTTP skrip (dicatat)'"
 
@@ -34,6 +48,13 @@ SecRule REQUEST_FILENAME "@rx \.php$" \
 SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" \
     "id:7700111,phase:1,t:none,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses PHP dengan User-Agent kosong',chain"
     SecRule REQUEST_FILENAME "@rx \.php$" "t:none,t:lowercase"
+# Klien skrip (Go-http-client dkk.) ke berkas PHP selain titik masuk WordPress = probe webshell/brute force
+# (136.80.167.62 18 Okt: 3.040 request/75 dtk ke 64 domain di Farnaz). Callback sah (Duitku dkk.) lewat /wp-json/
+# atau index.php/admin-ajax.php, jadi tetap lolos. Tag eksploit → dihitung BFM (blokir IP).
+SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/klien-skrip.txt" \
+    "id:7700112,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Klien skrip ke berkas PHP non-WordPress (probe webshell)',chain"
+    SecRule REQUEST_FILENAME "@rx \.php$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"
+    SecRule REQUEST_FILENAME "!@rx /(?:index|wp-cron|xmlrpc|admin-ajax)\.php$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"
 
 # ---- 2. Berkas sensitif & probe ----
 SecRule REQUEST_FILENAME "@rx (?:^|/)\.(?:env(?:\.[\w.-]*)?|git|svn|hg|bzr|aws|ssh|docker|npmrc|bash_history|htpasswd|ds_store)(?:/|$)" \
@@ -46,9 +67,9 @@ SecRule REQUEST_FILENAME "@rx (?:\.(?:sql|sql\.gz|sql\.zip|mysql|bak|old|swp|sav
 # PHP dijalankan dari folder unggahan / berkas PHP tersembunyi (ciri webshell)
 SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
     "id:7700210,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/uploads'"
-# Folder cache plugin tak pernah berisi PHP yang dipanggil langsung (webshell eksploit Podlove dkk.)
-SecRule REQUEST_FILENAME "@rx /wp-content/cache/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
-    "id:7700213,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/cache'"
+# Folder cache plugin & upgrade WordPress tak pernah berisi PHP yang dipanggil langsung (webshell Podlove, a4tech.php dkk.)
+SecRule REQUEST_FILENAME "@rx /wp-content/(?:cache|upgrade|upgrade-temp-backup)/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
+    "id:7700213,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/cache atau upgrade'"
 # Eksploit Podlove Podcast Publisher image cache (unduh berkas PHP dari URL luar)
 SecRule ARGS_NAMES "@streq podlove_image_cache_url" \
     "id:7700214,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Eksploit Podlove image cache'"
@@ -57,6 +78,21 @@ SecRule REQUEST_FILENAME "@rx /\.[^/]+\.php\d?$" \
 # URL berisi /wp-content/uploads/ ≥3 kali (scraper rusak membaca srcset)
 SecRule REQUEST_URI "@rx (?:/wp-content/uploads/.*?){3,}" \
     "id:7700212,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - URL berisi banyak /wp-content/uploads/ (scraper rusak)'"
+# /<tahun>/<bln>/<tgl>/<slug>/page/N = halaman artikel yang tak ada (WordPress tetap menjawab 200 + query berat);
+# (+ /page/N/tel:… dari tautan relatif) botnet IP residensial memutar N ribuan (sepindonesia 19 Okt: 62 rb/hari, 7 rb IP). Dikecualikan BFM: IP-nya bisa dipakai pengunjung asli.
+SecRule REQUEST_FILENAME "@rx ^/\d{4}/\d{2}/\d{2}/[^/]+/page/\d+(?:/.*)?$" \
+    "id:7700215,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI410@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Halaman /page/N di artikel (tidak ada)'"
+# REST API konten/oEmbed dari UA browser TANPA Referer, tanpa login/Authorization = scraper (20 Okt Wulan: beritanew,
+# pintas1, timesmuba… ±7,6 rb/hari, IP Tencent/BytePlus/Alibaba + proxy residensial, 1 request/IP, UA Chrome berputar).
+# Browser asli memanggil REST dari halaman (ada Referer); klien sah (oEmbed WordPress, aplikasi, Discord) ber-UA non-browser.
+# nolog: tak dihitung BFM agar IP residensial pengunjung asli tak diblokir CSF (hasil terlihat sebagai 403 di access log).
+SecRule REQUEST_FILENAME "@rx ^/wp-json/(?:wp/v2/(?:posts|pages|users|media|categories|tags|comments|search)|oembed/)" \
+    "id:7700216,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scraper REST API/oEmbed (UA browser tanpa Referer)',chain"
+    SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"
+    SecRule REQUEST_HEADERS:User-Agent "@rx (?:chrome|firefox|safari)/" "t:none,t:lowercase,chain"
+    SecRule REQUEST_HEADERS:User-Agent "!@rx bot|crawl|spider|compatible;" "t:none,t:lowercase,chain"
+    SecRule &REQUEST_HEADERS:Authorization "@eq 0" "t:none,chain"
+    SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in/ "@eq 0" "t:none"
 
 # ---- 3. Traversal, wrapper PHP, null byte ----
 SecRule REQUEST_URI_RAW "@rx %00" \
@@ -81,6 +117,21 @@ SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" \
     SecRule REQUEST_METHOD "@streq POST" "t:none,setvar:ip.vw_xmlrpc=+1,expirevar:ip.vw_xmlrpc=60"
 SecRule IP:VW_XMLRPC "@gt @XMLRPC_MAKS@" \
     "id:7700503,phase:1,pass,nolog,t:none,setvar:ip.vw_xmlrpc_blok=1,expirevar:ip.vw_xmlrpc_blok=600"
+# system.multicall = ratusan tebakan password dalam satu request, lolos rate limit per IP. Klien sah (Jetpack dari
+# WordPress.com, aplikasi WP) memanggil metode tunggal, jadi ditolak di semua mode tanpa ambang.
+# REQUEST_BODY hanya terisi lewat prosesor URLENCODED (bukan untuk text/xml), maka prosesor dipaksa di xmlrpc saja.
+SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" \
+    "id:7700504,phase:1,pass,nolog,t:none,t:lowercase,ctl:requestBodyProcessor=URLENCODED"
+SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" \
+    "id:7700505,phase:2,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - xmlrpc system.multicall (brute force massal)',chain"
+    SecRule REQUEST_BODY "@rx <methodname>\s*system\.multicall\s*</methodname>" "t:none,t:lowercase"
+# POST xmlrpc hanya dari Jetpack asli (IP Automattic 192.0.64.0/18); IP kantor lewat ip-putih. Botnet ber-UA Jetpack
+# palsu dari ratusan IP seluler (±2/mnt per IP, di bawah rate limit) = ±10 rb/jam di Farnaz 17 Okt, 0 dari Automattic.
+# Id 77005xx → BFM kategori login (blokir IP 1 jam). Aplikasi WP mobile/posting jarak jauh ikut ditolak.
+SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" \
+    "id:7700506,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'ddos',msg:'Velocity WAF - xmlrpc POST bukan dari Jetpack (Automattic)',chain"
+    SecRule REQUEST_METHOD "@streq POST" "t:none,chain"
+    SecRule REMOTE_ADDR "!@ipMatch 192.0.64.0/18" "t:none"
 SecRule IP:VW_LOGIN_BLOK "@eq 1" \
     "id:7700511,phase:1,t:none,@AKSI406@,log,noauditlog,tag:'velocity-waf',tag:'ddos',msg:'Velocity WAF - Rate limit wp-login.php (brute force)',chain"
     SecRule REQUEST_FILENAME "@endsWith /wp-login.php" "t:none,t:lowercase"

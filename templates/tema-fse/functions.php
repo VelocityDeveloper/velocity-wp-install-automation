@@ -31,6 +31,7 @@ require get_theme_file_path('inc/iklan.php');
 require get_theme_file_path('inc/dealer.php');
 require get_theme_file_path('inc/produk.php');
 require get_theme_file_path('inc/referensi.php');
+require get_theme_file_path('inc/donasi.php');
 
 add_action('after_setup_theme', function () {
     add_theme_support('wp-block-styles');

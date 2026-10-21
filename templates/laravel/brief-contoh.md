@@ -14,6 +14,8 @@ Platform: **{{PLATFORM}}**
 
 {{ARAHAN}}
 
+{{REFERENSI}}
+
 ## Aturan isi
 
 - Bahasa mengikuti bahan (umumnya Indonesia). Pakai istilah klien apa adanya (nama usaha/sistem, nama peran,
@@ -83,9 +85,11 @@ inti yang tidak disertakan; abaikan nomornya, ikuti isi Fix-nya. Penyesuaian unt
 
 ## Cara kerja (folder kerja = direktori saat ini)
 
-1. Bila bahan menyebut situs referensi/pembanding (URL), lihat dulu: `{{ALAT}} ref <url>` (+ `--hp`), lalu Read
-   screenshot-nya (potong yang panjang dengan `{{ALAT}} potong <png> <y> <tinggi>`). Tiru struktur & alurnya, bukan
-   merek/teksnya.
+1. Bila bahan menyebut situs referensi/pembanding (URL atau domain polos seperti `alibaba.com`), lihat dulu: `{{ALAT}} ref <url>` DAN `{{ALAT}} ref <url> --hp`, lalu Read
+   screenshot-nya (potong yang panjang dengan `{{ALAT}} potong <png> <y> <tinggi>`). Read juga gambar dokumen klien
+   yang disebut di Bahan. Tiru struktur & alurnya, bukan merek/teksnya. Referensi bisa lebih dari satu dan bisa hanya
+   untuk blok tertentu (mis. "header seperti A, katalog seperti gambar 2"): tiru tiap blok dari acuannya masing-masing,
+   blok tanpa acuan dirancang bebas mengikuti gaya keseluruhan.
 2. Ambil foto yang dibutuhkan dengan `{{ALAT}} foto`.
 3. Tulis {{BERKAS_KELUARAN}} dengan Write (satu kali utuh per berkas).
 4. Periksa di browser: `{{ALAT}} potret index.html` dan `{{ALAT}} potret index.html --hp` (juga `dashboard.html` dan
@@ -96,5 +100,11 @@ inti yang tidak disertakan; abaikan nomornya, ikuti isi Fix-nya. Penyesuaian unt
 
 ## Keluaran JSON
 - `nama_aplikasi`: nama situs/sistem yang ditampilkan.
+- `referensi`: peta referensi desain — satu entri per blok yang meniru acuan: `halaman` (`index.html`/`dashboard.html`),
+  `blok` (mis. "header & pencarian", "hero", "kategori produk", "kartu produk", "footer", "seluruh halaman"),
+  `sumber` (URL situs persis seperti dipakai di `ref`, atau nama berkas gambar acuan mis. `dok-2.png` / `aset/gambar-1.jpg`),
+  `unsur` (yang ditiru: susunan, jumlah kolom, bentuk kartu, kepadatan, dsb.). Peta ini dipakai agen pembuat aplikasi
+  sebagai ACUAN UTAMA dan untuk cek kemiripan otomatis, jadi isi jujur: hanya blok yang benar-benar punya acuan.
+  Tidak ada referensi (klien menyerahkan desain ke tim) = `[]`.
 - `catatan`: 2–5 poin singkat untuk PM (asumsi yang diambil, tampilan/rute tambahan yang bisa dicoba klien, hal yang
   sebaiknya dikonfirmasi ke klien).

@@ -26,3 +26,9 @@ petalbot
 aspiegelbot
 baiduspider
 openindexspider
+# Ditambah 16 Okt 2026 (ukur access log Wulan): tool SEO/monitoring + mesin pencari luar.
+qlyzebot
+binokularbot
+sogou web spider
+# JANGAN pakai pola berawalan "(compatible; " di sini: @pmFromFile LiteSpeed lalu gagal mencocokkan UA lain
+# berawalan sama (uji 16 Okt: "(compatible; SemrushBot" dan "(compatible; QlyzeBot" lolos). Lihat aturan 7700109.
