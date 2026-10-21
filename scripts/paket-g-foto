@@ -835,8 +835,7 @@ def foto_berita(cfg, domain, isi, key, coba, manifest, ganti=False):
            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
     if os.environ.get('VELOCITY_LOKAL_SSH') and os.environ.get('VELOCITY_LOKAL_DOCROOT'):
         ssh, docroot = [os.environ['VELOCITY_LOKAL_SSH']], os.environ['VELOCITY_LOKAL_DOCROOT']
-    # Semua artikel, bukan 60 terbaru: medanspot.com 2026-10-21 (66 artikel) 6 artikel tertua tak pernah diberi foto.
-    php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => -1)) as $p) {"
+    php = ("$o = array(); foreach (get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 60)) as $p) {"
            " $lama = (int) get_post_thumbnail_id($p->ID);"
            # --ganti-artikel: foto contoh bank foto (_velocity_foto_contoh non-Pexels) atau sampul ilustrasi
            # installer dicarikan ulang; foto klien/unggahan orang tidak pernah disentuh.
