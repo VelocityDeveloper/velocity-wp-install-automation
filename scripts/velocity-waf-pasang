@@ -47,7 +47,8 @@ def main():
     ap.add_argument('--status', action='store_true')
     ap.add_argument('--tanpa-seo', action='store_true')
     ap.add_argument('--tanpa-ai', action='store_true')
-    ap.add_argument('--ai-pencarian', choices=['blokir', 'catat'])
+    ap.add_argument('--perplexity', choices=['blokir', 'catat'])
+    ap.add_argument('--oai-maks', type=int)
     a = ap.parse_args()
     s = server(a.server)
     perintah = {'aksi': 'status' if a.status else 'copot' if a.copot else 'pasang', 'mode': a.mode}
@@ -55,7 +56,7 @@ def main():
         # Setelan dashboard (Server > WAF > Setelan) sebagai dasar; opsi baris perintah menimpa
         setelan = velocity_waf.baca_setelan()
         setelan.update({k: v for k, v in (('seo', False if a.tanpa_seo else None), ('ai', False if a.tanpa_ai else None),
-                                           ('ai_pencarian', a.ai_pencarian)) if v is not None})
+                                           ('perplexity', a.perplexity), ('oai_maks', a.oai_maks)) if v is not None})
         perintah['berkas'], _, _ = velocity_waf.rakit_berkas(a.mode, setelan)
     hasil = velocity_waf.jalankan(s, ist.ssh_key_file(), perintah)
     print(json.dumps(hasil, indent=2, ensure_ascii=False))

@@ -3,7 +3,7 @@
 
 Pemakaian:
   velocity-waf-build --keluar DIR [--mode deteksi|blokir] [--dir /etc/velocity-waf]
-                     [--tanpa-seo] [--tanpa-ai] [--ai-pencarian blokir|catat] [--xmlrpc 10] [--login 10]
+                     [--tanpa-seo] [--tanpa-ai] [--perplexity blokir|catat] [--oai-maks 30] [--xmlrpc 10] [--login 10]
 
 Hasil di DIR: velocity-waf.conf + berkas data (bot-*.txt, klien-skrip.txt, ip-putih.txt, ip-ai-pencarian.txt) + VERSI.
 Mode deteksi: semua aturan hanya mencatat ("ModSecurity: Warning", request tetap lolos) — dipakai selama cPGuard
@@ -22,14 +22,15 @@ AKAR = Path(__file__).resolve().parent.parent / 'waf'
 DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt']
 
 
-def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, ai_pencarian='catat', xmlrpc=10, login=10):
+def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, perplexity='blokir', oai_maks=30, xmlrpc=10, login=10):
     teks = (AKAR / 'velocity-waf.conf.in').read_text()
     aksi = (lambda kode: f'deny,status:{kode}') if mode == 'blokir' else (lambda kode: 'pass')
     versi = hashlib.sha1((teks + ''.join((AKAR / d).read_text() for d in DATA)).encode()).hexdigest()[:10]
     ganti = {
         '@MODE@': mode, '@DIR@': direktori, '@VERSI@': f'{versi} ({time.strftime("%Y-%m-%d")})',
         '@AKSI429@': aksi(429), '@AKSI403@': aksi(403), '@AKSI406@': aksi(406), '@AKSI410@': aksi(410),
-        '@AKSIAICARI@': aksi(429) + ',log' if ai_pencarian == 'blokir' else 'pass,nolog',
+        '@AKSIPPLX@': aksi(429) + ',log' if perplexity == 'blokir' else 'pass,nolog',
+        '@OAI_MAKS@': str(int(oai_maks)), '@OAI@': '' if oai_maks else '# (OAI-SearchBot tanpa batas) ',
         '@XMLRPC_MAKS@': str(int(xmlrpc)), '@LOGIN_MAKS@': str(int(login)),
         '@SEO@': '' if seo else '# (crawler SEO tidak diblokir) ', '@AI@': '' if ai else '# (crawler AI tidak diblokir) ',
     }
@@ -48,11 +49,12 @@ def main():
     ap.add_argument('--dir', default='/etc/velocity-waf', help='lokasi berkas data di server')
     ap.add_argument('--tanpa-seo', action='store_true')
     ap.add_argument('--tanpa-ai', action='store_true')
-    ap.add_argument('--ai-pencarian', choices=['blokir', 'catat'], default='catat')
+    ap.add_argument('--perplexity', choices=['blokir', 'catat'], default='blokir')
+    ap.add_argument('--oai-maks', type=int, default=30, help='maks. request OAI-SearchBot per situs per menit (0 = tanpa batas)')
     ap.add_argument('--xmlrpc', type=int, default=10, help='maks. POST xmlrpc.php per IP per 60 dtk')
     ap.add_argument('--login', type=int, default=10, help='maks. POST wp-login.php per IP per 5 mnt')
     a = ap.parse_args()
-    teks, versi = rakit(a.mode, a.dir, not a.tanpa_seo, not a.tanpa_ai, a.ai_pencarian, a.xmlrpc, a.login)
+    teks, versi = rakit(a.mode, a.dir, not a.tanpa_seo, not a.tanpa_ai, a.perplexity, a.oai_maks, a.xmlrpc, a.login)
     keluar = Path(a.keluar)
     keluar.mkdir(parents=True, exist_ok=True)
     (keluar / 'velocity-waf.conf').write_text(teks)

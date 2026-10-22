@@ -1,5 +1,6 @@
 # Bot AI untuk pencarian/jawaban langsung (situs klien bisa dikutip ChatGPT/Perplexity). cPGuard memblokir sebagian
-# (ChatGPT, OAI-SearchBot); di Velocity WAF bawaannya HANYA DICATAT — ubah AKTIF_AI_PENCARIAN di velocity-waf-build.
+# (ChatGPT, OAI-SearchBot). Dipakai aturan bot palsu (7700106) & REST API (7700108); tindakan per bot (PerplexityBot
+# 7700104, rate limit OAI-SearchBot 7700117/7700118) diatur di Server > WAF > Setelan.
 chatgpt-user
 oai-searchbot
 perplexitybot

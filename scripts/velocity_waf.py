@@ -15,7 +15,7 @@ from pathlib import Path
 
 AKAR = Path(__file__).resolve().parent.parent
 SETELAN_BERKAS = Path('/var/lib/velocity/server-waf/setelan.json')
-SETELAN_BAWAAN = {'seo': True, 'ai': True, 'ai_pencarian': 'catat', 'xmlrpc': 10, 'login': 10, 'ip_putih': []}
+SETELAN_BAWAAN = {'seo': True, 'ai': True, 'perplexity': 'blokir', 'oai_maks': 30, 'xmlrpc': 10, 'login': 10, 'ip_putih': []}
 DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt']
 
 REMOTE = r'''
@@ -36,19 +36,77 @@ def baca(p):
         return open(p).read().strip()
     except (OSError, UnicodeDecodeError):
         return ''
+def ngx_main():
+    # nginx + libmodsecurity v3 (server non-DA, mis. atha): berkas aturan utama yang dipakai modsecurity_rules_file
+    for f in ['/etc/nginx/nginx.conf'] + sorted(glob.glob('/etc/nginx/conf.d/*.conf')):
+        m = re.search(r'^\s*modsecurity_rules_file\s+([^;\s]+)', baca(f), re.M)
+        if m:
+            return m.group(1)
+NGX = None if os.path.isfile('/usr/local/lsws/bin/lswsctrl') else ngx_main()
+BARIS_NGX = 'Include %s/velocity-waf.conf' % DIR
+# Blok bertanda: modsecurity-main.conf atha memuat modsecurity.conf ber-SecRuleEngine DetectionOnly → tanpa On, deny tak jalan
+BLOK_NGX = ['# >>> Velocity WAF (dashboard Velocity) — hapus blok ini untuk mencopot', 'SecRuleEngine On', BARIS_NGX, '# <<< Velocity WAF']
+def inc_ada():
+    return BARIS_NGX in baca(NGX).splitlines() if NGX else os.path.isfile(INC)
+def inc_pasang():
+    if NGX:
+        with open(NGX, 'a') as f:
+            f.write('\n' + '\n'.join(BLOK_NGX) + '\n')
+        return
+    with open(INC, 'w') as f:
+        f.write('# Velocity WAF — dipasang scripts/velocity-waf-pasang (dashboard Velocity). Hapus berkas ini untuk mencopot.\nInclude %s/velocity-waf.conf\n' % DIR)
+    os.chmod(INC, 0o644)
+def inc_copot():
+    if not NGX:
+        os.remove(INC)
+        return
+    baris, di_blok = [], False
+    for b in open(NGX).read().split('\n'):
+        if b == BLOK_NGX[0]:
+            di_blok = True
+        elif di_blok and b == BLOK_NGX[-1]:
+            di_blok = False
+        elif not di_blok and b != BARIS_NGX:
+            baris.append(b)
+    with open(NGX + '.baru', 'w') as f:
+        f.write('\n'.join(baris).rstrip('\n') + '\n')
+    os.rename(NGX + '.baru', NGX)
+def berkas_log():
+    # ModSecurity nginx menulis ke error_log per vhost
+    return sorted(set(glob.glob('/var/log/nginx/*error.log') + glob.glob('/var/log/nginx/*/*error.log'))) if NGX else [ELOG]
+def ukuran_log():
+    return {p: os.path.getsize(p) for p in berkas_log() if os.path.isfile(p)}
+def log_baru(awal):
+    teks = ''
+    for p in berkas_log():
+        try:
+            with open(p, errors='replace') as f:
+                a = awal.get(p, 0)
+                f.seek(a if os.path.getsize(p) >= a else 0)
+                teks += f.read()
+        except OSError:
+            pass
+    return teks
 def status():
     versi = baca(DIR + '/VERSI').split()
     cadangan = sorted(glob.glob(DIR + '.bak-*'))
-    return {'terpasang': os.path.isfile(INC), 'berkas_ada': os.path.isfile(DIR + '/velocity-waf.conf'),
+    return {'terpasang': inc_ada(), 'berkas_ada': os.path.isfile(DIR + '/velocity-waf.conf'),
             'versi': versi[0] if versi else None, 'mode': versi[1] if len(versi) > 1 else None,
             'sidik': baca(DIR + '/SIDIK') or None,
             'diubah': int(os.path.getmtime(DIR + '/VERSI')) if os.path.isfile(DIR + '/VERSI') else None,
-            'cpguard': os.path.isfile('/etc/modsecurity.d/cpguard_waf.conf'),
+            'cpguard': os.path.isfile('/etc/modsecurity.d/cpguard_waf.conf') or os.path.isfile('/etc/nginx/cpguard_waf.conf'),
             'cpguard_aturan': len(glob.glob('/etc/cpguard/cpguard_modsec*.conf')),
             'lsws': os.path.isfile('/usr/local/lsws/bin/lswsctrl'), 'modsecurity_d': os.path.isdir('/etc/modsecurity.d'),
-            'cadangan': len(cadangan)}
+            'nginx': bool(NGX), 'cadangan': len(cadangan)}
 def situs():
     # domain pertama yang punya docroot, untuk uji HTTP
+    if NGX:
+        for f in sorted(glob.glob('/etc/nginx/conf.d/*.conf')):
+            t = baca(f)
+            m = re.search(r'^\s*server_name\s+([^;\s]+)', t, re.M)
+            if m and re.search(r'^\s*modsecurity\s+on', t, re.M):
+                return m.group(1)
+        return None
     for f in sorted(glob.glob('/usr/local/directadmin/data/users/*/domains.list')):
         for d in open(f).read().split():
             if d:
@@ -59,6 +117,10 @@ def ip_situs(domain):
         for b in open(f, errors='replace'):
             if b.startswith('ip='):
                 return b.strip()[3:]
+    if NGX:
+        m = re.search(r'\bsrc\s+(\S+)', jalan(['ip', '-4', 'route', 'get', '1.1.1.1'], 10)[1])
+        if m:
+            return m.group(1)
     return '127.0.0.1'
 def http(domain, ua):
     # Query unik → tidak dijawab dari LSCache
@@ -66,28 +128,27 @@ def http(domain, ua):
                      '--resolve', '%s:443:%s' % (domain, ip_situs(domain)), 'https://%s/?velocity-waf-cek=%d' % (domain, time.time())], 30)
     return o.strip()
 def restart():
+    if NGX:
+        k, o = jalan('nginx -t && systemctl reload nginx', 60)
+        time.sleep(2)
+        return k, o.strip()[-300:]
     k, o = jalan(['/usr/local/lsws/bin/lswsctrl', 'restart'], 120)
     time.sleep(6)
     return k, o.strip()[-300:]
 def galat_baru(ukuran_awal):
-    try:
-        with open(ELOG, errors='replace') as f:
-            f.seek(ukuran_awal if os.path.getsize(ELOG) >= ukuran_awal else 0)
-            teks = f.read()
-    except OSError:
-        return []
+    teks = log_baru(ukuran_awal)
     # Baris rule terpicu ("ModSecurity: …" / "[MODSEC] mod_security rule … triggered!") bukan galat walau berlabel [error]
     return [b[:300] for b in teks.split('\n') if 'velocity-waf' in b.lower() and 'ModSecurity: ' not in b and 'triggered' not in b
             and re.search(r'fail|parse|invalid|unknown|syntax|cannot|could not', b, re.I)][:10]
 aksi = P['aksi']
 s = status()
-if aksi == 'status' or not s['lsws'] or not s['modsecurity_d']:
+if aksi == 'status' or not (s['lsws'] and s['modsecurity_d'] or s['nginx']):
     out.update(ok=aksi == 'status', status=s, error=None if aksi == 'status' else 'bukan_litespeed_modsecurity')
     print(json.dumps(out)); raise SystemExit
 cadangan = None
 if aksi == 'copot':
-    if os.path.isfile(INC):
-        os.remove(INC)
+    if inc_ada():
+        inc_copot()
     k, o = restart()
     out.update(ok=k == 0, status=status(), restart=o); print(json.dumps(out)); raise SystemExit
 # --- pasang ---
@@ -104,24 +165,21 @@ for nama, isi in P['berkas'].items():
     os.chmod(jalur + '.baru', 0o644)
     os.rename(jalur + '.baru', jalur)
 out['langkah'].append('%d berkas ditulis' % len(P['berkas']))
-sudah = os.path.isfile(INC)
-with open(INC, 'w') as f:
-    f.write('# Velocity WAF — dipasang scripts/velocity-waf-pasang (dashboard Velocity). Hapus berkas ini untuk mencopot.\nInclude %s/velocity-waf.conf\n' % DIR)
-os.chmod(INC, 0o644)
+sudah = inc_ada()
+if not sudah:
+    inc_pasang()
 domain = situs()
-awal = os.path.getsize(ELOG) if os.path.isfile(ELOG) else 0
+awal = ukuran_log()
 sebelum = http(domain, UA_BIASA) if domain else None
 k, o = restart()
-out['langkah'].append('lswsctrl restart: %s' % k)
+out['langkah'].append('%s: %s' % ('nginx -t + reload' if NGX else 'lswsctrl restart', k))
+if k != 0:
+    out['restart'] = o
 galat = galat_baru(awal)
 sesudah = http(domain, UA_BIASA) if domain else None
 uji = http(domain, 'velocity-waf-uji/1.0') if domain else None
 time.sleep(1)
-try:
-    with open(ELOG, errors='replace') as f:
-        f.seek(awal); tercatat = 'Velocity WAF - Scanner/bot jahat' in f.read()
-except OSError:
-    tercatat = False
+tercatat = 'Velocity WAF - Scanner/bot jahat' in log_baru(awal)
 out.update(domain=domain, http_sebelum=sebelum, http_sesudah=sesudah, http_uji_sqlmap=uji, tercatat=tercatat, galat=galat)
 rusak = k != 0 or galat or (sesudah or '000')[0] == '5' or sesudah == '000' and sebelum != '000'
 harap_blokir = P['mode'] == 'blokir'
@@ -130,7 +188,7 @@ if not rusak and harap_blokir and uji != '429':
 if not rusak and not harap_blokir and not tercatat:
     out['peringatan'] = 'request uji belum tercatat di error.log (bisa karena LSCache/situs pertama tidak di server ini) — cek halaman WAF'
 if rusak:
-    os.remove(INC) if not sudah else None
+    inc_copot() if not sudah else None
     if cadangan:
         shutil.rmtree(DIR); shutil.copytree(cadangan, DIR)
     k2, o2 = restart()
@@ -158,10 +216,18 @@ def bersihkan_setelan(data):
     for k in ('seo', 'ai'):
         if k in data:
             s[k] = bool(data[k])
-    if 'ai_pencarian' in data:
-        if data['ai_pencarian'] not in ('catat', 'blokir'):
+    if 'perplexity' in data:
+        if data['perplexity'] not in ('catat', 'blokir'):
             raise ValueError('setelan_tidak_sah')
-        s['ai_pencarian'] = data['ai_pencarian']
+        s['perplexity'] = data['perplexity']
+    if 'oai_maks' in data:  # 0 = tanpa batas
+        try:
+            n = int(data['oai_maks'])
+        except (TypeError, ValueError):
+            raise ValueError('setelan_tidak_sah')
+        if n != 0 and not 5 <= n <= 600:
+            raise ValueError('setelan_tidak_sah')
+        s['oai_maks'] = n
     for k in ('xmlrpc', 'login'):
         if k in data:
             try:
@@ -208,7 +274,7 @@ def rakit_berkas(mode, setelan=None):
     """→ (berkas {nama: isi}, versi, sidik). Sidik tidak bergantung mode/tanggal, jadi bisa dibanding antar server."""
     s = setelan or baca_setelan()
     build = _build()
-    teks, versi = build.rakit(mode, '/etc/velocity-waf', s['seo'], s['ai'], s['ai_pencarian'], s['xmlrpc'], s['login'])
+    teks, versi = build.rakit(mode, '/etc/velocity-waf', s['seo'], s['ai'], s['perplexity'], s['oai_maks'], s['xmlrpc'], s['login'])
     berkas = {'velocity-waf.conf': teks}
     for d in DATA:
         berkas[d] = (AKAR / 'waf' / d).read_text()
@@ -266,10 +332,10 @@ def daftar_aturan():
         if not idm or not msg:
             continue
         aksi = 'catat'
-        for token, nilai in (('@AKSI429@', '429'), ('@AKSI403@', '403'), ('@AKSI406@', '406'), ('@AKSIAICARI@', 'ai_pencarian')):
+        for token, nilai in (('@AKSI429@', '429'), ('@AKSI403@', '403'), ('@AKSI406@', '406'), ('@AKSIPPLX@', 'perplexity')):
             if token in blok:
                 aksi = nilai
-        opsional = 'seo' if blok.startswith('@SEO@') else 'ai' if blok.startswith('@AI@') else None
+        opsional = next((k for awal, k in (('@SEO@', 'seo'), ('@AI@', 'ai'), ('@OAI@', 'oai_maks')) if blok.startswith(awal)), None)
         aturan.append({'id': idm.group(1), 'pesan': msg.group(1).replace('Velocity WAF - ', ''), 'bagian': bagian,
                        'tag': [t for t in re.findall(r"tag:'([^']+)'", blok) if t != 'velocity-waf'], 'aksi': aksi, 'opsional': opsional})
     data = {}

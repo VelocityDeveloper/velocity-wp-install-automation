@@ -44,7 +44,7 @@ const PESAN = {
   server_tidak_dikenal: 'Server tidak dikenal; muat ulang halaman.',
   mode_tidak_sah: 'Mode tidak dikenal.',
   aksi_sedang_jalan: 'Masih ada perubahan WAF berjalan di server ini. Tunggu selesai dulu.',
-  bukan_litespeed_modsecurity: 'Server ini bukan LiteSpeed + ModSecurity (/etc/modsecurity.d tidak ada).',
+  bukan_litespeed_modsecurity: 'Server ini bukan LiteSpeed + ModSecurity maupun nginx + libmodsecurity.',
   dikembalikan: 'Pemeriksaan sesudah restart gagal — berkas & include dikembalikan seperti semula.',
   setelan_tidak_sah: 'Ada nilai setelan di luar batas.',
   ip_tidak_sah: 'Ada alamat IP / CIDR yang tidak sah.',
@@ -67,15 +67,17 @@ function perluNama() {
 const st = (s) => s?.status || {}
 const terpasang = (s) => !!st(s).terpasang
 const perluUpdate = (s) => terpasang(s) && lokal.value && st(s).sidik !== lokal.value.sidik
+// LiteSpeed + /etc/modsecurity.d (server DA) atau nginx + libmodsecurity v3 (atha)
+const didukung = (s) => st(s).nginx || (st(s).lsws && st(s).modsecurity_d)
 function keadaan(s) {
   if (!s?.ok) return { kelas: 'abu', titik: 'bahaya', label: 'Tak terbaca' }
-  if (!st(s).lsws || !st(s).modsecurity_d) return { kelas: 'abu', titik: 'abu', label: 'Tidak didukung' }
+  if (!didukung(s)) return { kelas: 'abu', titik: 'abu', label: 'Tidak didukung' }
   if (!terpasang(s)) return { kelas: 'abu', titik: st(s).cpguard ? 'waspada' : 'bahaya', label: 'Belum terpasang' }
   if (st(s).mode === 'blokir') return { kelas: 'hijau', titik: perluUpdate(s) ? 'waspada' : 'baik', label: 'Mode blokir' }
   return { kelas: 'biru', titik: perluUpdate(s) ? 'waspada' : 'biru', label: 'Mode deteksi' }
 }
 // Server tanpa WAF sama sekali: cPGuard WAF tidak ada dan Velocity WAF belum terpasang
-const tanpaWaf = (s) => s.ok && st(s).lsws && !st(s).cpguard && !terpasang(s)
+const tanpaWaf = (s) => s.ok && didukung(s) && !st(s).cpguard && !terpasang(s)
 const jumlahTerpasang = computed(() => servers.value.filter((s) => s.ok && terpasang(s)).length)
 
 // ---- Job pasang/copot ----
@@ -190,12 +192,11 @@ async function cekIp(ip) {
 // ---- Aturan ----
 const AKSI_ATURAN = {
   429: ['merah', '429 Bot'], 403: ['merah', '403 Ditolak'], 406: ['ungu', '406 Rate limit'], catat: ['abu', 'Hanya dicatat'],
-  ai_pencarian: ['kuning', 'Ikut setelan'],
 }
 const aksiAturan = (a) => {
   const s = lokal.value?.setelan
   if (a.opsional && s && !s[a.opsional]) return ['abu', 'Dimatikan']
-  if (a.aksi === 'ai_pencarian') return s?.ai_pencarian === 'blokir' ? AKSI_ATURAN[429] : AKSI_ATURAN.catat
+  if (a.aksi === 'perplexity') return s?.perplexity === 'blokir' ? AKSI_ATURAN[429] : AKSI_ATURAN.catat
   return AKSI_ATURAN[a.aksi] || AKSI_ATURAN.catat
 }
 const bagianAturan = computed(() => {
@@ -214,7 +215,7 @@ const NAMA_DATA = {
 const bukaData = ref('')
 
 // ---- Setelan ----
-const form = reactive({ seo: true, ai: true, ai_pencarian: 'catat', xmlrpc: 10, login: 10, ip_putih: [] })
+const form = reactive({ seo: true, ai: true, perplexity: 'blokir', oai_maks: 30, xmlrpc: 10, login: 10, ip_putih: [] })
 const ipBaru = reactive({ ip: '', ket: '' })
 function isiForm() {
   const s = lokal.value?.setelan
@@ -337,7 +338,8 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
                 <template v-else>Tidak aktif</template>
               </dd></div>
               <div><dt>Platform</dt><dd>
-                LiteSpeed {{ st(terpilih).lsws ? '✓' : '✗' }} · ModSecurity {{ st(terpilih).modsecurity_d ? '✓' : '✗' }}
+                <template v-if="st(terpilih).nginx">nginx + libmodsecurity v3 ✓</template>
+                <template v-else>LiteSpeed {{ st(terpilih).lsws ? '✓' : '✗' }} · ModSecurity {{ st(terpilih).modsecurity_d ? '✓' : '✗' }}</template>
                 <small class="redup blok">{{ st(terpilih).cadangan }} salinan cadangan /etc/velocity-waf.bak-*</small>
               </dd></div>
             </dl>
@@ -361,7 +363,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
               </template>
             </div>
 
-            <div v-if="st(terpilih).lsws && st(terpilih).modsecurity_d" class="aksi-waf">
+            <div v-if="didukung(terpilih)" class="aksi-waf">
               <template v-if="!terpasang(terpilih)">
                 <button type="button" class="tombol" :disabled="proses || berjalan(terpilih.host)" @click="jalankan('pasang-deteksi')"><Ikon nama="waf" :ukuran="16" /> Pasang mode deteksi</button>
                 <button type="button" class="tombol garis" :disabled="proses || berjalan(terpilih.host)" @click="jalankan('pasang-blokir')">Pasang langsung mode blokir</button>
@@ -398,7 +400,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
             <ul class="aturan">
               <li v-for="a in b.isi" :key="a.id">
                 <code class="redup">{{ a.id }}</code>
-                <span>{{ a.pesan }}<template v-if="a.id === '7700501'"> · maks {{ lokal?.setelan.xmlrpc }} POST/menit, blokir 10 mnt</template><template v-else-if="a.id === '7700511'"> · maks {{ lokal?.setelan.login }} POST/5 menit, blokir 15 mnt</template></span>
+                <span>{{ a.pesan }}<template v-if="a.id === '7700501'"> · maks {{ lokal?.setelan.xmlrpc }} POST/menit, blokir 10 mnt</template><template v-else-if="a.id === '7700511'"> · maks {{ lokal?.setelan.login }} POST/5 menit, blokir 15 mnt</template><template v-else-if="a.id === '7700118' && lokal?.setelan.oai_maks"> · maks {{ lokal?.setelan.oai_maks }} request/menit per situs</template></span>
                 <span class="lencana" :class="aksiAturan(a)[0]">{{ aksiAturan(a)[1] }}</span>
               </li>
             </ul>
@@ -425,12 +427,14 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
             <label class="cek"><input v-model="form.seo" type="checkbox"> Blokir crawler SEO komersial <small class="redup">Ahrefs, Semrush, Majestic… matikan bila ada klien yang memakainya</small></label>
             <label class="cek"><input v-model="form.ai" type="checkbox"> Blokir crawler pelatihan AI <small class="redup">GPTBot, ClaudeBot, Meta-ExternalAgent, Bytespider…</small></label>
             <div class="baris-pil">
-              <span>Bot AI pencarian <small class="redup">(ChatGPT-User, OAI-SearchBot, Perplexity — situs bisa dikutip AI)</small></span>
-              <div class="pil-durasi" role="radiogroup" aria-label="Bot AI pencarian">
-                <label :class="{ aktif: form.ai_pencarian === 'catat' }"><input v-model="form.ai_pencarian" type="radio" class="sr" value="catat"> Hanya catat</label>
-                <label :class="{ aktif: form.ai_pencarian === 'blokir' }"><input v-model="form.ai_pencarian" type="radio" class="sr" value="blokir"> Blokir</label>
+              <span>PerplexityBot <small class="redup">(crawler indeks Perplexity — beban besar, hampir tak mengirim pengunjung)</small></span>
+              <div class="pil-durasi" role="radiogroup" aria-label="PerplexityBot">
+                <label :class="{ aktif: form.perplexity === 'catat' }"><input v-model="form.perplexity" type="radio" class="sr" value="catat"> Izinkan</label>
+                <label :class="{ aktif: form.perplexity === 'blokir' }"><input v-model="form.perplexity" type="radio" class="sr" value="blokir"> Blokir</label>
               </div>
             </div>
+            <label class="isian"><span>OAI-SearchBot (indeks ChatGPT) — maks. request per situs per menit <small class="redup">0 = tanpa batas; kelebihan dijawab 429</small></span><input v-model.number="form.oai_maks" type="number" min="0" max="600" required></label>
+            <p class="redup kaki-form">ChatGPT-User & Perplexity-User (dipicu pertanyaan pengguna) selalu diizinkan. Aturan bot AI pencarian tidak dihitung Brute Force.</p>
           </fieldset>
           <fieldset>
             <legend>Rate limit brute force (per IP)</legend>
