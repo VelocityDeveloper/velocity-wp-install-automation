@@ -20,6 +20,7 @@ Aksi:
 - suspend / unsuspend: akun DirectAdmin (`directadmin suspend-user`), hanya dipanggil Judi AI / tombol dashboard.
 """
 import base64
+import binascii
 import glob
 import hashlib
 import json
@@ -72,6 +73,41 @@ RE_HACKED = r(r'<title>[^<]{0,60}hack(?:ed|3d)\s*by')
 RE_LOCALE = r(r'wp-locale-perf|Locale Performance Cache|wp-cachepress|craft-harvester-jet|widget-compat-helper|wp_locale_cache_\w+|locale-cache-(?:db|oc)\b|Anti-DB-wipe MU loader')
 # Botnet backlink "WP-LinkHelper" (folder wlh-*/class-wlh-*.php, panel cachelayer.top), dari karantina cPGuard Fahmi 14 Okt 2026
 RE_WLH = r(r'\bclass\s+WLH_\w+|\bWLH_(?:REMOTE_URL|HANDSHAKE|OPT_LINKS)\b|WP-LinkHelper', 0)
+# Kampanye wp2shell (CVE-2026-63030, khankimi & bayarlis 22 Okt 2026): penanda alat, plugin/mu-plugin samaran, pintu TDS
+RE_SUFIKS_W2S = re.compile(r'__[0-9a-f]{7}$')
+RE_W2S = r(r'2DUAN_START|WP2SHELL::|WPBWORM::|Plugin Name:\s*(?:wp2shell|wpbatchworm)\b|FM_CACHE_IDX_INJECT|FM_CACHE_INDEX_CUSTOM_CODE'
+           r'|source:\s*b26_wp_mu|\bwfc_dp_(?:dynamic_payload_handler|decrypt_data|send_get_request)\b|\bll_autocreate\b'
+           r'|\?api=%s&ac=%s&path=%s|\d*PJcpMFsD8B\.php', 0)
+# Closure yang meng-eval argumennya: $f = function ($x) { EVAL ($x); };
+RE_EVAL_CLOSURE = r(r'function\s*\(\s*\$(\w+)\s*\)\s*\{\s*(?:@\s*)?(?:eval|assert)\s*\(\s*\$\1\s*\)\s*;\s*\}')
+# Tabel fungsi $GLOBALS[O0O0O0] = explode('|H|Z|8', 'ini_set|…|eval|…') (pemuat O00OO di index.php folder ganda)
+RE_GLOBALS_EXPLODE = r(r'\$GLOBALS\s*\[\s*[O0]{4,}\s*\]\s*=\s*explode\s*\(', 0)
+# Nama fungsi dibalik (plugin CoreStack): strrev('elif_dedaolpu_evom')
+RE_STRREV_FUNGSI = r(r'strrev\s*\(\s*[\'"](?:elif_dedaolpu_evom|knilnu|stnetnoc_tup_elif|stnetnoc_teg_elif|ridnacs|cexe_llehs|metsys|lave)[\'"]')
+# Nama fungsi dalam string hex ('7068705f756e616d65' = php_uname) → webshell ngji
+HEX_FUNGSI = {binascii.hexlify(x) for x in (b'php_uname', b'file_get_contents', b'file_put_contents', b'base64_decode', b'unlink',
+              b'chmod', b'mkdir', b'scandir', b'shell_exec', b'passthru', b'move_uploaded_file', b'fwrite', b'proc_open', b'popen')}
+RE_HEX_STR = re.compile(rb'[\'"]([0-9a-fA-F]{8,40})[\'"]')
+# .htaccess kunci: tolak semua PHP lalu izinkan index.php + nama shell (melindungi shell, menutup PHP lain)
+RE_HT_KUNCI = r(r'<FilesMatch\s+"[^"\n]*\(py\|exe\|(?:phtml\|)?php\b|<FilesMatch\s+"\^\([^"\n]*(?:lock360|wp-l0gin|PJcpMFsD8B|juejiang|zt2)\\?\.php')
+# Penyembunyi akun penyerang (login wp_*) dari Users/penulis
+RE_SEMBUNYI_USER = r(r'esc_like\s*\(\s*[\'"]wp_[\'"]\s*\)')
+# Pemuat O00OO: $O00OO_0_O_ = urldecode("%6E1%7A…") lalu fungsi dirakit per karakter
+RE_VAR_O0 = r(r'\$(?=[O0_]*O)(?=[O0_]*0)[O0_]{8,}\s*=\s*(?:urldecode|base64_decode|str_rot13|gzinflate|rawurldecode)\s*\(', 0)
+# Nama fungsi dirakit str_split/implode (file manager bergerbang $__h/$__k di plugin samaran wp-menu-helper)
+RE_STR_SPLIT = r(r'str_split\s*\(\s*[\'"](?:file_put_contents|file_get_contents|move_uploaded_file|unlink|rename|chmod|shell_exec)[\'"]'
+                 r'|implode\s*\(\s*[\'"][\'"]\s*,\s*str_split\s*\(\s*\$\w+\s*,\s*1\s*\)\s*\)\s*;\s*\}\s*,\s*\[\s*[\'"]move_uploaded_file')
+# mu-plugin sisipan tautan "Home Text Permanent" (bayarlis) — bisa saja dipasang pemilik → curiga
+RE_HOME_TEXT = r(r'\bhti_(?:permanent_settings|mu_installer_cleanup_pending)\b', 0)
+# Pintu belakang mu-plugin gelombang 21 Okt (montessori, dewanpendidikan, miainulyaqiin): salin diri ke MU, pemulih dari GitHub
+RE_MU_BELAKANG = r(r'\b(?:mu_protector_restore_file|lf_sync_mu_plugin_copy)\b|CURLOPT_LF_TEST|MU Guardian Plugin', 0)
+# Login sebagai admin mana saja: cari ID administrator lewat SQL lalu wp_set_auth_cookie
+RE_ADMIN_SQL = r(r'meta_value\s+LIKE\s+[\'"]%administrator%[\'"]')
+# Buat akun dari ?user=&pass= di URL
+RE_PASS_GET = r(r'\$_(?:GET|REQUEST)\s*\[\s*[\'"](?:pass|password|pwd)[\'"]\s*\]')
+RE_BUAT_USER = r(r'\bwp_(?:create|insert)_user\s*\(')
+# Payload dipecah ke $__map["k0"]…$__map["kN"] lalu didekode berlapis dan di-eval
+RE_PETA = r(r'\$__map\s*\[\s*[\'"]k\d+[\'"]\s*\]\s*=', 0)
 # Payload dipecah jadi array potongan base64 pendek lalu di-eval (wp-config-sample.php sisipan)
 RE_ARRAY_B64 = r(r'array\s*\(\s*(?:[\'"][A-Za-z0-9+/=]{16,64}[\'"]\s*,\s*){30,}')
 RE_ROT13_URL = r(r'str_rot13\s*\(\s*[\'"]uggcf?://')
@@ -527,6 +563,45 @@ def js_suntik(teks, path):
     return potong(teks, m) if m and RE_JS_SUNTIK.search(teks) else None
 
 
+def hex_fungsi(teks, path):
+    nama = {m.group(1).lower() for m in RE_HEX_STR.finditer(teks)} & HEX_FUNGSI
+    return 'nama fungsi dalam hex: ' + ', '.join(sorted(binascii.unhexlify(x).decode() for x in nama)[:5]) if len(nama) >= 4 else None
+
+
+def eval_tag_dekripsi(teks, path):
+    # eval('?>' . openssl_decrypt(...)) — payload terenkripsi kunci tetap (SvVZ6/index.php)
+    m = RE_EVAL_TAG.search(teks)
+    return potong(teks, m) if m and b'openssl_decrypt' in teks else None
+
+
+def pintu_tds(teks, path):
+    # Pintu TDS index.php: kirim domain/referer/UA pengunjung ke API luar lalu cetak header+isi balasannya
+    if len(teks) < 40000 and re.search(rb'\$params\s*\[\s*[\'"]agent[\'"]\s*\]', teks) and re.search(rb'\$params\s*\[\s*[\'"]referer[\'"]\s*\]', teks) \
+            and re.search(rb'gzuncompress\s*\(\s*base64_decode', teks):
+        return potong(teks, re.search(rb'\$params\s*\[\s*[\'"]agent', teks))
+    return None
+
+
+def login_admin_acak(teks, path):
+    m = RE_ADMIN_SQL.search(teks)
+    return potong(teks, m) if m and RE_AUTH.search(teks) and RE_ADMIN_PAKSA.search(teks) else None
+
+
+def buat_user_get(teks, path):
+    m = RE_PASS_GET.search(teks)
+    return potong(teks, m) if m and RE_BUAT_USER.search(teks) else None
+
+
+def peta_eval(teks, path):
+    n = len(RE_PETA.findall(teks))
+    return '%d potongan $__map + eval' % n if n >= 20 and re.search(rb'\beval\s*\(', teks) else None
+
+
+def sembunyi_user(teks, path):
+    m = RE_SEMBUNYI_USER.search(teks)
+    return potong(teks, m) if m and b'user_login' in teks and re.search(rb'pre_user_query|author__not_in|views_users', teks) else None
+
+
 # Gerbang = potongan huruf kecil yang WAJIB ada sebelum regex dijalankan (regex re.I mahal di ribuan berkas)
 TANDA = [
     ('VD.PHP.EvalDekode', 'eval/assert atas hasil dekode', 'virus', 'php', cari(RE_EVAL_DEKODE), (b'eval', b'assert')),
@@ -538,6 +613,21 @@ TANDA = [
     ('VD.Deface.HackedBy', 'Halaman deface "hacked by"', 'virus', 'web', cari(RE_HACKED), (b'hacked', b'hack3d')),
     ('VD.WP.PluginPalsu', 'Plugin samaran (Locale Perf / cachepress dkk.)', 'virus', 'php', cari(RE_LOCALE), (b'locale', b'cachepress', b'craft-harvester', b'widget-compat', b'anti-db-wipe')),
     ('VD.WP.LinkHelper', 'Botnet backlink WP-LinkHelper (wlh)', 'virus', 'php', cari(RE_WLH), (b'wlh_', b'wp-linkhelper')),
+    ('VD.W2S.Penanda', 'Alat/pemuat kampanye wp2shell', 'virus', PHP | {'htaccess'}, cari(RE_W2S), (b'2duan_start', b'wp2shell', b'wpbworm', b'wpbatchworm', b'fm_cache_', b'b26_wp_mu', b'wfc_dp_', b'll_autocreate', b'?api=%s', b'pjcpmfsd8b')),
+    ('VD.PHP.EvalClosure', 'Closure yang meng-eval argumennya', 'virus', 'php', cari(RE_EVAL_CLOSURE), (b'eval', b'assert')),
+    ('VD.PHP.GlobalsExplode', 'Tabel fungsi $GLOBALS[O0..] = explode() (pemuat O00OO)', 'virus', 'php', cari(RE_GLOBALS_EXPLODE), (b'explode',)),
+    ('VD.PHP.StrrevFungsi', 'Nama fungsi berbahaya dibalik strrev()', 'virus', 'php', cari(RE_STRREV_FUNGSI), (b'strrev',)),
+    ('VD.Webshell.HexNama', 'Nama fungsi webshell dalam string hex', 'virus', 'php', hex_fungsi, (b'66696c65', b'7068705f', b'756e6c696e6b')),
+    ('VD.PHP.EvalDekripsi', "eval('?>' . openssl_decrypt(...))", 'virus', 'php', eval_tag_dekripsi, (b'openssl_decrypt',)),
+    ('VD.SEO.PintuTDS', 'Pintu TDS: data pengunjung dikirim ke API luar, balasan dicetak', 'virus', 'php', pintu_tds, (b'gzuncompress',)),
+    ('VD.Htaccess.KunciShell', '.htaccess menolak PHP lain & mengizinkan shell', 'virus', {'htaccess'}, cari(RE_HT_KUNCI), (b'filesmatch',)),
+    ('VD.WP.SembunyiAdmin', 'Menyembunyikan akun wp_* dari daftar Users', 'virus', 'php', sembunyi_user, (b'esc_like',)),
+    ('VD.PHP.VariabelO0', 'Pemuat O00OO (variabel O/0 + urldecode)', 'virus', 'php', cari(RE_VAR_O0), (b'o00', b'0o0', b'o0o')),
+    ('VD.WP.PintuBelakangMU', 'mu-plugin pintu belakang (salin diri/pemulih dari luar)', 'virus', 'php', cari(RE_MU_BELAKANG), (b'mu_protector', b'lf_sync_mu', b'curlopt_lf_test', b'mu guardian')),
+    ('VD.WP.LoginAdminAcak', 'Login otomatis sebagai administrator mana saja', 'virus', 'php', login_admin_acak, (b'%administrator%',)),
+    ('VD.WP.BuatUserGet', 'Membuat akun dari parameter URL (user/pass)', 'virus', 'php', buat_user_get, (b'_user(',)),
+    ('VD.PHP.PetaEval', 'Payload dipecah $__map[kN] lalu di-eval', 'virus', 'php', peta_eval, (b'$__map',)),
+    ('VD.Webshell.StrSplit', 'Nama fungsi berkas dirakit str_split (file manager samaran)', 'virus', 'php', cari(RE_STR_SPLIT), (b'str_split',)),
     ('VD.PHP.ArrayBase64', 'Payload base64 dipecah dalam array + eval', 'virus', 'php', array_b64, (b'eval', b'assert', b'create_function')),
     ('VD.Backlink.Rot13', 'Backlink tersembunyi str_rot13', 'virus', 'php', cari(RE_ROT13_URL), (b'str_rot13',)),
     ('VD.PHP.RantaiChr', 'Rantai chr() (webshell disamarkan)', 'virus', 'php', rantai_chr, (b'chr(',)),
@@ -562,10 +652,13 @@ TANDA = [
     ('VD.JS.AlihAtob', 'Pengalih TDS: script src dari atob()', 'virus', TEKS_JUDI | {'php', 'js'}, cari(RE_SRC_ATOB), (b'atob',)),
     ('VD.WP.SuntikRemote', 'Cetak .txt situs luar di wp_footer/wp_head', 'virus', 'php', suntik_remote, (b'wp_footer', b'wp_head')),
     ('VD.JS.Suntik', 'JavaScript tersuntik (fromCharCode)', 'curiga', {'js'}, js_suntik, (b'fromcharcode',)),
+    ('VD.WP.SisipanHomeText', 'mu-plugin sisipan tautan Home Text (wp2shell)', 'curiga', 'php', cari(RE_HOME_TEXT), (b'hti_',)),
 ]
 
 
 def ekstensi(nama):
+    # wp2shell menamai ulang berkas asli jadi index.php__01bd3b5 (salinan pemuat ikut) → nilai sebagai ekstensi aslinya
+    nama = RE_SUFIKS_W2S.sub('', nama)
     if nama == '.htaccess':
         return 'htaccess'
     return nama.rsplit('.', 1)[-1].lower() if '.' in nama else ''
