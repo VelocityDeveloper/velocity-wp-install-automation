@@ -119,8 +119,14 @@
    ],
    "footer-widget2": [
     {
-     "jenis": "tentang",
-     "judul": "About Us"
+     "jenis": "core",
+     "base": "categories",
+     "opsi": {
+      "title": "Categories",
+      "count": 0,
+      "hierarchical": 0,
+      "dropdown": 0
+     }
     }
    ],
    "footer-widget3": [
@@ -131,18 +137,12 @@
    ],
    "footer-widget4": [
     {
-     "jenis": "core",
-     "base": "categories",
-     "opsi": {
-      "title": "Categories",
-      "count": 0,
-      "hierarchical": 0,
-      "dropdown": 0
-     }
+     "jenis": "statistik",
+     "judul": "Pengunjung"
     }
    ]
   },
-  "catatan": "Area milik child: main-sidebar, secondary-sidebar (kolom kiri col-2 di halaman arsip/kategori, left_sidebar()), footer-widget1..4 TANPA tanda hubung (part-footer.php: dynamic_sidebar('footer-widget'.$x)); footer-widget-1..4 induk tidak dipakai. Posts_Berita_1_Widget: kunci title/style/urutkan/kategori/jumlah; style = '1'..'6' -> module_vdposts('posts'+style) (demo: 3 = daftar thumbnail 1:1+tanggal/views+cuplikan, 6 = grid 2 kolom overlay, 4 = daftar judul ber-ikon); urutkan 'recent'|'popular' (popular = meta 'hit'); kategori = term_id (ID, bukan slug), '' = semua. Widget 'House' di demo berisi 4 tulisan kategori Nasional (kategori demo terbanyak) padahal judulnya 'House' (bukan nama kategori) -> judul dipertahankan sesuai aturan, tapi pertimbangkan '{kat_nama}'. Placeholder {kat_id} di opsi.kategori harus diganti ID kategori_ke. Iklan footer 640x352 di demo berupa foto stok 'ecommerce' di kolom 3 footer (bukan logo) -> diperlakukan slot iklan, tidak pasti. Footer demo juga menampilkan iklan_footer dari Customizer (bukan widget). Tabs_Berita_1_Widget terdaftar tapi tidak dipakai demo. Populer butuh meta 'hit' pada tulisan."
+  "catatan": "Area milik child: main-sidebar, secondary-sidebar (kolom kiri col-2 di halaman arsip/kategori, left_sidebar()), footer-widget1..4 TANPA tanda hubung (part-footer.php: dynamic_sidebar('footer-widget'.$x)); footer-widget-1..4 induk tidak dipakai. Posts_Berita_1_Widget: kunci title/style/urutkan/kategori/jumlah; style = '1'..'6' -> module_vdposts('posts'+style) (demo: 3 = daftar thumbnail 1:1+tanggal/views+cuplikan, 6 = grid 2 kolom overlay, 4 = daftar judul ber-ikon); urutkan 'recent'|'popular' (popular = meta 'hit'); kategori = term_id (ID, bukan slug), '' = semua. Widget 'House' di demo berisi 4 tulisan kategori Nasional (kategori demo terbanyak) padahal judulnya 'House' (bukan nama kategori) -> judul dipertahankan sesuai aturan, tapi pertimbangkan '{kat_nama}'. Placeholder {kat_id} di opsi.kategori harus diganti ID kategori_ke. Iklan footer 640x352 di demo berupa foto stok 'ecommerce' di kolom 3 footer (bukan logo) -> diperlakukan slot iklan, tidak pasti. Footer demo juga menampilkan iklan_footer dari Customizer (bukan widget). Tabs_Berita_1_Widget terdaftar tapi tidak dipakai demo. Populer butuh meta 'hit' pada tulisan. Footer diubah user 2026-10-22 (persmediapresisihukum.com): 1 Pencarian, 2 Categories, 3 iklan, 4 Pengunjung (About Us dibuang)."
  },
  "velocity-berita10": {
   "slug": "velocity-berita10",
