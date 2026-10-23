@@ -106,6 +106,8 @@ RE_MU_BELAKANG = r(r'\b(?:mu_protector_restore_file|lf_sync_mu_plugin_copy)\b|CU
 RE_LOADER_SP = r(r'Plugin Name:\s*SecurePlugin[A-Za-z0-9]{6,}|\bclass\s+Loader[A-Z]{5}\d{3,}\b', 0)
 RE_PTR_ELEM = r(r'\$key\s*=\s*[\'"]ptr[\'"]', 0)
 RE_FM_ROOT = r(r'\bFM_ROOT\b', 0)
+RE_HOST_LOKAL = re.compile(r'^(localhost|127\.0\.0\.1|::1|\[::1\])?(:(\d+|/\S+))?$', re.I)
+IP_DB_PERETAS = {'46.28.71.63'}
 # Login sebagai admin mana saja: cari ID administrator lewat SQL lalu wp_set_auth_cookie
 RE_ADMIN_SQL = r(r'meta_value\s+LIKE\s+[\'"]%administrator%[\'"]')
 # Buat akun dari ?user=&pass= di URL
@@ -607,6 +609,21 @@ def sembunyi_user(teks, path):
     return potong(teks, m) if m and b'user_login' in teks and re.search(rb'pre_user_query|author__not_in|views_users', teks) else None
 
 
+def wpconfig_bajak(teks, path, remote_saja=False):
+    # Pembajakan wp-config (anugrahsaktisehati/kantorhukumwusang, 8 Okt): DB diarahkan ke server peretas 46.28.71.63:80, DB/user mytestdb.
+    # remote_saja=True → DB_HOST bukan lokal tanpa ciri peretas (bisa DB remote sah, tingkat curiga).
+    if not path.endswith('/wp-config.php'):
+        return None
+    d = {m.group(1).decode(): m.group(3).decode('utf-8', 'replace').strip() for m in RE_DEF.finditer(teks)}
+    h = d.get('DB_HOST', 'localhost')
+    lokal = RE_HOST_LOKAL.match(h)
+    peretas = 'mytestdb' in (d.get('DB_NAME', '').lower(), d.get('DB_USER', '').lower()) or h.split(':')[0] in IP_DB_PERETAS \
+        or (not lokal and h.rsplit(':', 1)[-1] in ('80', '443', '8080', '21'))
+    if remote_saja and lokal or remote_saja == peretas:
+        return None
+    return 'DB_HOST=%s DB_NAME=%s' % (h[:60], d.get('DB_NAME', '?')[:40])
+
+
 def ptr_elem(teks, path):
     m = RE_PTR_ELEM.search(teks)
     return potong(teks, m) if m and b'.elem' in teks and b'include' in teks else None
@@ -643,6 +660,7 @@ TANDA = [
     ('VD.PHP.LoaderSecurePlugin', 'Pemuat SecurePlugin*/Loader* (index.php diganti, montesso 23 Okt)', 'virus', 'php', cari(RE_LOADER_SP), (b'secureplugin', b'class loader')),
     ('VD.Webshell.PtrElem', 'Shell $key="ptr" tulis .elem lalu include', 'virus', 'php', ptr_elem, (b'"ptr"', b"'ptr'")),
     ('VD.Webshell.FmRoot', 'File manager mandiri FM_ROOT/.fm_key', 'virus', 'php', fm_root, (b'fm_root',)),
+    ('VD.WP.ConfigDibajak', 'wp-config diarahkan ke DB peretas (mytestdb / port web)', 'virus', 'php', wpconfig_bajak, (b'db_host', b'db_name')),
     ('VD.WP.LoginAdminAcak', 'Login otomatis sebagai administrator mana saja', 'virus', 'php', login_admin_acak, (b'%administrator%',)),
     ('VD.WP.BuatUserGet', 'Membuat akun dari parameter URL (user/pass)', 'virus', 'php', buat_user_get, (b'_user(',)),
     ('VD.PHP.PetaEval', 'Payload dipecah $__map[kN] lalu di-eval', 'virus', 'php', peta_eval, (b'$__map',)),
@@ -671,6 +689,7 @@ TANDA = [
     ('VD.JS.AlihAtob', 'Pengalih TDS: script src dari atob()', 'virus', TEKS_JUDI | {'php', 'js'}, cari(RE_SRC_ATOB), (b'atob',)),
     ('VD.WP.SuntikRemote', 'Cetak .txt situs luar di wp_footer/wp_head', 'virus', 'php', suntik_remote, (b'wp_footer', b'wp_head')),
     ('VD.JS.Suntik', 'JavaScript tersuntik (fromCharCode)', 'curiga', {'js'}, js_suntik, (b'fromcharcode',)),
+    ('VD.WP.ConfigDBRemote', 'wp-config memakai DB remote (cek: sah atau dibajak)', 'curiga', 'php', lambda teks, path: wpconfig_bajak(teks, path, True), (b'db_host',)),
     ('VD.WP.SisipanHomeText', 'mu-plugin sisipan tautan Home Text (wp2shell)', 'curiga', 'php', cari(RE_HOME_TEXT), (b'hti_',)),
 ]
 

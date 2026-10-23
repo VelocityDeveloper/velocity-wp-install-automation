@@ -11,6 +11,7 @@ def tanda(nama, isi):
     return {t['id'] for t in ag.periksa('/home/u/domains/d/public_html/' + nama, ag.ekstensi(os.path.basename(nama)), isi)}
 
 
+WPC = b"<?php\ndefine( 'DB_NAME', '%s' );\ndefine( 'DB_USER', 'u' );\ndefine( 'DB_PASSWORD', 'x' );\ndefine( 'DB_HOST', '%s' );\n"
 KENA = [
     ('3PJcpMFsD8B.php', b'<?php\n$h= \t\tfunction ($c) {\r\n    EVAL \t\t($c);\r\n};', 'VD.PHP.EvalClosure'),
     ('x/index.php', b"<?php define('O0O0O0', 'O0O00O');$GLOBALS[O0O0O0] = explode('|H|Z|8', 'ini_set|H|Z|8eval');", 'VD.PHP.GlobalsExplode'),
@@ -32,6 +33,10 @@ KENA = [
     ('index.php', b"<?php\n/*\nPlugin Name: SecurePluginLomxJhBs41\n*/\nclass LoaderHBBGL43537 { }", 'VD.PHP.LoaderSecurePlugin'),
     ('wp-content/uploads/search_template_1.php', b'<?php $key="ptr"; $bind = "$item/.elem"; include $bind;', 'VD.Webshell.PtrElem'),
     ('asset-manager.php', b"<?php define('FM_ROOT', __DIR__); $fm_key_file = __DIR__ . '/.fm_key';", 'VD.Webshell.FmRoot'),
+    ('wp-config.php', WPC % (b'mytestdb', b'46.28.71.63:80'), 'VD.WP.ConfigDibajak'),
+    ('wp-config.php', WPC % (b'x_wp1', b'203.0.113.9:443'), 'VD.WP.ConfigDibajak'),
+    ('wp-config.php', WPC % (b'mytestdb', b'localhost'), 'VD.WP.ConfigDibajak'),
+    ('wp-config.php', WPC % (b'x_wp1', b'db.example.net:3306'), 'VD.WP.ConfigDBRemote'),
 ]
 for nama, isi, harap in KENA:
     assert harap in tanda(nama, isi), (nama, harap, tanda(nama, isi))
@@ -42,6 +47,10 @@ AMAN = [
     ('.htaccess', b'<FilesMatch "\\.(?i:php[0-9]?|phtml|phar)$">\n    Require all denied\n</FilesMatch>'),
     ('wp-content/plugins/x/d.php', b"<?php class LoaderCache { } $key = 'ptr'; define('FM_ROOT', ABSPATH);"),
     ('wp-content/plugins/x/c.php', b"<?php $like = $wpdb->esc_like( 'wp_' ) . '%'; $wpdb->query( \"DELETE FROM $wpdb->options WHERE option_name LIKE '$like'\" );"),
+    ('wp-config.php', WPC % (b'x_wp1', b'localhost')),
+    ('wp-config.php', WPC % (b'x_wp1', b'localhost:/var/lib/mysql/mysql.sock')),
+    ('wp-config.php', WPC % (b'x_wp1', b'127.0.0.1:3306')),
+    ('wp-config-sample.php', WPC % (b'mytestdb', b'46.28.71.63:80')),
 ]
 for nama, isi in AMAN:
     assert not tanda(nama, isi), (nama, tanda(nama, isi))
