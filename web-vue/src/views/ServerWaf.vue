@@ -122,7 +122,7 @@ const KONFIRMASI = {
   perbarui: (s) => ({ judul: `Perbarui Velocity WAF di ${s.name}?`, tombol: 'Perbarui',
     teks: `Ruleset & setelan terbaru dipasang dengan mode tetap ${st(s).mode}. Berkas lama disalin ke /etc/velocity-waf.bak-<waktu>. ${restart(s)}.` }),
   copot: (s) => ({ judul: `Copot Velocity WAF dari ${s.name}?`, tombol: 'Copot', kelas: 'bahaya',
-    teks: `Include di /etc/modsecurity.d dihapus (berkas /etc/velocity-waf tetap ada) dan ${restart(s)}.${st(s).cpguard ? '' : ' cPGuard WAF tidak aktif di server ini → server jadi TANPA aturan WAF.'}` }),
+    teks: `Include Velocity WAF dihapus (berkas /etc/velocity-waf tetap ada) dan ${restart(s)}.${st(s).cpguard ? '' : ' cPGuard WAF tidak aktif di server ini → server jadi TANPA aturan WAF.'}` }),
 }
 async function jalankan(jenis) {
   if (perluNama()) return
@@ -350,7 +350,7 @@ const ringkasSetelan = (s) => Object.entries(s || {}).map(([k, v]) => `${k}=${Ar
               <template v-if="jobServer.status === 'berjalan'">
                 <span class="putar besar" aria-hidden="true" />
                 <div role="status"><b>{{ jobServer.aksi === 'copot' ? 'Mencopot' : `Memasang mode ${jobServer.mode}` }}…</b>
-                  <span class="redup"> menulis berkas, restart LiteSpeed, uji situs · {{ durasi(jobServer) }}</span></div>
+                  <span class="redup"> menulis berkas, {{ st(terpilih).nginx ? 'reload nginx' : 'restart LiteSpeed' }}, uji situs · {{ durasi(jobServer) }}</span></div>
               </template>
               <template v-else>
                 <Ikon :nama="jobServer.status === 'selesai' ? 'centang' : 'peringatan'" :ukuran="20" />
