@@ -113,15 +113,16 @@ function pantauJob() {
 }
 onBeforeUnmount(() => clearInterval(timerJob))
 
+const restart = (s) => st(s).nginx ? 'nginx di-reload' : 'LiteSpeed di-restart'
 const KONFIRMASI = {
   'pasang-deteksi': (s) => ({ judul: `Pasang Velocity WAF mode deteksi di ${s.name}?`, tombol: 'Pasang mode deteksi',
-    teks: 'Aturan hanya MENCATAT (tidak memblokir pengunjung) — aman dijalankan berdampingan dengan cPGuard. LiteSpeed di-restart (±10 detik); bila situs uji error sesudahnya, semua dikembalikan otomatis.' }),
+    teks: `Aturan hanya MENCATAT (tidak memblokir pengunjung) — aman dijalankan berdampingan dengan cPGuard. ${restart(s)} (±10 detik); bila situs uji error sesudahnya, semua dikembalikan otomatis.` }),
   'pasang-blokir': (s) => ({ judul: `Aktifkan mode BLOKIR di ${s.name}?`, tombol: 'Aktifkan blokir', kelas: 'bahaya',
-    teks: `Bot jahat, crawler SEO/AI, probe berkas sensitif, dan brute force xmlrpc/wp-login akan DITOLAK (429/403/406).${st(s).cpguard ? ' cPGuard WAF masih aktif di server ini — aturan keduanya berjalan bersamaan.' : ''} LiteSpeed di-restart; rollback otomatis bila situs uji error.` }),
+    teks: `Bot jahat, crawler SEO/AI, probe berkas sensitif, dan brute force xmlrpc/wp-login akan DITOLAK (429/403/406).${st(s).cpguard ? ' cPGuard WAF masih aktif di server ini — aturan keduanya berjalan bersamaan.' : ''} ${restart(s)}; rollback otomatis bila situs uji error.` }),
   perbarui: (s) => ({ judul: `Perbarui Velocity WAF di ${s.name}?`, tombol: 'Perbarui',
-    teks: `Ruleset & setelan terbaru dipasang dengan mode tetap ${st(s).mode}. Berkas lama disalin ke /etc/velocity-waf.bak-<waktu>. LiteSpeed di-restart.` }),
+    teks: `Ruleset & setelan terbaru dipasang dengan mode tetap ${st(s).mode}. Berkas lama disalin ke /etc/velocity-waf.bak-<waktu>. ${restart(s)}.` }),
   copot: (s) => ({ judul: `Copot Velocity WAF dari ${s.name}?`, tombol: 'Copot', kelas: 'bahaya',
-    teks: `Include di /etc/modsecurity.d dihapus (berkas /etc/velocity-waf tetap ada) dan LiteSpeed di-restart.${st(s).cpguard ? '' : ' cPGuard WAF tidak aktif di server ini → server jadi TANPA aturan WAF.'}` }),
+    teks: `Include di /etc/modsecurity.d dihapus (berkas /etc/velocity-waf tetap ada) dan ${restart(s)}.${st(s).cpguard ? '' : ' cPGuard WAF tidak aktif di server ini → server jadi TANPA aturan WAF.'}` }),
 }
 async function jalankan(jenis) {
   if (perluNama()) return

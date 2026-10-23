@@ -381,6 +381,8 @@ def log(p):
 
 # ---- Log WAF: baris "ModSecurity:" di error log LiteSpeed (+ arsip berukuran) / Apache. Tidak bergantung cPGuard. ----
 RE_WAF = re.compile(r'^\[\w{3} (\w{3} +\d+ \d\d:\d\d:\d\d)(?:\.\d+)? (\d{4})\] \[[\w:]+\](?: \[pid \d+(?::tid \d+)?\])? \[client ([^\]]+)\] ModSecurity: (.*)$')
+# nginx + libmodsecurity v3 (atha): "2026/07/28 16:45:43 [error] 220823#220823: *33853 [client 1.2.3.4] ModSecurity: …"
+RE_WAF_NGX = re.compile(r'^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d) \[\w+\] \d+#\d+: (?:\*\d+ )?\[client ([^\]]+)\] ModSecurity: (.*)$')
 WAF_KUNCI = {k: re.compile(r'\[%s "([^"]*)"\]' % k) for k in ('msg', 'id', 'hostname', 'uri', 'file')}
 
 
@@ -400,7 +402,8 @@ def kategori_waf(msg):
 
 
 def berkas_waf(batas):
-    pola = ['/usr/local/lsws/logs/error.log', '/usr/local/lsws/logs/error.log.*', '/var/log/httpd/error_log', '/var/log/httpd/error_log.*']
+    pola = ['/usr/local/lsws/logs/error.log', '/usr/local/lsws/logs/error.log.*', '/var/log/httpd/error_log', '/var/log/httpd/error_log.*',
+            '/var/log/nginx/*error[._]log', '/var/log/nginx/*error[._]log.*', '/var/log/nginx/*/*error.log', '/var/log/nginx/*/*error.log.*']
     out = []
     for g in pola:
         for b in glob.glob(g):
@@ -429,22 +432,27 @@ def waf(p):
             proc = None
         for baris in (proc.stdout if proc else []):
             m = RE_WAF.match(baris)
-            if not m:
+            n = None if m else RE_WAF_NGX.match(baris)
+            if not m and not n:
                 continue
             try:
-                t = int(time.mktime(time.strptime('%s %s' % (re.sub(r'\s+', ' ', m.group(1)), m.group(2)), '%b %d %H:%M:%S %Y')))
+                if m:
+                    t = int(time.mktime(time.strptime('%s %s' % (re.sub(r'\s+', ' ', m.group(1)), m.group(2)), '%b %d %H:%M:%S %Y')))
+                else:
+                    t = int(time.mktime(time.strptime(n.group(1), '%Y/%m/%d %H:%M:%S')))
             except ValueError:
                 continue
             if t < batas:
                 continue
-            isi = m.group(4)
+            isi = m.group(4) if m else n.group(3)
+            klien = m.group(3) if m else n.group(2)
             f = {k: (r.search(isi).group(1) if r.search(isi) else '') for k, r in WAF_KUNCI.items()}
             if not f['msg']:
                 r = RE_RULE.search(isi)
                 f['msg'] = NAMA_RULE.get(r.group(1), 'Rule ' + r.group(1)) if r else ''
             kode = re.search(r'with code (\d+)', isi)
             kode = kode.group(1) if kode else ('deteksi' if isi.startswith('Warning') else '-')
-            ip = m.group(3).split(':')[0] if m.group(3).count(':') == 1 else m.group(3)
+            ip = klien.split(':')[0] if klien.count(':') == 1 else klien
             kat = kategori_waf(f['msg'])
             total += 1
             for k, v in (('kode', kode), ('aturan', f['msg'] or ('id ' + f['id'])), ('domain', f['hostname'].lower()), ('ip', ip), ('kategori', kat)):
@@ -468,8 +476,8 @@ def waf(p):
     return {'ok': True, 'hari': hari, 'total': total, 'teratas': teratas, 'jam': sorted(jam.items()), 'acara': acara[:maks],
             'berkas': len(berkas), 'modsecurity': mod.group(1).strip() if mod else None,
             'ruleset': rs.group(1).strip() if rs else None, 'cpguard_rules': os.path.isfile('/etc/cpguard/cpguard_modsec100.conf'),
-            'velocity_waf': (baca('/etc/velocity-waf/VERSI').strip() or 'terpasang') if any(
-                            os.path.isfile('/etc/modsecurity.d/velocity-waf.conf' + x) for x in ('', '.main')) else None}  # .main = DA nginx (sanke)
+            'velocity_waf': (baca('/etc/velocity-waf/VERSI').strip() or 'terpasang') if any(os.path.isfile('/etc/modsecurity.d/velocity-waf.conf' + x) for x in ('', '.main'))  # .main = DA nginx (sanke)
+                            or any('Include /etc/velocity-waf/' in baca(f) for f in glob.glob('/etc/nginx/*.conf')) else None}
 
 
 AKSI = {'ringkas': ringkas, 'cek': cek, 'blokir': blokir, 'lepas': lepas, 'izinkan': izinkan,
