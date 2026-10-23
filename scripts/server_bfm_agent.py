@@ -30,17 +30,24 @@ CSF_DENY = '/etc/csf/csf.deny'
 TEMPBAN = '/var/lib/csf/csf.tempban'
 REGEX = '/etc/csf/regex.custom.pm'
 LFD_LOG = '/var/log/lfd.log'
-WAF_LOG = '/usr/local/lsws/logs/error.log'
+# nginx + libmodsecurity v3 (atha): Velocity WAF di-Include dari berkas modsecurity_rules_file, log ke error_log per vhost.
+# Nilai berisi spasi/wildcard → lfd memakai glob() (vhost baru perlu restart lfd).
+# DA nginx(_apache), mis. sanke: include di /etc/modsecurity.d, log utama DA bernama error_log (bukan error.log)
+DA_NGX = not os.path.isfile('/usr/local/lsws/bin/lswsctrl') and bool(glob.glob('/etc/modsecurity.d/velocity-waf.conf*'))
+NGX = DA_NGX or any('Include /etc/velocity-waf/' in open(f, errors='replace').read() for f in glob.glob('/etc/nginx/*.conf'))
+WAF_LOG = ('/var/log/nginx/error_log /var/log/nginx/*/*error.log' if DA_NGX else
+           '/var/log/nginx/error.log /var/log/nginx/*/*error.log' if NGX else '/usr/local/lsws/logs/error.log')
 CPG_BFM = '/opt/cpguard/app/data/bruteforce.db'
 LOG_KOSONG = '/var/log/customlog'
 MULAI = '# VELOCITY-BFM MULAI'
 SELESAI = '# VELOCITY-BFM SELESAI'
-BATAS_EDIT = '# Do not edit beyond this point'
+# CSF asli: '# Do not edit beyond…'; fork Aetherinox (atha): '#   Do not edit beyond…'
+RE_BATAS_EDIT = re.compile(r'^#\s*Do not edit beyond this point', re.M)
 KUNCI_CSF = ('DENY_IP_LIMIT', 'DENY_TEMP_IP_LIMIT', 'LF_IPSET', 'LF_TRIGGER', 'LF_SELECT', 'LF_INTERVAL', 'LF_PERMBLOCK',
              'LF_PERMBLOCK_COUNT', 'LF_PERMBLOCK_INTERVAL', 'LF_SSHD', 'LF_DIRECTADMIN', 'LF_FTPD', 'LF_SMTPAUTH',
              'LF_POP3D', 'LF_IMAPD', 'LF_MODSEC', 'MODSEC_LOG', 'TESTING')
-RE_BARIS_WAF = re.compile(r'^\[(\w{3} \w{3} +\d+ [\d:.]+ \d{4})\] \[(?:\S*:)?error\] \[client (\S+)\] ModSecurity: (Access denied|Warning)'
-                          r'.*?\[id "(77\d{5})"\]')
+RE_BARIS_WAF = re.compile(r'^(?:\[(\w{3} \w{3} +\d+ [\d:.]+ \d{4})\] \[(?:\S*:)?error\] |(\d{4}/\d\d/\d\d [\d:]+) \[\w+\] \d+#\d+: (?:\*\d+ )?)'
+                          r'\[client (\S+)\] ModSecurity: (Access denied|Warning).*?\[id "(77\d{5})"\]')
 BULAN = {b: i + 1 for i, b in enumerate(('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'))}
 
 
@@ -78,8 +85,6 @@ def kelompok(rid):
         return 'crawler'
     if rid == '7700103':
         return 'ai'
-    if rid == '7700104':
-        return 'pencarian'
     if rid == '7700101':
         return 'bot'
     return 'eksploit'
@@ -94,7 +99,6 @@ def blok_perl(aturan, slot, sidik):
     for k, cocok, teks in (('login', "$id =~ /^77005/", 'Velocity WAF brute force login'),
                            ('crawler', "$id eq '7700102'", 'Velocity WAF crawler SEO'),
                            ('ai', "$id eq '7700103'", 'Velocity WAF crawler AI'),
-                           ('pencarian', "$id eq '7700104'", 'Velocity WAF bot AI pencarian'),
                            ('bot', "$id eq '7700101'", 'Velocity WAF bot jahat'),
                            ('berat', '$id =~ ' + RE_BERAT, 'Velocity WAF eksploit berat')):
         if k not in aturan:  # setelan lama tanpa kelompok ini → ikut aturan eksploit
@@ -105,10 +109,10 @@ def blok_perl(aturan, slot, sidik):
         '%s sidik=%s slot=%s' % (MULAI, sidik, slot),
         '# Dikelola dashboard Velocity (Server > Brute Force). Jangan disunting manual: diganti saat Perbarui.',
         '# Memblokir IP yang berulang kali DITOLAK Velocity WAF (mode blokir); baris "Warning" (mode deteksi) diabaikan.',
-        '\tif (($globlogs{%s}{$lgfile}) and ($line =~ /^\\[[^\\]]+\\] \\[(?:\\S*:)?error\\] \\[client (\\S+)\\] ModSecurity: Access denied with code \\S+ .*?\\[id "(77\\d{5})"\\].*?\\[tag "velocity-waf"\\]/)) {' % slot,
+        '\tif (($globlogs{%s}{$lgfile}) and ($line =~ /^(?:\\[[^\\]]+\\] \\[(?:\\S*:)?error\\] |\\d{4}\\/\\d\\d\\/\\d\\d [\\d:]+ \\[\\w+\\] \\d+#\\d+: (?:\\*\\d+ )?)\\[client (\\S+)\\] ModSecurity: Access denied with code \\S+ .*?\\[id "(77\\d{5})"\\].*?\\[tag "velocity-waf"\\]/)) {' % slot,
         '\t\tmy ($ip, $id) = ($1, $2);',
         '\t\t$ip =~ s/^::ffff://;',
-        '\t\treturn 0 if $id =~ /^(?:77007\\d\\d|7700107|7700215)$/;',
+        '\t\treturn 0 if $id =~ /^(?:77007\\d\\d|7700104|7700107|7700118|7700215)$/;',
     ] + cabang + ['\t\t' + akhir, '\t}', SELESAI])
 
 
@@ -119,7 +123,7 @@ def status_blok(teks):
 
 def berkas_log_24j(sejak):
     out = []
-    for p in sorted(glob.glob(WAF_LOG + '*'), key=lambda x: os.path.getmtime(x), reverse=True):
+    for p in sorted(set(x for pola in WAF_LOG.split() for x in glob.glob(pola + '*')), key=lambda x: os.path.getmtime(x), reverse=True):
         if p.endswith('.gz'):
             continue
         try:
@@ -128,11 +132,16 @@ def berkas_log_24j(sejak):
         except OSError:
             continue
         out.append(p)
-    return out[:4]
+    return out[:12]
 
 
 def waktu_log(teks):
-    # "Tue Oct 13 18:29:16.537397 2026"
+    # "Tue Oct 13 18:29:16.537397 2026" (LiteSpeed) atau "2026/10/13 18:29:16" (nginx)
+    if '/' in teks:
+        try:
+            return time.mktime(time.strptime(teks, '%Y/%m/%d %H:%M:%S'))
+        except ValueError:
+            return 0
     try:
         _, b, h, jam, th = teks.split()
         jj, mm, dd = jam.split('.')[0].split(':')
@@ -158,14 +167,14 @@ def simulasi(aturan, interval):
                 m = RE_BARIS_WAF.match(b.decode('utf-8', 'replace'))
                 if not m:
                     continue
-                t = waktu_log(m.group(1))
+                t = waktu_log(m.group(1) or m.group(2))
                 if t < sejak:
                     continue
-                mode[m.group(3)] += 1
-                rid = m.group(4)
-                if rid in ('7700105', '7700107', '7700215') or rid.startswith('77006') or rid.startswith('77007'):
-                    continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam; 7700107 Meta: IP dipakai pratinjau FB/WA; 7700215 page/N artikel: IP residensial
-                per.setdefault(kelompok(rid), {}).setdefault(m.group(2), []).append(t)
+                mode[m.group(4)] += 1
+                rid = m.group(5)
+                if rid in ('7700104', '7700105', '7700107', '7700118', '7700215') or rid.startswith('77006') or rid.startswith('77007'):
+                    continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam; 7700107 Meta: IP dipakai pratinjau FB/WA; 7700215 page/N artikel: IP residensial; 7700104/7700118 bot AI pencarian: IP dipakai juga ChatGPT-User/Perplexity-User
+                per.setdefault(kelompok(rid), {}).setdefault(m.group(3), []).append(t)
     hasil = {}
     for k, a in aturan.items():
         ips = per.get(k, {})
@@ -227,7 +236,7 @@ def sumber_deny():
 
 def mode_waf():
     """Mode Velocity WAF di server ini (deteksi/blokir) atau None bila tidak terpasang."""
-    if not os.path.isfile('/etc/modsecurity.d/velocity-waf.conf'):
+    if not os.path.isfile('/etc/modsecurity.d/velocity-waf.conf') and not NGX:
         return None
     v = baca('/etc/velocity-waf/VERSI').split()
     return v[1] if len(v) > 1 else 'terpasang'
@@ -246,7 +255,7 @@ def status(p):
     interval = int(csf.get('LF_INTERVAL') or 3600)
     out = {'ok': True, 'csf': csf, 'deny': sumber_deny(), 'blok': dict(blok, slot_ok=slot_ok),
            'lfd_aktif': jalan(['systemctl', 'is-active', 'lfd'], 15)[1].strip() == 'active',
-           'waf_log': os.path.isfile(WAF_LOG), 'cpguard': cpguard_24j(),
+           'waf_log': any(glob.glob(x) for x in WAF_LOG.split()), 'cpguard': cpguard_24j(),
            'velocity_waf': mode_waf()}
     if p.get('aturan'):
         out['simulasi'] = simulasi(p['aturan'], interval)
@@ -298,8 +307,11 @@ def ubah(p, pasang):
     regex = baca(regex_asli)
     if not conf or not regex:
         return {'ok': False, 'error': 'csf_tidak_ada'}
-    if BATAS_EDIT not in regex:
+    if not RE_BATAS_EDIT.search(regex):
         return {'ok': False, 'error': 'regex_custom_tidak_dikenal'}
+    # csf -r di bawah MENYALAKAN firewall walau service disabled (atha: CSF terpasang tapi sengaja mati selama cPGuard jalan)
+    if jalan(['systemctl', 'is-active', 'csf'], 15)[1].strip() != 'active':
+        return {'ok': False, 'error': 'csf_belum_aktif'}
     blok = status_blok(regex)
     waktu = time.strftime('%Y%m%d%H%M%S')
     cad_conf = CSF_CONF + '.velocity-' + waktu
@@ -313,7 +325,7 @@ def ubah(p, pasang):
         if not slot:
             return {'ok': False, 'error': 'slot_custom_log_penuh'}
         teks_blok = blok_perl(p['aturan'], slot, p['sidik'])
-        i = regex_baru.index(BATAS_EDIT)
+        i = RE_BATAS_EDIT.search(regex_baru).start()
         # Sisipkan tepat sebelum baris "# Do not edit beyond this point" (di dalam sub custom_line, sebelum return 0)
         awal_baris = regex_baru.rfind('\n', 0, regex_baru.rfind('\n', 0, i)) + 1
         regex_baru = regex_baru[:awal_baris] + teks_blok + '\n' + regex_baru[awal_baris:]

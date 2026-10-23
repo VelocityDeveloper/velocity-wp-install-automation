@@ -22,7 +22,6 @@ REMOTE = r'''
 import base64, glob, json, os, re, shutil, subprocess, time
 P = json.loads(base64.b64decode(SANDI).decode())
 DIR = '/etc/velocity-waf'
-INC = '/etc/modsecurity.d/velocity-waf.conf'
 ELOG = '/usr/local/lsws/logs/error.log'
 # UA browser lengkap: UA polos 'Mozilla/5.0' pernah kena aturan 406 cPGuard. UA uji 'velocity-waf-uji' hanya ada di
 # bot-jahat.txt Velocity WAF (bukan daftar cPGuard), jadi uji tidak memicu cPGuard/BFM selama keduanya jalan paralel.
@@ -42,7 +41,16 @@ def ngx_main():
         m = re.search(r'^\s*modsecurity_rules_file\s+([^;\s]+)', baca(f), re.M)
         if m:
             return m.group(1)
-NGX = None if os.path.isfile('/usr/local/lsws/bin/lswsctrl') else ngx_main()
+LSWS = os.path.isfile('/usr/local/lsws/bin/lswsctrl')
+# DirectAdmin nginx / nginx_apache (mis. sanke): nginx-modsecurity.conf sudah IncludeOptional /etc/modsecurity.d/*.conf
+# → pakai berkas INC seperti LiteSpeed (tahan rebuild CustomBuild), tapi reload & log lewat nginx.
+DA_NGX = not LSWS and 'modsecurity on' in baca('/etc/nginx/nginx-modsecurity-enable.conf') and os.path.isdir('/etc/modsecurity.d')
+# DA memuat *.conf.main sebelum *.conf: .main → Velocity WAF jalan sebelum CRS DA (self-contained, deny 406 per aturan),
+# jadi ip-putih & hitungan BFM (aturan 77xxxxx) tidak didahului CRS. Salinan di custom/ agar tahan `build modsecurity_rules`.
+INC = '/etc/modsecurity.d/velocity-waf.conf' + ('.main' if DA_NGX else '')
+INC_DA = '/usr/local/directadmin/custombuild/custom/modsecurity/conf/velocity-waf.conf.main'
+NGX = None if LSWS or DA_NGX else ngx_main()
+LEWAT_NGINX = bool(NGX or DA_NGX)
 BARIS_NGX = 'Include %s/velocity-waf.conf' % DIR
 # Blok bertanda: modsecurity-main.conf atha memuat modsecurity.conf ber-SecRuleEngine DetectionOnly → tanpa On, deny tak jalan
 BLOK_NGX = ['# >>> Velocity WAF (dashboard Velocity) — hapus blok ini untuk mencopot', 'SecRuleEngine On', BARIS_NGX, '# <<< Velocity WAF']
@@ -53,12 +61,16 @@ def inc_pasang():
         with open(NGX, 'a') as f:
             f.write('\n' + '\n'.join(BLOK_NGX) + '\n')
         return
-    with open(INC, 'w') as f:
-        f.write('# Velocity WAF — dipasang scripts/velocity-waf-pasang (dashboard Velocity). Hapus berkas ini untuk mencopot.\nInclude %s/velocity-waf.conf\n' % DIR)
-    os.chmod(INC, 0o644)
+    for p in [INC] + ([INC_DA] if DA_NGX else []):
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w') as f:
+            f.write('# Velocity WAF — dipasang scripts/velocity-waf-pasang (dashboard Velocity). Hapus berkas ini untuk mencopot.\nInclude %s/velocity-waf.conf\n' % DIR)
+        os.chmod(p, 0o644)
 def inc_copot():
     if not NGX:
-        os.remove(INC)
+        for p in [INC] + ([INC_DA] if DA_NGX else []):
+            if os.path.isfile(p):
+                os.remove(p)
         return
     baris, di_blok = [], False
     for b in open(NGX).read().split('\n'):
@@ -73,7 +85,8 @@ def inc_copot():
     os.rename(NGX + '.baru', NGX)
 def berkas_log():
     # ModSecurity nginx menulis ke error_log per vhost
-    return sorted(set(glob.glob('/var/log/nginx/*error.log') + glob.glob('/var/log/nginx/*/*error.log'))) if NGX else [ELOG]
+    # DA: log utama /var/log/nginx/error_log, per domain /var/log/nginx/domains/<d>.error.log
+    return sorted(set(glob.glob('/var/log/nginx/*error[._]log') + glob.glob('/var/log/nginx/*/*error.log'))) if LEWAT_NGINX else [ELOG]
 def ukuran_log():
     return {p: os.path.getsize(p) for p in berkas_log() if os.path.isfile(p)}
 def log_baru(awal):
@@ -97,7 +110,7 @@ def status():
             'cpguard': os.path.isfile('/etc/modsecurity.d/cpguard_waf.conf') or os.path.isfile('/etc/nginx/cpguard_waf.conf'),
             'cpguard_aturan': len(glob.glob('/etc/cpguard/cpguard_modsec*.conf')),
             'lsws': os.path.isfile('/usr/local/lsws/bin/lswsctrl'), 'modsecurity_d': os.path.isdir('/etc/modsecurity.d'),
-            'nginx': bool(NGX), 'cadangan': len(cadangan)}
+            'nginx': LEWAT_NGINX, 'cadangan': len(cadangan)}
 def situs():
     # domain pertama yang punya docroot, untuk uji HTTP
     if NGX:
@@ -111,13 +124,16 @@ def situs():
         for d in open(f).read().split():
             if d:
                 return d
+    if DA_NGX:
+        # server DA baru tanpa akun: uji ke hostname (vhost bawaan nginx juga kena modsecurity on di blok http)
+        return jalan(['hostname', '-f'], 10)[1].strip() or None
 def ip_situs(domain):
     # IP publik domain (bukan 127.0.0.1: loopback ada di ip-putih.txt sehingga semua aturan dilewati)
     for f in glob.glob('/usr/local/directadmin/data/users/*/domains/%s.conf' % domain):
         for b in open(f, errors='replace'):
             if b.startswith('ip='):
                 return b.strip()[3:]
-    if NGX:
+    if LEWAT_NGINX:
         m = re.search(r'\bsrc\s+(\S+)', jalan(['ip', '-4', 'route', 'get', '1.1.1.1'], 10)[1])
         if m:
             return m.group(1)
@@ -128,7 +144,7 @@ def http(domain, ua):
                      '--resolve', '%s:443:%s' % (domain, ip_situs(domain)), 'https://%s/?velocity-waf-cek=%d' % (domain, time.time())], 30)
     return o.strip()
 def restart():
-    if NGX:
+    if LEWAT_NGINX:
         k, o = jalan('nginx -t && systemctl reload nginx', 60)
         time.sleep(2)
         return k, o.strip()[-300:]
@@ -172,7 +188,7 @@ domain = situs()
 awal = ukuran_log()
 sebelum = http(domain, UA_BIASA) if domain else None
 k, o = restart()
-out['langkah'].append('%s: %s' % ('nginx -t + reload' if NGX else 'lswsctrl restart', k))
+out['langkah'].append('%s: %s' % ('nginx -t + reload' if LEWAT_NGINX else 'lswsctrl restart', k))
 if k != 0:
     out['restart'] = o
 galat = galat_baru(awal)
