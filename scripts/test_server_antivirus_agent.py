@@ -29,6 +29,9 @@ KENA = [
     ('wp-content/mu-plugins/compat-loader.php', b"<?php $ids = $wpdb->get_col(\"SELECT u.ID FROM u WHERE m.meta_value LIKE '%administrator%'\"); wp_set_current_user($i); wp_set_auth_cookie($i, true);", 'VD.WP.LoginAdminAcak'),
     ('wp-content/mu-plugins/site-compat-layer.php', b"<?php $u = sanitize_user($_GET['user'], true); $p = wp_unslash($_GET['pass']); $id = wp_create_user($u, $p, $e);", 'VD.WP.BuatUserGet'),
     ('wp-content/mu-plugins/index.php', b'<?php $__map = [];' + b''.join(b'$__map["k%d"] = "x";' % i for i in range(25)) + b' eval($__code);', 'VD.PHP.PetaEval'),
+    ('index.php', b"<?php\n/*\nPlugin Name: SecurePluginLomxJhBs41\n*/\nclass LoaderHBBGL43537 { }", 'VD.PHP.LoaderSecurePlugin'),
+    ('wp-content/uploads/search_template_1.php', b'<?php $key="ptr"; $bind = "$item/.elem"; include $bind;', 'VD.Webshell.PtrElem'),
+    ('asset-manager.php', b"<?php define('FM_ROOT', __DIR__); $fm_key_file = __DIR__ . '/.fm_key';", 'VD.Webshell.FmRoot'),
 ]
 for nama, isi, harap in KENA:
     assert harap in tanda(nama, isi), (nama, harap, tanda(nama, isi))
@@ -37,6 +40,7 @@ AMAN = [
     ('wp-content/plugins/x/a.php', b"<?php $f = function ($x) { return eval_helper($x); }; $GLOBALS['wp_filter'] = explode(',', $s);"),
     ('wp-content/plugins/x/b.php', b"<?php $hash = '7068705f'; $s = strrev($nama); $p = str_split($teks, 1);"),
     ('.htaccess', b'<FilesMatch "\\.(?i:php[0-9]?|phtml|phar)$">\n    Require all denied\n</FilesMatch>'),
+    ('wp-content/plugins/x/d.php', b"<?php class LoaderCache { } $key = 'ptr'; define('FM_ROOT', ABSPATH);"),
     ('wp-content/plugins/x/c.php', b"<?php $like = $wpdb->esc_like( 'wp_' ) . '%'; $wpdb->query( \"DELETE FROM $wpdb->options WHERE option_name LIKE '$like'\" );"),
 ]
 for nama, isi in AMAN:

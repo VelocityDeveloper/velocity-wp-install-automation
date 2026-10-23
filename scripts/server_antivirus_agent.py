@@ -101,6 +101,11 @@ RE_STR_SPLIT = r(r'str_split\s*\(\s*[\'"](?:file_put_contents|file_get_contents|
 RE_HOME_TEXT = r(r'\bhti_(?:permanent_settings|mu_installer_cleanup_pending)\b', 0)
 # Pintu belakang mu-plugin gelombang 21 Okt (montessori, dewanpendidikan, miainulyaqiin): salin diri ke MU, pemulih dari GitHub
 RE_MU_BELAKANG = r(r'\b(?:mu_protector_restore_file|lf_sync_mu_plugin_copy)\b|CURLOPT_LF_TEST|MU Guardian Plugin', 0)
+# Gelombang montesso 23 Okt: pemuat index.php "Plugin Name: SecurePlugin<acak>" + class Loader<HURUF><angka>,
+# shell kecil $key="ptr" yang menulis payload ke <tmp>/.elem lalu include, dan file manager mandiri FM_ROOT/.fm_key
+RE_LOADER_SP = r(r'Plugin Name:\s*SecurePlugin[A-Za-z0-9]{6,}|\bclass\s+Loader[A-Z]{5}\d{3,}\b', 0)
+RE_PTR_ELEM = r(r'\$key\s*=\s*[\'"]ptr[\'"]', 0)
+RE_FM_ROOT = r(r'\bFM_ROOT\b', 0)
 # Login sebagai admin mana saja: cari ID administrator lewat SQL lalu wp_set_auth_cookie
 RE_ADMIN_SQL = r(r'meta_value\s+LIKE\s+[\'"]%administrator%[\'"]')
 # Buat akun dari ?user=&pass= di URL
@@ -602,6 +607,17 @@ def sembunyi_user(teks, path):
     return potong(teks, m) if m and b'user_login' in teks and re.search(rb'pre_user_query|author__not_in|views_users', teks) else None
 
 
+def ptr_elem(teks, path):
+    m = RE_PTR_ELEM.search(teks)
+    return potong(teks, m) if m and b'.elem' in teks and b'include' in teks else None
+
+
+def fm_root(teks, path):
+    # FM_ROOT saja bisa nama konstanta plugin sah → wajib ada .fm_key atau FM_PASS + move_uploaded_file
+    m = RE_FM_ROOT.search(teks)
+    return potong(teks, m) if m and (b'.fm_key' in teks or (b'FM_PASS' in teks and b'move_uploaded_file' in teks)) else None
+
+
 # Gerbang = potongan huruf kecil yang WAJIB ada sebelum regex dijalankan (regex re.I mahal di ribuan berkas)
 TANDA = [
     ('VD.PHP.EvalDekode', 'eval/assert atas hasil dekode', 'virus', 'php', cari(RE_EVAL_DEKODE), (b'eval', b'assert')),
@@ -624,6 +640,9 @@ TANDA = [
     ('VD.WP.SembunyiAdmin', 'Menyembunyikan akun wp_* dari daftar Users', 'virus', 'php', sembunyi_user, (b'esc_like',)),
     ('VD.PHP.VariabelO0', 'Pemuat O00OO (variabel O/0 + urldecode)', 'virus', 'php', cari(RE_VAR_O0), (b'o00', b'0o0', b'o0o')),
     ('VD.WP.PintuBelakangMU', 'mu-plugin pintu belakang (salin diri/pemulih dari luar)', 'virus', 'php', cari(RE_MU_BELAKANG), (b'mu_protector', b'lf_sync_mu', b'curlopt_lf_test', b'mu guardian')),
+    ('VD.PHP.LoaderSecurePlugin', 'Pemuat SecurePlugin*/Loader* (index.php diganti, montesso 23 Okt)', 'virus', 'php', cari(RE_LOADER_SP), (b'secureplugin', b'class loader')),
+    ('VD.Webshell.PtrElem', 'Shell $key="ptr" tulis .elem lalu include', 'virus', 'php', ptr_elem, (b'"ptr"', b"'ptr'")),
+    ('VD.Webshell.FmRoot', 'File manager mandiri FM_ROOT/.fm_key', 'virus', 'php', fm_root, (b'fm_root',)),
     ('VD.WP.LoginAdminAcak', 'Login otomatis sebagai administrator mana saja', 'virus', 'php', login_admin_acak, (b'%administrator%',)),
     ('VD.WP.BuatUserGet', 'Membuat akun dari parameter URL (user/pass)', 'virus', 'php', buat_user_get, (b'_user(',)),
     ('VD.PHP.PetaEval', 'Payload dipecah $__map[kN] lalu di-eval', 'virus', 'php', peta_eval, (b'$__map',)),
