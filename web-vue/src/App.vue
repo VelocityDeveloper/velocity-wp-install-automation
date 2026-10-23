@@ -45,6 +45,7 @@ const NAV = [
     { ke: '/server/waf', label: 'WAF', ikon: 'waf' },
     { ke: '/server/cms', label: 'Kerentanan CMS', ikon: 'cms' },
     { ke: '/server/bruteforce', label: 'Brute Force', ikon: 'kunci' },
+    { ke: '/server/limit', label: 'Limit Resource', ikon: 'server' },
     { ke: '/server/log', label: 'Log', ikon: 'dokumen' },
     { ke: '/server/cpguard', label: 'Kesiapan Copot cPGuard', ikon: 'daftar' },
   ] },

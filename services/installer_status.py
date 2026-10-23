@@ -2208,12 +2208,12 @@ def _bfm_sidik(aturan):
     return hashlib.sha1((json.dumps(aturan, sort_keys=True) + BFM_AGEN.read_text()).encode()).hexdigest()[:10]
 
 
-def _bfm_satu(srv, key, perintah, batas=120):
+def _bfm_satu(srv, key, perintah, batas=120, agen=BFM_AGEN):
     cmd = perintah_server(srv, key, 'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -')
     sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
     hasil = {'host': srv['host'], 'name': srv['name']}
     try:
-        r = subprocess.run(cmd, input=f"{BFM_AGEN.read_text()}\njalankan('{sandi}')\n", capture_output=True, text=True,
+        r = subprocess.run(cmd, input=f"{agen.read_text()}\njalankan('{sandi}')\n", capture_output=True, text=True,
                            timeout=batas, check=False)
     except subprocess.TimeoutExpired:
         return {**hasil, 'ok': False, 'error': 'timeout'}
@@ -2340,6 +2340,77 @@ def bfm_riwayat(batas=300):
             continue
     return {'riwayat': out}
 
+
+
+# Limit Resource: halaman /server/limit — pengganti LVE untuk server DA non-CloudLinux (sanke). Agen scripts/server_limit_agent.py
+# membaca/mengganti preset /etc/velocity-cg/preset (kecil|sedang|tinggi) yang diterapkan velocity-cg-default ke semua user DA.
+LIMIT_AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_limit_agent.py'
+LIMIT_RIWAYAT = Path('/var/lib/velocity/server-limit/riwayat.jsonl')
+_cache_limit = CacheLatar()
+_limit_job = {}
+_limit_kunci = threading.Lock()
+
+
+def server_limit(paksa=False):
+    def ambil():
+        key = ssh_key_file()
+        if not key:
+            return {'error': 'kunci_ssh_installer_tidak_ada'}
+        servers = _daftar_server()
+        hasil = [None] * len(servers)
+
+        def kerja(i):
+            hasil[i] = _bfm_satu(servers[i], key, {'aksi': 'status'}, 60, LIMIT_AGEN)
+        utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
+        for t in utas:
+            t.start()
+        for t in utas:
+            t.join(65)
+        return {'servers': [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
+                            for h, s in zip(hasil, servers)], 'diambil': int(time.time())}
+    data = _cache_limit.ambil('status', ambil, BFM_TTL, paksa)
+    if isinstance(data, dict) and not data.get('error'):
+        data = {**data, 'job': [j for j in _limit_job.values() if j['status'] == 'berjalan']}
+    return data
+
+
+def _limit_kerja(job, srv, key, perintah):
+    hasil = _bfm_satu(srv, key, perintah, 1800, LIMIT_AGEN)  # > agen: tar 120 + --semua 300 + rollback per user
+    job.update(status='selesai' if hasil.get('ok') else 'gagal', selesai=int(time.time()), hasil=hasil)
+    LIMIT_RIWAYAT.parent.mkdir(parents=True, exist_ok=True)
+    with _limit_kunci, LIMIT_RIWAYAT.open('a') as f:
+        f.write(json.dumps({'t': job['selesai'], 'oleh': job['oleh'], 'server': srv['name'], 'host': srv['host'],
+                            'preset': perintah['preset'], 'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
+                            'cadangan': (hasil.get('hasil') or {}).get('cadangan')}, ensure_ascii=False) + '\n')
+    _cache_limit.hapus()
+
+
+def limit_aksi(payload):
+    preset = payload.get('preset')
+    if preset not in ('kecil', 'sedang', 'tinggi'):
+        return {'error': 'preset_tidak_dikenal'}, 400
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
+    if not oleh:
+        return {'error': 'invalid_oleh'}, 400
+    srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}, 400
+    key = ssh_key_file()
+    if not key:
+        return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
+    perintah = {'aksi': 'terapkan', 'preset': preset}
+    job = {'id': time.strftime('%Y%m%d-%H%M%S-') + pysecrets.token_hex(3), 'host': srv['host'], 'server': srv['name'],
+           'aksi': 'terapkan', 'preset': preset, 'oleh': oleh, 'mulai': int(time.time()), 'status': 'berjalan'}
+    with _limit_kunci:
+        if any(j['host'] == srv['host'] and j['status'] == 'berjalan' for j in _limit_job.values()):
+            return {'error': 'aksi_sedang_jalan'}, 409
+        _limit_job[job['id']] = job
+    threading.Thread(target=_limit_kerja, args=(job, srv, key, perintah), daemon=True).start()
+    return job, 200
+
+
+def limit_job(jid):
+    return _limit_job.get(jid or '') or {'error': 'job_tidak_ada'}
 
 # Kerentanan CMS (WordPress) per server: halaman /server/cms, logika di services/server_cms.py
 import server_cms  # noqa: E402
@@ -4302,6 +4373,16 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json(server_cms.ringkasan())
             return
+        if path in ('/api/servers/limit', '/api/servers/limit/job'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            q = parse_qs(parsed.query)
+            if path == '/api/servers/limit':
+                self._send_json(server_limit('segar' in q))
+            else:
+                self._send_json(limit_job((q.get('id') or [''])[0]))
+            return
         if path in ('/api/servers/bfm', '/api/servers/bfm/job', '/api/servers/bfm/riwayat'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
@@ -4494,6 +4575,7 @@ class Handler(BaseHTTPRequestHandler):
                           '/api/servers/judi/setelan', '/api/servers/judi/nilai', '/api/servers/judi/aksi', '/api/servers/judi/henti', '/api/servers/judi/bersihkan',
                           '/api/servers/waf/aksi', '/api/servers/waf/setelan',
                           '/api/servers/bfm/aksi', '/api/servers/bfm/setelan',
+                          '/api/servers/limit/aksi',
                           '/api/servers/cms/scan',
                           '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek',
                           '/api/servers/guard/celah/scan', '/api/servers/guard/insiden',
@@ -4633,6 +4715,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
                 obj, kode = (bfm_aksi if path == '/api/servers/bfm/aksi' else bfm_setelan)(payload)
+                self._send_json(obj, kode)
+                return
+            if path == '/api/servers/limit/aksi':
+                # Ganti preset = set-property cgroup semua user DA server produksi: Origin wajib sama dengan Host
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = limit_aksi(payload)
                 self._send_json(obj, kode)
                 return
             if path.startswith('/api/servers/waf/'):

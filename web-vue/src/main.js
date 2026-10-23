@@ -11,6 +11,7 @@ const ServerProteksi = () => import('./views/ServerProteksi.vue')
 const ServerAntivirus = () => import('./views/ServerAntivirus.vue')
 const ServerWaf = () => import('./views/ServerWaf.vue')
 const ServerBruteforce = () => import('./views/ServerBruteforce.vue')
+const ServerLimit = () => import('./views/ServerLimit.vue')
 const ServerCms = () => import('./views/ServerCms.vue')
 const ServerCpguard = () => import('./views/ServerCpguard.vue')
 const ServerGuard = () => import('./views/ServerGuard.vue')
@@ -43,6 +44,7 @@ const routes = [
   { path: '/server/antivirus', component: ServerAntivirus, meta: { judul: 'Antivirus · VelocityGuard' } },
   { path: '/server/waf', component: ServerWaf, meta: { judul: 'WAF · VelocityGuard' } },
   { path: '/server/bruteforce', component: ServerBruteforce, meta: { judul: 'Brute Force · VelocityGuard' } },
+  { path: '/server/limit', component: ServerLimit, meta: { judul: 'Limit Resource · VelocityGuard' } },
   { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS · VelocityGuard' } },
   { path: '/server/cpguard', component: ServerCpguard, meta: { judul: 'Kesiapan Copot cPGuard' } },
   { path: '/server/log', component: ServerLog, meta: { judul: 'Log · VelocityGuard' } },
