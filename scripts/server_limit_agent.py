@@ -5,6 +5,8 @@ Limit per user = DA User Cgroups (directadmin.conf cgroup=1): key CPUQuota/Memor
 DA menerapkannya dengan `systemctl set-property user-UID.slice` (drop-in /etc/systemd/system.control). Nilai default
 diisi /usr/local/sbin/velocity-cg-default (dipasang build/sanke/cgroup/pasang.sh) dari preset di /etc/velocity-cg/preset;
 hook DA user_create/restore/modify_post + timer 15 mnt menjaga user baru & hasil restore. Akun `admin` dikecualikan.
+Pengganti EP = pm.max_children FPM (directadmin.conf php_fpm_max_children_default, global); pengganti MySQL Governor =
+MAX_USER_CONNECTIONS + MAX_STATEMENT_TIME per akun MariaDB milik user DA (USER, USER_*) — keduanya dari preset yang sama.
 
 Dipakai halaman Server > Limit Resource (installer_status.py). Pemanggil menambahkan `jalankan(<base64 JSON>)`.
 Harus tetap jalan di Python 3.6. Aksi:
@@ -28,6 +30,7 @@ CG = '/usr/local/sbin/velocity-cg-default'
 PRESET = '/etc/velocity-cg/preset'
 KUNCI_F = '/run/velocity-cg.lock'  # sama dengan velocity-cg-default (timer/hook tidak menulis selama terapkan)
 KUNCI = ('CPUQuota', 'MemoryMax', 'IOReadBandwidthMax', 'IOWriteBandwidthMax', 'IOReadIOPSMax', 'IOWriteIOPSMax', 'TasksMax')
+SISTEM_SQL = re.compile(r'^(root|mysql|mariadb\.sys|PUBLIC|da_.*)$')  # sama dengan velocity-cg-default
 
 
 def sh(cmd, batas=300):
@@ -107,6 +110,34 @@ def _nyata(s):
             'io': [int(s[k]) if s.get(k, '').isdigit() else None for k in IO]}
 
 
+def ep_user(u):  # pm.max_children efektif di konfigurasi FPM user (semua versi PHP, pool bersama & jail)
+    out = set()
+    for f in glob.glob('%s/%s/php/php-*fpm*.conf' % (USERS, u)):
+        for b in open(f, errors='replace'):
+            m = re.match(r'pm\.max_children\s*=\s*(\d+)', b)
+            if m:
+                out.add(int(m.group(1)))
+    return sorted(out)
+
+
+def mysql_akun():  # {User: [{akun, host, koneksi, query}]} semua akun MariaDB; None bila gagal dibaca
+    k, o = sh(['/usr/local/bin/mariadb', '-N', '-B', '-e', "SELECT User,Host,IFNULL(JSON_VALUE(Priv,'$.max_user_connections'),0),"
+               "IFNULL(JSON_VALUE(Priv,'$.max_statement_time'),0) FROM mysql.global_priv"], 30)
+    if k:
+        return None
+    out = {}
+    for b in o.splitlines():
+        a, h, c, t = b.split('\t')
+        out.setdefault(a, []).append({'akun': a, 'host': h, 'koneksi': c, 'query': re.sub(r'\.0+$', '', t)})
+    return out
+
+
+def ep_global():
+    _, o = sh([DA + '/directadmin', 'config'], 30)
+    m = re.search(r'^php_fpm_max_children_default=(\d+)', o, re.M)
+    return m.group(1) if m else ''
+
+
 def info():
     k, o = sh([CG, '--json'], 30)
     try:
@@ -120,6 +151,13 @@ def daftar_user(inf):
     for p in inf['daftar'].values():
         for k, v in p.items():
             nilai_preset.setdefault(k, set()).add(v)
+    aktif = inf['daftar'][inf['preset']]
+    sql = mysql_akun()
+
+    def cocok(k, v, kecuali):  # nilai preset aktif (atau tanpa batas bila dikecualikan); nilai di luar preset = kustom, selalu sah
+        if v not in nilai_preset.get(k, ()) and not (v == '0' and not kecuali):
+            return True
+        return v == ('0' if kecuali else aktif.get(k))
     out = []
     for d in sorted(glob.glob(USERS + '/*/user.conf')):
         u = d.split('/')[-2]
@@ -130,11 +168,19 @@ def daftar_user(inf):
         conf = user_conf(u)
         nyata = _nyata(slice_nyata(uid))
         kecuali = u in inf.get('kecuali', [])
+        # akun MariaDB milik user: USER dan USER_* (nama user DA tanpa '_')
+        akun = [] if sql is None else [x for a, v in sql.items() if (a == u or a.startswith(u + '_')) and not SISTEM_SQL.match(a)
+                                       for x in v]
+        ep = ep_user(u)
+        # ep kosong = konfigurasi FPM tak terbaca → tidak sesuai. admin: EP tetap ikut default global (php_fpm_max_children_default berlaku untuk semua pool), tidak dinilai
+        ep_ok = kecuali or bool(ep) and all(str(n) == aktif.get('EP') or str(n) not in nilai_preset.get('EP', ()) for n in ep)
+        sql_ok = sql is not None and all(cocok('MySQLConn', x['koneksi'], kecuali) and cocok('MySQLTime', x['query'], kecuali)
+                                         for x in akun)
         # akun dikecualikan = slice tanpa batas apa pun isi user.conf-nya (velocity-cg-default melepasnya)
         harap = {'cpu': None, 'mem': None, 'tasks': None, 'io': [None] * len(IO)} if kecuali else _harap(conf)
         out.append({'user': u, 'uid': uid, 'kecuali': kecuali, 'nilai': conf,
                     'kustom': [k for k, v in conf.items() if v and v not in nilai_preset.get(k, ())],
-                    'nyata': nyata, 'sesuai': nyata == harap})
+                    'nyata': nyata, 'ep': ep, 'mysql': akun, 'sesuai': nyata == harap and ep_ok and sql_ok})
     return out
 
 
@@ -145,7 +191,7 @@ def status(p):
     inf = info() if os.access(CG, os.X_OK) else None
     if not inf:
         return {'ok': True, 'didukung': True, 'terpasang': False}
-    return {'ok': True, 'didukung': True, 'terpasang': True, **inf, 'users': daftar_user(inf)}
+    return {'ok': True, 'didukung': True, 'terpasang': True, **inf, 'ep_global': ep_global(), 'users': daftar_user(inf)}
 
 
 def terapkan(p):
@@ -179,6 +225,9 @@ def terapkan(p):
         return {'ok': False, 'error': 'cadangan_gagal', 'pesan': o[-300:]}
     if os.path.exists(PRESET):
         shutil.copy2(PRESET, cad + '/preset')
+    # nilai lama EP & batas MySQL (rollback otomatis = jalankan ulang preset lama; berkas ini untuk pemeriksaan manual)
+    with open(cad + '/ep-mysql.json', 'w') as f:
+        json.dump({'php_fpm_max_children_default': ep_global(), 'mysql': mysql_akun()}, f)
 
     def tulis_preset(n):
         os.makedirs(os.path.dirname(PRESET), exist_ok=True)
@@ -194,16 +243,22 @@ def terapkan(p):
         k, log = r.returncode, r.stdout
     except subprocess.TimeoutExpired:
         k, log = 124, 'timeout velocity-cg-default --semua (300 dtk)'
-    users = daftar_user(info() or inf)
+    inf2 = info() or inf
+    users = daftar_user(inf2)
     salah = [u['user'] for u in users if not u['sesuai']]
+    if ep_global() != inf2['daftar'][preset].get('EP', ep_global()):
+        salah.append('php_fpm_max_children_default')
     hasil = {'preset_lama': lama, 'preset': preset, 'cadangan': cad, 'log': log[-2000:], 'users': users}
     if not k and not salah:
         return {'ok': True, 'hasil': hasil}
     # kembalikan: user.conf + preset lama, lalu terapkan ulang per user (mode satu = tanpa lewati; set-property menulis ulang drop-in)
     sh(['tar', 'xzf', cad + '/user-conf.tgz', '-C', '/'], 120)
     tulis_preset(lama)
-    for u in users:
-        subprocess.run([CG, u['user']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=False, env=env)
+    for u in users:  # panggilan pertama ikut mengembalikan EP global (rewrite httpd + reload FPM) → batas longgar
+        try:
+            subprocess.run([CG, u['user']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300, check=False, env=env)
+        except subprocess.TimeoutExpired:
+            pass  # lanjut user berikutnya; sisa beda terlihat di daftar_user di bawah
     return {'ok': False, 'error': 'verifikasi_gagal', 'hasil': {**hasil, 'tidak_sesuai': salah, 'dikembalikan': True,
                                                                   'users': daftar_user(info() or inf)}}
 

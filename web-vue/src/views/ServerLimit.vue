@@ -40,7 +40,16 @@ const BARIS = [
   { k: 'IOReadIOPSMax', label: 'IOPS baca', f: (v) => v },
   { k: 'IOWriteIOPSMax', label: 'IOPS tulis', f: (v) => v },
   { k: 'TasksMax', label: 'Proses / thread', f: (v) => v },
+  { k: 'EP', label: 'PHP serentak (EP)', f: (v) => `${v} request` },
+  { k: 'MySQLConn', label: 'Koneksi MySQL', f: (v) => `${v} per user database` },
+  { k: 'MySQLTime', label: 'Lama query MySQL', f: (v) => `maks ${v} dtk` },
 ]
+// ringkas batas MySQL semua akun database user: "15 kon · 30 dtk" (nilai berbeda digabung "15/7")
+const sqlRingkas = (akun) => {
+  if (!akun?.length) return '—'
+  const u = (k) => [...new Set(akun.map((x) => (x[k] === '0' ? '∞' : x[k])))].join('/')
+  return `${u('koneksi')} kon · ${u('query')} dtk`
+}
 const PESAN = {
   invalid_oleh: 'Masuk dulu lewat tombol "Masuk dengan VD.net" di kanan atas — setiap perubahan dicatat atas nama akun Anda.',
   login_diperlukan: 'Sesi login habis atau belum masuk. Klik "Masuk dengan VD.net" di kanan atas.',
@@ -49,7 +58,7 @@ const PESAN = {
   preset_tidak_dikenal: 'Preset tidak dikenal.',
   velocity_cg_belum_terpasang: 'Mekanisme limit belum terpasang di server ini (build/sanke/cgroup/pasang.sh).',
   kunci_sibuk: 'Timer/hook limit di server masih berjalan lebih dari 10 menit — tidak ada yang diubah. Coba lagi nanti.',
-  verifikasi_gagal: 'Nilai slice tidak sesuai sesudah diterapkan — semua dikembalikan ke preset lama.',
+  verifikasi_gagal: 'Nilai limit (slice, EP, atau MySQL) tidak sesuai sesudah diterapkan — semua dikembalikan ke preset lama.',
   galat: 'Agen berhenti karena galat — keadaan bisa setengah jadi. Muat ulang dan periksa kolom Status akun; cadangan ada di /root/velocity-cadangan/limit-resource-*.',
   bukan_directadmin: 'Bukan server DirectAdmin.',
   cloudlinux_pakai_lve: 'Server CloudLinux — limit memakai LVE.',
@@ -104,7 +113,7 @@ async function terapkan() {
   const p = s.daftar[dipilih.value]
   const ya = await konfirmasi({
     judul: `Terapkan preset ${dipilih.value} di ${s.name}?`, tombol: 'Terapkan',
-    teks: `Semua user DA (kecuali admin dan nilai kustom) dibatasi CPU ${p.CPUQuota}, RAM ${p.MemoryMax}, IO ${p.IOReadBandwidthMax}B/dtk, ${p.TasksMax} proses. Berlaku langsung tanpa restart; user baru & hasil restore ikut. Cadangan dibuat, bila verifikasi gagal dikembalikan otomatis.`,
+    teks: `Semua user DA (kecuali admin dan nilai kustom) dibatasi CPU ${p.CPUQuota}, RAM ${p.MemoryMax}, IO ${p.IOReadBandwidthMax}B/dtk, ${p.TasksMax} proses, ${p.EP} request PHP serentak, ${p.MySQLConn} koneksi MySQL & query maks ${p.MySQLTime} dtk. Berlaku langsung tanpa restart; user baru & hasil restore ikut. Cadangan dibuat, bila verifikasi gagal dikembalikan otomatis.`,
   })
   if (!ya) return
   try {
@@ -160,7 +169,7 @@ async function terapkan() {
               </tbody>
             </table>
           </div>
-          <p class="redup kecil-p">Akun <code>admin</code> tidak dibatasi. Nilai yang diubah manual per user/paket di DirectAdmin (selain nilai preset) dipertahankan. Swap per akun 0; koneksi MySQL maks 25 per user database.</p>
+          <p class="redup kecil-p">Akun <code>admin</code> tidak dibatasi. Nilai yang diubah manual per user/paket di DirectAdmin (selain nilai preset) dipertahankan. Swap per akun 0. EP = <code>pm.max_children</code> PHP-FPM per versi PHP (request lebih antre, bukan error 508). Batas MySQL berlaku per user database (akun DB sistem tidak dibatasi); query yang melewati batas waktu dihentikan.</p>
 
           <div v-if="job" class="job" :class="job.status" role="status">
             <span v-if="berjalan" class="putar besar" aria-hidden="true" />
@@ -178,13 +187,15 @@ async function terapkan() {
           <h3 class="sub">Akun ({{ terpilih.users.length }})</h3>
           <div class="tabel-wadah">
             <table class="tabel">
-              <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">Status</th></tr></thead>
+              <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">EP</th><th scope="col">MySQL</th><th scope="col">Status</th></tr></thead>
               <tbody>
                 <tr v-for="u in terpilih.users" :key="u.user">
                   <td><b>{{ u.user }}</b> <span v-if="u.kecuali" class="lencana abu">dikecualikan</span><span v-if="u.kustom.length" class="lencana ungu" :title="u.kustom.join(', ')">kustom</span></td>
                   <td>{{ u.nyata.cpu == null ? 'tanpa batas' : `${u.nyata.cpu}%` }}</td>
                   <td>{{ mem(u.nyata.mem) }}</td>
                   <td>{{ ringkas(u.nyata.tasks) }}</td>
+                  <td>{{ u.ep?.length ? u.ep.join('/') : '—' }}</td>
+                  <td :title="(u.mysql || []).map((x) => `${x.akun}: ${x.koneksi} koneksi, ${x.query} dtk`).join('\n')">{{ sqlRingkas(u.mysql) }}</td>
                   <td><span class="lencana" :class="u.sesuai ? 'hijau' : 'kuning'">{{ u.sesuai ? 'sesuai' : 'belum diterapkan' }}</span></td>
                 </tr>
               </tbody>
