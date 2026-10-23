@@ -586,6 +586,16 @@ Use Indonesian language. Ground the content in the client's actual field of busi
     
     return ai_json_list(system_prompt, user_prompt, model, 'articles')
 
+def ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key):
+    """(perintah ssh, docroot) situs; staging velocitydeveloper.co lewat VELOCITY_LOKAL_* (installer-runner)."""
+    lokal_ssh, lokal_docroot = os.environ.get('VELOCITY_LOKAL_SSH', ''), os.environ.get('VELOCITY_LOKAL_DOCROOT', '')
+    if lokal_ssh and lokal_docroot:
+        return [lokal_ssh], lokal_docroot
+    return (['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}'],
+            f'/home/{da_user}/domains/{domain}/public_html')
+
+
 def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
     """Judul layanan dari child theme yang terpasang, untuk dipakai jadi kategori.
 
@@ -620,13 +630,11 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
         "  }"
         "}"
     )
+    ssh, docroot = ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key)
     perintah = (f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(skrip)} '
-                f'--path=/home/{da_user}/domains/{domain}/public_html --allow-root 2>/dev/null')
+                f'--path={docroot} --allow-root 2>/dev/null')
     try:
-        hasil = subprocess.run(
-            ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}', perintah],
-            capture_output=True, text=True, timeout=120)
+        hasil = subprocess.run(ssh + [perintah], capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return []
     layanan, jenis = [], ''
@@ -667,13 +675,11 @@ def tema_aktif(domain, da_user, ssh_port, ssh_user, target_host):
     ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     if not ssh_key or not Path(ssh_key).is_file():
         return ''
+    ssh, docroot = ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key)
     perintah = (f"/usr/local/bin/wp eval 'echo get_stylesheet();' "
-                f'--path=/home/{da_user}/domains/{domain}/public_html --allow-root 2>/dev/null')
+                f'--path={docroot} --allow-root 2>/dev/null')
     try:
-        hasil = subprocess.run(
-            ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}', perintah],
-            capture_output=True, text=True, timeout=60)
+        hasil = subprocess.run(ssh + [perintah], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return ''
     return hasil.stdout.strip()
