@@ -468,7 +468,8 @@ def waf(p):
     return {'ok': True, 'hari': hari, 'total': total, 'teratas': teratas, 'jam': sorted(jam.items()), 'acara': acara[:maks],
             'berkas': len(berkas), 'modsecurity': mod.group(1).strip() if mod else None,
             'ruleset': rs.group(1).strip() if rs else None, 'cpguard_rules': os.path.isfile('/etc/cpguard/cpguard_modsec100.conf'),
-            'velocity_waf': (baca('/etc/velocity-waf/VERSI').strip() or 'terpasang') if os.path.isfile('/etc/modsecurity.d/velocity-waf.conf') else None}
+            'velocity_waf': (baca('/etc/velocity-waf/VERSI').strip() or 'terpasang') if any(
+                            os.path.isfile('/etc/modsecurity.d/velocity-waf.conf' + x) for x in ('', '.main')) else None}  # .main = DA nginx (sanke)
 
 
 AKSI = {'ringkas': ringkas, 'cek': cek, 'blokir': blokir, 'lepas': lepas, 'izinkan': izinkan,
