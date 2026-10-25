@@ -79,6 +79,15 @@ watch(() => [terpilih.value?.host, terpilih.value?.preset], ([, p]) => { dipilih
 const ringkas = (n) => (n == null ? 'tanpa batas' : n)
 const mem = (b) => (b == null ? 'tanpa batas' : `${Math.round(b / 1048576)} MB`)
 
+// Pengingat (permintaan pemilik 25 Okt): salinan uji limit per akun di Sanke menunggu dihapus mulai 26 Okt.
+// Hilang sendiri begitu akunnya dihapus di DirectAdmin; zona showa/tancho ikut terhapus (zona-sinkron), override oleh timer.
+const UJI_HAPUS = { host: '157.66.55.81', mulai: '2026-10-26', users: ['ongkir', 'pengaca6'] }
+const ujiSisa = computed(() => {
+  const s = terpilih.value
+  if (s?.host !== UJI_HAPUS.host || new Date().toISOString().slice(0, 10) < UJI_HAPUS.mulai) return []
+  return UJI_HAPUS.users.filter((u) => s.users?.some((x) => x.user === u))
+})
+
 // ---- Form limit per akun (satuan form → nilai user.conf/override) ----
 // Default LVE server Cahyadi (lvectl list, 25 Okt 2026): SPEED 100, PMEM 1024M, EP 20, NPROC 100, IO 1024 KB/s, IOPS 1024; tanpa MySQL Governor
 const LVE_CAHYADI = { cpu: 100, ram: 1024, ioBaca: 1024, ioTulis: 1024, iopsBaca: 1024, iopsTulis: 1024, proses: 100, ep: 20, sqlKon: 0, sqlDtk: 0 }
@@ -226,6 +235,10 @@ async function terapkan() {
         <p v-if="!terpilih.ok" class="pesan-status bahaya">Tidak bisa dibaca: {{ pesanGalat(terpilih.error) }} {{ terpilih.pesan || '' }}</p>
         <p v-else-if="!terpilih.terpasang" class="pesan-status waspada">{{ PESAN.velocity_cg_belum_terpasang }}</p>
         <template v-else>
+          <p v-if="ujiSisa.length" class="pesan-status waspada" role="status">
+            <b>Pengingat:</b> akun uji {{ ujiSisa.join(', ') }} (salinan dari Cahyadi/Kiya, 25 Okt) masih ada di {{ terpilih.name }} dan menunggu dihapus.
+            Hapus lewat DirectAdmin {{ terpilih.name }} → List Users. Akun asli di server asal tidak ikut terhapus.
+          </p>
           <div class="tabel-wadah">
             <table class="tabel">
               <thead><tr><th scope="col">Per akun</th><th v-for="p in PRESET" :key="p.k" scope="col" :class="{ aktif: p.k === terpilih.preset }">
