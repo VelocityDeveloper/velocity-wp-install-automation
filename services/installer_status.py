@@ -2380,14 +2380,23 @@ def _limit_kerja(job, srv, key, perintah):
     LIMIT_RIWAYAT.parent.mkdir(parents=True, exist_ok=True)
     with _limit_kunci, LIMIT_RIWAYAT.open('a') as f:
         f.write(json.dumps({'t': job['selesai'], 'oleh': job['oleh'], 'server': srv['name'], 'host': srv['host'],
-                            'preset': perintah['preset'], 'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
+                            'preset': perintah.get('preset'), 'user': perintah.get('user'), 'nilai': perintah.get('nilai'),
+                            'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
                             'cadangan': (hasil.get('hasil') or {}).get('cadangan')}, ensure_ascii=False) + '\n')
     _cache_limit.hapus()
 
 
 def limit_aksi(payload):
-    preset = payload.get('preset')
-    if preset not in ('kecil', 'sedang', 'tinggi'):
+    # {preset} = ganti preset server; {user, nilai} = override per akun (nilai null = kembali ke preset), divalidasi lagi di agen
+    preset, user = payload.get('preset'), payload.get('user')
+    if user is not None:
+        nilai = payload.get('nilai')
+        if not re.fullmatch(r'[a-z0-9]{1,32}', str(user)) or not (nilai is None or isinstance(nilai, dict) and 0 < len(nilai) <= 12):
+            return {'error': 'nilai_tidak_sah'}, 400
+        perintah = {'aksi': 'atur_user', 'user': user, 'nilai': nilai}
+    elif preset in ('kecil', 'sedang', 'tinggi'):
+        perintah = {'aksi': 'terapkan', 'preset': preset}
+    else:
         return {'error': 'preset_tidak_dikenal'}, 400
     oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
     if not oleh:
@@ -2398,9 +2407,8 @@ def limit_aksi(payload):
     key = ssh_key_file()
     if not key:
         return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
-    perintah = {'aksi': 'terapkan', 'preset': preset}
     job = {'id': time.strftime('%Y%m%d-%H%M%S-') + pysecrets.token_hex(3), 'host': srv['host'], 'server': srv['name'],
-           'aksi': 'terapkan', 'preset': preset, 'oleh': oleh, 'mulai': int(time.time()), 'status': 'berjalan'}
+           'aksi': perintah['aksi'], 'preset': preset, 'user': user, 'oleh': oleh, 'mulai': int(time.time()), 'status': 'berjalan'}
     with _limit_kunci:
         if any(j['host'] == srv['host'] and j['status'] == 'berjalan' for j in _limit_job.values()):
             return {'error': 'aksi_sedang_jalan'}, 409

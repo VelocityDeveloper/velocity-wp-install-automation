@@ -12,6 +12,8 @@ Dipakai halaman Server > Limit Resource (installer_status.py). Pemanggil menamba
 Harus tetap jalan di Python 3.6. Aksi:
 - status (baca): preset aktif + nilai tiap preset, limit tiap user (user.conf vs slice sebenarnya).
 - terapkan {preset}: cadangan → tulis preset → velocity-cg-default --semua → verifikasi slice; gagal → kembalikan.
+- atur_user {user, nilai}: override per akun /etc/velocity-cg/user/USER (menang atas preset; nilai None = kembali ke preset):
+  cadangan → tulis override → velocity-cg-default USER → verifikasi; gagal → kembalikan.
 """
 import base64
 import fcntl
@@ -31,6 +33,11 @@ PRESET = '/etc/velocity-cg/preset'
 KUNCI_F = '/run/velocity-cg.lock'  # sama dengan velocity-cg-default (timer/hook tidak menulis selama terapkan)
 KUNCI = ('CPUQuota', 'MemoryMax', 'IOReadBandwidthMax', 'IOWriteBandwidthMax', 'IOReadIOPSMax', 'IOWriteIOPSMax', 'TasksMax')
 SISTEM_SQL = re.compile(r'^(root|mysql|mariadb\.sys|PUBLIC|da_.*)$')  # sama dengan velocity-cg-default
+OV = '/etc/velocity-cg/user'
+# nilai override yang diterima form per akun (MySQL 0 = tanpa batas, sama seperti tanpa MySQL Governor)
+NILAI_SAH = {'CPUQuota': r'[1-9]\d{0,3}%', 'MemoryMax': r'[1-9]\d{0,5}[MG]', 'IOReadBandwidthMax': r'[1-9]\d{0,6}[KMG]?',
+             'IOWriteBandwidthMax': r'[1-9]\d{0,6}[KMG]?', 'IOReadIOPSMax': r'[1-9]\d{0,6}', 'IOWriteIOPSMax': r'[1-9]\d{0,6}',
+             'TasksMax': r'[1-9]\d{0,5}', 'EP': r'[1-9]\d{0,3}', 'MySQLConn': r'\d{1,5}', 'MySQLTime': r'\d{1,5}'}
 
 
 def sh(cmd, batas=300):
@@ -52,6 +59,18 @@ def user_conf(u):
         for b in open('%s/%s/user.conf' % (USERS, u), errors='replace'):
             k, _, v = b.rstrip('\n').partition('=')
             if k in KUNCI:
+                out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+def override(u):
+    out = {}
+    try:
+        for b in open('%s/%s' % (OV, u), errors='replace'):
+            k, _, v = b.strip().partition('=')
+            if k in NILAI_SAH and v:
                 out[k] = v
     except OSError:
         pass
@@ -146,6 +165,11 @@ def info():
         return None
 
 
+def akun_user(sql, u):  # akun MariaDB milik user: USER dan USER_* (nama user DA tanpa '_')
+    return [] if sql is None else [x for a, v in sql.items() if (a == u or a.startswith(u + '_')) and not SISTEM_SQL.match(a)
+                                   for x in v]
+
+
 def daftar_user(inf):
     nilai_preset = {}
     for p in inf['daftar'].values():
@@ -169,18 +193,24 @@ def daftar_user(inf):
         nyata = _nyata(slice_nyata(uid))
         kecuali = u in inf.get('kecuali', [])
         # akun MariaDB milik user: USER dan USER_* (nama user DA tanpa '_')
-        akun = [] if sql is None else [x for a, v in sql.items() if (a == u or a.startswith(u + '_')) and not SISTEM_SQL.match(a)
-                                       for x in v]
+        akun = akun_user(sql, u)
         ep = ep_user(u)
+        ov = {} if kecuali else override(u)
         # ep kosong = konfigurasi FPM tak terbaca → tidak sesuai. admin: EP tetap ikut default global (php_fpm_max_children_default berlaku untuk semua pool), tidak dinilai
-        ep_ok = kecuali or bool(ep) and all(str(n) == aktif.get('EP') or str(n) not in nilai_preset.get('EP', ()) for n in ep)
-        sql_ok = sql is not None and all(cocok('MySQLConn', x['koneksi'], kecuali) and cocok('MySQLTime', x['query'], kecuali)
-                                         for x in akun)
+        if 'EP' in ov:
+            ep_ok = ep == [int(ov['EP'])]
+        else:
+            ep_ok = kecuali or bool(ep) and all(str(n) == aktif.get('EP') or str(n) not in nilai_preset.get('EP', ()) for n in ep)
+
+        def cocok_u(k, v):  # override menang atas aturan preset
+            return v == ov[k] if k in ov else cocok(k, v, kecuali)
+        sql_ok = sql is not None and all(cocok_u('MySQLConn', x['koneksi']) and cocok_u('MySQLTime', x['query']) for x in akun)
+        ov_ok = all(conf.get(k) == v for k, v in ov.items() if k in KUNCI)  # user.conf sudah memuat override
         # akun dikecualikan = slice tanpa batas apa pun isi user.conf-nya (velocity-cg-default melepasnya)
         harap = {'cpu': None, 'mem': None, 'tasks': None, 'io': [None] * len(IO)} if kecuali else _harap(conf)
         out.append({'user': u, 'uid': uid, 'kecuali': kecuali, 'nilai': conf,
-                    'kustom': [k for k, v in conf.items() if v and v not in nilai_preset.get(k, ())],
-                    'nyata': nyata, 'ep': ep, 'mysql': akun, 'sesuai': nyata == harap and ep_ok and sql_ok})
+                    'kustom': [k for k, v in conf.items() if v and v not in nilai_preset.get(k, ())], 'override': ov,
+                    'nyata': nyata, 'ep': ep, 'mysql': akun, 'sesuai': nyata == harap and ep_ok and sql_ok and ov_ok})
     return out
 
 
@@ -194,6 +224,21 @@ def status(p):
     return {'ok': True, 'didukung': True, 'terpasang': True, **inf, 'ep_global': ep_global(), 'users': daftar_user(inf)}
 
 
+_kunci = []
+
+
+def kunci():  # pegang /run/velocity-cg.lock sampai proses agen selesai
+    f = open(KUNCI_F, 'w')
+    for _ in range(600):
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _kunci.append(f)
+            return True
+        except OSError:
+            time.sleep(1)
+    return False
+
+
 def terapkan(p):
     preset = p.get('preset')
     alasan = didukung()
@@ -202,14 +247,7 @@ def terapkan(p):
     if not os.access(CG, os.X_OK):
         return {'ok': False, 'error': 'velocity_cg_belum_terpasang'}
     # kunci dulu (maks 600 dtk, sama dengan flock -w 600 di skrip) supaya cadangan & preset lama tidak terbaca setengah jalan
-    kunci = open(KUNCI_F, 'w')
-    for _ in range(600):
-        try:
-            fcntl.flock(kunci, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except OSError:
-            time.sleep(1)
-    else:
+    if not kunci():
         return {'ok': False, 'error': 'kunci_sibuk'}
     inf = info()
     if not inf:
@@ -263,7 +301,122 @@ def terapkan(p):
                                                                   'users': daftar_user(info() or inf)}}
 
 
-AKSI = {'status': status, 'terapkan': terapkan}
+def _sql_batas(akun, nilai):  # nilai: {(akun, host): (koneksi, query)}
+    gagal = []
+    for x in akun:
+        a, h = x['akun'], x['host']
+        if (a, h) not in nilai or not re.match(r'^[A-Za-z0-9_]+$', a) or not re.match(r'^[A-Za-z0-9_.%:-]+$', h):
+            continue
+        c, t = nilai[(a, h)]
+        k, o = sh(['/usr/local/bin/mariadb', '-e', "ALTER USER '%s'@'%s' WITH MAX_USER_CONNECTIONS %d MAX_STATEMENT_TIME %s"
+                   % (a, h, int(c), float(t))], 30)
+        if k:
+            gagal.append(a)
+    return gagal
+
+
+def _fpm_ulang(uid):  # tulis ulang konfigurasi FPM (custom1) + reload pool user
+    sh(['bash', '-c', "echo 'action=rewrite&value=httpd' >> %s/data/task.queue && %s/directadmin taskq >/dev/null 2>&1; "
+        "systemctl list-units --no-legend --plain --state=active 'php-isolated-fpm*@%d.service' 'php-fpm*.service' "
+        "| awk '{print $1}' | xargs -r systemctl reload" % (DA, DA, uid)], 300)
+
+
+def _custom1_tanpa_ep(f):
+    try:
+        isi = [b for b in open(f) if not b.startswith('|?MAX_CHILDREN=')]
+    except OSError:
+        return
+    if any(b.strip() for b in isi):
+        with open(f, 'w') as g:
+            g.writelines(isi)
+    else:
+        os.remove(f)
+
+
+def atur_user(p):
+    u, nilai = p.get('user') or '', p.get('nilai')
+    alasan = didukung()
+    if alasan:
+        return {'ok': False, 'error': alasan}
+    if not os.access(CG, os.X_OK):
+        return {'ok': False, 'error': 'velocity_cg_belum_terpasang'}
+    if not re.match(r'^[a-z0-9]+$', u) or not os.path.isfile('%s/%s/user.conf' % (USERS, u)):
+        return {'ok': False, 'error': 'user_tidak_ada'}
+    if nilai is not None:
+        if not isinstance(nilai, dict) or not nilai or any(k not in NILAI_SAH or not re.match('^%s$' % NILAI_SAH[k], str(v))
+                                                           for k, v in nilai.items()):
+            return {'ok': False, 'error': 'nilai_tidak_sah'}
+        nilai = {k: str(v) for k, v in nilai.items()}
+    if not kunci():
+        return {'ok': False, 'error': 'kunci_sibuk'}
+    inf = info()
+    if not inf:
+        return {'ok': False, 'error': 'velocity_cg_belum_terpasang'}
+    if u in inf.get('kecuali', []):
+        return {'ok': False, 'error': 'user_dikecualikan'}
+    uid = pwd.getpwnam(u).pw_uid
+    conf_f, ov_f = '%s/%s/user.conf' % (USERS, u), '%s/%s' % (OV, u)
+    c1_f = '%s/%s/php/php-fpm.conf.custom1' % (USERS, u)
+    lama = override(u)
+    akun = akun_user(mysql_akun(), u)
+    cad = '/root/velocity-cadangan/limit-resource-user-%s-%s' % (u, time.strftime('%Y%m%d%H%M%S'))
+    os.makedirs(cad)
+    for f in (conf_f, ov_f, c1_f):
+        if os.path.exists(f):
+            shutil.copy2(f, cad + '/' + os.path.basename(f))
+    with open(cad + '/mysql.json', 'w') as f:
+        json.dump(akun, f)
+
+    # kunci yang dilepas (kembali ke preset): cgroup dihapus dari user.conf & MySQL dinolkan → velocity-cg-default isi preset
+    hapus = set(NILAI_SAH) if nilai is None else set(lama) - set(nilai)
+    isi = [b for b in open(conf_f) if b.partition('=')[0] not in hapus or b.partition('=')[0] not in KUNCI]
+    with open(conf_f + '.tmp', 'w') as f:
+        f.writelines(isi)
+    shutil.copystat(conf_f, conf_f + '.tmp')
+    st = os.stat(conf_f)
+    os.chown(conf_f + '.tmp', st.st_uid, st.st_gid)
+    os.replace(conf_f + '.tmp', conf_f)
+    nol = {(x['akun'], x['host']): ('0' if 'MySQLConn' in hapus else x['koneksi'], '0' if 'MySQLTime' in hapus else x['query'])
+           for x in akun}
+    _sql_batas(akun, nol)
+    if nilai:
+        os.makedirs(OV, mode=0o700, exist_ok=True)
+        with open(ov_f + '.tmp', 'w') as f:
+            f.write(''.join('%s=%s\n' % (k, nilai[k]) for k in sorted(nilai)))
+        os.chmod(ov_f + '.tmp', 0o600)
+        os.replace(ov_f + '.tmp', ov_f)
+    elif os.path.exists(ov_f):
+        os.remove(ov_f)
+    if 'EP' in hapus and 'EP' in lama:
+        _custom1_tanpa_ep(c1_f)
+        _fpm_ulang(uid)
+
+    env = dict(os.environ, VCG_TERKUNCI='1')
+    try:
+        r = subprocess.run([CG, u], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True,
+                           timeout=300, check=False, env=env)
+        k, log = r.returncode, r.stdout
+    except subprocess.TimeoutExpired:
+        k, log = 124, 'timeout velocity-cg-default %s (300 dtk)' % u
+    baris = next((x for x in daftar_user(info() or inf) if x['user'] == u), None)
+    hasil = {'user': u, 'override_lama': lama, 'override': nilai or {}, 'cadangan': cad, 'log': log[-2000:], 'baris': baris}
+    if not k and baris and baris['sesuai'] and baris['override'] == (nilai or {}):
+        return {'ok': True, 'hasil': hasil}
+    # kembalikan berkas + batas MySQL lama, lalu terapkan ulang
+    for f in (conf_f, ov_f, c1_f):
+        b = cad + '/' + os.path.basename(f)
+        if os.path.exists(b):
+            shutil.copy2(b, f)
+        elif os.path.exists(f):
+            os.remove(f)
+    _sql_batas(akun, {(x['akun'], x['host']): (x['koneksi'], x['query']) for x in akun})
+    _fpm_ulang(uid)
+    subprocess.run([CG, u], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300, check=False, env=env)
+    return {'ok': False, 'error': 'verifikasi_gagal', 'hasil': {**hasil, 'dikembalikan': True,
+                                                                  'baris': next((x for x in daftar_user(info() or inf) if x['user'] == u), None)}}
+
+
+AKSI = {'status': status, 'terapkan': terapkan, 'atur_user': atur_user}
 
 
 def jalankan(kode):

@@ -3,7 +3,9 @@
 // Limit = DA User Cgroups (systemd user-UID.slice), nilai default dari preset Kecil/Sedang/Tinggi di
 // /etc/velocity-cg/preset yang diterapkan velocity-cg-default ke semua user DA (kecuali admin; nilai kustom dipertahankan).
 // Data: GET /api/servers/limit (installer_status.py → scripts/server_limit_agent.py). Ganti preset: POST /api/servers/limit/aksi
-// → job latar (cadangan → terapkan → verifikasi slice → kembalikan bila gagal).
+// → job latar (cadangan → terapkan → verifikasi slice → kembalikan bila gagal). Override per akun: POST yang sama
+// {user, nilai} → /etc/velocity-cg/user/USER (menang atas preset; nilai null = kembali ke preset).
+import Dialog from '../components/Dialog.vue'
 import PilihServer from '../components/PilihServer.vue'
 import { pilihServer } from '../jenisServer.js'
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
@@ -64,6 +66,9 @@ const PESAN = {
   cloudlinux_pakai_lve: 'Server CloudLinux — limit memakai LVE.',
   job_tidak_ada: 'Status perubahan hilang (layanan dashboard di-restart). Muat ulang.',
   forbidden: 'Ditolak: hanya bisa dijalankan dari halaman dashboard ini.',
+  user_tidak_ada: 'User DA tidak ada di server ini.',
+  user_dikecualikan: 'Akun ini dikecualikan (tanpa batas) — tidak bisa diatur per akun.',
+  nilai_tidak_sah: 'Ada nilai yang tidak sah (harus angka bulat positif; MySQL boleh 0 = tanpa batas).',
   timeout: 'Server tidak menjawab (timeout) — keadaan bisa setengah jadi. Muat ulang dan periksa kolom Status akun.',
 }
 const pesanGalat = (e) => PESAN[e] || e || 'gagal'
@@ -73,6 +78,69 @@ watch(() => [terpilih.value?.host, terpilih.value?.preset], ([, p]) => { dipilih
 
 const ringkas = (n) => (n == null ? 'tanpa batas' : n)
 const mem = (b) => (b == null ? 'tanpa batas' : `${Math.round(b / 1048576)} MB`)
+
+// ---- Form limit per akun (satuan form → nilai user.conf/override) ----
+// Default LVE server Cahyadi (lvectl list, 25 Okt 2026): SPEED 100, PMEM 1024M, EP 20, NPROC 100, IO 1024 KB/s, IOPS 1024; tanpa MySQL Governor
+const LVE_CAHYADI = { cpu: 100, ram: 1024, ioBaca: 1024, ioTulis: 1024, iopsBaca: 1024, iopsTulis: 1024, proses: 100, ep: 20, sqlKon: 0, sqlDtk: 0 }
+const ISIAN = [
+  { k: 'cpu', label: 'CPU (%)', ket: '100 = 1 core', min: 1 },
+  { k: 'ram', label: 'RAM maksimal (MB)', min: 1 },
+  { k: 'ioBaca', label: 'IO baca (KB/dtk)', min: 1 },
+  { k: 'ioTulis', label: 'IO tulis (KB/dtk)', min: 1 },
+  { k: 'iopsBaca', label: 'IOPS baca', min: 1 },
+  { k: 'iopsTulis', label: 'IOPS tulis', min: 1 },
+  { k: 'proses', label: 'Proses / thread', min: 1 },
+  { k: 'ep', label: 'PHP serentak (EP)', min: 1 },
+  { k: 'sqlKon', label: 'Koneksi MySQL', ket: '0 = tanpa batas', min: 0 },
+  { k: 'sqlDtk', label: 'Lama query MySQL (dtk)', ket: '0 = tanpa batas', min: 0 },
+]
+const KB = (v) => { const m = /^(\d+)([KMG]?)$/.exec(v || ''); return m ? Number(m[1]) * { '': 0.001, K: 1, M: 1000, G: 1e6 }[m[2]] : null }
+const MB = (v) => { const m = /^(\d+)([MG])$/.exec(v || ''); return m ? Number(m[1]) * (m[2] === 'G' ? 1024 : 1) : null }
+function keForm(u, preset) {
+  const n = { ...preset, ...u.nilai, ...u.override }
+  const sql = u.mysql?.[0]
+  return {
+    cpu: Number.parseInt(n.CPUQuota), ram: MB(n.MemoryMax), ioBaca: KB(n.IOReadBandwidthMax), ioTulis: KB(n.IOWriteBandwidthMax),
+    iopsBaca: Number(n.IOReadIOPSMax), iopsTulis: Number(n.IOWriteIOPSMax), proses: Number(n.TasksMax),
+    ep: Number(u.override?.EP || u.ep?.[0] || preset.EP),
+    sqlKon: Number(u.override?.MySQLConn ?? sql?.koneksi ?? preset.MySQLConn), sqlDtk: Number(u.override?.MySQLTime ?? sql?.query ?? preset.MySQLTime),
+  }
+}
+const dariForm = (f) => ({
+  CPUQuota: `${f.cpu}%`, MemoryMax: f.ram % 1024 ? `${f.ram}M` : `${f.ram / 1024}G`, IOReadBandwidthMax: `${f.ioBaca}K`,
+  IOWriteBandwidthMax: `${f.ioTulis}K`, IOReadIOPSMax: String(f.iopsBaca), IOWriteIOPSMax: String(f.iopsTulis),
+  TasksMax: String(f.proses), EP: String(f.ep), MySQLConn: String(f.sqlKon), MySQLTime: String(f.sqlDtk),
+})
+const form = reactive({ buka: false, user: null, data: {} })
+function bukaForm(u) {
+  Object.assign(form, { buka: true, user: u, data: keForm(u, terpilih.value.daftar[terpilih.value.preset]) })
+}
+
+async function kirimUser(user, nilai, teksJalan) {
+  if (!oleh.value.trim()) { Object.assign(pesan, { teks: PESAN.invalid_oleh, galat: true }); return }
+  const s = terpilih.value
+  try {
+    const j = await kirim('/api/servers/limit/aksi', { server: s.host, user, nilai, oleh: oleh.value.trim() })
+    jobs.value = { ...jobs.value, [s.host]: j }
+    Object.assign(pesan, { teks: `${s.name}: ${teksJalan}…`, galat: false })
+    form.buka = false
+    pantau()
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  }
+}
+function simpanUser() {
+  const f = form.data
+  if (ISIAN.some((i) => !Number.isInteger(f[i.k]) || f[i.k] < i.min)) { Object.assign(pesan, { teks: PESAN.nilai_tidak_sah, galat: true }); return }
+  kirimUser(form.user.user, dariForm(f), `mengatur limit ${form.user.user}`)
+}
+async function kembaliPreset(u) {
+  const ya = await konfirmasi({
+    judul: `Kembalikan ${u.user} ke preset ${terpilih.value.preset}?`, tombol: 'Kembalikan',
+    teks: 'Limit khusus akun ini dihapus; CPU, RAM, IO, proses, EP, dan batas MySQL kembali mengikuti preset server. Cadangan dibuat.',
+  })
+  if (ya) kirimUser(u.user, null, `mengembalikan ${u.user} ke preset`)
+}
 
 // ---- Job terapkan (per host; gagal ambil status sekali = coba lagi, bukan dianggap gagal) ----
 const jobs = ref({})
@@ -98,7 +166,7 @@ function pantau() {
     if (baru.status !== 'berjalan') {
       clearInterval(timer); timer = null
       Object.assign(pesan, baru.status === 'selesai'
-        ? { teks: `${baru.server}: preset ${baru.preset} diterapkan.`, galat: false }
+        ? { teks: baru.user ? `${baru.server}: limit ${baru.user} diterapkan.` : `${baru.server}: preset ${baru.preset} diterapkan.`, galat: false }
         : { teks: `${baru.server}: ${pesanGalat(baru.hasil?.error)}`, galat: true })
       muatSegar()
       pantau() // job server lain masih berjalan
@@ -175,7 +243,7 @@ async function terapkan() {
             <span v-if="berjalan" class="putar besar" aria-hidden="true" />
             <Ikon v-else :nama="job.status === 'selesai' ? 'centang' : 'peringatan'" :ukuran="20" />
             <div>
-              <b>{{ berjalan ? 'Menerapkan…' : job.status === 'selesai' ? 'Berhasil' : 'Gagal' }}</b> · preset {{ job.preset }}
+              <b>{{ berjalan ? 'Menerapkan…' : job.status === 'selesai' ? 'Berhasil' : 'Gagal' }}</b> · {{ job.user ? `akun ${job.user}` : `preset ${job.preset}` }}
               <span v-if="job.status === 'gagal'" class="blok-t">{{ pesanGalat(job.hasil?.error) }}</span>
               <small v-if="job.hasil?.hasil?.cadangan" class="redup blok-t">Cadangan: {{ job.hasil.hasil.cadangan }}</small>
             </div>
@@ -187,16 +255,22 @@ async function terapkan() {
           <h3 class="sub">Akun ({{ terpilih.users.length }})</h3>
           <div class="tabel-wadah">
             <table class="tabel">
-              <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">EP</th><th scope="col">MySQL</th><th scope="col">Status</th></tr></thead>
+              <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">EP</th><th scope="col">MySQL</th><th scope="col">Status</th><th scope="col">Atur</th></tr></thead>
               <tbody>
                 <tr v-for="u in terpilih.users" :key="u.user">
-                  <td><b>{{ u.user }}</b> <span v-if="u.kecuali" class="lencana abu">dikecualikan</span><span v-if="u.kustom.length" class="lencana ungu" :title="u.kustom.join(', ')">kustom</span></td>
+                  <td><b>{{ u.user }}</b> <span v-if="u.kecuali" class="lencana abu">dikecualikan</span><span v-if="Object.keys(u.override || {}).length" class="lencana ungu" title="Limit khusus akun ini (bukan preset)">per akun</span><span v-else-if="u.kustom.length" class="lencana ungu" :title="u.kustom.join(', ')">kustom</span></td>
                   <td>{{ u.nyata.cpu == null ? 'tanpa batas' : `${u.nyata.cpu}%` }}</td>
                   <td>{{ mem(u.nyata.mem) }}</td>
                   <td>{{ ringkas(u.nyata.tasks) }}</td>
                   <td>{{ u.ep?.length ? u.ep.join('/') : '—' }}</td>
                   <td :title="(u.mysql || []).map((x) => `${x.akun}: ${x.koneksi} koneksi, ${x.query} dtk`).join('\n')">{{ sqlRingkas(u.mysql) }}</td>
                   <td><span class="lencana" :class="u.sesuai ? 'hijau' : 'kuning'">{{ u.sesuai ? 'sesuai' : 'belum diterapkan' }}</span></td>
+                  <td class="aksi-u">
+                    <template v-if="!u.kecuali">
+                      <button type="button" class="tombol garis kecil" :disabled="berjalan" @click="bukaForm(u)">Atur</button>
+                      <button v-if="Object.keys(u.override || {}).length" type="button" class="tombol garis kecil" :disabled="berjalan" @click="kembaliPreset(u)">Ke preset</button>
+                    </template>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -204,6 +278,23 @@ async function terapkan() {
         </template>
       </section>
     </template>
+
+    <Dialog :buka="form.buka" :judul="`Limit akun ${form.user?.user || ''}`" lebar="640px" @tutup="form.buka = false">
+      <form class="form-limit" @submit.prevent="simpanUser">
+        <p class="redup kecil-p">Berlaku hanya untuk akun ini dan tetap dipakai walau preset server diganti. Diisi dari nilai sekarang.</p>
+        <div class="dua">
+          <label v-for="i in ISIAN" :key="i.k" class="isian"><span>{{ i.label }}</span>
+            <input v-model.number="form.data[i.k]" type="number" :min="i.min" step="1" required>
+            <small v-if="i.ket">{{ i.ket }}</small></label>
+        </div>
+        <div class="aksi">
+          <button type="button" class="tombol garis kecil" @click="form.data = { ...LVE_CAHYADI }">Isi seperti LVE Cahyadi</button>
+          <span class="isi" />
+          <button type="button" class="tombol garis kecil" @click="form.buka = false">Batal</button>
+          <button type="submit" class="tombol kecil" :disabled="berjalan">Simpan</button>
+        </div>
+      </form>
+    </Dialog>
   </div>
 </template>
 
@@ -220,5 +311,11 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 .putar { width: 18px; height: 18px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: putar .8s linear infinite; }
 @keyframes putar { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .putar { animation: none; } }
+.aksi-u { white-space: nowrap; }
+.aksi-u .tombol + .tombol { margin-left: 6px; }
+.form-limit { display: grid; gap: 12px; }
+.form-limit .dua { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.form-limit .isi { flex: 1; }
+@media (max-width: 560px) { .form-limit .dua { grid-template-columns: minmax(0, 1fr); } }
 .aksi { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 </style>
