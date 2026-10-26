@@ -743,6 +743,11 @@ ul.vk-sosmed>li::before{content:none!important}
 @media (max-width:767.98px){.navigation-brand-logo img,.custom-logo-link img{max-height:64px}}
 @media (max-width:575.98px){.home-wrapper .position-relative.overflow-hidden>.position-absolute .col-md-7{max-width:78%}.velocity-home-title{font-size:17px;line-height:23px;margin-bottom:.25rem!important}.velocity-home-desc{display:none}}
 .velocity-banner-title,.velocity-banner-subtitle{max-width:min(80%,900px);padding-right:1rem}
+/* bisnis1: judul banner di kolom text-center ikut di tengah + lapisan gelap agar terbaca di foto terang (arcapadaglobal.com
+   2026-10-26); perusahaan1 rata kiri tidak kena */
+.text-center>.velocity-banner-title,.text-center>.velocity-banner-subtitle{margin-left:auto;margin-right:auto;padding-right:0}
+.position-relative.overflow-hidden:has(>.position-absolute>.text-center>.velocity-banner-title)::before{content:"";position:absolute;inset:0;background:rgba(0,0,0,.38);z-index:1}
+.position-relative.overflow-hidden>.position-absolute:has(>.text-center>.velocity-banner-title){z-index:2}
 .velocity-banner-title{font-size:clamp(1.4rem,3.6vw,3.1rem)!important;line-height:1.15}
 .velocity-banner-subtitle{font-size:clamp(.9rem,1.3vw,1.2rem)!important;line-height:1.45}
 div.text-center.my-5>img.w-100{max-height:min(460px,40vw);object-fit:cover}
