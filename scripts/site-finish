@@ -679,7 +679,13 @@ fi
 if [[ "${LATAR_ABU:-0}" == 1 && "$SITUS_BARU" == 1 ]]; then
   wp eval 'if (get_stylesheet() === "velocity-fse") { echo "latar_skip:tema_fse"; return; }
 $l = strtolower((string) get_theme_mod("background_website_color", ""));
-if (in_array($l, ["", "#ffffff", "#fff"], true)) { set_theme_mod("background_website_color", "#f1f3f5"); echo "latar_abu_set"; }
+// velocity-mobil4 dirancang berlatar hitam (demo: latar #000000, teks & tautan terang) — sungbin.co.id 2026-10-26.
+if (in_array($l, ["", "#ffffff", "#fff"], true) && get_stylesheet() === "velocity-mobil4") {
+    foreach (["background_website_color" => "#000000", "body_text_color" => "#ededed", "heading_color" => "#fcfcfc",
+              "link_color" => "#e2e2e2", "link_hover_color" => "#bababa", "link_active_color" => "#e5e5e5"] as $k => $v) { set_theme_mod($k, $v); }
+    echo "latar_gelap_set";
+}
+elseif (in_array($l, ["", "#ffffff", "#fff"], true)) { set_theme_mod("background_website_color", "#f1f3f5"); echo "latar_abu_set"; }
 else { echo "latar_kept:" . $l; }' >&2 || true
   echo >&2
 fi

@@ -715,6 +715,9 @@ ul.vk-sosmed>li::before{content:none!important}
 .vk-kartu-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:.75rem 0 1.25rem}
 .vk-kartu-grid .vk-kartu{margin:0}
 .vk-kartu h3{font-size:1rem;margin:0 0 .4rem}
+/* velocity-mobil4 berlatar hitam + teks terang (site-finish LATAR_ABU): kartu & ajakan putih membuat teksnya hilang
+   (sungbin.co.id 2026-10-26) */
+.wp-child-theme-velocity-mobil4 .vk-kartu,.wp-child-theme-velocity-mobil4 .vk-ajakan{background:rgba(255,255,255,.06)}
 .gallery{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:1rem 0!important}
 .gallery .gallery-item{float:none!important;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}
 .gallery .gallery-item img{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border:0!important;border-radius:var(--bs-border-radius)}
