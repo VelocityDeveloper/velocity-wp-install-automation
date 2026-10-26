@@ -674,6 +674,16 @@ if ($kirki || $punya("color_theme")) {
   echo >&2
 fi
 
+# Latar situs abu-abu muda, putih polos terlalu terang (user 2026-10-26, psblegalitas.com). Paket F &
+# Biasa (portal berita punya latar demo sendiri di theme-paket-biasa), instalasi baru, latar masih putih.
+if [[ "${LATAR_ABU:-0}" == 1 && "$SITUS_BARU" == 1 ]]; then
+  wp eval 'if (get_stylesheet() === "velocity-fse") { echo "latar_skip:tema_fse"; return; }
+$l = strtolower((string) get_theme_mod("background_website_color", ""));
+if (in_array($l, ["", "#ffffff", "#fff"], true)) { set_theme_mod("background_website_color", "#f1f3f5"); echo "latar_abu_set"; }
+else { echo "latar_kept:" . $l; }' >&2 || true
+  echo >&2
+fi
+
 if [[ -n "$CSS" ]]; then
   VCSS="$CSS" wp eval '$c = wp_get_custom_css(); if (get_stylesheet() === "velocity-fse") { echo "colors_skip:palet_tema_fse"; } elseif ($c === "" || strpos($c, "velocity-installer-colors") !== false) { $r = wp_update_custom_css_post(getenv("VCSS")); echo is_wp_error($r) ? "colors_failed" : "colors_set"; } else { echo "colors_kept"; }' >&2 || true
   echo >&2
@@ -1264,6 +1274,7 @@ def main():
             f'WARNA_TEMA={shlex.quote(warna_tema)}',
             f'SITUS_BARU={0 if cari_logo.sudah_terpasang(domain) else 1}',
             f'BERITA_BIASA={1 if re.sub(r"[^a-z]", "", cfg.get("paket", "").lower()) == "paketportalberitabiasa" else 0}',
+            f'LATAR_ABU={1 if jenis_paket == "paketf" or (jenis_paket.endswith("biasa") and jenis_paket != "paketportalberitabiasa") else 0}',
         ])
         # Hanya secret per domain yang disalin dari catatan hosting PM; file password
         # bersama lama tidak boleh dipasang lagi. Dikirim lewat stdin, tidak dicetak.

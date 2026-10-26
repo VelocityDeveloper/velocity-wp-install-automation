@@ -121,11 +121,14 @@ def warna_logo(path):
             _, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
             hexv = '#%02x%02x%02x' % (r, g, b)
             if s >= 0.3 and v >= 0.25 and n / total >= 0.06:
-                warna.append(hexv)
+                warna.append((n * min(s, 0.6), hexv))
             elif v < 0.5:
                 gelap.append(hexv)
         # Logo hitam bergaris tipis: kelompok terbanyak abu-abu tepi antialias -> ambil yang tergelap.
         gelap.sort(key=kontras_putih, reverse=True)
+        # Bobot jumlah x saturasi (maks 0,6 agar aksen jenuh kecil tak menang): teks logo JPG banyak
+        # piksel antialias pucat (psblegalitas.com 2026-10-26: biru #0723ae kalah lavender #8a82c9).
+        warna = [h for _, h in sorted(warna, reverse=True)]
         pilih = (warna or gelap or [''])[0]
         return _gelapkan(pilih) if pilih else ''
     except Exception:
