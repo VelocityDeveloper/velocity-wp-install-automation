@@ -715,7 +715,7 @@ ul.vk-sosmed>li::before{content:none!important}
 .vk-kartu-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:.75rem 0 1.25rem}
 .vk-kartu-grid .vk-kartu{margin:0}
 .vk-kartu h3{font-size:1rem;margin:0 0 .4rem}
-/* velocity-mobil4 berlatar hitam + teks terang (site-finish LATAR_ABU): kartu & ajakan putih membuat teksnya hilang
+/* velocity-mobil4 berlatar hitam + teks terang (site-finish LATAR_DEMO): kartu & ajakan putih membuat teksnya hilang
    (sungbin.co.id 2026-10-26) */
 .wp-child-theme-velocity-mobil4 .vk-kartu,.wp-child-theme-velocity-mobil4 .vk-ajakan{background:rgba(255,255,255,.06)}
 .wp-child-theme-velocity-mobil4 .widget-area .vk-kontak a{color:#fff!important}
@@ -1567,6 +1567,20 @@ if (function_exists('velocity_tema_widget_footer') && !velocity_tema_widget_foot
         $hapus_bawaan($sb[$id]); $sb[$id] = []; $ubah[] = $id;
     }
     echo "tampilan: footer_acuan_tema:kosong\n";
+    $kaki = [];
+} elseif (function_exists('velocity_tema_widget_footer')) {
+    // Acuan footer berisi (velocity-toko12: Produk Terbaru, Bank Pembayaran, Ekspedisi Pengiriman, Hubungi Kami —
+    // user 2026-10-27, busanamoda.com): [[judul, isi], ...] = footer-widget-1..N, menggantikan footer umum
+    // (tentang/kontak/statistik). Area yang sudah disunting orang dibiarkan.
+    foreach (array_values((array) velocity_tema_widget_footer()) as $i => [$judul, $isi]) {
+        $id = 'footer-widget-' . ($i + 1);
+        if (!isset($wp_registered_sidebars[$id]) || !$boleh($sb[$id] ?? [])) { continue; }
+        $hapus_bawaan($sb[$id] ?? []);
+        $n = 300; while (isset($tx[$n])) { $n++; }
+        $tx[$n] = ['title' => $judul, 'text' => $isi, 'filter' => false, 'visual' => false];
+        $sb[$id] = ["text-$n"]; $ubah[] = $id; $semua[] = "text-$n";
+    }
+    echo 'tampilan: footer_acuan_tema:' . count((array) velocity_tema_widget_footer()) . "\n";
     $kaki = [];
 } elseif ($demo_w) {
     // Footer tema berita mengikuti demonya (disusun di atas); demo tanpa widget footer = footer kosong.
