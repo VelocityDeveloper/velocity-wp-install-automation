@@ -1504,6 +1504,29 @@ if ($utama && in_array($utama, $ubah, true)) {
     }
     $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
     echo 'tampilan: widget_sidebar_acuan_tema:' . count($baru) . "\n";
+} elseif ($utama && strpos($tema, 'velocity-toko') === 0 && taxonomy_exists('store_product_cat') && $boleh($sb[$utama] ?? [])) {
+    // Tema toko + VD Store tanpa acuan tema (user 2026-10-27, busanamoda.com: widget harus sesuai toko online, bukan
+    // kategori layanan /layanan/#...): Kategori Produk (induk store_product_cat, produk sudah dibuat toko-biasa),
+    // Hubungi Kami, Pembayaran & Ekspedisi dari Pengaturan VD Store (shortcode = ikut berubah bila pengaturan diubah).
+    $hapus_bawaan($sb[$utama] ?? []);
+    $baru = [];
+    $kat_toko = get_terms(['taxonomy' => 'store_product_cat', 'parent' => 0, 'hide_empty' => false]);
+    if ($kat_toko && !is_wp_error($kat_toko)) {
+        $baru[] = $buat_html('Kategori Produk', '<ul>' . implode('', array_map(fn($t) => '<li><a href="' . esc_url(get_term_link($t))
+            . '">' . esc_html($t->name) . '</a></li>', $kat_toko)) . '</ul>');
+    }
+    if (!empty($W['konsultasi'])) { $baru[] = $buat_html($W['konsultasi'][0], $W['konsultasi'][1]); }
+    $set_toko = (array) get_option('wp_store_settings', []);
+    foreach ([['store_bank_accounts', 'Pembayaran', '[wp_store_bank_accounts]'], ['shipping_couriers', 'Ekspedisi', '[wp_store_couriers]']] as [$kunci, $judul, $kode]) {
+        if (empty($set_toko[$kunci])) { continue; }
+        $n = 300; while (isset($tx[$n])) { $n++; }
+        $tx[$n] = ['title' => $judul, 'text' => $kode, 'filter' => false, 'visual' => false];
+        $baru[] = "text-$n";
+    }
+    $n = 300; while (isset($rp[$n])) { $n++; } $rp[$n] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
+    $baru[] = "recent-posts-$n";
+    $sb[$utama] = $baru; $ubah[] = $utama; $semua = array_merge($semua, $baru);
+    echo 'tampilan: widget_sidebar_toko:' . count($baru) . "\n";
 } elseif ($utama && $boleh($sb[$utama] ?? [])) {
     $hapus_bawaan($sb[$utama] ?? []);
     $baru = empty($W['konsultasi']) ? [] : [$buat_html($W['konsultasi'][0], $W['konsultasi'][1])];
@@ -1586,14 +1609,16 @@ if ($baru !== trim($css)) { wp_update_custom_css_post($baru, ['stylesheet' => $t
 // Portal berita tidak diisi (user 2026-10-06, cybernasional24.com: "Current header tidak usah di isi").
 // Tema anak yang membuang seksi Customizer header_image juga tidak diisi (user 2026-10-06, oklaundryexpress.com):
 // perusahaan2/property2 memakainya sebagai gambar di atas menu (tidak ada di demo) dan tak bisa dihapus dari wp-admin.
-$header_disembunyikan = false;
+// Tema toko (velocity-toko*) juga tidak diisi (user 2026-10-27, busanamoda.com): toko12 mencetaknya sebagai
+// foto besar di atas bar kontak, tidak ada di demo.
+$header_disembunyikan = strpos($tema, 'velocity-toko') === 0;
 foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(get_stylesheet_directory(), FilesystemIterator::SKIP_DOTS)) as $berkas) {
     if ($berkas->getExtension() === 'php'
         && preg_match('#remove_section\(\s*[\'"]header_image[\'"]#', (string) file_get_contents($berkas->getPathname()))) {
         $header_disembunyikan = true; break;
     }
 }
-if ($header_disembunyikan && !empty($d['situs_baru']) && empty($st['header_image'])) echo "tampilan: header_image:dilewati:seksi_disembunyikan_tema\n";
+if ($header_disembunyikan && !empty($d['situs_baru']) && empty($st['header_image'])) echo "tampilan: header_image:dilewati:" . (strpos($tema, 'velocity-toko') === 0 ? 'tema_toko' : 'seksi_disembunyikan_tema') . "\n";
 if (!empty($d['situs_baru']) && empty($d['berita']) && empty($st['header_image']) && !$header_disembunyikan
     && current_theme_supports('custom-header') && !get_header_image() && !empty($media['hero'])) {
     $hid = (int) $media['hero']; $hurl = (string) wp_get_attachment_url($hid); $hm = wp_get_attachment_metadata($hid) ?: [];
