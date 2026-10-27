@@ -687,10 +687,12 @@ if (in_array($l, ["", "#ffffff", "#fff"], true) && get_stylesheet() === "velocit
     echo "latar_gelap_set";
 }
 else {
-    // Warna dari demo <slug>.velocitydeveloper.com 2026-10-27. sekolah, sekolah1, tour3 berlatar gambar demo (warna
-    // #ffffff); tour2 & mobil2 latarnya dari Customizer child (background_themewebsite), jadi tidak di sini.
+    // Warna dari demo <slug>.velocitydeveloper.com 2026-10-27. sekolah, sekolah1, tour3 di demo berlatar gambar,
+    // tanpa gambar itu abu-abu muda, jangan putih (user 2026-10-27); tour2 & mobil2 latarnya dari Customizer child
+    // (background_themewebsite), jadi tidak di sini.
     $demo = ["velocity-bisnis1" => "#f5f5f5", "velocity-kesehatan1" => "#f5f5f5", "velocity-mobil3" => "#f5f5f5",
-             "velocity-sekolah4" => "#eab53a", "velocity-sekolah5" => "#efefef"][get_stylesheet()] ?? "";
+             "velocity-sekolah4" => "#eab53a", "velocity-sekolah5" => "#efefef", "velocity-sekolah" => "#f1f3f5",
+             "velocity-sekolah1" => "#f1f3f5", "velocity-tour3" => "#f1f3f5"][get_stylesheet()] ?? "";
     if ($demo === "") { echo "latar_putih_tema"; }
     elseif (in_array($l, ["", "#ffffff", "#fff"], true)) { set_theme_mod("background_website_color", $demo); echo "latar_demo_set:" . $demo; }
     else { echo "latar_kept:" . $l; }
