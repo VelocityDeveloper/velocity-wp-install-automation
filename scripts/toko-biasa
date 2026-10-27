@@ -2,7 +2,7 @@
 """Paket Toko Online biasa: menu toko & produk VD Store (keputusan user 2026-09-23).
 
 Pemakaian: toko-biasa --menu <manifest>     menu utama baku toko
-           toko-biasa --produk <manifest>   produk dari folder produk klien, atau 5 produk contoh
+           toko-biasa --produk <manifest>   produk dari folder produk klien, atau 12 produk contoh
            toko-biasa --produk --coba <manifest>   susun & tampilkan daftar produk tanpa SSH
            --paksa   jalankan juga di situs yang sudah ter-deploy (HANYA dengan persetujuan user)
 (butuh WP_INSTALL_SSH_KEY_FILE; VELOCITY_LOKAL_SSH/DOCROOT untuk rig uji)
@@ -21,7 +21,7 @@ Alur di installer-runner (hanya paket toko online BIASA, bukan Toko Online Custo
   bernama jelas = satu produk (harga dari nama berkas, mis. "Daster (95k).jpg"), gambar bernama
   generik ("WhatsApp Image ...", "IMG-...") & dokumen daftar produk dikenali Claude
   (scripts/claude_vision.py): dikelompokkan per produk, dinamai, harga hanya bila tertulis.
-  Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 5 produk contoh (Marketplace Biasa: 8) (judul "Contoh – ",
+  Gambar > 100 KB dikompres ke < 100 KB. Tanpa folder produk: 12 produk contoh (Marketplace Biasa: 8) (judul "Contoh – ",
   meta _velocity_contoh=1) berfoto Pexels. Produk contoh dihapus begitu produk asli masuk.
   Produk yang sudah diimpor (meta _velocity_produk_kunci) tidak digandakan pada run ulang.
   Video di folder produk TIDAK diunggah ke situs; jumlahnya dicatat (toko: video_dilewati:N). Videonya
@@ -63,7 +63,9 @@ VIDEO = {'.mp4', '.mov', '.avi', '.mkv', '.3gp', '.webm', '.m4v', '.wmv', '.flv'
 BATAS_BYTE = 100 * 1024
 MAKS_PRODUK = 60
 MAKS_GAMBAR_AI = 30
-JUMLAH_CONTOH = 5
+# 12 = kelipatan 2/3/4/6 kolom & >= jumlah produk beranda semua tema toko (6/8/12), supaya grid
+# beranda penuh tanpa baris yatim (busanamoda.com 2026-10-27: 5 contoh di grid 4 kolom).
+JUMLAH_CONTOH = 12
 # Paket Marketplace Biasa: 8 produk contoh — beranda velocity-marketplace-child (aturan user 2026-10-04).
 JUMLAH_CONTOH_MARKETPLACE = 8
 UA = {'User-Agent': 'velocity-installer/1.0'}
@@ -361,8 +363,9 @@ def jumlah_contoh(cfg):
 
 
 def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
-    """5 produk contoh (Marketplace Biasa: 8) sesuai bidang usaha (Claude), foto dari Pexels.
-    scripts/velocity-produk memakainya untuk katalog Paket E/F (jumlah=6, jenis='katalog produk')."""
+    """12 produk contoh (Marketplace Biasa: 8) sesuai bidang usaha (Claude), foto dari Pexels.
+    scripts/velocity-produk memakainya untuk katalog Paket E/F (jumlah=6, jenis='katalog produk').
+    contoh.json lama yang kurang ditambah kekurangannya saja (produk lama tetap, tidak dibuat ulang)."""
     jumlah = jumlah or jumlah_contoh(cfg)
     pratinjau = 'katalog' if 'katalog' in jenis else 'toko'
     simpan = KERJA / domain / 'contoh.json'
@@ -371,7 +374,10 @@ def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
         if len(lama) >= jumlah:
             return lama[:jumlah]
     except (OSError, ValueError, TypeError):
-        pass
+        lama = []
+    if not isinstance(lama, list):
+        lama = []
+    kurang = jumlah - len(lama)
     form = read_client_form(folder_klien(domain))
     fields = {k: v for k, v in (form.get('fields') or {}).items()
               if not re.search(r'password|sandi|login|user|alamat|nama anda|hp|telp|wa|email|bank|kodepos', k, re.I)}
@@ -381,7 +387,9 @@ def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
         tema = {}
     layanan = ', '.join(str(x.get('judul') or x) if isinstance(x, dict) else str(x) for x in (tema.get('layanan') or []))[:600]
     prompt = (
-        f'Buat {jumlah} produk CONTOH untuk {jenis} "{cfg.get("site_title") or domain}".\n'
+        f'Buat {kurang} produk CONTOH untuk {jenis} "{cfg.get("site_title") or domain}".\n'
+        + (f'Jangan mengulang produk yang sudah ada: {", ".join(str(x.get("nama", "")) for x in lama)}\n' if lama else '')
+        + 
         f'Data form klien:\n' + '\n'.join(f'- {k}: {v}' for k, v in fields.items())[:2500] + '\n'
         + (f'Layanan/bidang: {layanan}\n' if layanan else '')
         + 'Produk harus jenis barang yang wajar dijual usaha ini, harga perkiraan pasar Indonesia (angka bulat).\n'
@@ -390,14 +398,14 @@ def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
     jawab = claude_vision.tanya(prompt, [], timeout=300, log=log)
     if not isinstance(jawab, list) or not jawab:
         jawab = [{'nama': f'Produk {i}', 'kategori': 'Produk', 'harga': 0, 'deskripsi': 'Produk contoh.',
-                  'kata_kunci_foto': 'product package'} for i in range(1, jumlah + 1)]
-    jawab = [x for x in jawab if isinstance(x, dict)][:jumlah]
+                  'kata_kunci_foto': 'product package'} for i in range(len(lama) + 1, jumlah + 1)]
+    jawab = [x for x in jawab if isinstance(x, dict)][:kurang]
     foto = muat('paket_g_foto', 'paket-g-foto').Pexels()
     kerja = KERJA / domain / 'contoh'
     kerja.mkdir(parents=True, exist_ok=True)
-    produk, terpakai = [], set()
-    for i, x in enumerate(jawab, 1):
-        gambar = []
+    produk, terpakai = list(lama), {x.get('foto_url') for x in lama}
+    for i, x in enumerate(jawab, len(lama) + 1):
+        gambar, foto_url = [], ''
         for calon in foto.cari(str(x.get('kata_kunci_foto') or x.get('nama') or ''))[:8]:
             if not calon.get('url') or calon['url'] in terpakai:
                 continue
@@ -406,17 +414,20 @@ def produk_contoh(domain, cfg, jumlah=None, jenis='toko online'):
                 req = urllib.request.Request(calon['url'], headers=UA)
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     tujuan.write_bytes(resp.read())
-                gambar = [str(tujuan)]
+                gambar, foto_url = [str(tujuan)], calon['url']
                 terpakai.add(calon['url'])
                 break
             except Exception:
                 continue
         harga = x.get('harga')
-        produk.append({'nama': 'Contoh – ' + str(x.get('nama') or f'Produk {i}').strip()[:100],
+        # Claude bisa meniru awalan "Contoh – " dari daftar produk lama di prompt
+        nama = re.sub(r'^(contoh\s*[–-]\s*)+', '', str(x.get('nama') or '').strip(), flags=re.I) or f'Produk {i}'
+        produk.append({'nama': 'Contoh – ' + nama[:100],
                        'harga': int(harga) if isinstance(harga, (int, float)) and harga > 0 else None,
                        'deskripsi': f'Produk CONTOH untuk pratinjau {pratinjau}; nama, harga, dan foto akan diganti data produk asli. '
                                     + str(x.get('deskripsi') or '').strip(),
-                       'kategori': str(x.get('kategori') or 'Produk').strip()[:60], 'gambar': gambar, 'contoh': True})
+                       'kategori': str(x.get('kategori') or 'Produk').strip()[:60], 'gambar': gambar, 'contoh': True,
+                       'foto_url': foto_url})
     simpan.write_text(json.dumps(produk, ensure_ascii=False, indent=1))
     return produk
 
@@ -477,7 +488,7 @@ if ($ada_asli && $contoh_lama) {
 $jumlah_asli = count(get_posts(['post_type' => 'store_product', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids',
                                 'meta_query' => [['key' => '_velocity_contoh', 'compare' => 'NOT EXISTS']]]));
 if (!$ada_asli && $jumlah_asli) { echo "produk: contoh_dilewati:sudah_ada_produk\n"; return; }
-if (!$ada_asli && $contoh_lama) { echo "produk: contoh_sudah_ada\n"; return; }
+// contoh yang sudah ada dilewati per kunci di bawah; yang kurang (JUMLAH_CONTOH naik) ditambahkan
 $baru = 0; $ada = 0;
 foreach ($data as $p) {
     $kunci = $p['kunci'];
