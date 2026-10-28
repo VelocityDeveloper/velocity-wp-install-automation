@@ -4,6 +4,7 @@ AI Content Generator for Velocity WP Install
 Reads manifest + client folder data, calls OpenAI-compatible API,
 generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
 """
+import collections
 import hashlib
 import html
 import json
@@ -666,7 +667,8 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # Home 5 semua kategori — medanspot.com 2026-10-21 3 per rubrik kurang.
 ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
                        'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6],
-                       'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4]}
+                       'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4],
+                       'velocity-berita15': [6, 6, 6, 6, 6, 4]}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 
@@ -1039,15 +1041,20 @@ def main():
             client_info = format_for_prompt(client_data, docs)
     if articles and kategori:
         articles = [a for a in articles if str(a.get('title') or '').strip() and str(a.get('slug') or '').strip()]
-        ada = {str(a.get('category')) for a in articles}
-        kurang = [(i, k) for i, k in enumerate(kategori) if k['judul'] not in ada]
+        # Kategori yang artikelnya kurang dari kebutuhan blok beranda juga dilengkapi, bukan hanya yang
+        # kosong (user 2026-10-28, benangrajanews.com: berita15 butuh 6, tiap rubrik baru 3).
+        ada = collections.Counter(str(a.get('category')) for a in articles)
+        kurang = [(i, k) for i, k in enumerate(kategori) if ada[k['judul']] < jumlah_ke(i)]
         for i, k in kurang:
             if not docs['sources']:
                 docs = collect_client_docs(folder_klien(domain))
                 client_info = format_for_prompt(client_data, docs)
-            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {jumlah_ke(i)}')
-            bagian = artikel_bertahap(jumlah_ke(i), site_title, domain, client_info, model, k['judul'],
-                                      k.get('keterangan', ''), 'berita' if berita else 'bisnis')
+            tambah = jumlah_ke(i) - ada[k['judul']]
+            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {tambah}')
+            judul_ada = '; '.join(str(a.get('title', '')) for a in articles if a.get('category') == k['judul'])
+            bagian = artikel_bertahap(tambah, site_title, domain, client_info, model, k['judul'],
+                                      (k.get('keterangan', '') + (f' Jangan mengulang topik artikel: {judul_ada}.' if judul_ada else '')).strip(),
+                                      'berita' if berita else 'bisnis')
             for art in bagian:
                 art['category'] = k['judul']
             articles.extend(bagian)

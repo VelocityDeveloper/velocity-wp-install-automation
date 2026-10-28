@@ -532,13 +532,10 @@
    ],
    "footer-widget-1": [
     {
-     "jenis": "core",
-     "base": "meta",
-     "opsi": {
-      "title": "Meta"
-     },
-     "lewati": true,
-     "alasan": "widget Meta memuat tautan Log in / feed / WordPress.org, tidak pantas untuk situs klien"
+     "jenis": "tentang",
+     "judul": "Tentang Kami",
+     "ringkas": true,
+     "sosmed": "tidak"
     }
    ],
    "footer-widget-2": [
@@ -556,11 +553,11 @@
    "footer-widget-3": [
     {
      "jenis": "core",
-     "base": "tag_cloud",
+     "base": "recent-posts",
      "opsi": {
-      "title": "Tags",
-      "count": 0,
-      "taxonomy": "post_tag"
+      "title": "Recent Posts",
+      "number": 4,
+      "show_date": false
      }
     }
    ],
@@ -571,7 +568,7 @@
     }
    ]
   },
-  "catatan": "Widget kelas tema: id_base posts_berita_6_widget (konstruktor 'Posts_Berita_6_Widget', WP menurunkan ke huruf kecil) dan tabs_berita_6_widget. Kunci instance posts: title, style ('1'..'7', string), urutkan (recent|popular; popular = meta 'hit'), jumlah (string), cat (term_id kategori, string; '' = semua). Bila cat diisi, judul otomatis ditautkan ke arsip kategori. Tabs hanya punya title (demo kosong). Home widget (partials/home-widget.php, 4 kolom col-md-3 di bawah beranda): kategori demo Entertainment=1, House=2, Technology=3, Gallery=4 (urutan kemunculan; demo memakai tiap kategori dua kali: satu style 7 jumlah 5, satu style 7 jumlah 3). Sidebar 'Teknologi' = kategori Technology demo -> kategori_ke 3 dengan judul {kat_nama}. 'Most view article' tanpa kategori; urutan demo (2024, 2013, April 2013 di tengah) bukan urut tanggal -> urutkan=popular. Kedua iklan = media_image 300x300 (sidebar teratas & home-widget-4 teratas). Footer: 4 kolom col-md, meta di footer-widget-1 dilewati -> footer tinggal 3 kolom (installer boleh menggeser ke 1..3). Categories core tanpa count/hierarki/dropdown; tag_cloud default. Tidak pasti: apakah widget kategori home memakai urutkan recent (urutan cocok dengan terbaru, jadi diasumsikan recent)."
+  "catatan": "Widget kelas tema: id_base posts_berita_6_widget (konstruktor 'Posts_Berita_6_Widget', WP menurunkan ke huruf kecil) dan tabs_berita_6_widget. Kunci instance posts: title, style ('1'..'7', string), urutkan (recent|popular; popular = meta 'hit'), jumlah (string), cat (term_id kategori, string; '' = semua). Bila cat diisi, judul otomatis ditautkan ke arsip kategori. Tabs hanya punya title (demo kosong). Home widget (partials/home-widget.php, 4 kolom col-md-3 di bawah beranda): kategori demo Entertainment=1, House=2, Technology=3, Gallery=4 (urutan kemunculan; demo memakai tiap kategori dua kali: satu style 7 jumlah 5, satu style 7 jumlah 3). Sidebar 'Teknologi' = kategori Technology demo -> kategori_ke 3 dengan judul {kat_nama}. 'Most view article' tanpa kategori; urutan demo (2024, 2013, April 2013 di tengah) bukan urut tanggal -> urutkan=popular. Kedua iklan = media_image 300x300 (sidebar teratas & home-widget-4 teratas). Footer: 4 kolom col-md, meta di footer-widget-1 dilewati -> footer tinggal 3 kolom (installer boleh menggeser ke 1..3). Categories core tanpa count/hierarki/dropdown; tag_cloud default. Tidak pasti: apakah widget kategori home memakai urutkan recent (urutan cocok dengan terbaru, jadi diasumsikan recent). Footer (user 2026-10-28, benangrajanews.com): kolom 1 = Tentang Kami ringkas tanpa ikon sosmed (Meta demo tetap dibuang), kolom 3 = Recent Posts 4 tanpa tanggal menggantikan Tags."
  },
  "velocity-berita16": {
   "slug": "velocity-berita16",

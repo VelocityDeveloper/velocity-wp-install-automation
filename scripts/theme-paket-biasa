@@ -1494,7 +1494,10 @@ if ($demo_w) {
                         $html = '<p>' . esc_html($ringkas) . '</p>' . (preg_match('#<ul class="vk-sosmed">.*?</ul>#s', $html, $m) ? $m[0] : '');
                     }
                 }
-                if (($it['sosmed'] ?? '') === 'customizer' && shortcode_exists('velocity-sosmed')) {
+                // "tidak": paragraf saja, tanpa ikon sosmed (berita15, benangrajanews.com 2026-10-28).
+                if (($it['sosmed'] ?? '') === 'tidak') {
+                    $html = preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $html);
+                } elseif (($it['sosmed'] ?? '') === 'customizer' && shortcode_exists('velocity-sosmed')) {
                     $html = preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $html) . '[velocity-sosmed]';
                 }
                 return $buat_html($judul, $html);
