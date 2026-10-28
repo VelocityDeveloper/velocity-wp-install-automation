@@ -1463,21 +1463,11 @@ if ($demo_w) {
                 // Judul kosong (logo di atasnya): tanpa logo, nama situs yang jadi judul.
                 $judul = $it['judul'] ?? $W['footer_tentang'][0];
                 $judul = $judul === '' && !$logo ? $W['footer_tentang'][0] : $judul;
-                // "lengkap": isi halaman Tentang Kami utuh, tanpa ikon sosmed (berita4, info-luarbiasa.com 2026-10-09);
-                // halaman belum ada/kosong = teks ringkas tanpa ikon sosmed.
-                if (!empty($it['lengkap'])) {
-                    $tk = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);
-                    // Judul seksi dibuang, tiap paragraf tetap paragraf sendiri.
-                    $teks = $tk ? strip_shortcodes(excerpt_remove_blocks($tk[0]->post_content)) : '';
-                    $teks = preg_replace(['#<h[1-6][^>]*>.*?</h[1-6]>#is', '#</(p|div|li|section)>|<br\s*/?>#i'], ['', "\n\n"], $teks);
-                    $par = array_filter(array_map(fn($x) => trim(preg_replace('/\s+/', ' ', $x)), explode("\n\n", wp_strip_all_tags($teks))));
-                    $html = $par ? '<p>' . implode('</p><p>', array_map('esc_html', $par)) . '</p>'
-                                 : preg_replace('#<ul class="vk-sosmed">.*?</ul>#s', '', $W['footer_tentang'][1]);
-                    return $buat_html($judul, $html);
-                }
                 // "ringkas": kalimat awal halaman Tentang Kami (maks ±180 karakter), "sosmed": "customizer" = ikon dari
                 // Customizer > Sosial Media lewat [velocity-sosmed] (mu-plugin site-finish), sama dengan ikon header
                 // (berita2, liputara.com 2026-10-11). Tanpa halaman/mu-plugin: teks & ikon ringkas bawaan.
+                // berita4 dulu "lengkap" (isi halaman utuh, info-luarbiasa.com 2026-10-09) → kini ringkas tanpa sosmed
+                // (widyatvnews.com 2026-10-28).
                 $html = $W['footer_tentang'][1];
                 if (!empty($it['ringkas'])) {
                     $tk = get_posts(['post_type' => 'page', 'name' => 'tentang-kami', 'post_status' => 'publish', 'numberposts' => 1]);

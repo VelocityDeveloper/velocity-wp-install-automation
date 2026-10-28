@@ -767,7 +767,8 @@
     {
      "jenis": "tentang",
      "judul": "Tentang Kami",
-     "lengkap": true
+     "ringkas": true,
+     "sosmed": "tidak"
     }
    ],
    "footer-widget-2": [
