@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Daftarkan WordPress hasil installer ke Softaculous akun DirectAdmin klien.
+
+Permintaan user 2026-10-28: WordPress dipasang lewat WP-CLI sehingga tidak muncul di daftar
+instalasi Softaculous; klien/PM tidak bisa memakai fitur Softaculous (backup, kloning, update)
+untuk situs itu. Setiap run apply/finish kini mengimpornya lewat CLI Softaculous:
+
+  php /usr/local/directadmin/plugins/softaculous/cli.php --import --sid=26 --user=U --url=URL
+
+(sid 26 = WordPress; https://www.softaculous.com/docs/cli/import-installation-from-cli).
+CLI mencetak "Imported successfully!" tapi diam saja untuk akun yang salah, jadi hasilnya
+dipastikan dari /home/U/.softaculous/installations.php (`softpath` = folder WordPress).
+URL diambil dari siteurl WordPress (http/https sesuai situs), manifest hanya cadangan.
+
+Tidak pernah menggagalkan instalasi: semua hasil hanya dicatat. Sudah terdaftar = dilewati,
+jadi aman dijalankan ulang. Staging (docroot=/site_url= di manifest) ikut didaftarkan ke akun
+stagingnya.
+
+  softaculous-import <manifest>
+Keluaran baris terakhir: `softaculous: <status>` — terdaftar:<url>|sudah_ada|dilewati:<alasan>|gagal:<alasan>.
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+REMOTE = r'''
+SOFT=/usr/local/directadmin/plugins/softaculous
+INST="/home/$U/.softaculous/installations.php"
+[ -f "$SOFT/cli.php" ] || { echo "softaculous: dilewati:softaculous_tidak_ada"; exit 0; }
+[ -f "$DOCROOT/wp-config.php" ] || { echo "softaculous: dilewati:wp_tidak_ada"; exit 0; }
+# Rekaman Softaculous = array PHP ter-serialize: s:8:"softpath";s:<panjang>:"<folder>"
+ada() { [ -f "$INST" ] && grep -qF "\"softpath\";s:${#DOCROOT}:\"$DOCROOT\"" "$INST"; }
+if ada; then echo "softaculous: sudah_ada"; exit 0; fi
+
+WP=/usr/local/bin/wp; [ -x "$WP" ] || WP=$(command -v wp)
+URL=""
+[ -n "$WP" ] && URL=$(cd /tmp && timeout 60 runuser -u "$U" -- "$WP" option get siteurl --path="$DOCROOT" \
+  --skip-plugins --skip-themes 2>/dev/null | tail -1)
+case "$URL" in http://*|https://*) ;; *) URL="$URL_MANIFEST" ;; esac
+PHP=/usr/local/bin/php; [ -x "$PHP" ] || PHP=$(command -v php)
+
+keluaran=$(cd "$SOFT" && timeout 300 "$PHP" cli.php --import --sid=26 --user="$U" --url="$URL" 2>&1)
+if ada; then
+  echo "softaculous: terdaftar:$URL"
+else
+  # DirectAdmin selalu mencetak peringatan "Legacy command line arguments" — bukan alasan gagal.
+  echo "softaculous: gagal:$(printf '%s\n' "$keluaran" | grep -v '^Legacy command' | grep . | tail -1 | cut -c1-120)"
+fi
+'''
+
+
+def baca_manifest(path):
+    cfg = {}
+    for baris in Path(path).read_text(errors='replace').splitlines():
+        kunci, pisah, nilai = baris.partition('=')
+        if pisah and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kunci.strip()):
+            cfg[kunci.strip()] = nilai.strip()
+    return cfg
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print(__doc__)
+        return 2
+    cfg = baca_manifest(args[0])
+    domain = (cfg.get('domain') or '').lower()
+    da_user, host = cfg.get('da_user', ''), cfg.get('target_host', '')
+    if not (domain and da_user and host):
+        print('softaculous: dilewati:manifest_tidak_lengkap')
+        return 0
+    if os.environ.get('INSTALL_MODE') == 'dry-run':
+        print('softaculous: dilewati:dry_run')
+        return 0
+    kunci = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not (kunci and Path(kunci).is_file()):
+        print('softaculous: dilewati:tanpa_kunci_ssh')
+        return 0
+
+    # Sama dengan website-install-from-manifest: docroot/site_url manifest menang (staging).
+    docroot = (cfg.get('docroot') or f'/home/{da_user}/domains/{domain}/public_html').rstrip('/')
+    url = cfg.get('site_url') or f'https://{domain}'
+    ssh = ['ssh', '-i', kunci, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+           '-o', 'ConnectTimeout=20', '-p', str(cfg.get('ssh_port') or 22),
+           f"{cfg.get('ssh_user') or 'root'}@{host}"]
+    env = (f"U={shlex.quote(da_user)}\nDOCROOT={shlex.quote(docroot)}\n"
+           f"URL_MANIFEST={shlex.quote(url)}\n")
+    try:
+        run = subprocess.run(ssh + ['bash', '-s'], input=env + REMOTE,
+                             capture_output=True, text=True, timeout=600)
+    except subprocess.SubprocessError as e:
+        print(f'softaculous: gagal:ssh_{type(e).__name__}')
+        return 0
+    baris = [b for b in run.stdout.splitlines() if b.startswith('softaculous: ')]
+    print(baris[-1] if baris else 'softaculous: gagal:' + (
+        (run.stderr.strip().splitlines() or ['tanpa_keluaran'])[-1][:120]), flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

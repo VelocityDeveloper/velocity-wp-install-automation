@@ -54,6 +54,15 @@
       return 'dilewati: ' + (ket.startsWith('dns_belum_mengarah') ? 'DNS belum mengarah ke server'
         : ket === 'staging' ? 'staging' : ket === 'domain_tidak_ada_di_da' ? 'domain belum ada di panel' : ket);
     }
+    function hasilSoftaculous(t) {
+      const m = /^softaculous: (terdaftar|sudah_ada|dilewati|gagal):?(.*)$/m.exec(t);
+      if (!m) return null;
+      const ket = (m[2] || '').trim();
+      if (m[1] === 'terdaftar') return 'terdaftar' + (ket ? ': ' + ket : '');
+      if (m[1] === 'sudah_ada') return 'sudah terdaftar';
+      if (m[1] === 'gagal') return 'gagal: ' + (ket || 'tanpa alasan');
+      return 'dilewati: ' + (ket === 'softaculous_tidak_ada' ? 'server tanpa Softaculous' : ket);
+    }
     function hasilChild(teks) {
       const m = /child_theme:(matched|generated|not_found|no_ref|api_error|download_failed|error):([^:\n]*)/.exec(teks);
       if (!m) return null;
@@ -140,6 +149,11 @@
       { id: 'ssl', kol: 5, jalur: 1, nama: 'Terbitkan SSL', ket0: 'Let\'s Encrypt lewat DirectAdmin',
         mulai: /\] Terbitkan SSL$/, selesai: /^ssl: (terbit|sudah_ada|dilewati|gagal)/,
         gagal: /^ssl: gagal/, ketHasil: hasilSsl, aktif: tanpaDry },
+      // Softaculous (permintaan user 2026-10-28, scripts/softaculous-import): WordPress hasil WP-CLI
+      // diimpor ke daftar instalasi Softaculous akun DA. Sudah terdaftar = dilewati.
+      { id: 'softaculous', kol: 5, jalur: 2, nama: 'Daftar Softaculous', ket0: 'impor WordPress ke Softaculous akun DA',
+        mulai: /\] Daftarkan ke Softaculous$/, selesai: /^softaculous: (terdaftar|sudah_ada|dilewati|gagal)/,
+        gagal: /^softaculous: gagal/, ketHasil: hasilSoftaculous, aktif: tanpaDry },
       { id: 'paket', kol: 6, jalur: 1, cek: true, nama: 'Cek paket', mulai: /http_check: 200/, aktif: tanpaDry,
         ket: (c, row) => row.paket || 'paket tidak terbaca' },
       // Sebelum tema FSE digenerate, referensi desain dari form dibaca & diukur dulu (paket_g_tema
@@ -540,7 +554,7 @@
       ['validasi', 'bacaForm'], ['bacaForm', 'mode'],
       ['mode', 'terpasang', 'finish'], ['mode', 'install', 'apply'], ['mode', 'tahanF', 'Paket F tanpa referensi', c => c.tahanF], ['mode', 'server', 'dry run'],
       ['terpasang', 'http'], ['install', 'http'], ['server', 'dryselesai'],
-      ['http', 'ssl'], ['ssl', 'paket'],
+      ['http', 'ssl'], ['ssl', 'softaculous'], ['softaculous', 'paket'],
       ['paket', 'referensi', 'G / Portal', c => dan(tanpaDry(c), c.custom === null ? null : c.custom && !c.toko && !c.donasi)],
       ['paket', 'donasi', 'G + form donasi', c => dan(tanpaDry(c), c.donasi)], ['donasi', 'referensi'],
       ['paket', 'vdstoreCustom', 'Toko Online Custom'], ['vdstoreCustom', 'referensi'],

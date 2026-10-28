@@ -614,6 +614,10 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
   # pengunjung. DNS belum mengarah = dilewati (bukan gagal), run berikutnya mencoba lagi.
   echo "[$(date -Is)] Terbitkan SSL" >> "$LOG"
   /usr/bin/python3 "$SCRIPTS/site-ssl" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Softaculous (permintaan user 2026-10-28): WordPress dari WP-CLI tidak tercatat di Softaculous
+  # akun DA, jadi diimpor lewat CLI-nya. Sudah terdaftar = dilewati; tidak pernah menggagalkan run.
+  echo "[$(date -Is)] Daftarkan ke Softaculous" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/softaculous-import" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Generator memakai ulang konten tersimpan saat apply ulang, jadi aman
   # dijalankan lagi tanpa biaya AI dan tanpa menggandakan artikel. Mode finish
   # menimpa ulang halaman target dengan konten yang sudah dibersihkan.
