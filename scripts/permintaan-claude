@@ -214,6 +214,15 @@ ATURAN_KATALOG_EF = (
     '   WhatsApp lewat opsi `vdproduk_tombol_beli`=`wa` + `vdproduk_nowa`. Produk CONTOH (meta\n'
     '   `_velocity_produk_contoh`) dihapus begitu produk asli masuk. **Jangan pakai `velocity-paket`, Meta Box,\n'
     '   atau CPT baru** untuk data produk/paket di paket ini.')
+# velocity-spa: katalog = CPT layanan bawaan tema, tanpa velocity-produk (user 2026-10-18, ditegaskan 2026-10-28
+# sesudah agen memasang velocity-produk di satebuntelbadran.com).
+ATURAN_KATALOG_SPA = (
+    '**Tema velocity-spa: katalog, menu, produk, paket, dan harga pakai CPT `layanan` bawaan tema — JANGAN pasang\n'
+    '   `velocity-produk`/`velocity-paket`.** Satu item = satu post `layanan`: meta `harga` (angka tanpa titik),\n'
+    '   `fasilitas` (array teks pendek, 2-4 butir), gambar unggulan WAJIB (foto makanan/produk; kartu tanpa gambar\n'
+    '   tidak boleh), isi = keterangan lengkap. Tema mengurutkan terbaru dulu (beranda 6 item, arsip `/layanan/`\n'
+    '   semua), jadi isi `post_date` mundur per item agar urutan sesuai brosur. Post `layanan` contoh/AI yang\n'
+    '   digantikan dihapus. Menu katalog = tautan kustom ke `/layanan/`; judul seksi beranda = theme mod `title_layanan`.')
 
 
 def prompt_tugas(cfg, domain, kerja, situs, permintaan, menit):
@@ -225,7 +234,8 @@ def prompt_tugas(cfg, domain, kerja, situs, permintaan, menit):
         '{{PERMINTAAN}}': permintaan, '{{KERJA}}': str(kerja), '{{ALAT}}': str(ALAT), '{{MENIT}}': str(menit),
         '{{PLUGIN_TERSEDIA}}': ', '.join(sum(plugin_api.plugin_agen(cfg.get('paket'), [p.name for p in PLUGINS.iterdir()
                                                                                        if p.is_dir()]), [])),
-        '{{ATURAN_KATALOG}}': ATURAN_KATALOG_EF if plugin_api.paket_ef(cfg.get('paket')) else ATURAN_KATALOG,
+        '{{ATURAN_KATALOG}}': (ATURAN_KATALOG_SPA if situs.get('tema') == 'velocity-spa' else
+                               ATURAN_KATALOG_EF if plugin_api.paket_ef(cfg.get('paket')) else ATURAN_KATALOG),
         '{{MENU_PETUNJUK}}': ('Menu tema blok ada di post `wp_navigation` (lihat `navigasi` di situs.json): tambah '
                               '`<!-- wp:navigation-link {...} /-->` ke isinya lewat `alat php`.') if blok else
                              ('Menu klasik: `wp menu item add-post <menu> <id-halaman>` (menu utama lihat '

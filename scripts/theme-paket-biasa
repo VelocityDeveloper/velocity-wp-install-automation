@@ -56,6 +56,11 @@ PAKET_CUSTOM = ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
 # Tema yang berandanya diisi langkah sendiri (bukan adaptor AI): velocity-marketplace-child =
 # template "Marketplace: Home Page" + theme_mod vmc_*, diisi scripts/marketplace-biasa (2026-10-04).
 BERANDA_LANGKAH_SENDIRI = {'velocity-marketplace-child': 'marketplace-biasa'}
+# Tema yang slidernya diganti banner bertulisan: theme mod repeater + kolom ID gambar.
+SLIDER_BANNER = {'velocity-spa': ('spa_slider_repeater', 'image_id')}
+# Tema yang berandanya membaca CPT (langkah 6e): gambar unggulan CPT ikut diunggah, jadi kartu
+# layanan selalu bergambar (dulu layanan-* tidak diunggah karena tak dirujuk mods, satebuntelbadran.com 2026-10-28).
+CPT_BERANDA = {'velocity-spa'}
 SOSMED = (('facebook', 'https://www.facebook.com/', 'Facebook'), ('instagram', 'https://www.instagram.com/', 'Instagram'),
           ('twitter-x', 'https://x.com/', 'X'), ('youtube', 'https://www.youtube.com/', 'YouTube'),
           ('tiktok', 'https://www.tiktok.com/', 'TikTok'))
@@ -170,6 +175,76 @@ def sampul_kategori(judul, nama, warna, tujuan):
     d.text(((1200 - d.textlength(nama, font=fs)) / 2, y + 34), nama, font=fs, fill=(235, 240, 250))
     im.save(tujuan, quality=86)
     return tujuan
+
+
+def banner_slider(foto, judul, teks, ajakan, warna, tujuan, lebar=1600, tinggi=900, maks_kb=100):
+    """Banner slider beranda: foto + lapisan gelap kiri, judul, teks, pil ajakan berwarna utama.
+    Dulu slider spa berisi foto mentah/potongan poster tanpa tulisan (satebuntelbadran.com 2026-10-28)."""
+    from PIL import ImageFilter, ImageFont
+    try:
+        aksen = tuple(int(warna[i:i + 2], 16) for i in (1, 3, 5))
+    except (TypeError, ValueError):
+        aksen = (30, 64, 124)
+    im = ImageOps.fit(ImageOps.exif_transpose(Image.open(foto)).convert('RGB'), (lebar, tinggi), Image.LANCZOS,
+                      centering=(0.5, 0.5))
+    # Sisi teks diburamkan bergradasi: foto klien sering berupa poster bertulisan yang bertabrakan dengan judul.
+    topeng = Image.linear_gradient('L').rotate(90, expand=True).resize((lebar, tinggi))
+    im = Image.composite(im.filter(ImageFilter.GaussianBlur(14)), im, topeng.point(lambda v: min(255, (255 - v) * 2))).convert('RGBA')
+    lapis = Image.new('RGBA', (lebar, tinggi))
+    dl = ImageDraw.Draw(lapis)
+    for x in range(lebar):
+        dl.line([(x, 0), (x, tinggi)], fill=(0, 0, 0, int(200 * max(0.0, 1 - x / (lebar * 0.75)) + 40)))
+    im = Image.alpha_composite(im, lapis).convert('RGB')
+    d = ImageDraw.Draw(im)
+
+    def huruf(nama_berkas, besar):
+        for f in (f'/usr/share/fonts/urw-base35/{nama_berkas}', '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf'):
+            try:
+                return ImageFont.truetype(f, besar)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def bungkus(s, font, batas):
+        baris, kini = [], ''
+        for k in str(s or '').split():
+            uji = (kini + ' ' + k).strip()
+            if d.textlength(uji, font=font) > batas and kini:
+                baris.append(kini)
+                kini = k
+            else:
+                kini = uji
+        return baris + [kini] if kini else baris
+
+    kiri, batas = int(lebar * 0.07), int(lebar * 0.55)
+    fj, ft, fa = huruf('NimbusSans-Bold.otf', 92), huruf('NimbusSans-Regular.otf', 46), huruf('NimbusSans-Bold.otf', 34)
+    bj, bt = bungkus(judul, fj, batas)[:3], bungkus(teks, ft, batas)[:3]
+    tinggi_isi = len(bj) * 104 + 30 + len(bt) * 60 + (110 if ajakan else 0)
+    y = (tinggi - tinggi_isi) // 2
+    d.rectangle([kiri, y - 34, kiri + 110, y - 26], fill=aksen)
+    for b in bj:
+        d.text((kiri, y), b, font=fj, fill=(255, 255, 255))
+        y += 104
+    y += 30
+    for b in bt:
+        d.text((kiri, y), b, font=ft, fill=(235, 235, 235))
+        y += 60
+    if ajakan:
+        y += 36
+        w = d.textlength(ajakan, font=fa)
+        d.rounded_rectangle([kiri, y, kiri + w + 76, y + 74], radius=37, fill=aksen)
+        terang = 0.299 * aksen[0] + 0.587 * aksen[1] + 0.114 * aksen[2] > 150
+        d.text((kiri + 38, y + 19), ajakan, font=fa, fill=(20, 20, 20) if terang else (255, 255, 255))
+    # Berkas media maks 100 KB (feedback-media-maks-100kb): kualitas turun bertahap, lalu lebar dikecilkan.
+    asli = im
+    while True:
+        for q in range(84, 52, -6):
+            im.save(tujuan, quality=q, optimize=True, progressive=True)
+            if Path(tujuan).stat().st_size <= maks_kb * 1024:
+                return tujuan
+        if im.width <= 960:
+            return tujuan
+        im = asli.resize((im.width - 160, round((im.width - 160) * tinggi / lebar)), Image.LANCZOS)
 
 
 # Banner "Ruang Iklan" polos yang siap diganti pemilik, satu per ukuran slot iklan tema berita aktif
@@ -2291,6 +2366,22 @@ def main():
         cadangan = [k for k in ['tentang'] + [f'layanan-{l["slug"]}' for l in layanan] + ['hero'] if k in aset]
         if kunci not in aset and cadangan:
             aset[kunci] = potong(aset[cadangan[i % len(cadangan)]], 800, 800, kerja / f'{kunci}.jpg')
+    # Slider beranda = banner bertulisan (nama + layanan), bukan foto mentah (user 2026-10-28, satebuntelbadran.com).
+    if tema in SLIDER_BANNER and isinstance(data['mods'].get(tema), dict):
+        mod, kolom = SLIDER_BANNER[tema]
+        wa = f"WhatsApp {kontak['wa_tampil']}" if kontak.get('wa') else 'Hubungi Kami'
+        isi_slide = [('hero', data['nama'], isi.get('hero_teks') or isi.get('profil'), wa)]
+        isi_slide += [(f'layanan-{l["slug"]}', l['judul'], l.get('teks'), 'Lihat Layanan') for l in layanan[:2]]
+        if len(isi_slide) < 3:
+            isi_slide.append(('tentang', f"Tentang {data['nama']}", isi.get('profil'), 'Selengkapnya'))
+        slide = []
+        for i, (kunci, j, t, a) in enumerate([s for s in isi_slide if s[0] in aset][:3], 1):
+            aset[f'slider-{i}'] = banner_slider(aset[kunci], pendek(j, 60), pendek(t, 120), a,
+                                                (isi.get('warna') or {}).get('utama'), kerja / f'slider-{i}.jpg')
+            slide.append({kolom: '{{id:slider-%d}}' % i})
+        if slide:
+            data['mods'][tema][mod] = slide
+            print(f'tampilan: slider_banner={len(slide)}')
     # Logo klien asli, atau logo contoh. Hasilnya selalu sama per sumber, jadi sidik md5-nya tetap
     # dan run ulang memakai lampiran yang sudah ada (tanpa tembolok: logo asli yang dikirim
     # belakangan langsung menggantikan contoh).
@@ -2313,6 +2404,7 @@ def main():
     judul.update({k: f"Foto {data['nama']}" for k in pendamping})
     judul.update({k: f"Galeri {data['nama']} {k.split('-')[1]}" for k in galeri})
     judul.update({f'klien-{i}': j for i, j in enumerate(klien_judul, 1)})
+    judul.update({k: f"Slider {data['nama']} {k.split('-')[1]}" for k in aset if k.startswith('slider-')})
     iklan = []
     if data['berita']:
         # Halaman Redaksi & Pedoman Media Siber untuk semua tema berita (user 2026-09-30).
@@ -2366,8 +2458,11 @@ def main():
                         isi_mods.pop(k, None)
     rujukan = json.dumps([data['mods'].get(tema), data['bawaan'].get(tema)] if tema in data['mods']
                          else [data['mods'], data['bawaan']], ensure_ascii=False)
+    if tema in CPT_BERANDA:
+        rujukan += json.dumps(data.get('cpt_isi'), ensure_ascii=False)
     dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan)) | set(iklan)
-    if data['situs_baru'] and not data['berita']:
+    if data['situs_baru'] and not data['berita'] and tema not in SLIDER_BANNER:
+        # velocity-spa menyembunyikan seksi Header Image; hero cukup jadi latar banner slider.
         dipakai.add('hero')  # Header Image tema (banner halaman dalam), lihat langkah 6c PHP
     data['aset'], per_md5 = {}, {}
     for k, p in aset.items():
