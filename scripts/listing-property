@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Listing, sidebar kanan, galeri, dan warna untuk child theme Velocity Property 2.
+"""Listing, sidebar, galeri, dan warna untuk child theme Velocity Property 1 & 2.
 
 Pemakaian: listing-property <manifest> [--coba] [--paksa]   (butuh WP_INSTALL_SSH_KEY_FILE)
 
@@ -23,6 +23,13 @@ Yang dikerjakan (hanya bila tema aktif velocity-property2 dan situs belum pernah
 - CSS di antara penanda /* velocity-property2 */ (banner terbaca, teks kartu kontras, ikon
   sosmed sejajar, foto VD Gallery penuh, ikon kamar disembunyikan untuk listing non-properti)
 Isi disimpan di /var/lib/velocity/ai/generated/<domain>-listing-property.json (run ulang tanpa AI).
+
+Property 1 (user 2026-10-28, hapibanten.com: "listing untuk tema property1 selalu di isi"): langkah yang
+sama untuk listing, warna, menu, dan galeri; seksi beranda = theme mod judul_properti/subjudul_properti.
+Widget mengikuti child-theme-data-setup.md tema: Footer 1 Kontak Kami, Footer 2 listing terbaru
+([velocity-property]), Footer 3 statistik — hanya area yang kosong (theme-paket-biasa mengisi
+footer-widget-*, sedangkan property1 mendaftarkan footer-1..3). Main Sidebar [velocity-filter] hanya untuk
+listing properti; listing lain → Hubungi Kami, Layanan Kami, Artikel Terbaru. CSS property2 tidak dipakai.
 """
 import hashlib
 import io
@@ -42,7 +49,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from folder_klien import folder_klien  # noqa: E402
 
-TEMA = 'velocity-property2'
+TEMAS = ('velocity-property1', 'velocity-property2')
 GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
 BIRU_BAWAAN = ('', '#1e73be')
 
@@ -59,6 +66,7 @@ echo "CEK:" . wp_json_encode(array(
     "primary" => strtolower((string) get_theme_mod("primary_color", "")),
     "layanan" => $lay,
     "sidebar2" => !empty($sb["secondary-sidebar"]),
+    "services" => count((array) get_theme_mod("services_list", array())),
     "galeri" => $g ? (int) $g->ID : 0,
     "galeri_isi" => $g ? (int) (strpos($g->post_content, "[vdgallery") !== false || strpos($g->post_content, "[gallery") !== false) : 0,
     "vdgallery" => (int) class_exists("Velocity_Addons_Gallery"),
@@ -128,9 +136,13 @@ foreach ($d['listing'] as $urut => $p) {
     wp_set_object_terms($id, $istilah('property-location', $p['lokasi']), 'property-location');
 }
 echo "listing_property: listing baru=$baru dibiarkan=$dibiarkan\n";
-if ($d['judul_listing'] !== '' && in_array(get_theme_mod('judul_listing', ''), ['', 'Listing Terbaru'], true)) {
+$p1 = $d['tema'] === 'velocity-property1';
+if ($d['judul_listing'] !== '' && !$p1 && in_array(get_theme_mod('judul_listing', ''), ['', 'Listing Terbaru'], true)) {
     set_theme_mod('judul_listing', $d['judul_listing']);
 }
+// Property 1: judul seksi listing beranda kosong = seksi tanpa judul.
+if ($p1 && $d['judul_listing'] !== '' && get_theme_mod('judul_properti', '') === '') { set_theme_mod('judul_properti', $d['judul_listing']); }
+if ($p1 && $d['subjudul_listing'] !== '' && get_theme_mod('subjudul_properti', '') === '') { set_theme_mod('subjudul_properti', $d['subjudul_listing']); }
 
 // 4. Ikon kartu layanan beranda (bawaan tema: jempol untuk semua kartu)
 if ($d['ikon']) {
@@ -154,6 +166,10 @@ if ($menu_id) {
         if ((int) $it->object_id === (int) get_option('page_on_front') || in_array($it->title, ['Layanan', 'Layanan Kami'], true)) { $posisi = $it->menu_order + 1; }
     }
     if (!$ada) {
+        // Geser butir sesudahnya: menu_order kembar membuat menu baru jatuh sesudah Galeri (hapibanten.com 2026-10-28).
+        foreach ((array) wp_get_nav_menu_items($menu_id) as $it) {
+            if ($it->menu_order >= $posisi) { wp_update_post(['ID' => $it->ID, 'menu_order' => $it->menu_order + 1]); }
+        }
         wp_update_nav_menu_item($menu_id, 0, ['menu-item-title' => $d['menu'], 'menu-item-type' => 'post_type_archive',
             'menu-item-object' => 'property', 'menu-item-status' => 'publish', 'menu-item-position' => $posisi]);
         echo "listing_property: menu_ditambah\n";
@@ -162,7 +178,7 @@ if ($menu_id) {
 
 // 6. Secondary Sidebar ala demo: listing per kategori + kalender (hanya bila kosong)
 $sb = get_option('sidebars_widgets', []);
-if (empty($sb['secondary-sidebar'])) {
+if (!$p1 && empty($sb['secondary-sidebar'])) {
     $text = get_option('widget_text', ['_multiwidget' => 1]);
     $ids = [];
     $n = 0;
@@ -190,6 +206,47 @@ if (empty($sb['secondary-sidebar'])) {
     echo "listing_property: sidebar_kanan:" . count($ids) . "\n";
 }
 
+// 6b. Property 1 (child-theme-data-setup.md tema): footer 1-3 bila kosong, Main Sidebar non-properti.
+if ($p1) {
+    $text = get_option('widget_text', ['_multiwidget' => 1]);
+    $teks = function ($judul, $isi) use (&$text) {
+        $k = max(array_merge([400], array_filter(array_keys($text), 'is_int'))) + 1;
+        $text[$k] = ['title' => $judul, 'text' => $isi, 'filter' => 'content', 'visual' => true];
+        return "text-$k";
+    };
+    $kaki = ['footer-1' => ['Kontak Kami', $d['kontak_html']],
+             'footer-2' => [($d['menu'] ?: 'Listing') . ' Terbaru', '[velocity-property jumlah="4"]'],
+             'footer-3' => ['Statistik Pengunjung', '[velocity-statistics style="list"]']];
+    foreach ($kaki as $area => [$judul, $isi]) {
+        if (empty($sb[$area]) && $isi !== '') { $sb[$area] = [$teks($judul, $isi)]; echo "listing_property: widget:$area\n"; }
+    }
+    // Main Sidebar yang hanya berisi filter properti bawaan installer/tema.
+    $utama = (array) ($sb['main-sidebar'] ?? []);
+    $hanya_filter = count($utama) === 1 && preg_match('/^text-(\d+)$/', $utama[0], $m)
+        && trim((string) ($text[(int) $m[1]]['text'] ?? '')) === '[velocity-filter]';
+    if (!$d['properti'] && ($hanya_filter || !$utama)) {
+        $lay = '';
+        foreach ((array) get_theme_mod('services_list', []) as $it) {
+            if (!empty($it['service_title'])) {
+                $lay .= '<li>' . (!empty($it['service_link']) ? '<a href="' . esc_url($it['service_link']) . '">' . esc_html($it['service_title']) . '</a>' : esc_html($it['service_title'])) . '</li>';
+            }
+        }
+        $baru = [];
+        if ($d['kontak_html'] !== '') { $baru[] = $teks('Hubungi Kami', $d['kontak_html']); }
+        if ($lay !== '') { $baru[] = $teks('Layanan Kami', '<ul class="vk-poin">' . $lay . '</ul>'); }
+        $rp = get_option('widget_recent-posts', ['_multiwidget' => 1]);
+        $rk = max(array_merge([400], array_filter(array_keys($rp), 'is_int'))) + 1;
+        $rp[$rk] = ['title' => 'Artikel Terbaru', 'number' => 5, 'show_date' => false];
+        update_option('widget_recent-posts', $rp);
+        $baru[] = "recent-posts-$rk";
+        if ($hanya_filter) { unset($text[(int) $m[1]]); }
+        $sb['main-sidebar'] = $baru;
+        echo 'listing_property: sidebar_utama:' . count($baru) . "\n";
+    }
+    update_option('widget_text', $text);
+    update_option('sidebars_widgets', $sb);
+}
+
 // 7. Galeri = VD Gallery bila halaman Galeri belum bergaleri
 $gal = get_page_by_path('galeri');
 $galeri_ids = array_values(array_filter(array_map(fn($k) => $media[$k] ?? 0, $d['galeri'])));
@@ -210,7 +267,7 @@ if ($gal && $galeri_ids && class_exists('Velocity_Addons_Gallery')
 // 8. CSS
 $css = (string) wp_get_custom_css();
 $css = preg_replace('#\n?/\* velocity-property2 \*/.*?/\* /velocity-property2 \*/#s', '', $css);
-wp_update_custom_css_post(rtrim($css) . "\n/* velocity-property2 */\n" . $d['css'] . "\n/* /velocity-property2 */");
+if ($d['css'] !== '') { wp_update_custom_css_post(rtrim($css) . "\n/* velocity-property2 */\n" . $d['css'] . "\n/* /velocity-property2 */"); }
 flush_rewrite_rules(false);
 echo "listing_property: selesai\n";
 '''
@@ -305,6 +362,23 @@ def css_tema(warna, properti):
     return '\n'.join(bagian)
 
 
+def kontak_html(dk):
+    """Daftar kontak publik (markup vk-kontak dari theme-paket-biasa) untuk widget Kontak Kami property1."""
+    wa = re.sub(r'\D', '', dk.get('WA', '') or '')
+    if wa.startswith('0'):
+        wa = '62' + wa[1:]
+    baris = []
+    if dk.get('ALAMAT'):
+        baris.append(f'<i class="bi bi-geo-alt" aria-hidden="true"></i> <span>{e(dk["ALAMAT"])}</span>')
+    if wa:
+        baris.append(f'<i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{wa}" target="_blank" rel="noopener">+{wa}</a>')
+    if dk.get('TELP') and re.sub(r'\D', '', dk['TELP']) not in (wa, '0' + wa[2:]):
+        baris.append(f'<i class="bi bi-telephone" aria-hidden="true"></i> <a href="tel:{re.sub(r"[^0-9+]", "", dk["TELP"])}">{e(dk["TELP"])}</a>')
+    if dk.get('EMAIL_PUBLIK'):
+        baris.append(f'<i class="bi bi-envelope" aria-hidden="true"></i> <a href="mailto:{e(dk["EMAIL_PUBLIK"])}">{e(dk["EMAIL_PUBLIK"])}</a>')
+    return '<ul class="vk-kontak">' + ''.join(f'<li>{b}</li>' for b in baris) + '</ul>' if baris else ''
+
+
 def minta_listing(manifest, cfg, domain, layanan):
     simpanan = GENERATED_DIR / f'{domain}-listing-property.json'
     try:
@@ -344,6 +418,7 @@ Bentuk jawaban:
 {{"contoh": true,
   "properti": false,               // true hanya bila listing berupa rumah/bangunan/tanah
   "judul_listing": "Paket Haji & Umroh",   // judul seksi beranda, maks 30 karakter
+  "subjudul_listing": "1 kalimat pendek di bawah judul seksi",
   "menu": "Paket",                 // label menu ke arsip listing, 1-2 kata
   "listing": [{{
     "judul": "Paket Umroh Reguler 12 Hari",
@@ -440,7 +515,7 @@ def main():
     if muat('cari_logo', HERE / 'cari_logo.py').sudah_terpasang(domain) and '--paksa' not in sys.argv:
         print('listing_property: dilewati:situs_sudah_terpasang')
         return 0
-    keadaan = {'tema': TEMA, 'listing': 0, 'primary': '', 'layanan': [], 'sidebar2': False, 'galeri': 1, 'galeri_isi': 0, 'vdgallery': 1}
+    keadaan = {'tema': TEMAS[-1], 'listing': 0, 'primary': '', 'layanan': [], 'sidebar2': False, 'galeri': 1, 'galeri_isi': 0, 'vdgallery': 1}
     if not coba:
         if not Path(os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')).is_file():
             print('listing_property: kunci SSH tidak ada')
@@ -451,10 +526,11 @@ def main():
             print(f'listing_property: cek_tema_gagal:{cek.strip()[:200]}')
             return 1
         keadaan = json.loads(m.group(1))
-        if keadaan['tema'] != TEMA:
+        if keadaan['tema'] not in TEMAS:
             print(f"listing_property: dilewati:tema_{keadaan['tema']}")
             return 0
-    print(f"listing_property: tema={TEMA} listing_ada={keadaan['listing']}")
+    tema = keadaan['tema']
+    print(f"listing_property: tema={tema} listing_ada={keadaan['listing']}")
 
     finish = muat('site_finish', HERE / 'site-finish')
     from client_form import read_client_form
@@ -463,7 +539,9 @@ def main():
     warna = (finish.pick_colors(finish.field(form['fields'], r'warna tema')) or [''])[0]
 
     perlu_listing = keadaan['listing'] == 0
-    data = minta_listing(manifest, cfg, domain, keadaan['layanan']) if perlu_listing or keadaan['layanan'] else None
+    # Property 1 butuh jawaban AI juga untuk judul footer/sidebar (properti atau bukan).
+    butuh = perlu_listing or keadaan['layanan'] or tema == 'velocity-property1'
+    data = minta_listing(manifest, cfg, domain, keadaan['layanan']) if butuh else None
     if perlu_listing and not data:
         return 1
     data = data or {'listing': [], 'contoh': False, 'properti': True, 'galeri': [], 'ikon': {}}
@@ -476,7 +554,8 @@ def main():
 
     kerja = Path(tempfile.mkdtemp(prefix=f'listing-property-{domain}-'))
     aset, dipakai = {}, set()
-    pex = muat('paket_g_foto', HERE / 'paket-g-foto').Pexels()
+    pgf = muat('paket_g_foto', HERE / 'paket-g-foto')
+    pex = pgf.Pexels()
     klien = tpb.foto_klien(domain)
     listing = []
     if perlu_listing:
@@ -525,10 +604,18 @@ def main():
     ikon = {str(k): re.sub(r'^bi-', '', str(v).strip().lower()) for k, v in (data.get('ikon') or {}).items()
             if re.match(r'^[a-z0-9-]{2,40}$', re.sub(r'^bi-', '', str(v).strip().lower()))}
     muatan = {'listing': listing, 'aset': aset, 'galeri': galeri, 'contoh': bool(data.get('contoh')),
-              'judul_listing': str(data.get('judul_listing') or '')[:40] if perlu_listing else '',
+              'judul_listing': str(data.get('judul_listing') or '')[:40] if perlu_listing or tema == 'velocity-property1' else '',
+              'subjudul_listing': str(data.get('subjudul_listing') or '')[:160],
+              'tema': tema, 'properti': bool(data.get('properti', True)),
+              'kontak_html': kontak_html(dk) if tema == 'velocity-property1' else '',
               'menu': str(data.get('menu') or 'Listing')[:20], 'sidebar': sidebar, 'ikon': ikon,
               'warna': warna if keadaan['primary'] in BIRU_BAWAAN else '',
-              'css': css_tema(warna, bool(data.get('properti', True)))}
+              'css': css_tema(warna, bool(data.get('properti', True))) if tema == 'velocity-property2' else ''}
+    # Media maks 100 KB (feedback 2026-10-02): galeri 1200x900 q78 sempat 104-191 KB (hapibanten.com 2026-10-28).
+    for f in kerja.glob('*.jpg'):
+        pgf.kecilkan_jpeg(f, 1200, 100_000)
+    for a in aset.values():
+        a['sidik'] = a['sidik'].rsplit(':', 1)[0] + ':' + hashlib.md5((kerja / a['file']).read_bytes()).hexdigest()
     (kerja / 'data.json').write_text(json.dumps(muatan, ensure_ascii=False))
     print(f"listing_property: listing={len(listing)} contoh={int(muatan['contoh'])} foto={len(aset)} galeri={len(galeri)} "
           f"warna={warna or '-'} folder={kerja}")
