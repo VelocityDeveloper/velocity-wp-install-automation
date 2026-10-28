@@ -833,8 +833,9 @@ ul.vk-sosmed>li::before{content:none!important}
 div.text-center.my-5>img.w-100{max-height:min(460px,40vw);object-fit:cover}
 @media (max-width:575.98px){.velocity-banner-subtitle{display:none}}
 /* Tema berita: --bs-link-hover-color = warna tema, jadi tautan di latar warna tema/bg-dark (Secondary Menu, footer)
-   hilang saat hover; judul Posts Home 3 berita14 text-dark di latar warna tema (medanspot.com 2026-10-21) */
-.bg-color-theme a.text-dark,.bg-color-theme a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):hover,.bg-color-theme a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):focus,.bg-dark a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):hover,.bg-dark a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):focus,.home-title a:hover,.related-post-title a:hover{color:#fff!important}
+   hilang saat hover; judul Posts Home 3 berita14 text-dark di latar warna tema (medanspot.com 2026-10-21); .related-post-title
+   tidak di sini: modul listpost berlatar putih → judul hilang saat hover (ayipanahukum.com 2026-10-28) */
+.bg-color-theme a.text-dark,.bg-color-theme a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):hover,.bg-color-theme a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):focus,.bg-dark a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):hover,.bg-dark a:not(.dropdown-item):not(.bg-white *):not(.bg-light *):focus,.home-title a:hover{color:#fff!important}
 /* /velocity-tampilan-klasik */'''
 
 
