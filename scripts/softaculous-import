@@ -44,6 +44,13 @@ PHP=/usr/local/bin/php; [ -x "$PHP" ] || PHP=$(command -v php)
 
 keluaran=$(cd "$SOFT" && timeout 300 "$PHP" cli.php --import --sid=26 --user="$U" --url="$URL" 2>&1)
 if ada; then
+  # Impor CLI menyimpan softurl tanpa http(s):// dan tanpa adminurl, sehingga tombol login wp-admin
+  # Softaculous membuka URL relatif -> 404 (asesorpasti.com 2026-10-28). Dilengkapi di rekamannya.
+  SU="$URL" DR="$DOCROOT" "$PHP" -r '$f=$argv[1]; $d=@unserialize(file_get_contents($f)); if(!is_array($d)) exit;
+    foreach($d as $k=>$v){ if(($v["softpath"]??"")!==getenv("DR")) continue;
+      if(!preg_match("#^https?://#",$v["softurl"]??"")) $d[$k]["softurl"]=getenv("SU");
+      if(empty($v["adminurl"])) $d[$k]["adminurl"]="wp-admin/"; }
+    file_put_contents($f, serialize($d));' "$INST"
   echo "softaculous: terdaftar:$URL"
 else
   # DirectAdmin selalu mencetak peringatan "Legacy command line arguments" — bukan alasan gagal.
