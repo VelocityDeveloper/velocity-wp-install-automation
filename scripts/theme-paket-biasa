@@ -359,7 +359,8 @@ BLOK_SEMUA_KATEGORI = {'velocity-berita16': ['cat_berita3'],
                        'velocity-berita14': ['cat_posts_home_5']}
 # Tema yang blok kategorinya diisi berputar bila kategori lebih sedikit dari blok (kategori ke-1 lagi, dst.),
 # supaya Customizer Home terisi semua — berita5 tribunnewsupdate.com 2026-10-20 (3 rubrik, 7 blok).
-BLOK_KATEGORI_PUTAR = {'velocity-berita5'}
+# berita4: 8 blok home_post_1..8, sisanya dulu "RECENT POSTS" (widyatvnews.com 2026-10-28, 6 rubrik).
+BLOK_KATEGORI_PUTAR = {'velocity-berita5', 'velocity-berita4'}
 
 
 def berita8_customizer(domain, isi):
@@ -961,7 +962,9 @@ if (!empty($d['berita'])) {
             // tak tertangkap sehingga Customizer Home kosong (ircamedia.com 2026-10-15).
             $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['', 'disable']);
             // berita16 dkk. memakai kirki-react-select (dulu tak tertangkap: suarapurwakarta.com 2026-10-07).
-            if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && count($pilih) > 1
+            // Satu pilihan cukup: berita4 membuang Uncategorized dari pilihan, situs satu rubrik dulu tak tertangkap
+            // (widyatvnews.com 2026-10-28).
+            if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && $pilih
                 && !array_diff($pilih, $id_kat) && is_object($c->setting)) { $blok_kat[] = $c->setting->id; }
         }
     } catch (Throwable $t) { echo 'tampilan: berita_customizer_gagal:' . $t->getMessage() . "\n"; }
