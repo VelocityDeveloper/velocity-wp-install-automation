@@ -57,7 +57,13 @@ const SARING = [{ nilai: 'semua', label: 'Aktif' }, ...TAHAP.map((t) => ({ nilai
 const saring = tabUrl('tahap', 'semua', { boleh: SARING.map((s) => s.nilai) })
 const aktif = (p) => (p.status_proyek || 'aktif') === 'aktif'
 const cocok = (p, n) => (n in STATUS_PROYEK ? p.status_proyek === n : aktif(p) && (n === 'semua' || p.tahap === n))
-const tersaring = computed(() => proyek.value.filter((p) => cocok(p, saring.value)))
+// Cari domain: cocokkan ke domain, folder On Progress, judul, klien, slug & nama app (domain kadang hanya ada di judul)
+const cari = ref('')
+const cocokCari = (p) => {
+  const k = cari.value.trim().toLowerCase()
+  return !k || [p.domain, p.onprogress, p.judul, p.klien, p.slug, p.app].some((v) => v && String(v).toLowerCase().includes(k))
+}
+const tersaring = computed(() => proyek.value.filter((p) => cocok(p, saring.value) && cocokCari(p)))
 // Paginasi 10 project per halaman; nomor halaman di URL (?hal=2) supaya tombol Kembali dari detail project
 // pulang ke halaman yang sama. Ganti filter tahap → kembali ke halaman 1.
 const PER_HALAMAN = 10
@@ -78,7 +84,7 @@ function pilihSaring(n) {
   saring.value = n
   halUrl.value = '1'
 }
-const jumlah = (n) => proyek.value.filter((p) => cocok(p, n)).length
+const jumlah = (n) => proyek.value.filter((p) => cocok(p, n) && cocokCari(p)).length
 // Ubah status langsung dari kartu daftar (tombol di kartu tidak membuka halaman project)
 const ubahStatus = ref(null)
 const hapusProyek = ref(null)
@@ -143,6 +149,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
     <div class="aksi-atas">
       <button type="button" class="tombol" @click="bukaBaru"><Ikon nama="tambah" :ukuran="18" /> Project baru</button>
       <button type="button" class="tombol garis" @click="alurBuka = true">Alur</button>
+      <input v-model="cari" class="cari" type="search" placeholder="Cari domain…" aria-label="Cari project berdasarkan domain" autocomplete="off" @input="halUrl = '1'">
     </div>
 
     <Dialog :buka="baruBuka" judul="Project baru" lebar="560px" @tutup="baruBuka = false">
@@ -201,7 +208,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
       </div>
       <p v-if="memuat" class="redup">Memuat…</p>
       <p v-else-if="galat && !data" class="pesan-status bahaya">Gagal memuat: {{ galat.message }}</p>
-      <p v-else-if="!tampil.length" class="redup">Belum ada project di sini.</p>
+      <p v-else-if="!tampil.length" class="redup">{{ cari.trim() ? `Tidak ada project cocok dengan "${cari.trim()}".` : 'Belum ada project di sini.' }}</p>
       <div v-else class="daftar">
         <RouterLink v-for="p in tampil" :key="p.slug" :to="`/installer/laravel/${p.slug}`" class="proyek" :class="{ jalan: p.job, nonaktif: !aktif(p) }" :aria-busy="!!p.job">
           <div class="p-atas">
@@ -269,6 +276,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
 .tab button.aktif .hitung.waspada { color: #fff; }
 .panel { display: grid; gap: 18px; }
 .aksi-atas { display: flex; gap: 10px; flex-wrap: wrap; }
+.aksi-atas .cari { margin-left: auto; width: min(280px, 100%); }
 .ket-id { margin: -4px 0 14px; }
 .peringatan { border-color: rgba(232, 181, 74, .5); background: rgba(232, 181, 74, .07); }
 .peringatan b { color: var(--waspada); }
