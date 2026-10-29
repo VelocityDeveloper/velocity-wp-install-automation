@@ -1791,6 +1791,27 @@ foreach ((array) ($d['cpt_isi'] ?? []) as $pt => $daftar) {
     $st["cpt_$pt"] = gmdate('c');
     echo "tampilan: cpt_diisi:$pt:$n\n";
 }
+// 6f. Halaman Galeri = VD Gallery dari foto galeri-<n> (user 2026-10-29, ptbukitmayana.com: "setiap gallery gambar
+// pakai vd gallery"). site-finish hanya membuat galeri bila klien mengirim foto, jadi situs yang galerinya foto
+// contoh berhalaman Galeri berisi teks saja. Hanya instalasi baru, sekali, dan bila halaman belum punya galeri.
+$gal_ids = [];
+foreach ($media as $kunci => $mid) { if (preg_match('/^galeri-\d+$/', $kunci)) { $gal_ids[] = (int) $mid; } }
+$gal_hal = get_page_by_path('galeri', OBJECT, 'page');
+if (!empty($d['situs_baru']) && empty($st['vdgallery']) && $gal_ids && $gal_hal && class_exists('Velocity_Addons_Gallery')
+    && !preg_match('/\[(vdgallery|gallery)\b|wp:gallery/', $gal_hal->post_content)) {
+    update_option('velocity_gallery', '1');
+    $ada = get_posts(['post_type' => 'vdgallery', 'name' => 'galeri-situs', 'post_status' => 'any', 'numberposts' => 1]);
+    $vdg = wp_insert_post(['ID' => $ada ? $ada[0]->ID : 0, 'post_type' => 'vdgallery', 'post_status' => 'publish',
+        'post_title' => 'Galeri ' . get_bloginfo('name'), 'post_name' => 'galeri-situs'], true);
+    if (!is_wp_error($vdg)) {
+        update_post_meta($vdg, 'vdgaleri', ['media' => array_values(array_unique($gal_ids)), 'gallery_use_global_options' => '1', 'slideshow_use_global_options' => '1']);
+        $milik = $milik_installer($gal_hal->ID);
+        wp_update_post(['ID' => $gal_hal->ID, 'post_content' => rtrim($gal_hal->post_content) . "\n<!-- velocity-gallery -->\n[vdgallery id=\"$vdg\"]"]);
+        if ($milik) { $tandai($gal_hal->ID); }
+        $st['vdgallery'] = gmdate('c');
+        echo "tampilan: vdgallery:$vdg:" . count($gal_ids) . "\n";
+    }
+}
 // 7. Statistik pengunjung (sekali; kalau orang mematikannya sesudah itu, dibiarkan)
 if (empty($st['statistik'])) {
     if ((string) get_option('statistik_velocity', '1') !== '1') { update_option('statistik_velocity', '1'); echo "tampilan: statistik_dinyalakan\n"; }
@@ -2467,6 +2488,8 @@ def main():
     if data['situs_baru'] and not data['berita'] and tema not in SLIDER_BANNER:
         # velocity-spa menyembunyikan seksi Header Image; hero cukup jadi latar banner slider.
         dipakai.add('hero')  # Header Image tema (banner halaman dalam), lihat langkah 6c PHP
+    if data['situs_baru'] and not data['berita']:
+        dipakai |= set(galeri)  # VD Gallery halaman Galeri, lihat langkah 6f PHP
     data['aset'], per_md5 = {}, {}
     for k, p in aset.items():
         if k not in dipakai:
