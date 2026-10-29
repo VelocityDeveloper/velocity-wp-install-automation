@@ -665,7 +665,9 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 # semua kategori — tribunnewsupdate.com 2026-10-20 3 per rubrik kurang.
 # velocity-berita14: Home 1 carousel 5, Home 2 = 4, Home 3 (offset 1 + 4) = 5, Home 4 (1+2) = 3, Home 6 (1+3) = 4;
 # Home 5 semua kategori — medanspot.com 2026-10-21 3 per rubrik kurang.
-ARTIKEL_BLOK_BERITA = {'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
+# velocity-berita6: Posts Home 1 = 4, Home 2 = 5 (kategori ke-1/2), widget sidebar kategori ke-3 (4) dan ke-4 (5)
+# — baloypedia.id 2026-10-29 satu rubrik 3 artikel, beranda & sidebar bolong.
+ARTIKEL_BLOK_BERITA = {'velocity-berita6': [5, 5, 5, 5], 'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
                        'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6],
                        'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4],
                        'velocity-berita15': [6, 6, 6, 6, 6, 4]}

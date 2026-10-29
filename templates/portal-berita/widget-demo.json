@@ -865,7 +865,10 @@
       "urutkan": "recent",
       "jumlah": "4"
      },
-     "kategori_ke": 1,
+     "kategori_ke": [
+      3,
+      1
+     ],
      "kunci_kategori": "cat",
      "format_kategori": "id"
     },
@@ -878,7 +881,10 @@
       "urutkan": "recent",
       "jumlah": "5"
      },
-     "kategori_ke": 2,
+     "kategori_ke": [
+      4,
+      2
+     ],
      "kunci_kategori": "cat",
      "format_kategori": "id"
     },
@@ -902,7 +908,10 @@
       "urutkan": "recent",
       "jumlah": "4"
      },
-     "kategori_ke": 3,
+     "kategori_ke": [
+      5,
+      1
+     ],
      "kunci_kategori": "cat",
      "format_kategori": "id"
     }
@@ -932,15 +941,12 @@
    ],
    "footer-widget-3": [
     {
-     "jenis": "core",
-     "base": "calendar",
-     "opsi": {
-      "title": "Kalender"
-     }
+     "jenis": "statistik",
+     "judul": "Pengunjung"
     }
    ]
   },
-  "catatan": "Area dari induk (main-sidebar, footer-widget-1..4); footer child (inc/part-footer.php) hanya merender footer-widget-1..3, satu kolom col-md per area. id_base kelas Posts_Berita_6_Widget = 'Posts_Berita_6_Widget' di konstruktor, WP me-lowercase -> 'posts_berita_6_widget' (option widget_posts_berita_6_widget), cocok dgn ID demo. Kunci instance: title, style ('1'-'5'), urutkan (recent|popular), jumlah, cat (term_id). PERHATIAN: di sumber tema 'cat' hanya dipakai untuk tautan judul, TIDAK memfilter query (demo tampak terfilter per kategori -> versi demo mungkin beda); isi widget = tulisan terbaru semua kategori. Style: Hukum=3 (grid 2 kolom kartu), Daerah=4 (daftar panah), Pendidikan=1 (thumbnail kiri+tanggal); jumlah dihitung dari demo (4/5/4). urutkan 'recent' disimpulkan (tidak pasti 100%). Tabs widget hanya punya kunci title; demo tanpa judul. Kedua media_image = banner 300x250. Judul kategori demo (Hukum, Daerah, Pendidikan) -> kategori_ke 1-3."
+  "catatan": "Area dari induk (main-sidebar, footer-widget-1..4); footer child (inc/part-footer.php) hanya merender footer-widget-1..3, satu kolom col-md per area. id_base kelas Posts_Berita_6_Widget = 'Posts_Berita_6_Widget' di konstruktor, WP me-lowercase -> 'posts_berita_6_widget' (option widget_posts_berita_6_widget), cocok dgn ID demo. Kunci instance: title, style ('1'-'5'), urutkan (recent|popular), jumlah, cat (term_id). Tema 2.0.0: 'cat' memfilter query. Style: Hukum=3 (grid 2 kolom kartu), Daerah=4 (daftar panah), Pendidikan=1 (thumbnail kiri+tanggal); jumlah dihitung dari demo (4/5/4). urutkan 'recent' disimpulkan (tidak pasti 100%). Tabs widget hanya punya kunci title; demo tanpa judul. Kedua media_image = banner 300x250. Judul kategori demo (Hukum, Daerah, Pendidikan) -> kategori_ke 1-3. User 2026-10-29 (baloypedia.id): sidebar memakai kategori ke-3/ke-4/ke-5 (cadangan ke-1/ke-2) supaya tidak mengulang Posts Home 1/2 (kategori ke-1/ke-2); footer 3 Kalender diganti Pengunjung."
  },
  "velocity-berita7": {
   "slug": "velocity-berita7",

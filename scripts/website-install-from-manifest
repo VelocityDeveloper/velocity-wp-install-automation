@@ -467,8 +467,10 @@ echo "active_theme:$(php -d memory_limit=512M "$WP_BIN" theme list --status=acti
 # Child theme yang memakai Kirki untuk Customizer (mis. velocity-hukum1: `if (class_exists('Kirki'))`)
 # kehilangan seluruh pengaturannya tanpa plugin Kirki — dan API tema tidak mencatatnya di
 # plugin_wp_required (cepadtl.org 2026-09-30, permintaan user). Dipasang dari wordpress.org.
+# velocity-berita6 2.0.0 sudah lepas Kirki (Customizer bawaan); class_exists('Kirki') di sana hanya migrasi
+# latar dari versi lama, jadi Kirki tidak dipasang (user 2026-10-29, baloypedia.id).
 TEMA_AKTIF=$(php -d memory_limit=512M "$WP_BIN" theme list --status=active --field=name --path="$DOCROOT" --allow-root 2>/dev/null | head -1 || true)
-if [[ -n "$TEMA_AKTIF" && -d "$DOCROOT/wp-content/themes/$TEMA_AKTIF" ]] \
+if [[ -n "$TEMA_AKTIF" && "$TEMA_AKTIF" != velocity-berita6 && -d "$DOCROOT/wp-content/themes/$TEMA_AKTIF" ]] \
     && grep -rqsE 'Kirki::|class_exists\(.Kirki.\)' --include='*.php' "$DOCROOT/wp-content/themes/$TEMA_AKTIF"; then
   # Kirki 6.x memeriksa berkas lewat WP_Filesystem; WP-CLI root (--allow-root, pemilik berkas beda)
   # membuat WordPress memilih metode FTP dan Kirki fatal di ftp_nlist() -> SEMUA perintah wp berikutnya
