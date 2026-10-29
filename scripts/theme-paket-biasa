@@ -948,6 +948,10 @@ if (!empty($d['berita'])) {
             echo "tampilan: berita_beranda_tulisan_terbaru\n";
         } else { echo "tampilan: berita_beranda_dibiarkan:disunting\n"; }
     }
+    // berita6: Reading Settings "Blog pages show at most" 6 (user 2026-10-29, baloypedia.id); nilai pilihan orang dibiarkan.
+    if (get_stylesheet() === 'velocity-berita6' && (int) get_option('posts_per_page') === 10) {
+        update_option('posts_per_page', 6); echo "tampilan: berita_posts_per_page:6\n";
+    }
     // Terbanyak artikel dulu; sama banyak -> urutan dibuat (= urutan kategori di form klien).
     $kategori = get_categories(['hide_empty' => true, 'exclude' => [(int) get_option('default_category')]]);
     usort($kategori, fn($a, $b) => [$b->count, $a->term_id] <=> [$a->count, $b->term_id]);
