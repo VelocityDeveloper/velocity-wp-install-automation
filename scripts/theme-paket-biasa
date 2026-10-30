@@ -2308,6 +2308,12 @@ def main():
         n_layanan = len([l for l in isi.get('layanan') or [] if l.get('judul')])
         if panduan['layanan_min'] and n_layanan < panduan['layanan_min']:
             print(f"tampilan: panduan_layanan_kurang:{n_layanan}/{panduan['layanan_min']}")
+    if not galeri and not SITUS_LAMA and not data['berita'] and isi.get('galeri'):
+        # Tanpa foto klien & tanpa galeri_min panduan, halaman Galeri dulu teks saja (mbahtris.com Paket E,
+        # user 2026-10-30: "setiap gallery gambar pakai vd gallery"): foto contoh isi.galeri → VD Gallery (6f PHP).
+        galeri = [f'galeri-{i}' for i in range(1, min(len(isi['galeri']), GALERI_MAKS) + 1)]
+        ctx = konteks_adaptor(cfg, domain, isi, kontak, len(galeri), klien_judul)
+        print(f'tampilan: galeri_contoh:{len(galeri)}')
     maks = LAYANAN_BERANDA_MAKS.get(tema)
     if maks and not SITUS_LAMA and len(ctx['daftar']['layanan']) > maks:
         print(f"tampilan: layanan_beranda_maks:{len(ctx['daftar']['layanan'])}->{maks}")
@@ -2358,8 +2364,8 @@ def main():
     slot += [(f'layanan-{l["slug"]}', l.get('foto') or l['judul'], l['judul'])
              for l in layanan if f'layanan-{l["slug"]}' not in sumber]
     slot += [(k, isi.get('hero_foto') or '', f'Foto {i}') for i, k in enumerate(pendamping, 1) if k not in sumber]
-    if panduan and panduan['galeri_min']:
-        # Galeri minimal panduan (Paket F): slot yang tidak terisi foto klien/tembolok pakai kata kunci isi contoh.
+    if galeri:
+        # Galeri (minimal panduan Paket F / galeri_contoh): slot yang tidak terisi foto klien/tembolok pakai kata kunci isi contoh.
         kata = [g for g in isi.get('galeri') or [] if isinstance(g, dict)]
         slot += [(k, (kata[i]['foto'] if i < len(kata) and kata[i].get('foto') else isi.get('hero_foto') or ''),
                   kata[i].get('judul') or f'Galeri {i + 1}' if i < len(kata) else f'Galeri {i + 1}')
