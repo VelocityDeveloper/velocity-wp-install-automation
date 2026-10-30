@@ -563,6 +563,25 @@ Kembalikan JSON persis: {{"rubrik":[{{"judul":"","teks":"","sub":[""]}}]}}"""
     return hasil[:12]
 
 
+# Form hanya berisi satu kategori ("UMUM", fokus-berita-indonesia.id, user 2026-10-30): beranda
+# & menu berita kosong, jadi rubrik contoh ditambahkan sesudah rubrik klien.
+RUBRIK_CONTOH = [
+    ('Nasional', 'Berita nasional seputar peristiwa dan kebijakan di Indonesia.'),
+    ('Daerah', 'Berita dari daerah: pemerintahan, peristiwa, dan kehidupan warga.'),
+    ('Politik', 'Berita politik, pemerintahan, dan kebijakan publik.'),
+    ('Hukum', 'Berita hukum, kriminal, dan penegakan hukum.'),
+    ('Ekonomi', 'Berita ekonomi, bisnis, dan UMKM.'),
+]
+
+
+def lengkapi_rubrik(rubrik):
+    if len(rubrik) > 1:
+        return rubrik
+    ada = {r['slug'] for r in rubrik}
+    return rubrik + [{'slug': slug_dari(j), 'judul': j, 'teks': t}
+                     for j, t in RUBRIK_CONTOH if slug_dari(j) not in ada]
+
+
 def buat_isi_berita(gen, cfg, domain):
     """Isi awal portal berita: identitas media, rubrik, pedoman redaksi, warna.
 
@@ -632,6 +651,7 @@ Kembalikan JSON persis:
             gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
         elif warna_dipilih_klien(domain):
             gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
+    rubrik = lengkapi_rubrik(rubrik)
     nama = tampil or nama_form
     return {
         'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
