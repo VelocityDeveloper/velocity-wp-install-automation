@@ -573,14 +573,44 @@ RUBRIK_KANDIDAT = ['Nasional', 'Daerah', 'Politik', 'Hukum', 'Kriminal', 'Ekonom
                    'Religi', 'Pertanian', 'Sosial']
 RUBRIK_UMUM = re.compile(r'^(berita\s*)?(umum|semua|bebas|campuran|lainnya|lain-lain|all)?$', re.I)
 RUBRIK_JUMLAH = 6
+# Blok kategori Customizer beranda tema aktif, cara deteksi sama dengan theme-paket-biasa langkah 2b. "Umum" tidak
+# dibatasi 6: tema berbanyak blok (berita4 8 blok) diberi rubrik sebanyak bloknya (user 2026-10-30).
+BLOK_KATEGORI_PHP = r"""<?php
+require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+$wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
+$id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
+$n = 0;
+foreach ($wpc->controls() as $c) {
+    $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['', 'disable']);
+    if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && is_object($c->setting)
+        && ($pilih ? !array_diff($pilih, $id_kat) : strpos($c->setting->id, 'cat_') === 0)) { $n++; }
+}
+echo "blok=$n";
+"""
 
 
-def lengkapi_rubrik(rubrik, saran, acak=random):
-    """Rubrik klien <=1 dilengkapi saran AI (urutan diacak) lalu kandidat acak sampai RUBRIK_JUMLAH."""
+def blok_kategori_beranda(gen, cfg, domain):
+    """Jumlah blok kategori beranda tema aktif (0 bila tak terbaca); ARTIKEL_BLOK_BERITA jadi batas bawah."""
+    import os
+    args = (cfg.get('da_user', ''), domain, cfg.get('ssh_port') or 22, cfg.get('ssh_user') or 'root', cfg.get('target_host', ''))
+    ssh_cmd, docroot = gen.ssh_wp(*args, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    try:
+        keluar = subprocess.run(ssh_cmd + [f'/usr/local/bin/wp eval-file - --path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
+                                input=BLOK_KATEGORI_PHP, capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        keluar = ''
+    cocok = re.search(r'blok=(\d+)', keluar)
+    return max(int(cocok.group(1)) if cocok else 0, len(gen.ARTIKEL_BLOK_BERITA.get(gen.tema_aktif(*args), [])))
+
+
+def lengkapi_rubrik(rubrik, saran, blok=0, acak=random):
+    """Rubrik klien <=1 dilengkapi saran AI (urutan diacak) lalu kandidat acak: "Umum"/kosong -> sebanyak blok
+    kategori beranda (min. RUBRIK_JUMLAH), satu rubrik nyata -> RUBRIK_JUMLAH."""
     if len(rubrik) > 1:
         return rubrik
-    if rubrik and RUBRIK_UMUM.match(rubrik[0]['judul'].strip()):
-        rubrik = []
+    jumlah = RUBRIK_JUMLAH
+    if not rubrik or RUBRIK_UMUM.match(rubrik[0]['judul'].strip()):
+        rubrik, jumlah = [], max(RUBRIK_JUMLAH, blok)
     hasil, ada = list(rubrik), {r['slug'] for r in rubrik}
     saran = list(saran)
     acak.shuffle(saran)
@@ -588,7 +618,7 @@ def lengkapi_rubrik(rubrik, saran, acak=random):
     for r in saran + cadangan:
         judul = teks(r.get('judul'), 40)
         slug = slug_dari(judul)
-        if len(hasil) >= RUBRIK_JUMLAH:
+        if len(hasil) >= jumlah:
             break
         if judul and slug not in ada and not RUBRIK_UMUM.match(judul):
             ada.add(slug)
@@ -614,6 +644,8 @@ def buat_isi_berita(gen, cfg, domain):
         raise RuntimeError('model AI belum diatur')
     rubrik = rubrik_form(domain) or rubrik_berkas(gen, domain, model)
     nama_form = cfg.get('site_title') or domain.split('.')[0]
+    blok = blok_kategori_beranda(gen, cfg, domain) if len(rubrik) <= 1 else 0
+    gen.log(f'Blok kategori beranda tema: {blok}')
     permintaan = f"""Isi awal portal berita dari data klien berikut.
 - Nama media (dari form): {nama_form}
 - Domain: {domain}
@@ -629,7 +661,7 @@ Aturan (wajib):
 - "slogan": maksimal 8 kata. "hero_teks": 1 kalimat. "tentang": 2-3 kalimat tentang arah pemberitaan media.
 - "redaksi": 3 paragraf pedoman redaksi umum (independensi & akurasi, verifikasi sebelum terbit, hak jawab & koreksi).
 - "rubrik": hanya diisi kalau daftar rubrik di atas kosong: rubrik yang DITULIS klien di data (jangan menambah sendiri).
-- "rubrik_saran": 8 rubrik yang paling sesuai materi klien, nama domain, dan daerah media; pilih acak dari kandidat berikut (boleh nama lain bila materi klien jelas menuntut), tanpa "Umum" dan tanpa rubrik klien: {', '.join(random.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT)))}. "teks" = 1 kalimat cakupan rubrik.
+- "rubrik_saran": {max(8, blok + 2)} rubrik yang paling sesuai materi klien, nama domain, dan daerah media; pilih acak dari kandidat berikut (boleh nama lain bila materi klien jelas menuntut), tanpa "Umum" dan tanpa rubrik klien: {', '.join(random.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT)))}. "teks" = 1 kalimat cakupan rubrik.
 - "foto_umum": 3 frasa BAHASA INGGRIS (2-3 kata) suasana umum dunia berita, tanpa orang (mis. "newspaper printing press").
 
 Kembalikan JSON persis:
@@ -666,7 +698,7 @@ Kembalikan JSON persis:
             gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
         elif warna_dipilih_klien(domain):
             gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
-    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)])
+    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)], blok)
     nama = tampil or nama_form
     return {
         'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
