@@ -355,7 +355,9 @@ BERITA8_SOSMED = {'facebook': ('facebook.com', 'https://www.facebook.com/'), 'tw
 # berita5 (user 2026-10-20, tribunnewsupdate.com): Posts Home Main (11 tulisan) & Kolom Kanan Terbaru/Populer = semua.
 # berita14 (user 2026-10-21, medanspot.com): Posts Home 5 (9 tulisan) = semua, satu rubrik 3 berita membuatnya kosong.
 # berita6 (user 2026-10-29, baloypedia.id): Big Carousel Home = semua, Posts Home 1/2 per kategori.
+# berita3 (user 2026-10-30, bongkarselubung.com): Carousel Home = semua (nilai kosong -> WP_Query tanpa cat).
 BLOK_SEMUA_KATEGORI = {'velocity-berita16': ['cat_berita3'], 'velocity-berita6': ['cat_bigcarousel_home'],
+                       'velocity-berita3': ['cat_carousel_home'],
                        'velocity-berita5': ['cat_posts_home_4', 'cat_posts_sidebar_1', 'cat_posts_sidebar_2'],
                        'velocity-berita14': ['cat_posts_home_5']}
 # Tema yang blok kategorinya diisi berputar bila kategori lebih sedikit dari blok (kategori ke-1 lagi, dst.),
