@@ -131,7 +131,11 @@ def design_ref(text):
                 continue
             if 'pilihannya' in nxt.lower() or nxt.lower().startswith('www.'):
                 break
-            m = re.match(r'https?://([a-z0-9-]+)\.velocitydeveloper\.com', nxt, re.I)
+            # Mockup velocity.ai.id/preview bukan WordPress; demo dasarnya ditulis di baris
+            # berikut "(https://sekolah1.velocitydeveloper.com/)" (sidomakmur.id 2026-10-30).
+            if 'velocity.ai.id/preview/' in nxt.lower():
+                continue
+            m = re.match(r'\(?https?://([a-z0-9-]+)\.velocitydeveloper\.com', nxt, re.I)
             if m and m.group(1).lower() != 'www':
                 return m.group(1).lower()
             break

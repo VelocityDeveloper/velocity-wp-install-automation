@@ -1083,6 +1083,36 @@ if (!empty($d['berita'])) {
         update_post_meta($pof, '_wp_page_template', 'page-home.php'); echo "tampilan: berita_template_beranda:page-home.php\n";
     }
 }
+// 2c. Blok kategori beranda tema non-berita (velocity-sekolah1 news1–news6, sidomakmur.id 2026-10-30): kontrol
+// select berpilihan kategori + "Show All" (0) dibiarkan 0 -> judul blok kosong & semua blok berisi artikel sama.
+// Diisi kategori terbanyak artikel, sekali per pengaturan; nilai pilihan orang (bukan 0/kosong) dibiarkan.
+if (empty($d['berita'])) {
+    $kategori = get_categories(['hide_empty' => true, 'exclude' => [(int) get_option('default_category')]]);
+    usort($kategori, fn($a, $b) => [$b->count, $a->term_id] <=> [$a->count, $b->term_id]);
+    $blok_kat = [];
+    if ($kategori) {
+        require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+        try {
+            $wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
+            $id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
+            foreach ($wpc->controls() as $c) {
+                $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['', '0', 'disable']);
+                // headline_post dsb. ("Show All" = semua kategori) memang bawaan yang benar, bukan blok kategori.
+                if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && $pilih
+                    && !array_diff($pilih, $id_kat) && is_object($c->setting)
+                    && !preg_match('/headline|highlight|slider|banner/i', $c->setting->id)) { $blok_kat[] = $c->setting->id; }
+            }
+        } catch (Throwable $t) { echo 'tampilan: blok_kategori_customizer_gagal:' . $t->getMessage() . "\n"; }
+    }
+    $isi_kat = []; $i = 0;
+    foreach ($blok_kat as $k) {
+        if (isset($st['blok_kat'][$k]) || !in_array((string) get_theme_mod($k, ''), ['', '0'], true)) { continue; }
+        $kat = $kategori[$i++ % count($kategori)];
+        set_theme_mod($k, $kat->term_id); $st['blok_kat'][$k] = (string) $kat->term_id;
+        $isi_kat[] = "$k=" . $kat->slug;
+    }
+    if ($isi_kat) { echo 'tampilan: blok_kategori:' . implode(',', $isi_kat) . "\n"; }
+}
 // berita4 berberanda page-home.php (beranda statis) tetapi menunya sama dengan portal berita lain
 // (user 2026-10-09, info-luarbiasa.com): primary = Beranda + kategori, secondary = ikon home ala demo,
 // Tentang Kami, Redaksi, Pedoman Media Siber. berita11 sama-sama berberanda page-home.php: dulu terlewat,
