@@ -603,14 +603,17 @@ def blok_kategori_beranda(gen, cfg, domain):
     return max(int(cocok.group(1)) if cocok else 0, len(gen.ARTIKEL_BLOK_BERITA.get(gen.tema_aktif(*args), [])))
 
 
-def lengkapi_rubrik(rubrik, saran, blok=0, acak=random):
-    """Rubrik klien <=1 dilengkapi saran AI (urutan diacak) lalu kandidat acak: "Umum"/kosong -> sebanyak blok
-    kategori beranda (min. RUBRIK_JUMLAH), satu rubrik nyata -> RUBRIK_JUMLAH."""
-    if len(rubrik) > 1:
-        return rubrik
-    jumlah = RUBRIK_JUMLAH
-    if not rubrik or RUBRIK_UMUM.match(rubrik[0]['judul'].strip()):
-        rubrik, jumlah = [], max(RUBRIK_JUMLAH, blok)
+def lengkapi_rubrik(rubrik, saran, blok=0, isian_form=True, acak=random):
+    """Rubrik dilengkapi saran AI (urutan diacak) lalu kandidat acak. Kolom "kategori berita" form berisi rubrik
+    nyata: 1 -> RUBRIK_JUMLAH, >=2 apa adanya. Kolom kosong/"Umum" (rubrik dari dokumen lain atau tidak ada):
+    sebanyak blok kategori beranda, min. RUBRIK_JUMLAH (user 2026-10-30)."""
+    rubrik = [r for r in rubrik if not RUBRIK_UMUM.match(r['judul'].strip())]
+    if isian_form and rubrik:
+        if len(rubrik) > 1:
+            return rubrik
+        jumlah = RUBRIK_JUMLAH
+    else:
+        jumlah = max(RUBRIK_JUMLAH, blok)
     hasil, ada = list(rubrik), {r['slug'] for r in rubrik}
     saran = list(saran)
     acak.shuffle(saran)
@@ -644,7 +647,13 @@ def buat_isi_berita(gen, cfg, domain):
         raise RuntimeError('model AI belum diatur')
     rubrik = rubrik_form(domain) or rubrik_berkas(gen, domain, model)
     nama_form = cfg.get('site_title') or domain.split('.')[0]
-    blok = blok_kategori_beranda(gen, cfg, domain) if len(rubrik) <= 1 else 0
+    # Kolom "kategori berita" form: kosong/"Umum" -> rubrik (dari dokumen lain bila ada) dilengkapi sebanyak blok.
+    isian_kat = next((str(v) for k, v in client_data.items() if re.search(r'kategori\s*berita', str(k), re.I)), '')
+    # Kunci terpotong di "(": nilainya masih membawa contoh form "kriminal, politik, hukum, dll): UMUM".
+    isian_kat = re.sub(r'^.*\)\s*:|^\s*:', '', isian_kat).strip()
+    isian_form = bool(isian_kat) and not RUBRIK_UMUM.match(isian_kat)
+    blok = blok_kategori_beranda(gen, cfg, domain) if not isian_form or len(rubrik) <= 1 else 0
+    gen.log(f'Kolom kategori form: {isian_kat or "(kosong)"}; blok kategori beranda tema: {blok}')
     gen.log(f'Blok kategori beranda tema: {blok}')
     permintaan = f"""Isi awal portal berita dari data klien berikut.
 - Nama media (dari form): {nama_form}
@@ -698,7 +707,7 @@ Kembalikan JSON persis:
             gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
         elif warna_dipilih_klien(domain):
             gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
-    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)], blok)
+    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)], blok, isian_form)
     nama = tampil or nama_form
     return {
         'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
