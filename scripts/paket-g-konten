@@ -22,6 +22,7 @@ berkas di situs masih berisi isian netral template (belum disunting orang).
 import importlib.util
 import json
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -563,23 +564,36 @@ Kembalikan JSON persis: {{"rubrik":[{{"judul":"","teks":"","sub":[""]}}]}}"""
     return hasil[:12]
 
 
-# Form hanya berisi satu kategori ("UMUM", fokus-berita-indonesia.id, user 2026-10-30): beranda
-# & menu berita kosong, jadi rubrik contoh ditambahkan sesudah rubrik klien.
-RUBRIK_CONTOH = [
-    ('Nasional', 'Berita nasional seputar peristiwa dan kebijakan di Indonesia.'),
-    ('Daerah', 'Berita dari daerah: pemerintahan, peristiwa, dan kehidupan warga.'),
-    ('Politik', 'Berita politik, pemerintahan, dan kebijakan publik.'),
-    ('Hukum', 'Berita hukum, kriminal, dan penegakan hukum.'),
-    ('Ekonomi', 'Berita ekonomi, bisnis, dan UMKM.'),
-]
+# Kategori form cuma satu (user 2026-10-30, fokus-berita-indonesia.id "UMUM"): beranda & menu berita kosong.
+# "Umum"/sejenisnya -> 6 rubrik saran, satu rubrik nyata -> rubrik itu + 5 saran. Saran dipilih AI secara acak
+# dari kandidat (diacak tiap situs) yang sesuai materi klien/domain; kandidat ini juga cadangan bila AI gagal.
+RUBRIK_KANDIDAT = ['Nasional', 'Daerah', 'Politik', 'Hukum', 'Kriminal', 'Ekonomi', 'Bisnis', 'Pendidikan',
+                   'Kesehatan', 'Olahraga', 'Teknologi', 'Hiburan', 'Gaya Hidup', 'Wisata', 'Budaya',
+                   'Pemerintahan', 'Peristiwa', 'Opini', 'Internasional', 'Otomotif', 'Lingkungan',
+                   'Religi', 'Pertanian', 'Sosial']
+RUBRIK_UMUM = re.compile(r'^(berita\s*)?(umum|semua|bebas|campuran|lainnya|lain-lain|all)?$', re.I)
+RUBRIK_JUMLAH = 6
 
 
-def lengkapi_rubrik(rubrik):
+def lengkapi_rubrik(rubrik, saran, acak=random):
+    """Rubrik klien <=1 dilengkapi saran AI (urutan diacak) lalu kandidat acak sampai RUBRIK_JUMLAH."""
     if len(rubrik) > 1:
         return rubrik
-    ada = {r['slug'] for r in rubrik}
-    return rubrik + [{'slug': slug_dari(j), 'judul': j, 'teks': t}
-                     for j, t in RUBRIK_CONTOH if slug_dari(j) not in ada]
+    if rubrik and RUBRIK_UMUM.match(rubrik[0]['judul'].strip()):
+        rubrik = []
+    hasil, ada = list(rubrik), {r['slug'] for r in rubrik}
+    saran = list(saran)
+    acak.shuffle(saran)
+    cadangan = [{'judul': j, 'teks': f'Berita seputar {j.lower()}.'} for j in acak.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT))]
+    for r in saran + cadangan:
+        judul = teks(r.get('judul'), 40)
+        slug = slug_dari(judul)
+        if len(hasil) >= RUBRIK_JUMLAH:
+            break
+        if judul and slug not in ada and not RUBRIK_UMUM.match(judul):
+            ada.add(slug)
+            hasil.append({'slug': slug, 'judul': judul, 'teks': teks(r.get('teks'), 160) or f'Berita seputar {judul.lower()}.'})
+    return hasil
 
 
 def buat_isi_berita(gen, cfg, domain):
@@ -614,11 +628,12 @@ Aturan (wajib):
 - "nama_tampil": nama media yang ditulis rapi dengan spasi dan huruf kapital bila di form ditulis menyambung (mis. "kabarkotaku" -> "Kabar Kotaku"). Huruf dan urutannya TIDAK boleh berubah.
 - "slogan": maksimal 8 kata. "hero_teks": 1 kalimat. "tentang": 2-3 kalimat tentang arah pemberitaan media.
 - "redaksi": 3 paragraf pedoman redaksi umum (independensi & akurasi, verifikasi sebelum terbit, hak jawab & koreksi).
-- "rubrik": hanya diisi kalau daftar rubrik di atas kosong.
+- "rubrik": hanya diisi kalau daftar rubrik di atas kosong: rubrik yang DITULIS klien di data (jangan menambah sendiri).
+- "rubrik_saran": 8 rubrik yang paling sesuai materi klien, nama domain, dan daerah media; pilih acak dari kandidat berikut (boleh nama lain bila materi klien jelas menuntut), tanpa "Umum" dan tanpa rubrik klien: {', '.join(random.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT)))}. "teks" = 1 kalimat cakupan rubrik.
 - "foto_umum": 3 frasa BAHASA INGGRIS (2-3 kata) suasana umum dunia berita, tanpa orang (mis. "newspaper printing press").
 
 Kembalikan JSON persis:
-{{"nama_tampil":"","slogan":"","hero_teks":"","tentang":"","redaksi":["","",""],"rubrik":[{{"judul":"","teks":""}}],"foto_umum":["","",""]}}"""
+{{"nama_tampil":"","slogan":"","hero_teks":"","tentang":"","redaksi":["","",""],"rubrik":[{{"judul":"","teks":""}}],"rubrik_saran":[{{"judul":"","teks":""}}],"foto_umum":["","",""]}}"""
     sistem = ("You are a senior Indonesian newsroom editor. Output ONLY one valid JSON object, "
               "no markdown fences, no extra text.")
     data = {}
@@ -651,7 +666,7 @@ Kembalikan JSON persis:
             gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
         elif warna_dipilih_klien(domain):
             gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
-    rubrik = lengkapi_rubrik(rubrik)
+    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)])
     nama = tampil or nama_form
     return {
         'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
