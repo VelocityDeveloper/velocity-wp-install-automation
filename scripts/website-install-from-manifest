@@ -85,7 +85,7 @@ done
 
 # Lokasi pemasangan. Bawaan = docroot DirectAdmin milik domain sendiri. Klien dengan
 # hosting di luar (tidak bisa dipasangi installer) dikerjakan di staging
-# velocitydeveloper.co/<domain>: manifest menyebut `docroot=` + `site_url=`, dan
+# velocitydatacenter.biz/<domain> (PC lokal sejak 2026-10-31): manifest menyebut `docroot=` + `site_url=`, dan
 # seluruh skrip lain memakai escape hatch VELOCITY_LOKAL_DOCROOT yang sama.
 DOCROOT_PATH=${cfg[docroot]:-/home/${cfg[da_user]}/domains/${cfg[domain]}/public_html}
 SITE_URL=${cfg[site_url]:-https://${cfg[domain]}}
@@ -141,7 +141,7 @@ if [[ "$MODE" == dry-run ]]; then
        while read -r t; do
          [[ -n "$t" ]] && problems+="$t "
        done < <(grep -o 'missing_tool:[a-z]*' <<<"$probe" || true)
-       # Staging (docroot=) berbagi akun vdco dengan situs lain, dan installer memakai
+       # Staging (docroot=) berbagi akun vdcenterbiz dengan situs lain, dan installer memakai
        # CREATE DATABASE IF NOT EXISTS: DB bernama sama di folder kosong = milik situs lain.
        if [[ -n "${cfg[docroot]:-}" && "$probe" == *site:empty* && "$probe" == *db:ada* ]]; then
          problems+="db_staging_sudah_ada:${cfg[db_name]} "
@@ -218,7 +218,7 @@ set -Eeuo pipefail
 DOCROOT="__DOCROOT__"
 DA_USER="__DA_USER__"
 DOMAIN="__DOMAIN__"
-# Folder domain DirectAdmin yang menaungi docroot (di staging: docroot velocitydeveloper.co).
+# Folder domain DirectAdmin yang menaungi docroot (di staging: docroot velocitydatacenter.biz).
 DOMAIN_DIR="__DOMAIN_DIR__"
 # Awalan URL situs: "/" biasa, "/<subfolder>/" untuk staging.
 REWRITE_BASE="__REWRITE_BASE__"
@@ -281,6 +281,20 @@ if [[ -f "$DA_MYSQL_CONF" ]]; then
   GRANT ALL PRIVILEGES ON __DB_NAME_Q__.* TO '__DB_USER_Q__'@'localhost';
   FLUSH PRIVILEGES;
   " || true
+  echo "MySQL user/database ready." >&2
+elif [[ "$DOCROOT" == /home/vdcenterbiz/domains/velocitydatacenter.biz/* ]] \
+     && runuser -u mysql -- mysql -N -e 'SELECT 1' >/dev/null 2>&1; then
+  # Server tanpa DirectAdmin, KHUSUS staging velocitydatacenter.biz di PC lokal (sejak 2026-10-31):
+  # MariaDB lokal hanya bisa diadministrasi lewat unix_socket user mysql. Server non-DA lain
+  # (mis. Atha) tetap seperti dulu: DB dianggap sudah ada.
+  echo "Creating MySQL user and database for WordPress (lokal, runuser mysql)..." >&2
+  runuser -u mysql -- mysql -e "
+  CREATE DATABASE IF NOT EXISTS __DB_NAME_Q__ CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE USER IF NOT EXISTS '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
+  ALTER USER '__DB_USER_Q__'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';
+  GRANT ALL PRIVILEGES ON __DB_NAME_Q__.* TO '__DB_USER_Q__'@'localhost';
+  FLUSH PRIVILEGES;
+  " || { echo "db_create_failed:__DB_NAME_Q__" >&2; exit 14; }
   echo "MySQL user/database ready." >&2
 else
   echo "Warning: DA MySQL config not found, assuming database exists" >&2

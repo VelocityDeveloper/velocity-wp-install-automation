@@ -132,17 +132,20 @@ INSTALL_JENIS = {'Pembuatan', 'Pembuatan apk', 'Pembuatan apk biasa',
                  'Pembuatan Tanpa Hosting', 'Pembuatan Tanpa Domain+Hosting',
                  'Pembuatan web konsep', 'Redesign'}
 # Deskripsi tiket "Kerjakan diweb velocity dl" = situs dikerjakan dulu di staging
-# velocitydeveloper.co/<domain> (akun vdco di server Kiya), bukan di akun DirectAdmin
+# velocitydatacenter.biz/<domain> (akun Linux vdcenterbiz di PC lokal kantor sejak 2026-10-31,
+# dilayani Apache 127.0.0.1:8191 lewat Cloudflare Tunnel; 23–31 Okt akun DA vdcenterbiz di
+# Kiya; sebelum 2026-10-23 velocitydeveloper.co, akun vdco), bukan di akun DirectAdmin
 # domain klien (permintaan user 2026-09-30, cybersumatra.com). Wajib kata kerja + "di":
 # "hosting di velocity" atau "migrasi ... kelayanan velocity" tetap pemasangan biasa.
-STAGING_HOST = '202.73.26.2'
-STAGING_DA_USER = 'vdco'
-STAGING_DOMAIN = 'velocitydeveloper.co'
+# PC tanpa DirectAdmin/Softaculous: DB dibuat lewat `runuser -u mysql`, SSL oleh Cloudflare.
+STAGING_HOST = '127.0.0.1'
+STAGING_DA_USER = 'vdcenterbiz'
+STAGING_DOMAIN = 'velocitydatacenter.biz'
 _STAGING_RE = re.compile(
     r'\b\w*(?:kerja|garap|pasang|taruh|instal|upload|buat|bikin)\w*\s+(?:(?:dulu|dlu|dl)\s+)?'
     r'di\s*(?:web(?:site)?|situs|staging|subdomain|subfolder|domain)?\s*'
     r'(?:velocity\s*developer|velocity|vdco|vd)\b'
-    r'|velocitydeveloper\.co/|\bstaging\s+(?:di\s+)?(?:velocity|vdco|vd)\b', re.I)
+    r'|velocitydeveloper\.co/|velocitydatacenter\.biz/|\bstaging\s+(?:di\s+)?(?:velocity|vdco|vd)\b', re.I)
 
 
 def staging_dari_deskripsi(teks):
@@ -2699,13 +2702,13 @@ def default_target():
 
 
 def staging_target():
-    """Server staging velocitydeveloper.co (Kiya) dari daftar server."""
+    """Server staging velocitydatacenter.biz: PC lokal kantor (SSH root@127.0.0.1)."""
     servers = load_servers()
     for srv in servers if isinstance(servers, list) else []:
         if isinstance(srv, dict) and str(srv.get('host') or '') == STAGING_HOST:
             return {'host': STAGING_HOST, 'name': str(srv.get('name') or ''),
                     'port': str(srv.get('port') or '22'), 'user': str(srv.get('user') or 'root')}
-    return {'host': STAGING_HOST, 'name': 'Kiya', 'port': '57258', 'user': 'root'}
+    return {'host': STAGING_HOST, 'name': 'PC lokal', 'port': '22', 'user': 'root'}
 
 
 def diminta_staging(domain):
@@ -3044,6 +3047,9 @@ def domains():
     done = installed_domains()
     connected_hosts = {str(s.get('host', '')).strip() for s in load_servers()
                        if isinstance(s, dict) and str(s.get('host', '')).strip()}
+    # Staging PC lokal (sejak 2026-10-31) sengaja tidak masuk servers.json supaya monitor/antivirus
+    # server tidak ikut memindai PC; manifest staging tetap tampil di daftar.
+    connected_hosts.add(STAGING_HOST)
     antrean = crm_projects()
     claims = load_claims()
     abaikan = bukan_project()
@@ -3475,8 +3481,8 @@ def generate_manifest(domain: str):
         da_user = re.sub(r'[^a-z0-9]', '', labels.lower())[:7] or 'admin'
     if not re.match(r'^[a-z_]', da_user):
         da_user = 'u' + da_user
-    # Staging (deskripsi CRM "Kerjakan diweb velocity dl"): akun vdco di Kiya,
-    # situs di velocitydeveloper.co/<domain>. Akun DA klien tidak dipakai.
+    # Staging (deskripsi CRM "Kerjakan diweb velocity dl"): akun STAGING_DA_USER di PC lokal,
+    # situs di STAGING_DOMAIN/<domain>. Akun DA klien tidak dipakai.
     staging = diminta_staging(domain)
     if staging:
         da_user = STAGING_DA_USER
@@ -3516,7 +3522,7 @@ def generate_manifest(domain: str):
         if not suffix:
             suffix = labels_clean[:6]
     if staging:
-        # Semua situs staging berbagi akun vdco: awal nama domain lebih mudah dikenali
+        # Semua situs staging berbagi satu akun: awal nama domain lebih mudah dikenali
         # dan jarang bertabrakan dibanding 6 huruf terakhir (vdco_cybersum_wp).
         suffix = labels_clean
     if len(suffix) > 8:

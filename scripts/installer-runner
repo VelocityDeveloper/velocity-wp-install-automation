@@ -34,7 +34,7 @@ if [[ -z "${PERMINTAAN_CLAUDE:-}" ]]; then
   PERMINTAAN_CLAUDE=$(sed -n 's/^PERMINTAAN_CLAUDE=//p' /etc/velocity/installer-autopilot.env 2>/dev/null | tail -1)
 fi
 PERMINTAAN_CLAUDE=${PERMINTAAN_CLAUDE:-1}
-# Klien dengan hosting di luar dikerjakan di staging velocitydeveloper.co/<domain>:
+# Klien dengan hosting di luar dikerjakan di staging velocitydatacenter.biz/<domain> (PC lokal):
 # manifest menyebut `docroot=` + `site_url=`. Semua script pembantu (fse-apply,
 # site-finish, site-audit, paket-g-foto, ai-content-generator) memakai escape hatch
 # VELOCITY_LOKAL_SSH + VELOCITY_LOKAL_DOCROOT, jadi diisikan sekali di sini.
@@ -555,7 +555,7 @@ printf '[%s] Mode run: %s | paket: %s\n' "$(date -Is)" "$MODE" \
 # ("sub folder <nama>", keputusan user 2026-09-26, scripts/folder_klien.py). Dibaca bagan alur.
 printf '[%s] Folder klien: %s\n' "$(date -Is)" \
   "$(/usr/bin/python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from folder_klien import folder_klien; print(folder_klien(sys.argv[2]))' "$SCRIPTS" "$DOMAIN" 2>/dev/null || echo '?')" >> "$LOG"
-# Lokasi pasang: akun DA domain klien, atau staging velocitydeveloper.co/<domain> (docroot= di
+# Lokasi pasang: akun DA domain klien, atau staging velocitydatacenter.biz/<domain> (docroot= di
 # manifest, antara lain dari deskripsi CRM "Kerjakan diweb velocity dl"). Dibaca bagan alur.
 if [[ "$SITE_URL" == "https://$DOMAIN" ]]; then
   printf '[%s] Lokasi pasang: domain klien %s\n' "$(date -Is)" "$SITE_URL" >> "$LOG"

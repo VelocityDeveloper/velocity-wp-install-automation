@@ -101,14 +101,16 @@
         + (angka ? ': ' + angka : '');
     }
     function hasilLokasi(t) {
-      const m = [...t.matchAll(/\] Lokasi pasang: staging https:\/\/(\S+)/g)].pop();
-      return m ? 'staging ' + m[1] : null;
+      const m = [...t.matchAll(/\[(\d{4}-\d\d-\d\d)[^\]\n]*\] Lokasi pasang: staging https:\/\/(\S+)/g)].pop();
+      // Staging velocitydatacenter.biz dilayani PC lokal kantor sejak 2026-10-31 (23–31 Okt masih Kiya; label hanya penanda kasar).
+      return m ? 'staging ' + m[2] + (/^velocitydatacenter\.biz\//.test(m[2]) && m[1] >= '2026-10-31' ? ' (PC lokal)' : '') : null;
     }
     // Paket F saat ini diperlakukan sama dengan paket lain (child theme dari referensi form);
     // child theme khusus per website Paket F belum diotomatiskan.
     const SIMPUL = [
       // Lokasi pasang (installer-runner): deskripsi tiket CRM "Kerjakan diweb velocity dl" (keputusan
-      // user 2026-09-30) mengalihkan manifest ke staging velocitydeveloper.co/<domain>, akun vdco.
+      // user 2026-09-30) mengalihkan manifest ke staging velocitydatacenter.biz/<domain>, akun vdcenterbiz
+      // di PC lokal kantor (sejak 2026-10-31; tanpa DirectAdmin/Softaculous, SSL oleh Cloudflare).
       { id: 'validasi', kol: 0, jalur: 1, nama: 'Validasi manifest', mulai: /\] RUNNING: VALIDATING/, selesai: /\] RUNNING: (RUNNING_INSTALLER|REDESIGN)/,
         gagal: /\] FAILED: manifest_missing/, ketHasil: hasilLokasi, aktif: () => true },
       // Form klien dibaca agen Claude Code (keputusan user 2026-09-25, scripts/baca-form-claude): isian klien
@@ -135,7 +137,7 @@
       // WordPress dipasang + notif Telegram; PM melengkapi referensi / velocity_child_theme= di manifest.
       { id: 'tahanF', kol: 3, jalur: 2, nama: 'Ditahan: Paket F tanpa referensi', ket0: 'form tanpa demo/web contoh → WP tidak dipasang, notif Telegram',
         mulai: /paket_f_tanpa_referensi_tema/, gagal: /\] FAILED: paket_f_tanpa_referensi_tema/, aktif: c => c.tahanF },
-      { id: 'server', kol: 3, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
+      { id: 'server', kol: 3, jalur: 3, nama: 'Cek server tujuan', ket0: 'SSH, akun DA / staging PC lokal, folder domain', mulai: /\] RUNNING: RUNNING_INSTALLER/,
         selesai: /"dry_run":"ok"|\] SUCCESS: DRY_RUN_OK/, gagal: /remote_not_ready|"status":"error"/,
         ketHasil: t => (/"dry_run":"ok"/.test(t) ? (hasilLokasi(t) ? 'staging siap' : 'server tujuan siap') : null),
         aktif: hanyaMode('dry-run') },

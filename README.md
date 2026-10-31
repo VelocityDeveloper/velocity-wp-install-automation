@@ -47,12 +47,14 @@ Validasi: `target_host`, `domain` (FQDN), `da_user/ssh_user` (linux user), `db_n
 ### Staging untuk klien berhosting di luar (`docroot=` + `site_url=`)
 
 Klien yang hostingnya bukan milik kita (domain "LUAR" di catatan PM) tidak bisa dipasangi
-installer di tempatnya. Pekerjaannya dikerjakan di staging `velocitydeveloper.co/<domain>`
-dengan dua kunci tambahan:
+installer di tempatnya. Pekerjaannya dikerjakan di staging `velocitydatacenter.biz/<domain>`
+(akun Linux `vdcenterbiz` di **PC lokal kantor** sejak 2026-10-31, Apache 127.0.0.1:8191 di
+belakang Cloudflare Tunnel; 23–31 Okt akun DA `vdcenterbiz` di Kiya; sebelumnya
+`velocitydeveloper.co`, akun `vdco`) dengan dua kunci tambahan:
 
 ```ini
-docroot=/home/vdco/domains/velocitydeveloper.co/public_html/example.com
-site_url=https://velocitydeveloper.co/example.com
+docroot=/home/vdcenterbiz/domains/velocitydatacenter.biz/public_html/example.com
+site_url=https://velocitydatacenter.biz/example.com
 ```
 
 - `website-install-from-manifest` memasang WordPress di `docroot` itu (bukan
@@ -67,15 +69,23 @@ site_url=https://velocitydeveloper.co/example.com
 - Tanpa kedua kunci itu perilakunya persis seperti sebelumnya.
 - **Otomatis dari deskripsi tiket CRM** (2026-09-30): deskripsi yang bermakna "Kerjakan diweb
   velocity dl" (kata kerja + "di (web/staging/…) velocity|vdco|vd", `velocitydeveloper.co/`,
+  `velocitydatacenter.biz/`,
   "staging velocity"; `staging_dari_deskripsi` di `installer_status.py`) membuat `generate_manifest`
-  menulis manifest staging: server Kiya (`202.73.26.2`), `da_user=vdco`,
-  `db_name=vdco_<8 huruf awal domain>_wp`, plus kedua kunci di atas. Manifest lama tanpa
+  menulis manifest staging: PC lokal (`target_host=127.0.0.1`, `ssh_port=22`, root lewat
+  kunci installer), `da_user=vdcenterbiz`,
+  `db_name=vdcenterbiz_<8 huruf awal domain>_wp`, plus kedua kunci di atas. Manifest lama tanpa
   `docroot=` dialihkan saat dry-run/apply berikutnya selama situs belum COMPLETE
   (`_sync_staging`, log layanan `staging_sync`). Username di catatan hosting tidak lagi
   membuat ulang manifest staging. "hosting di velocity" / "migrasi … kelayanan velocity" tidak
   cocok (pemasangan biasa). Dry-run staging gagal `db_staging_sudah_ada:<db>` bila database
-  bernama sama sudah ada padahal foldernya kosong (akun vdco dipakai bersama). Runner mencatat
+  bernama sama sudah ada padahal foldernya kosong (akun staging dipakai bersama). Runner mencatat
   `Lokasi pasang: staging <url>` / `domain klien <url>`, dan bagan alur menampilkannya.
+- **Staging di PC lokal tanpa DirectAdmin** (2026-10-31): database + user dibuat lewat
+  `runuser -u mysql -- mysql` bila `/usr/local/directadmin/conf/mysql.conf` tidak ada
+  (`website-install-from-manifest`, juga `scripts/redesign`); `site-ssl` melewati staging
+  (HTTPS oleh Cloudflare) dan `softaculous-import` mencatat `dilewati:softaculous_tidak_ada`.
+  Selama NS velocitydatacenter.biz belum pindah ke Cloudflare, URL https staging masih
+  diarahkan DNS ke Kiya, sehingga http_check/QA/screenshot dari PC melihat Kiya (404).
 
 Database harus sudah ada. `apply` menginstall WordPress di `public_html` target, membuat `wp-config.php` (tanpa `--skip-check`), `wp core install` idempoten (skip jika sudah installed), dan install plugin/theme via `git clone` + `wp plugin/theme activate` (bukan `wp plugin install <git-url>`).
 

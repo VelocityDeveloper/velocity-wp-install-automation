@@ -14,7 +14,8 @@ URL diambil dari siteurl WordPress (http/https sesuai situs), manifest hanya cad
 
 Tidak pernah menggagalkan instalasi: semua hasil hanya dicatat. Sudah terdaftar = dilewati,
 jadi aman dijalankan ulang. Staging (docroot=/site_url= di manifest) ikut didaftarkan ke akun
-stagingnya.
+stagingnya — kecuali staging velocitydatacenter.biz di PC lokal (sejak 2026-10-31) yang
+tidak punya DirectAdmin/Softaculous: hasilnya `dilewati:softaculous_tidak_ada`.
 
   softaculous-import <manifest>
 Keluaran baris terakhir: `softaculous: <status>` — terdaftar:<url>|sudah_ada|dilewati:<alasan>|gagal:<alasan>.

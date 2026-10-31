@@ -79,8 +79,9 @@ CADANGAN_PER_DOMAIN = 3
 # Patokan kuota (keputusan user 2026-09-29): sisa ≥ ukuran situs lama + 150 MB.
 CADANGAN_KUOTA_MB = 150
 # Staging untuk kuota kurang / hosting luar (sama dengan manifest staging lain).
-STAGING = {'name': 'Kiya', 'host': '202.73.26.2', 'port': '57258', 'user': 'root', 'da_user': 'vdco',
-           'akar': '/home/vdco/domains/velocitydeveloper.co/public_html', 'url': 'https://velocitydeveloper.co'}
+# Staging velocitydatacenter.biz di PC lokal kantor sejak 2026-10-31 (sebelumnya Kiya 202.73.26.2:57258).
+STAGING = {'name': 'PC lokal', 'host': '127.0.0.1', 'port': '22', 'user': 'root', 'da_user': 'vdcenterbiz',
+           'akar': '/home/vdcenterbiz/domains/velocitydatacenter.biz/public_html', 'url': 'https://velocitydatacenter.biz'}
 # Tidak ikut ke salinan (cadangan tetap penuh): cache & arsip cadangan plugin memakan kuota
 # tanpa gunanya untuk desain.
 BUANG_SALIN = ['./new', './wp-content/cache', './wp-content/litespeed', './wp-content/et-cache',
@@ -94,6 +95,12 @@ WARNA_WP = {'000000', 'ffffff', 'abb8c3', 'f78da7', 'cf2e2e', 'ff6900', 'fcb900'
             '3858e9', '1e1e1e', 'eeeeee', '313131', '32373c'}
 WP = 'php -d memory_limit=512M /usr/local/bin/wp --allow-root --skip-plugins --skip-themes'
 # mariadb-dump bawaan DirectAdmin mencari /tmp/mysql.sock walau my.cnf menunjuk tempat lain.
+# Admin MySQL: da_admin DirectAdmin; server tanpa DirectAdmin (staging PC lokal) lewat
+# unix_socket user mysql. Fungsi shell `my`/`mydump` dipakai semua perintah DB jarak jauh.
+MYFN = (f'my() {{ if [ -f {DA_MYCNF} ]; then mysql --defaults-extra-file={DA_MYCNF} "$@"; '
+        f'else runuser -u mysql -- mysql "$@"; fi; }}; '
+        f'mydump() {{ if [ -f {DA_MYCNF} ]; then mariadb-dump --defaults-extra-file={DA_MYCNF} "$@"; '
+        f'else runuser -u mysql -- mariadb-dump "$@"; fi; }}; export PATH="$PATH:/usr/sbin:/sbin"\n')
 SOKET = ('SOK=; for s in /tmp/mysql.sock /var/lib/mysql/mysql.sock /run/mysqld/mysqld.sock '
          '/var/run/mysqld/mysqld.sock; do [ -S "$s" ] && { SOK="--socket=$s"; break; }; done\n')
 
@@ -133,7 +140,7 @@ class Server:
 
     def sql(self, query, timeout=300):
         """Kueri sebagai da_admin DirectAdmin; keluaran tanpa judul kolom."""
-        return self.keluar(f'mysql --defaults-extra-file={DA_MYCNF} -N -e {shlex.quote(query)}', timeout=timeout).strip()
+        return self.keluar(MYFN + f'my -N -e {shlex.quote(query)}', timeout=timeout).strip()
 
     def php(self, docroot, kode, timeout=300):
         """PHP di dalam WordPress salinan/asli (hanya baca); hasil JSON di baris VRD:."""
@@ -293,8 +300,8 @@ def cadangan(domain, info):
     db = shlex.quote(info['db'])
     with open(tujuan / 'db.sql.gz', 'wb') as f:
         run = subprocess.run(s.ssh + ['bash', '-s'], stdout=f, stderr=subprocess.PIPE, timeout=3600,
-                             input=('set -o pipefail\n' + SOKET +
-                                    f'mariadb-dump --defaults-extra-file={DA_MYCNF} $SOK --single-transaction '
+                             input=('set -o pipefail\n' + MYFN + SOKET +
+                                    f'mydump $SOK --single-transaction '
                                     f'--quick --default-character-set=utf8mb4 {db} | gzip -6\n').encode())
     if run.returncode:
         raise RuntimeError('dump_db_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
@@ -1027,7 +1034,7 @@ def _nama_db(s, da_user, akhiran):
 
 
 def duplikat(domain, info, tempat, cad, ulang=False):
-    """Salin berkas + DB ke <domain>/new atau staging vdco; kembalikan data manifest salinan."""
+    """Salin berkas + DB ke <domain>/new atau staging .biz; kembalikan data manifest salinan."""
     if tempat == 'new':
         s = Server(info['server'])
         da_user, docroot = info['da_user'], info['docroot'] + '/new'
@@ -1067,12 +1074,11 @@ def duplikat(domain, info, tempat, cad, ulang=False):
              f'chown {da_user}:{da_user} {q}/{TANDA}; chmod 600 {q}/{TANDA}')
     log(f'duplikat: database {db}')
     # 2. Database baru + impor dari cadangan.
-    my = f'mysql --defaults-extra-file={DA_MYCNF}'
     s.sql(f"DROP DATABASE IF EXISTS `{db}`; CREATE DATABASE `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; "
           f"CREATE USER IF NOT EXISTS '{db}'@'localhost'; ALTER USER '{db}'@'localhost' IDENTIFIED BY '{sandi_db}'; "
           f"GRANT ALL PRIVILEGES ON `{db}`.* TO '{db}'@'localhost'; FLUSH PRIVILEGES;")
     with open(Path(cad['folder']) / 'db.sql.gz', 'rb') as f:
-        run = subprocess.run(s.ssh + [f'gunzip | {my} {db}'], stdin=f, capture_output=True, timeout=7200)
+        run = subprocess.run(s.ssh + [MYFN.strip() + f'; gunzip | my {db}'], stdin=f, capture_output=True, timeout=7200)
     if run.returncode:
         raise RuntimeError('impor_db_gagal: ' + run.stderr.decode('utf-8', 'replace')[-300:])
     log('duplikat: wp-config, .htaccess')
@@ -1317,7 +1323,7 @@ def unduh_gambar(konten, tujuan):
 
 
 def pasang_baru(domain, info, inv, konten, ulang=False):
-    """WordPress baru di staging velocitydeveloper.co/<domain> lewat installer dasar yang sama dengan
+    """WordPress baru di staging velocitydatacenter.biz/<domain> lewat installer dasar yang sama dengan
     instalasi staging biasa (website-install-from-manifest), lalu konten publik situs lama diimpor.
     Situs lama tidak disentuh sama sekali. Kembalian sama dengan duplikat()."""
     s = Server(STAGING)
@@ -1868,7 +1874,7 @@ def laporan(domain):
     e = html.escape
     lok = st.get('lokasi') or {}
     tempat = ('salinan di folder <code>/new</code> hosting klien (situs asli tidak diubah)' if sal.get('tempat') == 'new'
-              else 'staging velocitydeveloper.co (' + e(str(lok.get('alasan', ''))) + ')')
+              else 'staging velocitydatacenter.biz (' + e(str(lok.get('alasan', ''))) + ')')
     cad = st.get('cadangan') or {}
     impor = sal.get('impor') or {}
     if cad.get('dilewati'):
