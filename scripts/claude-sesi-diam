@@ -36,9 +36,18 @@ with open("/proc/stat") as _f:
 
 
 def info_sesi(pid, starttime):
-    """Isi ~/.claude/sessions/<pid>.json (sessionId, status) bila milik proses ini."""
+    """Isi <CLAUDE_CONFIG_DIR>/sessions/<pid>.json (sessionId, status) bila milik proses ini."""
+    # Sesi akun2 (CLAUDE_CONFIG_DIR=/root/.claude-2) menulis status di folder config-nya sendiri.
+    konfig = "/root/.claude"
     try:
-        with open(f"/root/.claude/sessions/{pid}.json") as f:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            for v in f.read().split(b"\0"):
+                if v.startswith(b"CLAUDE_CONFIG_DIR="):
+                    konfig = v.split(b"=", 1)[1].decode(errors="replace").rstrip("/") or konfig
+    except OSError:
+        pass
+    try:
+        with open(f"{konfig}/sessions/{pid}.json") as f:
             d = json.load(f)
     except (OSError, ValueError):
         return {}
