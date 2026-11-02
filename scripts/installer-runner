@@ -272,6 +272,10 @@ tampilan_klasik() {
   # Iklan dari API ApiCo + pendaftaran pengunjung (Subscriber). Tema lain & situs ter-deploy dilewati
   # skripnya sendiri. Satu simpul bagan dengan Paket tour.
   /usr/bin/python3 "$SCRIPTS/velocity-iklan" "$MANIFEST" >> "$LOG" 2>&1 || true
+  # Tema velocity-mobil3 (user 2026-11-02, adzkirarentcar.com): katalog produk selalu terisi (folder produk /
+  # dokumen klien / 6 CONTOH) + beranda seperti demo (banner, sambutan, katalog). Tema lain & situs ter-deploy
+  # dilewati skripnya sendiri. Satu simpul bagan dengan Paket tour.
+  /usr/bin/python3 "$SCRIPTS/tema-mobil3" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Paket E/F (keputusan user 2026-10-06): klien minta katalog/data produk (menu Produk/Katalog, pesan
   # tambahan, atau folder produk) dan child theme tidak punya katalog -> plugin velocity-produk dari API
   # ApiCo + produk klien/6 CONTOH + halaman Katalog di menu. Tanpa Meta Box/velocity-paket. Sesudah

@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Tema velocity-mobil3: katalog produk selalu terisi + beranda mengikuti demo (user 2026-11-02, adzkirarentcar.com).
+
+  tema-mobil3 <manifest>           isi situs bertema velocity-mobil3 (instalasi baru)
+  tema-mobil3 --coba <manifest>    tampilkan hasil baca materi & foto tanpa SSH
+  --paksa  jalankan juga di situs ter-deploy (HANYA dengan persetujuan user)
+
+Beranda seperti mobil3.velocitydeveloper.com: gambar banner, sambutan, judul katalog, [velocity-produk
+jumlah="6"]. Produk (CPT produk, meta harga): folder produk klien, lalu daftar di dokumen klien yang dibaca AI,
+lalu 6 CONTOH sesuai bidang klien (judul "Contoh – ", meta _velocity_produk_contoh=1) — child-theme-data-setup.md
+tema. Foto produk & banner dari Pexels (<= 100 KB), turunan WP > 100 KB dibuang. Bahan AI tersimpan di
+/var/lib/velocity/ai/generated/<domain>-mobil3.json (run ulang tanpa biaya AI). Sekali per situs
+(opsi velocity_mobil3_selesai). Keluaran: baris "mobil3: ...".
+"""
+import importlib.machinery
+import importlib.util
+import json
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+TEMA = 'velocity-mobil3'
+GENERATED = Path('/var/lib/velocity/ai/generated')
+FONT = '/usr/share/fonts/dejavu-sans-fonts/'
+JUMLAH_CONTOH = 6
+# Dipakai hanya bila AI gagal: katalog tetap terisi.
+CADANGAN = ['Toyota Avanza', 'Daihatsu Xenia', 'Mitsubishi Xpander', 'Toyota Innova', 'Honda Brio', 'Toyota Fortuner']
+
+
+def muat(nama, berkas):
+    loader = importlib.machinery.SourceFileLoader(nama, str(HERE / berkas))
+    modul = importlib.util.module_from_spec(importlib.util.spec_from_loader(nama, loader))
+    loader.exec_module(modul)
+    return modul
+
+
+vp = muat('velocity_produk', 'velocity-produk')
+pgf = muat('paket_g_foto', 'paket-g-foto')
+DIUBAH = False
+
+
+def log(pesan):
+    print(f'mobil3: {pesan}', flush=True)
+
+
+def baca_bahan(manifest, cfg, domain):
+    """{sambutan, judul_katalog, slogan, foto_banner_en, produk: [...]} dari dokumen klien, disimpan sekali."""
+    simpan = GENERATED / f'{domain}-mobil3.json'
+    if simpan.is_file():
+        return json.loads(simpan.read_text())
+    from client_docs import collect_client_docs, format_for_prompt
+    from folder_klien import folder_klien
+    argv = sys.argv
+    try:
+        sys.argv = [argv[0], str(manifest)]
+        acg = muat('acg', 'ai-content-generator.py')
+        model = acg.get_model('isi_contoh') or acg.get_model('konten')
+        docs = collect_client_docs(folder_klien(domain))
+        info = format_for_prompt({}, docs)
+        sistem = 'You extract website content in Indonesian. Output ONLY a valid JSON array with one object, no markdown fences.'
+        tanya = f"""Situs: {cfg.get('site_title') or domain} ({domain}). Materi klien:
+{info}
+
+Kembalikan [{{"sambutan":["paragraf",...],"judul_katalog":"...","slogan":"...","foto_banner_en":"...","produk":[{{"nama":"...","deskripsi":"...","harga":0,"harga_lain":[["label",0]],"kategori":"...","foto_en":"...","contoh":false}}]}}]
+Aturan:
+- sambutan: 2-3 paragraf perkenalan, SALIN kalimat dari materi apa adanya tanpa mengarang; tanpa kontak.
+- judul_katalog: judul seksi katalog beranda, mis. "Harga Sewa Mobil" (rental) atau "Katalog Produk".
+- slogan: slogan klien di materi, atau ringkasan bidang usaha maks. 6 kata.
+- produk: SEMUA barang/unit/armada yang dijual atau disewakan di materi, urutan materi, nama terlengkap di materi; BUKAN jasa, layanan, atau paket wisata bila materi punya daftar barang/unit (jasa/paket hanya dipakai bila tidak ada barang/unit sama sekali); harga = angka harga utama persis dari materi (0 bila tidak ada, jangan mengarang), harga_lain = harga lain per unit dari materi berlabel (mis. ["Lepas Kunci",400000]); deskripsi hanya dari materi; kategori dari materi atau jenis umum produk.
+- Bila materi TIDAK menyebut produk apa pun: buat {JUMLAH_CONTOH} produk contoh sesuai bidang klien, contoh=true, harga 0.
+- foto_en: 3-5 kata bahasa Inggris untuk mencari foto stok produk itu (benda/jenis, tanpa orang; mobil: warna dan jenis bodi, mis. "white suv car"). foto_banner_en: sama untuk banner beranda."""
+        hasil = acg.ai_json_list(sistem, tanya, model, 'mobil3') if model else None
+    finally:
+        sys.argv = argv
+    bahan = hasil[0] if hasil and isinstance(hasil[0], dict) else None
+    if not bahan or not bahan.get('produk'):
+        log('ai_gagal:pakai_cadangan')
+        return {'sambutan': [], 'judul_katalog': 'Katalog Produk', 'slogan': cfg.get('site_title') or domain,
+                'foto_banner_en': 'car road travel',
+                'produk': [{'nama': n, 'contoh': True, 'foto_en': 'car road'} for n in CADANGAN]}
+    GENERATED.mkdir(parents=True, exist_ok=True)
+    simpan.write_text(json.dumps(bahan, ensure_ascii=False, indent=1))
+    return bahan
+
+
+def foto_klien(domain, bahan):
+    """Folder produk klien menang atas daftar AI; foto & harga dari nama berkas (pembacaan scripts/toko-biasa)."""
+    from folder_klien import folder_klien
+    produk, _, _ = vp.toko.susun_draf(folder_klien(domain))
+    hasil = [{'nama': p['nama'], 'harga': p.get('harga') or 0, 'kategori': p.get('kategori') or '',
+              'deskripsi': p.get('deskripsi') or '', 'berkas': str(p['gambar'][0])} for p in produk if p.get('gambar')]
+    if hasil:
+        bahan['produk'] = hasil
+    return bahan
+
+
+def foto_stok(pexels, kueri, sudah):
+    for r in pexels.cari(kueri):
+        if pgf.layak(r, 1000, sudah, kueri):
+            sudah.add(r['url'])
+            return r
+    return None
+
+
+def potong(berkas, w, h):
+    from PIL import Image
+    i = Image.open(berkas).convert('RGB')
+    r = w / h
+    if i.width / i.height > r:
+        nw = round(i.height * r)
+        x = (i.width - nw) // 2
+        i = i.crop((x, 0, x + nw, i.height))
+    else:
+        nh = round(i.width / r)
+        y = (i.height - nh) // 2
+        i = i.crop((0, y, i.width, y + nh))
+    return i.resize((w, h), Image.LANCZOS)
+
+
+def susun_banner(foto, logo, slogan, warna, tujuan):
+    """Banner beranda ala Home-Banner demo: logo + slogan di kiri, foto di kanan, pemisah miring warna tema."""
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 1000, 430
+    kanvas = Image.new('RGB', (W, H), 'white')
+    if foto:
+        kanvas.paste(potong(foto, 640, H), (W - 640, 0))
+    warna = warna if re.match(r'^#[0-9a-fA-F]{6}$', warna or '') else '#1e5aa8'
+    rgb = tuple(int(warna[i:i + 2], 16) for i in (1, 3, 5))
+    for poli, isi in (([(0, 0), (1000, 0), (740, H * 2), (0, H * 2)], 'white'), ([(1000, 0), (1030, 0), (770, H * 2), (740, H * 2)], rgb)):
+        m = Image.new('L', (W * 2, H * 2), 0)
+        ImageDraw.Draw(m).polygon(poli, fill=255)
+        kanvas.paste(Image.new('RGB', (W, H), isi), (0, 0), m.resize((W, H), Image.LANCZOS))
+    if logo:
+        lg = Image.open(logo).convert('RGBA')
+        lg.thumbnail((270, 80))
+        kanvas.paste(lg, (36, 36), lg)
+    d = ImageDraw.Draw(kanvas)
+    huruf = ImageFont.truetype(FONT + 'DejaVuSans-Bold.ttf', 30)
+    baris, kini = [], ''
+    for kata in str(slogan).split():
+        uji = f'{kini} {kata}'.strip()
+        if d.textlength(uji, font=huruf) > 360 and kini:
+            baris.append(kini)
+            kini = kata
+        else:
+            kini = uji
+    baris.append(kini)
+    y = 150
+    for b in baris[:5]:
+        d.text((36, y), b, font=huruf, fill=rgb)
+        y += 42
+    kanvas.save(tujuan, 'JPEG', quality=86)
+    pgf.kecilkan_jpeg(tujuan, lebar=W)
+
+
+TULIS_PHP = r'''<?php
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+kses_remove_filters();
+if (get_stylesheet() !== 'velocity-mobil3' || !post_type_exists('produk')) { echo "mobil3: gagal:tema_berubah\n"; return; }
+define('MOBIL3_DIR', getenv('MOBIL3_DIR'));
+$d = json_decode(file_get_contents(MOBIL3_DIR . '/data.json'), true);
+function mobil3_media($berkas, $judul) {
+    if (!$berkas || !is_file(MOBIL3_DIR . '/' . $berkas)) return 0;
+    $tmp = wp_tempnam($berkas);
+    copy(MOBIL3_DIR . '/' . $berkas, $tmp);
+    $id = media_handle_sideload(['name' => $berkas, 'tmp_name' => $tmp], 0, $judul);
+    if (is_wp_error($id)) { echo 'mobil3: media_gagal:' . $berkas . "\n"; return 0; }
+    update_post_meta($id, '_wp_attachment_image_alt', $judul);
+    // Turunan WP (q82) bisa lebih besar dari asli yang sudah dikompres: maks 100 KB per berkas.
+    $meta = wp_get_attachment_metadata($id); $dir = dirname(get_attached_file($id)); $ubah = false;
+    foreach ((array) ($meta['sizes'] ?? []) as $k => $s) {
+        $p = $dir . '/' . $s['file'];
+        if (is_file($p) && filesize($p) > 100 * 1024) { unlink($p); unset($meta['sizes'][$k]); $ubah = true; }
+    }
+    if ($ubah) wp_update_attachment_metadata($id, $meta);
+    return $id;
+}
+// Produk: urutan materi = terbaru dulu, sebab [velocity-produk] mengurutkan tanggal menurun.
+$contoh = 0; $t0 = time() - 3600;
+foreach ($d['produk'] as $i => $p) {
+    $judul = ($p['contoh'] ? 'Contoh – ' : '') . $p['nama'];
+    $id = wp_insert_post(['post_type' => 'produk', 'post_status' => 'publish', 'post_title' => $judul, 'post_content' => $p['isi'],
+                          'post_date' => date('Y-m-d H:i:s', $t0 - $i * 3600)]);
+    if (!$id || is_wp_error($id)) { echo "mobil3: produk_gagal:$judul\n"; continue; }
+    if ($p['harga']) update_post_meta($id, 'harga', (string) $p['harga']);
+    if ($p['contoh']) { update_post_meta($id, '_velocity_produk_contoh', '1'); $contoh++; }
+    if ($p['kategori']) wp_set_object_terms($id, [$p['kategori']], 'kategori-produk');
+    $g = mobil3_media($p['foto'], $p['nama']);
+    if ($g) set_post_thumbnail($id, $g);
+}
+$jumlah = (int) wp_count_posts('produk')->publish;
+// Beranda seperti demo.
+$depan = (int) get_option('page_on_front');
+if ($depan) {
+    $b = mobil3_media($d['banner'], get_bloginfo('name'));
+    $gambar = $b ? '<p>' . wp_get_attachment_image($b, 'large', false, ['class' => 'img-fluid w-100 wp-image-' . $b]) . "</p>\n" : '';
+    $isi = $gambar . '<h5 style="text-align: center;"><strong>Selamat Datang di Website ' . esc_html(get_bloginfo('name')) . "</strong></h5>\n"
+         . implode("\n", array_map(fn($x) => '<p>' . esc_html($x) . '</p>', $d['sambutan']))
+         . "\n<h3 style=\"text-align: center;\"><strong>" . esc_html($d['judul_katalog']) . "</strong></h3>\n[velocity-produk jumlah=\"6\"]\n"
+         . '<p style="text-align: center;"><a class="btn btn-sm btn-dark" href="' . esc_url(home_url('/produk/')) . '">Lihat Semua</a></p>';
+    wp_update_post(['ID' => $depan, 'post_content' => $isi]);
+    update_post_meta($depan, '_wp_page_template', 'page-home.php');
+}
+if (!get_theme_mod('welcome_text')) set_theme_mod('welcome_text', 'SELAMAT DATANG DI WEBSITE KAMI');
+// Menu Produk sebelum menu kontak.
+$lok = get_nav_menu_locations(); $menu = (int) ($lok['primary'] ?? 0);
+if ($menu) {
+    $pos = 0; $ada = false;
+    foreach (wp_get_nav_menu_items($menu) as $it) {
+        if (rtrim($it->url, '/') === rtrim(home_url('/produk'), '/')) $ada = true;
+        if (!$pos && !$it->menu_item_parent && preg_match('/hubungi|kontak/i', $it->title)) $pos = (int) $it->menu_order;
+    }
+    if (!$ada) {
+        if ($pos) foreach (wp_get_nav_menu_items($menu) as $it) { if ((int) $it->menu_order >= $pos) wp_update_post(['ID' => $it->ID, 'menu_order' => $it->menu_order + 1]); }
+        wp_update_nav_menu_item($menu, 0, ['menu-item-title' => 'Produk', 'menu-item-type' => 'custom', 'menu-item-url' => home_url('/produk/'),
+                                           'menu-item-status' => 'publish', 'menu-item-position' => $pos ?: 99]);
+    }
+}
+// Halaman materi armada/produk buatan generator (materi-*) sudah diwakili katalog: butir menu + halamannya dibuang.
+if ($menu && $jumlah) {
+    foreach (wp_get_nav_menu_items($menu) as $it) {
+        if ($it->menu_item_parent && $it->object === 'page' && preg_match('/^(pilihan )?(armada|produk|katalog)/i', $it->title) && get_post_meta($it->object_id, '_velocity_content_md5', true)) {
+            wp_trash_post($it->object_id); wp_delete_post($it->ID, true);
+        }
+    }
+}
+// Menu utama tetap satu baris di desktop.
+wp_update_custom_css_post(rtrim(wp_get_custom_css()) . "\n@media (min-width:992px){.wp-child-theme-velocity-mobil3 #primary-menu{flex-wrap:nowrap!important}.wp-child-theme-velocity-mobil3 #primary-menu>.nav-item>.nav-link{padding-left:.5rem;padding-right:.5rem;white-space:nowrap}}\n");
+update_option('velocity_mobil3_selesai', time(), false);
+flush_rewrite_rules(false);
+echo "mobil3: selesai: produk=$jumlah contoh=$contoh\n";
+'''
+
+
+def rupiah(v):
+    return 'Rp' + f'{int(v):,}'.replace(',', '.')
+
+
+def isi_produk(p):
+    from html import escape
+    isi = f"<p>{escape(p['deskripsi'])}</p>\n" if p.get('deskripsi') else ''
+    lain = [x for x in p.get('harga_lain') or [] if isinstance(x, list) and len(x) == 2 and x[1]]
+    if lain and p.get('harga'):
+        kolom = [('Harga', p['harga'])] + [(str(a), b) for a, b in lain]
+        isi += ('<table class="table table-bordered"><thead><tr>' + ''.join(f'<th>{escape(a)}</th>' for a, _ in kolom) + '</tr></thead><tbody><tr>'
+                + ''.join(f'<td>{rupiah(b)}</td>' for _, b in kolom) + '</tr></tbody></table>\n')
+    return isi
+
+
+def main():
+    global DIUBAH
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if not args:
+        print(__doc__)
+        return 2
+    coba = '--coba' in sys.argv
+    manifest = args[0]
+    cfg = vp.finish.read_manifest(manifest)
+    domain = cfg.get('domain', '').lower()
+    warna, logo_url = '', ''
+    if not coba:
+        if '--paksa' not in sys.argv:
+            import cari_logo
+            if cari_logo.sudah_terpasang(domain):
+                log('dilewati:situs_sudah_terpasang')
+                return 0
+        run = vp.jalankan(cfg, vp.kepala(cfg) + r'''wp eval 'echo "tema:".get_stylesheet()."\n"; echo "warna:".get_theme_mod("primary_color")."\n"; echo "logo:".wp_get_attachment_url((int)get_theme_mod("custom_logo"))."\n"; echo "selesai:".get_option("velocity_mobil3_selesai")."\n"; echo "produk:".(post_type_exists("produk")?wp_count_posts("produk")->publish:-1)."\n";' 2>/dev/null''', timeout=180)
+        nilai = dict(re.findall(r'^(\w+):(.*)$', run.stdout, re.M))
+        if nilai.get('tema') != TEMA:
+            log(f'dilewati:tema_lain:{nilai.get("tema", "tidak_terbaca")}')
+            return 0
+        if nilai.get('selesai') or int(nilai.get('produk') or -1) > 0:
+            log('dilewati:sudah_terisi')
+            return 0
+        warna, logo_url = nilai.get('warna', ''), nilai.get('logo', '')
+    bahan = foto_klien(domain, baca_bahan(manifest, cfg, domain))
+    log(f"bahan: produk={len(bahan['produk'])} sambutan={len(bahan.get('sambutan') or [])}")
+    stage = Path(tempfile.mkdtemp(prefix='velocity-mobil3-'))
+    try:
+        pexels, sudah = pgf.Pexels(), set()
+        produk = []
+        for n, p in enumerate(bahan['produk']):
+            foto = ''
+            tujuan = stage / f'produk-{n + 1}.jpg'
+            try:
+                if p.get('berkas'):
+                    potong(p['berkas'], 800, 600).save(tujuan, 'JPEG', quality=86)
+                    foto = tujuan.name
+                else:
+                    r = foto_stok(pexels, p.get('foto_en') or p['nama'], sudah)
+                    if r:
+                        pgf.unduh(r['url'], tujuan)
+                        potong(tujuan, 800, 600).save(tujuan, 'JPEG', quality=86)
+                        foto = tujuan.name
+                if foto:
+                    pgf.kecilkan_jpeg(tujuan, lebar=800)
+            except Exception as e:
+                log(f'foto_gagal:{p["nama"]}:{type(e).__name__}')
+            if coba:
+                log(f"produk: {p['nama']} harga={p.get('harga') or 0} lain={p.get('harga_lain') or []} kat={p.get('kategori') or ''} contoh={bool(p.get('contoh'))} foto={'ya' if foto else 'tidak'}")
+            produk.append({'nama': p['nama'], 'harga': int(p.get('harga') or 0), 'kategori': p.get('kategori') or '',
+                           'contoh': bool(p.get('contoh')), 'isi': isi_produk(p), 'foto': foto})
+        foto_banner = stage / 'bahan-banner.jpg'
+        r = foto_stok(pexels, bahan.get('foto_banner_en') or 'car road travel', sudah)
+        if r:
+            pgf.unduh(r['url'], foto_banner)
+        logo = stage / 'bahan-logo'
+        if logo_url.startswith('http'):
+            subprocess.run(['curl', '-fsS', '-A', 'Mozilla/5.0', '-m', '40', '-o', str(logo), logo_url], check=False)
+        susun_banner(foto_banner if foto_banner.is_file() else None, logo if logo.is_file() else None,
+                     bahan.get('slogan') or cfg.get('site_title') or domain, warna, stage / 'banner-beranda.jpg')
+        for x in (foto_banner, logo):
+            x.unlink(missing_ok=True)
+        (stage / 'data.json').write_text(json.dumps({
+            'produk': produk, 'banner': 'banner-beranda.jpg', 'sambutan': bahan.get('sambutan') or [],
+            'judul_katalog': bahan.get('judul_katalog') or 'Katalog Produk'}, ensure_ascii=False))
+        (stage / 'skrip.php').write_text(TULIS_PHP)
+        if coba:
+            log(f"banner: {stage / 'banner-beranda.jpg'} ({(stage / 'banner-beranda.jpg').stat().st_size} byte); sambutan: {(bahan.get('sambutan') or [''])[0][:120]}")
+            shutil.copy(stage / 'banner-beranda.jpg', '/tmp/mobil3-banner-coba.jpg')
+            return 0
+        DIUBAH = True
+        remote = f'/tmp/velocity-mobil3-{domain}'
+        k = shlex.quote(remote)
+        tar = subprocess.Popen(['tar', '-czf', '-', '-C', str(stage), '.'], stdout=subprocess.PIPE)
+        up = subprocess.run(vp.ssh_cmd(cfg) + [f'rm -rf {k} && mkdir -p {k} && tar -xzf - -C {k}'],
+                            stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+        tar.wait()
+        if up.returncode != 0:
+            log(f'gagal:kirim:{up.stderr.strip()[:200]}')
+            return 1
+        run = vp.jalankan(cfg, vp.kepala(cfg) + f'''K={k}
+trap 'rm -rf "$K"' EXIT
+MOBIL3_DIR="$K" wp eval-file "$K/skrip.php" --user=1 2>&1 | grep -v '^Warning:' || true
+''', timeout=900)
+        keluar = run.stdout + run.stderr
+        for baris in keluar.splitlines():
+            if baris.strip():
+                print(baris.strip()[:200], flush=True)
+        if 'mobil3: selesai' not in keluar:
+            log('gagal:tulis_tidak_selesai')
+            return 1
+        return 0
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    kode = 1
+    try:
+        kode = main()
+    except Exception as e:  # langkah ini tidak boleh menggagalkan instalasi
+        log(f'gagal:{type(e).__name__}:{str(e)[:150]}')
+    finally:
+        if DIUBAH:
+            import pemilik_wp
+            pemilik_wp.rapikan()
+    sys.exit(kode)

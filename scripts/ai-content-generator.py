@@ -378,7 +378,7 @@ def materi_hilang(docs, pages, materi):
         return re.sub(r'[^0-9a-z]+', '', html.unescape(re.sub(r'<[^>]+>', ' ', str(t))).lower())
     # Hanya halaman profile: beranda velocity-pakete tidak mencetak isi halaman Beranda.
     isi = polos(' '.join(str(p.get('content') or '') for p in pages or []
-                         if isinstance(p, dict) and p.get('slug') == 'profile'))
+                         if isinstance(p, dict) and (p.get('slug') == 'profile' or str(p.get('slug') or '').startswith('materi-'))))
     hilang = []
     for nama, teks in docs['sources']:
         if nama not in materi:
@@ -390,7 +390,14 @@ def materi_hilang(docs, pages, materi):
     return hilang
 
 
-def generate_pages(site_title, domain, client_info, model, materi=()):
+def materi_banyak_menu(cfg, domain):
+    """Materi klien dibagi ke beberapa menu: Paket E/F tanpa susunan menu di form (menu form milik scripts/menu-form)."""
+    import client_form
+    import plugin_api
+    return plugin_api.paket_ef(cfg.get('paket', '')) and not client_form.susunan_menu(folder_klien(domain))
+
+
+def generate_pages(site_title, domain, client_info, model, materi=(), banyak_menu=False):
     """Generate 4 pages: Home, Profile, Gallery, Contact
 
     materi: nama dokumen klien selain FORM ISIAN (Materi.docx, compro). Isinya wajib tampil
@@ -412,6 +419,18 @@ MATERI KLIEN ({', '.join(materi)}) WAJIB DIMUAT SELURUHNYA di halaman "profile" 
 - kontak (telepon/WA/email) cukup di halaman "contact".
 """
 
+    halaman_materi = ''
+    if materi and banyak_menu:
+        # adzkirarentcar.com 2026-11-02 (user): compro + price list + paket wisata jangan ditumpuk di Tentang Kami.
+        aturan_materi = aturan_materi.replace('di halaman "profile" (Tentang Kami)', 'di halaman "profile" (Tentang Kami) dan halaman "materi-*"') + """
+PEMBAGIAN MATERI KE BEBERAPA MENU — jangan menumpuk semua di Tentang Kami:
+- "profile" hanya: tentang perusahaan, sejarah, visi-misi, nilai, keunggulan, ringkasan layanan, area layanan;
+- bagian materi yang panjang atau berdiri sendiri (daftar harga/price list, armada/produk, destinasi, paket, syarat & ketentuan, portofolio, daftar klien, dan sejenisnya) masing-masing menjadi satu halaman tambahan: slug "materi-<nama-pendek>", title singkat (maks. 3 kata) dari judul bagian di materi — paling banyak 4 halaman tambahan;
+- tabel harga ditulis sebagai <table class="table table-bordered">; tiap isi materi hanya di satu halaman;
+- materi pendek yang tidak perlu halaman sendiri tetap di "profile". Materi tanpa bagian seperti itu: tanpa halaman tambahan.
+"""
+        halaman_materi = '\n  {"slug":"materi-<nama-pendek>","title":"<judul menu>","content":"<HTML utuh bagian materi>"},'
+
     user_prompt = f"""Generate WordPress page content for a website with these details:
 - Site title: {site_title}
 - Domain: {domain}
@@ -420,10 +439,11 @@ MATERI KLIEN ({', '.join(materi)}) WAJIB DIMUAT SELURUHNYA di halaman "profile" 
 
 {CONTENT_RULES}
 {aturan_materi}
-Generate 4 pages plus a tagline. Return JSON array:
+Generate 4 pages (plus any "materi-*" pages required above) plus a tagline. Return JSON array:
 [
   {{"slug":"home","title":"Home","content":"<HTML homepage: hero heading and intro, products/services, advantages, call to action. 300-500 words.>"}},
   {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile. Include history, vision-mission, values, or team ONLY when they appear in the client data; silently skip missing parts. Never write that some information is unavailable or not provided. {panjang_profil}.>"}},
+{halaman_materi}
   {{"slug":"gallery","title":"Gallery","content":"<HTML short intro for the photo gallery describing the client's products or activities. 60-120 words. Photos are added automatically.>"}},
   {{"slug":"contact","title":"Kontak","content":"<HTML contact info: public phone/WhatsApp, email, address, opening hours only if present in client data, plus an invitation to get in touch. 80-200 words. No form, no map.>"}},
   {{"slug":"tagline","title":"Tagline","content":"<client's slogan if present, otherwise a plain-text summary of the business, max 8 words, no HTML>"}}
@@ -820,6 +840,37 @@ done'''
             pages_done += 1
         log(f'Halaman {slug}: {" ".join(output.split()) or "tanpa_output"}')
     
+    # Halaman materi-* (generate_pages banyak_menu) + butir menu sebelum Hubungi Kami. 2 halaman atau lebih
+    # dikelompokkan di bawah "Informasi" agar menu utama tidak turun jadi 2 baris.
+    materi_pages = [p for p in pages if str(p.get('slug', '')).startswith('materi-') and clean_html(p.get('content', ''))]
+    if materi_pages:
+        induk = len(materi_pages) >= 2
+        cmd = helpers + r'''MENU=$($WP_BIN menu list --fields=term_id,locations --format=csv --path="$DOCROOT" --allow-root 2>/dev/null | awk -F, 'NR>1 && /primary/ {print $1; exit}')
+POS=$($WP_BIN menu item list "$MENU" --fields=position,title --format=csv --path="$DOCROOT" --allow-root 2>/dev/null | awk -F, 'NR>1 && /Hubungi/ {print $1; exit}')
+INDUK=0
+'''
+        if induk:
+            cmd += r'''INDUK=$($WP_BIN menu item add-custom "$MENU" Informasi '#' ${POS:+--position=$POS} --porcelain --path="$DOCROOT" --allow-root 2>/dev/null); [[ -n "$POS" ]] && POS=$((POS+1))
+'''
+        for p in materi_pages:
+            slug_wp_m = re.sub(r'[^a-z0-9-]', '', str(p['slug']).lower())[len('materi-'):] or 'informasi'
+            judul = str(p.get('title') or slug_wp_m.replace('-', ' ').title()).strip()
+            cmd += f'''id=$($WP_BIN post list --post_type=page --name={shlex.quote(slug_wp_m)} --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -z "$id" ]]; then
+  id=$($WP_BIN post create --post_type=page --post_status=publish --post_title={shlex.quote(judul)} --post_name={shlex.quote(slug_wp_m)} --post_content={shlex.quote(clean_html(p['content']))} --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+  [[ -n "$id" ]] && save_md5 "$id" && echo "page_created:{slug_wp_m}:$id"
+  if [[ -n "$id" && -n "$MENU" ]]; then
+    $WP_BIN menu item add-post "$MENU" "$id" --title={shlex.quote(judul)} --parent-id="$INDUK" ${{POS:+--position=$POS}} --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "menu:{slug_wp_m}"
+    [[ -n "$POS" ]] && POS=$((POS+1))
+  fi
+else
+  echo "page_kept:{slug_wp_m}:$id"
+fi
+'''
+        output, rc = wp_remote(cmd)
+        log(f'Halaman materi: {" ".join(output.split()) or "tanpa_output"}')
+        pages_done += output.count('page_created')
+
     # Kategori disiapkan per artikel: artikel dikelompokkan mengikuti layanan
     # klien, jadi satu situs bisa punya beberapa kategori sekaligus.
     def id_kategori(nama):
@@ -992,7 +1043,7 @@ def main():
     else:
         log('Generating pages...')
         materi = [n for n, _ in docs['sources'] if n not in docs.get('form', ())]
-        pages = generate_pages(site_title, domain, client_info, model, materi)
+        pages = generate_pages(site_title, domain, client_info, model, materi, banyak_menu=materi_banyak_menu(cfg, domain))
         if pages and materi:
             # AI tetap suka melewatkan butir (Push-up/Sit-up hilang di trimurtiekapaksi.com
             # 2026-09-30): sekali ulang dengan daftar baris yang belum termuat.
@@ -1000,7 +1051,8 @@ def main():
             log(f'Materi klien belum termuat: {len(hilang)} baris')
             if len(hilang) > 3:
                 ulang = generate_pages(site_title, domain, client_info + '\n\nBARIS MATERI YANG WAJIB ADA '
-                                       '(sebelumnya terlewat):\n' + '\n'.join(hilang), model, materi)
+                                       '(sebelumnya terlewat):\n' + '\n'.join(hilang), model, materi,
+                                       banyak_menu=materi_banyak_menu(cfg, domain))
                 if ulang and len(materi_hilang(docs, ulang, materi)) < len(hilang):
                     pages = ulang
                     log(f'Materi klien belum termuat sesudah ulang: {len(materi_hilang(docs, pages, materi))} baris')
