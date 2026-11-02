@@ -689,6 +689,10 @@ if [[ "$MODE" == "apply" || "$MODE" == "finish" ]]; then
     echo "[$(date -Is)] Permintaan form klien (agen Claude)" >> "$LOG"
     /usr/bin/python3 "$SCRIPTS/permintaan-claude" "$MANIFEST" >> "$LOG" 2>&1 || true
   fi
+  # Media maks 100 KB, lampiran tak terpakai dihapus, header property1 terbaca (user 2026-11-02,
+  # kemaljualbelibarangbekas.com). Sesudah agen permintaan supaya foto unggahannya ikut dirapikan.
+  echo "[$(date -Is)] Rapikan media" >> "$LOG"
+  /usr/bin/python3 "$SCRIPTS/media-rapi" "$MANIFEST" >> "$LOG" 2>&1 || true
   # Toko online (Custom & biasa): warna primary/hover VD Store = warna utama situs (permintaan
   # klien, keputusan user 2026-09-26). Sesudah tema, finishing & permintaan form supaya warna
   # akhirnya yang dipakai. Paket non-toko & situs yang sudah ter-deploy dilewati skripnya sendiri.

@@ -449,6 +449,13 @@
           if ((m = /^permintaan_claude: (lewati|gagal):(\S+)/m.exec(t))) return (m[1] === 'lewati' ? 'dilewati: ' : 'gagal: ') + m[2].replace(/_/g, ' ');
           return null; },
         aktif: c => dan(tanpaDry(c), c.permintaanClaude) },
+      // Rapikan media (permintaan user 2026-11-02, scripts/media-rapi): berkas maks 100 KB, lampiran tak
+      // terpakai dihapus, header velocity-property1 digelapkan agar menu & judul putih terbaca.
+      { id: 'mediaRapi', kol: 23, jalur: -1, nama: 'Rapikan media', ket0: 'maks 100 KB, hapus tak terpakai, header terbaca',
+        mulai: /\] Rapikan media/, selesai: /^media_rapi: (selesai |lewati:|gagal:)/m, gagal: /^media_rapi: gagal:/m,
+        ketHasil: t => { const m = /^media_rapi: selesai hapus=(\d+) kompres=(\d+)/m.exec(t);
+          return m ? m[1] + ' dihapus, ' + m[2] + ' dikompres' : /^media_rapi: lewati:/m.test(t) ? 'dilewati: situs lama' : null; },
+        aktif: tanpaDry },
       // Toko online (keputusan user 2026-09-26, scripts/vd-store-warna): warna primary & hover VD Store
       // = warna utama situs (palet FSE / warna form / Warna Utama child toko), sesudah tema & isi final.
       { id: 'warnaToko', kol: 23, jalur: 3, nama: 'Warna VD Store', ket0: 'primary & hover ikut warna utama situs',
@@ -599,7 +606,7 @@
       ['isi', 'tampilan', 'tidak'], ['tampilan', 'menuForm'],
       ['isi', 'landingIsi', 'landing', c => dan(tanpaDry(c), c.landing)], ['landingIsi', 'menuForm'], ['menuForm', 'dokumenKlien'], ['dokumenKlien', 'paketTour'], ['paketTour', 'katalogProduk', 'Paket E/F', c => dan(tanpaDry(c), c.e === null ? null : c.e || c.f)], ['katalogProduk', 'fotoKlasik'],
       ['paketTour', 'fotoKlasik', '', c => dan(tanpaDry(c), c.e === null ? null : !(c.e || c.f))], ['fotoKlasik', 'beritaYoutube'], ['beritaYoutube', 'permintaan'],
-      ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['permintaan', 'bahasa', 'form: bahasa Inggris'], ['bahasa', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
+      ['permintaan', 'qa', '', c => dan(tanpaDry(c), c.toko === null ? null : !c.toko)], ['permintaan', 'mediaRapi'], ['mediaRapi', 'qa'], ['permintaan', 'warnaToko'], ['warnaToko', 'qa'], ['permintaan', 'bahasa', 'form: bahasa Inggris'], ['bahasa', 'qa'], ['qa', 'maint'], ['maint', 'maintLewat', 'ya'], ['maint', 'maintOn', 'tidak'],
       ['maint', 'selesai', 'finish', hanyaMode('finish')], ['maintLewat', 'selesai'], ['maintOn', 'selesai'],
       ['selesai', 'pemilik'],
       ['mode', 'rdCek', 'redesign'], ['rdCek', 'rdCadangan', 'ya'], ['rdCek', 'rdPublik', 'tidak'],

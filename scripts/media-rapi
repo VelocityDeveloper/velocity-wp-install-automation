@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Rapikan Media di akhir instalasi: header terbaca, lampiran tak terpakai dihapus, berkas maks 100 KB.
+
+Pemakaian: media-rapi <manifest> [--coba] [--paksa]   (butuh WP_INSTALL_SSH_KEY_FILE)
+  --coba   hanya melaporkan, situs tidak diubah
+  --paksa  jalankan juga pada situs yang sudah terpasang
+
+Permintaan user 2026-11-02 (kemaljualbelibarangbekas.com): agen permintaan form mengunggah foto
+248-619 KB dan menggantikan foto installer tanpa menghapus yang lama; pada velocity-property1 menu &
+judul putih menumpang foto langit terang karena Header Image dipotong dari tepi atas (background-size:
+cover). Langkah ini sesudah permintaan-claude supaya foto hasil agen ikut dirapikan.
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+REMOTE_PHP = r'''<?php
+define('VMR_COBA', !empty(getenv('VMR_COBA')));
+define('VMR_MAKS', 100000);
+define('VMR_SISI', 1200);
+
+function vmr_tulis_jpeg($g, $tujuan, $q) {
+    ob_start();
+    imagejpeg($g, null, $q);
+    $b = ob_get_clean();
+    return $b !== '' && file_put_contents($tujuan, $b) !== false ? strlen($b) : 0;
+}
+
+function vmr_skala($g, $w) {
+    return imagescale($g, $w, (int) round(imagesy($g) * $w / imagesx($g)), IMG_BICUBIC);
+}
+
+// Kualitas turun dulu (batas 58, tribunnewsupdate 20 Okt), lalu lebar dikecilkan 50 px per langkah.
+function vmr_kompres($berkas, $lebar_maks = 0) {
+    $g = @imagecreatefromjpeg($berkas);
+    if (!$g) return null;
+    if ($lebar_maks && imagesx($g) > $lebar_maks) $g = vmr_skala($g, $lebar_maks);
+    imageinterlace($g, true);
+    $w = imagesx($g);
+    while (true) {
+        for ($q = 82; $q >= 58; $q -= 4) {
+            $n = vmr_tulis_jpeg($g, $berkas . '.vmr', $q);
+            if ($n && $n <= VMR_MAKS) break 2;
+        }
+        if ($w <= 400) break;
+        $w -= 50;
+        $g = vmr_skala($g, $w);
+        imageinterlace($g, true);
+    }
+    rename($berkas . '.vmr', $berkas);
+    return [imagesx($g), imagesy($g), filesize($berkas)];
+}
+
+function vmr_terang($g, $y0, $y1) {
+    $w = imagesx($g); $t = 0; $n = 0;
+    for ($y = $y0; $y < $y1; $y += max(1, (int) (($y1 - $y0) / 40))) {
+        for ($x = 0; $x < $w; $x += max(1, (int) ($w / 60))) {
+            $c = imagecolorat($g, $x, $y);
+            $t += 0.2126 * (($c >> 16) & 255) + 0.7152 * (($c >> 8) & 255) + 0.0722 * ($c & 255); $n++;
+        }
+    }
+    return $n ? $t / $n / 255 : 0;
+}
+
+// Pita tergelap setinggi $tinggi: menghindari langit yang terpotong untuk teks putih.
+function vmr_pita_gelap($g, $tinggi) {
+    $h = imagesy($g); $baik = 0; $nilai = 2;
+    for ($y = 0; $y + $tinggi <= $h; $y += max(1, (int) (($h - $tinggi) / 12))) {
+        $v = vmr_terang($g, $y, $y + $tinggi);
+        if ($v < $nilai) { $nilai = $v; $baik = $y; }
+    }
+    return $baik;
+}
+
+function vmr_gelapkan($g, $y0, $y1, $a0, $a1) {
+    $w = imagesx($g);
+    imagealphablending($g, true);
+    for ($y = $y0; $y < $y1; $y++) {
+        $a = $a0 + ($a1 - $a0) * ($y - $y0) / max(1, $y1 - $y0);
+        imagefilledrectangle($g, 0, $y, $w - 1, $y, imagecolorallocatealpha($g, 0, 0, 0, (int) round(127 * (1 - $a))));
+    }
+}
+
+function vmr_lampiran_baru($g, $nama, $judul) {
+    $up = wp_upload_dir();
+    $berkas = wp_unique_filename($up['path'], $nama);
+    $jalur = $up['path'] . '/' . $berkas;
+    vmr_tulis_jpeg($g, $jalur, 82);
+    $id = wp_insert_attachment(['post_mime_type' => 'image/jpeg', 'post_title' => $judul, 'post_status' => 'inherit'], $jalur);
+    wp_update_attachment_metadata($id, wp_generate_attachment_metadata($id, $jalur));
+    return [$id, wp_get_attachment_url($id), $jalur];
+}
+
+// logo_header memberi pelat hanya pada lebar yang ia nilai sulit dibaca; di atas header gelap semua lebar perlu.
+function vmr_pelat_logo() {
+    $css = wp_get_custom_css();
+    if (strpos($css, 'velocity-logo-header') === false || strpos($css, 'background:#ffffff') === false || strpos($css, '/* media-rapi-logo */') !== false) return;
+    echo 'media_rapi: pelat_logo', VMR_COBA ? ' (coba)' : '', "\n";
+    if (!VMR_COBA) wp_update_custom_css_post(rtrim($css) . "\n/* media-rapi-logo */\n.velocity-menu .custom-logo-link img{background:#fff;padding:4px 8px;border-radius:8px;box-sizing:border-box}\n");
+}
+
+// Menu & judul velocity-property1 putih tanpa latar, menumpang Home Header dan Header Image.
+function vmr_header() {
+    if (get_stylesheet() !== 'velocity-property1') return;
+    $url_home = get_theme_mod('home_header', '');
+    $url_hdr = get_header_image();
+    $url_asal = $url_hdr ?: $url_home;
+    vmr_pelat_logo();
+    if (!$url_asal) { echo "media_rapi: header:tanpa_gambar\n"; return; }
+    $path = function ($u) { $b = wp_upload_dir(); return str_replace(set_url_scheme($b['baseurl'], 'https'), $b['basedir'], set_url_scheme($u, 'https')); };
+
+    // Header Image: 1600x400 dari pita tergelap, digelapkan sampai teks putih terbaca.
+    if ($url_hdr && !preg_match('#-header(-\d+)?\.jpg$#', $url_hdr)) {
+        $g = @imagecreatefromstring((string) @file_get_contents($path($url_hdr)));
+        if ($g) {
+            $g = imagescale($g, 1600, (int) round(imagesy($g) * 1600 / imagesx($g)), IMG_BICUBIC);
+            $tinggi = min(400, imagesy($g));
+            $y = vmr_pita_gelap($g, $tinggi);
+            $pot = imagecrop($g, ['x' => 0, 'y' => $y, 'width' => 1600, 'height' => $tinggi]);
+            $alpha = max(0.45, min(0.72, 1 - 0.30 / max(0.01, vmr_terang($pot, 0, $tinggi))));
+            echo "media_rapi: header_image:pita_y=$y alpha=" . round($alpha, 2) . (VMR_COBA ? ' (coba)' : '') . "\n";
+            if (!VMR_COBA) {
+                vmr_gelapkan($pot, 0, $tinggi, $alpha, $alpha);
+                [$id, $url, $jalur] = vmr_lampiran_baru($pot, pathinfo($url_hdr, PATHINFO_FILENAME) . '-header.jpg', 'Header Image');
+                set_theme_mod('header_image', $url);
+                set_theme_mod('header_image_data', (object) ['attachment_id' => $id, 'url' => $url, 'thumbnail_url' => $url, 'width' => 1600, 'height' => $tinggi]);
+            }
+        }
+    }
+
+    // Home Header tetap foto penuh: buang langit terang di atas, lapisan gelap hanya pada area menu.
+    if ($url_home && !preg_match('#-beranda(-\d+)?\.jpg$#', $url_home)) {
+        $g = @imagecreatefromstring((string) @file_get_contents($path($url_home)));
+        if ($g && vmr_terang($g, 0, (int) (imagesy($g) * 0.2)) > 0.35) {
+            $g = imagescale($g, 1600, (int) round(imagesy($g) * 1600 / imagesx($g)), IMG_BICUBIC);
+            $tinggi = min(760, imagesy($g));
+            $pot = imagecrop($g, ['x' => 0, 'y' => vmr_pita_gelap($g, $tinggi), 'width' => 1600, 'height' => $tinggi]);
+            echo 'media_rapi: home_header:terang' . (VMR_COBA ? ' (coba)' : '') . "\n";
+            if (!VMR_COBA) {
+                vmr_gelapkan($pot, 0, (int) ($tinggi * 0.35), 0.62, 0);
+                [$id, $url, $jalur] = vmr_lampiran_baru($pot, pathinfo($url_home, PATHINFO_FILENAME) . '-beranda.jpg', 'Home Header');
+                set_theme_mod('home_header', $url);
+            }
+        }
+    }
+}
+
+// Rujukan lampiran di seluruh DB; ragu dianggap terpakai. Revisi & metadata lampiran tak dihitung.
+function vmr_terpakai() {
+    global $wpdb;
+    $teks = $wpdb->get_col("SELECT CONCAT_WS(' ',post_content,post_excerpt) FROM {$wpdb->posts} WHERE post_type NOT IN('attachment','revision')");
+    $meta = $wpdb->get_col("SELECT m.meta_value FROM {$wpdb->postmeta} m JOIN {$wpdb->posts} p ON p.ID=m.post_id WHERE p.post_type NOT IN('attachment','revision') AND m.meta_key NOT IN('_edit_lock','_edit_last')");
+    $meta = array_merge($meta, $wpdb->get_col("SELECT meta_value FROM {$wpdb->termmeta}"));
+    $opsi = $wpdb->get_col("SELECT option_value FROM {$wpdb->options} WHERE option_name NOT LIKE '%transient%'");
+    $semua = array_merge($teks, $meta, $opsi);
+    // ID polos hanya dicocokkan pada meta bertema gambar: angka biasa (views, harga) membuat lampiran terlihat terpakai.
+    $kunci = "meta_key REGEXP 'thumb|galer|galle|foto|image|media|logo|icon|banner|gambar'";
+    $meta_id = array_merge(
+        $wpdb->get_col("SELECT m.meta_value FROM {$wpdb->postmeta} m JOIN {$wpdb->posts} p ON p.ID=m.post_id WHERE p.post_type NOT IN('attachment','revision') AND m.$kunci"),
+        $wpdb->get_col("SELECT meta_value FROM {$wpdb->termmeta} WHERE $kunci")
+    );
+    $hasil = [];
+    foreach (get_posts(['post_type' => 'attachment', 'post_mime_type' => 'image', 'numberposts' => -1, 'post_status' => 'any', 'fields' => 'ids']) as $id) {
+        $i = pathinfo((string) get_attached_file($id));
+        if (empty($i['filename'])) continue;
+        $re = '#' . preg_quote($i['filename'], '#') . '(-\d+x\d+|-scaled)?\.' . preg_quote($i['extension'], '#') . '#';
+        $ada = (int) get_theme_mod('custom_logo') === $id || (int) get_option('site_icon') === $id;
+        foreach ($semua as $v) { if ($ada) break; $ada = preg_match($re, (string) $v) === 1; }
+        foreach ($meta_id as $v) { if ($ada) break; $ada = preg_match('#(?<![\d.])' . $id . '(?![\d.])#', (string) $v) === 1; }
+        foreach (array_merge($teks, $opsi) as $v) { if ($ada) break; $ada = preg_match('#wp-image-' . $id . '\b|"id":' . $id . '\b|"attachment_id";i:' . $id . ';|\bids="[^"]*\b' . $id . '\b#', (string) $v) === 1; }
+        $hasil[$id] = $ada;
+    }
+    return $hasil;
+}
+
+function vmr_hapus_tak_terpakai() {
+    $n = 0;
+    foreach (vmr_terpakai() as $id => $dipakai) {
+        if ($dipakai) continue;
+        echo 'media_rapi: hapus ', $id, ' ', basename((string) get_attached_file($id)), VMR_COBA ? ' (coba)' : '', "\n";
+        if (!VMR_COBA) wp_delete_attachment($id, true);
+        $n++;
+    }
+    return $n;
+}
+
+function vmr_kompres_semua() {
+    global $wpdb;
+    $n = 0; $png = 0;
+    $isi = implode("\n", $wpdb->get_col("SELECT post_content FROM {$wpdb->posts} WHERE post_type NOT IN('attachment','revision')"));
+    foreach (get_posts(['post_type' => 'attachment', 'post_mime_type' => 'image', 'numberposts' => -1, 'post_status' => 'any', 'fields' => 'ids']) as $id) {
+        $f = (string) get_attached_file($id);
+        if (!is_file($f)) continue;
+        $d = dirname($f) . '/';
+        $m = wp_get_attachment_metadata($id) ?: [];
+        $jpeg = preg_match('#\.jpe?g$#i', $f) === 1;
+        // shortcut: PNG/WebP hanya dilaporkan (GD membuang transparansi logo, ainakajeep 15 Okt); tangani manual bila muncul.
+        if (!$jpeg) {
+            foreach (array_merge([$f], array_map(function ($s) use ($d) { return $d . $s['file']; }, $m['sizes'] ?? [])) as $x)
+                if (is_file($x) && filesize($x) > VMR_MAKS) { echo 'media_rapi: png_besar ', basename($x), ' ', filesize($x), "\n"; $png++; }
+            continue;
+        }
+        $sz = @getimagesize($f);
+        if ($sz && (max($sz[0], $sz[1]) > VMR_SISI || filesize($f) > VMR_MAKS)) {
+            $lebar = max($sz[0], $sz[1]) > VMR_SISI ? (int) floor($sz[0] * VMR_SISI / max($sz[0], $sz[1])) : 0;
+            if (VMR_COBA) { echo 'media_rapi: kompres ', basename($f), ' ', filesize($f), " (coba)\n"; $n++; }
+            elseif ($h = vmr_kompres($f, $lebar)) {
+                [$m['width'], $m['height'], $m['filesize']] = $h;
+                $n++;
+                // Turunan >= asli sudah tak berguna, kecuali dirujuk langsung konten (warungmakanibutedy88 3 Okt).
+                foreach (($m['sizes'] ?? []) as $k => $s) {
+                    if (($s['width'] >= $h[0] || $s['height'] >= $h[1]) && strpos($isi, $s['file']) === false) {
+                        @unlink($d . $s['file']);
+                        unset($m['sizes'][$k]);
+                    }
+                }
+            }
+        }
+        foreach (($m['sizes'] ?? []) as $k => $s) {
+            $x = $d . $s['file'];
+            if (!is_file($x) || filesize($x) <= VMR_MAKS) continue;
+            if (VMR_COBA) { echo 'media_rapi: kompres ', $s['file'], ' ', filesize($x), " (coba)\n"; $n++; continue; }
+            if ($h = vmr_kompres($x)) {
+                [$m['sizes'][$k]['width'], $m['sizes'][$k]['height'], $m['sizes'][$k]['filesize']] = $h;
+                $n++;
+            }
+        }
+        if (!VMR_COBA && $m) wp_update_attachment_metadata($id, $m);
+    }
+    return [$n, $png];
+}
+
+require_once ABSPATH . 'wp-admin/includes/image.php';
+vmr_header();
+$hapus = vmr_hapus_tak_terpakai();
+[$kompres, $png] = vmr_kompres_semua();
+if (!VMR_COBA) wp_cache_flush();
+echo "media_rapi: selesai hapus=$hapus kompres=$kompres png_besar=$png\n";
+'''
+
+
+def muat(nama, path):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(nama, str(path))
+    spec = importlib.util.spec_from_loader(nama, loader)
+    modul = importlib.util.module_from_spec(spec)
+    loader.exec_module(modul)
+    return modul
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if len(args) != 1:
+        print('usage: media-rapi <manifest> [--coba] [--paksa]', file=sys.stderr)
+        return 2
+    lp = muat('listing_property', HERE / 'listing-property')
+    cfg = muat('theme_paket_biasa', HERE / 'theme-paket-biasa').read_manifest(Path(args[0]))
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('media_rapi: manifest_tidak_valid')
+        return 2
+    # Situs yang sudah ter-deploy tidak diubah aturan baru (feedback 2026-09-23).
+    if muat('cari_logo', HERE / 'cari_logo.py').sudah_terpasang(domain) and '--paksa' not in sys.argv:
+        print('media_rapi: lewati:situs_sudah_terpasang')
+        return 0
+    if not Path(os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')).is_file():
+        print('media_rapi: gagal:kunci_ssh_tidak_ada')
+        return 1
+    coba = '1' if '--coba' in sys.argv else ''
+    pra = ('T=$(mktemp -d /tmp/velocity-media-rapi.XXXXXX); trap \'rm -rf "$T"\' EXIT; cat > "$T/rapi.php"; '
+           f'chmod 755 "$T"; chmod 644 "$T/rapi.php"; export VMR_COBA={shlex.quote(coba)}; ')
+    # runuser mempertahankan env; lp.ssh_jalankan memakai runuser -u <user> -- wp.
+    hasil = lp.ssh_jalankan(cfg, domain, 'eval-file "$T/rapi.php"', REMOTE_PHP.encode(), pra)
+    keluar = hasil.stdout.decode(errors='replace').strip()
+    print(keluar)
+    if hasil.returncode != 0 or 'media_rapi: selesai' not in keluar:
+        print(f"media_rapi: gagal:kode_{hasil.returncode} {hasil.stderr.decode(errors='replace').strip()[:200]}")
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
