@@ -496,7 +496,7 @@ def rubrik_form(domain):
         terpakai.add(slug)
         keterangan = re.sub(r'^\s*berisi\s+', '', str(nilai), flags=re.I).strip().rstrip('.')
         hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan[:1].upper() + keterangan[1:] + '.', 160)})
-    return hasil[:10]
+    return hasil
 
 
 # Berkas daftar rubrik terpisah di folder klien (liputara.com Rubrik.docx, user 2026-10-11): kolom
@@ -560,8 +560,8 @@ Kembalikan JSON persis: {{"rubrik":[{{"judul":"","teks":"","sub":[""]}}]}}"""
         hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan.rstrip('.') + '.', 160)})
     print(f"rubrik_berkas: {', '.join(p.name for p in berkas)} -> {len(hasil)} rubrik"
           + (f" (dibuang, tak tertulis di berkas: {', '.join(dibuang)})" if dibuang else ''))
-    # Daftar rubrik klien diikuti utuh sampai 12; menu primary tema berita tetap membatasi 8 butir.
-    return hasil[:12]
+    # Daftar rubrik klien diikuti utuh, tidak dipotong (user 2026-10-30); menu diatur theme-paket-biasa.
+    return hasil
 
 
 # Kategori form cuma satu (user 2026-10-30, fokus-berita-indonesia.id "UMUM"): beranda & menu berita kosong.
@@ -703,7 +703,7 @@ Kembalikan JSON persis:
         'hero_judul': nama, 'hero_teks': teks(data.get('hero_teks'), 220), 'hero_poin': [],
         'tentang': teks(data.get('tentang'), 600),
         'redaksi': [teks(x, 600) for x in (data.get('redaksi') or []) if teks(x, 600)][:4],
-        'rubrik': rubrik[:12],
+        'rubrik': rubrik,
         'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
         'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
         'judul_seksi': {'terbaru': 'Berita Terbaru', 'pemesanan': 'Kirim Pesan ke Redaksi'},

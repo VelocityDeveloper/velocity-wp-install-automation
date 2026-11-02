@@ -1130,7 +1130,7 @@ if ($berita_depan || $beranda_statis) {
     // Semua rubrik masuk menu (dulu 8 pertama saja). Yang tak muat sebaris ditaruh di dropdown "Lainnya"
     // (liputara.com 2026-10-11: Home + 8 rubrik turun dua baris di 1366 px). Lebar ditaksir per karakter:
     // biaya butir = panjang judul + 5 (padding); liputara berita2 Home + 7 rubrik = 123 muat, + 1 lagi = 135 tidak.
-    $kat_menu = array_slice($kategori, 0, 12);
+    $kat_menu = $kategori;
     $judul_home = $beranda_statis ? 'Beranda' : 'Home';
     $biaya = fn($t) => mb_strlen($t) + 5;
     $muat = 123; $pakai = $biaya($judul_home); $kat_atas = [];
