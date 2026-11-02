@@ -3,8 +3,8 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import LogLive from './LogLive.vue'
 import Ikon from '../Ikon.vue'
-import { aksi, pesanGalat, namaSaya, STATUS_FITUR, jam } from '../../laravel.js'
-import { tanggalWaktu } from '../../api.js'
+import { aksi, pesanGalat, namaSaya, STATUS_FITUR, jam, angkaToken } from '../../laravel.js'
+import { tanggalWaktu, pakaiPolling } from '../../api.js'
 
 const props = defineProps({ d: { type: Object, required: true } })
 const emit = defineEmits(['ubah'])
@@ -24,6 +24,16 @@ const sisa = computed(() => props.d.fitur.filter((f) => ['antre', 'revisi', 'jal
 const adaGagal = computed(() => props.d.fitur.some((f) => f.status === 'gagal'))
 const biaya = computed(() => props.d.fitur.reduce((n, f) => n + Number(f.hasil?.biaya_usd || 0), 0))
 const menit = computed(() => props.d.fitur.reduce((n, f) => n + Number(f.hasil?.menit || 0), 0))
+// Token agen terhadap total project (brief + agen), dari usage.jsonl lewat API detail
+const { data: acuanJatah } = pakaiPolling('/brain/token-acuan.json', 300000)
+const jatahProyek = computed(() => acuanJatah.value?.domain?.[props.d.slug]?.persen)
+const angkaPersen = (p) => p < 0.1 ? '<0,1' : p.toLocaleString('id-ID', { maximumFractionDigits: 1 })
+const persenProyek = (n) => props.d.token?.total ? angkaPersen(n / props.d.token.total * 100) : '–'
+const tokenFitur = (f) => props.d.token_fitur?.[f.id]
+const judulTokenFitur = (f) => {
+  const t = tokenFitur(f)
+  return `${t.total.toLocaleString('id-ID')} token dari ${props.d.token.total.toLocaleString('id-ID')} total project · ${t.panggilan} permintaan · setara API $${t.biaya_usd.toFixed(2)}`
+}
 const minta = computed(() => props.d.agen?.minta_berhenti)
 // Tertahan gerbang review tanpa revisi: menekan Lanjutkan hanya akan berhenti lagi — arahkan ke Review
 const tertahan = computed(() => props.d.review?.gerbang?.length && !props.d.fitur.some((f) => f.status === 'revisi'))
@@ -49,6 +59,7 @@ const urlCommit = (h) => (props.d.install?.repo && h ? `${props.d.install.repo}/
         <span><b>{{ d.fitur.length - sisa }}</b>/{{ d.fitur.length }} dikerjakan</span>
         <span>{{ Math.round(menit) }} menit agen</span>
         <span>setara API <b>${{ biaya.toFixed(2) }}</b></span>
+        <span v-if="d.token?.agen" :title="`Agen ${d.token.agen.toLocaleString('id-ID')} dari ${d.token.total.toLocaleString('id-ID')} token project (brief + agen). % jatah = perkiraan jatah mingguan Claude, bukan angka resmi.`"><b>{{ angkaToken(d.token.agen) }}</b> token · <b>{{ persenProyek(d.token.agen) }}%</b> dari total project<template v-if="jatahProyek"> · {{ jatahProyek < 0.1 ? '<0,1' : '≈' + angkaPersen(jatahProyek) }}% jatah</template></span>
       </div>
     </div>
     <p v-if="!terinstall" class="pesan-status">Aplikasi belum terpasang (tab Install).</p>
@@ -91,7 +102,8 @@ const urlCommit = (h) => (props.d.install?.repo && h ? `${props.d.install.repo}/
           <span v-if="fiturJalan(f) && f.mulai" class="lama">berjalan {{ lamaFitur(f) }}</span>
           <span class="redup kecil">
             <template v-if="f.hasil">{{ f.hasil.menit }} mnt · <template v-if="f.hasil.tes_lulus != null">{{ f.hasil.tes_lulus }} tes lolos<template v-if="f.hasil.tes_gagal">, {{ f.hasil.tes_gagal }} gagal</template> · </template></template>
-            <template v-else>estimasi {{ jam(f.jam_agen) }}</template>
+            <template v-else>estimasi {{ jam(f.jam_agen) }}<template v-if="tokenFitur(f)"> · </template></template>
+            <span v-if="tokenFitur(f)" :title="judulTokenFitur(f)">{{ angkaToken(tokenFitur(f).total) }} token · {{ persenProyek(tokenFitur(f).total) }}% project · </span>
             <a v-if="f.hasil?.commit" :href="urlCommit(f.hasil.commit)" target="_blank" rel="noopener"><code>{{ f.hasil.commit }}</code></a>
           </span>
           <button v-if="f.hasil" type="button" class="tombol garis kecil" :aria-expanded="terbuka === f.id" @click="terbuka = terbuka === f.id ? '' : f.id">{{ terbuka === f.id ? 'Tutup' : 'Hasil' }}</button>

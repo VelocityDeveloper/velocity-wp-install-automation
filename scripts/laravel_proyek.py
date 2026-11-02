@@ -458,6 +458,9 @@ def ringkas(slug):
 _cache_token = {}
 
 
+RE_RUN_FITUR = re.compile(r'-(F\d+)$')  # run agen: laravel-agen-<slug>-F12
+
+
 def token_proyek(slug):
     """{'total', 'panggilan', 'biaya_usd', 'brief', 'agen'} atau None bila belum ada pemakaian."""
     try:
@@ -466,7 +469,7 @@ def token_proyek(slug):
         return None
     kunci = (st.st_mtime_ns, st.st_size)
     if _cache_token.get('kunci') != kunci:
-        per = {}
+        per, fitur = {}, {}
         for s in AI_USAGE.read_text(errors='replace').splitlines():
             try:
                 b = json.loads(s)
@@ -480,11 +483,26 @@ def token_proyek(slug):
             d['panggilan'] += int(b.get('permintaan') or 1)
             d['biaya_usd'] += float(b.get('biaya_usd') or 0)
             d['agen' if b['peran'] == 'laravel_agen' else 'brief'] += n
+            m = RE_RUN_FITUR.search(str(b.get('run') or '')) if b['peran'] == 'laravel_agen' else None
+            if m:
+                f = fitur.setdefault(b.get('domain') or '-', {}).setdefault(m.group(1), {'total': 0, 'panggilan': 0, 'biaya_usd': 0.0})
+                f['total'] += n
+                f['panggilan'] += int(b.get('permintaan') or 1)
+                f['biaya_usd'] += float(b.get('biaya_usd') or 0)
         for d in per.values():
             d['biaya_usd'] = round(d['biaya_usd'], 2)
+        for ff in fitur.values():
+            for f in ff.values():
+                f['biaya_usd'] = round(f['biaya_usd'], 2)
         _cache_token.clear()
-        _cache_token.update(kunci=kunci, data=per)
+        _cache_token.update(kunci=kunci, data=per, fitur=fitur)
     return _cache_token['data'].get(slug)
+
+
+def token_fitur(slug):
+    """{'F12': {'total', 'panggilan', 'biaya_usd'}} pemakaian agen per fitur, untuk tab Agen. Hanya di detail, supaya daftar tetap ringan."""
+    token_proyek(slug)  # menyegarkan cache bila usage.jsonl berubah
+    return _cache_token.get('fitur', {}).get(slug) or {}
 
 
 def daftar():
@@ -516,6 +534,7 @@ def detail(slug):
     p = baca_json(folder(slug) / 'proyek.json', {})
     return {
         **ringkas(slug),
+        'token_fitur': token_fitur(slug),
         'lan_ip': ip_lan(),
         'riwayat': (p.get('riwayat') or [])[-50:][::-1],
         'catatan': baca_teks(slug, 'catatan.md'),

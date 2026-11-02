@@ -342,6 +342,7 @@ ACUAN_SIKLUS = 4         # siklus selesai terakhir yang dipakai
 ACUAN_PERSEN_MIN = 20    # puncak lebih kecil dari ini terlalu kasar (persen dibulatkan Anthropic)
 ACUAN_CAKUP_HARI = 5     # riwayat siklus harus sepanjang ini; siklus pendek = sisa ganti akun/awal pencatatan
 LIMIT_BERKAS = {"1": "limit.json", "2": "limit-2.json"}
+RE_PROYEK_LARAVEL = re.compile(r"^project-\d+$")  # domain usage.jsonl untuk project installer Laravel
 
 
 def biaya_model(model, v):
@@ -404,7 +405,7 @@ def domain_jatah(akun):
             except (ValueError, KeyError):
                 continue
             biaya = float(r.get("biaya_usd") or 0)
-            if biaya and "." in (r.get("domain") or ""):
+            if biaya and ("." in (r.get("domain") or "") or RE_PROYEK_LARAVEL.match(r.get("domain") or "")):
                 ak = akun.get(akun_installer(pilihan, r.get("run") or "", ts))
                 x = per.setdefault(r["domain"], {"biaya": 0.0, "persen": 0.0})
                 x["biaya"] += biaya
