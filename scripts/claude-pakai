@@ -303,6 +303,7 @@ def rekap_installer():
     """Semua panggilan AI installer (Claude & gateway) per hari WIB per bagian:
     [token, output, cache baca, biaya USD, panggilan, gagal] + daftar domain, untuk token-installer.json."""
     hari = {}
+    pilihan = pilihan_akun()
     try:
         fh = open(AI_USAGE)
     except OSError:
@@ -311,12 +312,16 @@ def rekap_installer():
         for ln in fh:
             try:
                 r = json.loads(ln)
-                tgl = datetime.fromisoformat(r["ts"]).astimezone(WIB).strftime("%Y-%m-%d")
+                w = datetime.fromisoformat(r["ts"]).astimezone(WIB)
+                tgl = w.strftime("%Y-%m-%d")
             except (ValueError, KeyError):
                 continue
             b = r.get("peran") or "lainnya"
-            x = hari.setdefault(tgl, {}).setdefault(b, {"v": [0, 0, 0, 0.0, 0, 0], "domain": set(), "model": set()})
+            x = hari.setdefault(tgl, {}).setdefault(b, {"v": [0, 0, 0, 0.0, 0, 0], "domain": set(), "model": set(), "akun": {}})
             v = x["v"]
+            if r.get("biaya_usd"):  # biaya per akun: % jatah bagian hanya menghitung akun yang sedang dilihat
+                ak = akun_installer(pilihan, r.get("run") or "", w.timestamp())
+                x["akun"][ak] = x["akun"].get(ak, 0.0) + float(r["biaya_usd"])
             v[0] += int(r.get("total_tokens") or 0)
             v[1] += int(r.get("completion_tokens") or 0)
             v[2] += int(r.get("cache_read_tokens") or 0)
@@ -326,8 +331,107 @@ def rekap_installer():
             x["domain"].add(r.get("domain") or "-")
             if r.get("model"):
                 x["model"].add(r["model"])
-    return {t: {b: {"v": [*x["v"][:3], round(x["v"][3], 4), *x["v"][4:]], "domain": sorted(x["domain"]), "model": sorted(x["model"])}
+    return {t: {b: {"v": [*x["v"][:3], round(x["v"][3], 4), *x["v"][4:]], "domain": sorted(x["domain"]), "model": sorted(x["model"]),
+                     "akun": {k: round(n, 4) for k, n in x["akun"].items()}}
                 for b, x in pb.items()} for t, pb in hari.items()}
+
+
+# Patokan "1% jatah mingguan = berapa": Anthropic hanya memberi persen per akun, jadi dihitung dari siklus mingguan
+# yang sudah selesai: biaya & token siklus itu dibagi puncak persennya. Bobot biaya sama dengan Token.vue (biayaV).
+ACUAN_SIKLUS = 4         # siklus selesai terakhir yang dipakai
+ACUAN_PERSEN_MIN = 20    # puncak lebih kecil dari ini terlalu kasar (persen dibulatkan Anthropic)
+ACUAN_CAKUP_HARI = 5     # riwayat siklus harus sepanjang ini; siklus pendek = sisa ganti akun/awal pencatatan
+LIMIT_BERKAS = {"1": "limit.json", "2": "limit-2.json"}
+
+
+def biaya_model(model, v):
+    faktor = 0.2 if "haiku" in model else 0.6 if "sonnet" in model else 1
+    return faktor * (v[0] * 4 + v[1] * 8 + v[2] * 0.2 + v[3] * 20) / 1e6
+
+
+def median(n):
+    n = sorted(n)
+    return (n[len(n) // 2] + n[(len(n) - 1) // 2]) / 2
+
+
+def siklus_selesai(riwayat, kini):
+    """[(reset, puncak)] siklus mingguan yang sudah lewat dan riwayatnya cukup panjang, urut waktu."""
+    c = {}
+    for r in riwayat:
+        m = r.get("minggu")
+        if not m or m.get("persen") is None:
+            continue
+        x = c.setdefault(round(m["reset"] / 3600), {"reset": m["reset"], "puncak": 0, "awal": r["t"], "akhir": r["t"]})
+        x["puncak"] = max(x["puncak"], m["persen"])
+        x["akhir"] = r["t"]
+    return [(x["reset"], x["puncak"]) for _, x in sorted(c.items())
+            if x["reset"] < kini and x["puncak"] >= ACUAN_PERSEN_MIN and x["akhir"] - x["awal"] >= ACUAN_CAKUP_HARI * 86400]
+
+
+def acuan_akun(hari, riwayat, kini):
+    """hari = {tgl: [biaya, token, token tanpa cache baca]} satu akun. Hari reset ikut siklus baru, sama dengan Token.vue."""
+    tgl = lambda e: datetime.fromtimestamp(e, WIB).strftime("%Y-%m-%d")
+    baris = []
+    for reset, puncak in siklus_selesai(riwayat, kini):
+        dari, sampai = tgl(reset - 7 * 86400), tgl(reset - 86400)
+        j = [sum(v[i] for t, v in hari.items() if dari <= t <= sampai) for i in range(3)]
+        if j[0] > 0:  # transkrip siklus itu tidak ada, tidak bisa dijadikan patokan
+            baris.append({"dari": dari, "sampai": sampai, "puncak": puncak, "biaya": round(j[0], 2), "token": j[1], "token_tanpa_cache": j[2],
+                          "usd_per_persen": round(j[0] / puncak, 2)})
+    baris = baris[-ACUAN_SIKLUS:]
+    if not baris:
+        return None
+    usd = [b["usd_per_persen"] for b in baris]
+    return {"usd_per_persen": round(median(usd), 2), "rendah": min(usd), "tinggi": max(usd),
+            "token_per_persen": round(median([b["token"] / b["puncak"] for b in baris])),
+            "tanpa_cache_per_persen": round(median([b["token_tanpa_cache"] / b["puncak"] for b in baris])), "siklus": baris}
+
+
+def domain_jatah(akun):
+    """{domain: {biaya, persen}} biaya Claude tiap domain, dibagi patokan akun yang benar-benar dipakai run-nya."""
+    pilihan, per = pilihan_akun(), {}
+    try:
+        fh = open(AI_USAGE)
+    except OSError:
+        return {}
+    with fh:
+        for ln in fh:
+            if '"sumber": "claude"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+                ts = datetime.fromisoformat(r["ts"]).timestamp()
+            except (ValueError, KeyError):
+                continue
+            biaya = float(r.get("biaya_usd") or 0)
+            if biaya and "." in (r.get("domain") or ""):
+                ak = akun.get(akun_installer(pilihan, r.get("run") or "", ts))
+                x = per.setdefault(r["domain"], {"biaya": 0.0, "persen": 0.0})
+                x["biaya"] += biaya
+                x["persen"] += biaya / ak["usd_per_persen"] if ak else 0
+    return {d: {"biaya": round(x["biaya"], 2), "persen": round(x["persen"], 3)} for d, x in per.items()}
+
+
+def tulis_acuan(pengguna, folder):
+    hari, kini, hasil = {"1": {}, "2": {}}, time.time(), {}
+    for o in pengguna:
+        for s in o["sesi"]:
+            h = hari.setdefault(s.get("akun") or "1", {})
+            for tgl, pm in s["hari"].items():
+                r = h.setdefault(tgl, [0.0, 0, 0])
+                for m, v in pm.items():
+                    r[0] += biaya_model(m, v)
+                    r[1] += v[0] + v[1] + v[2] + v[3]
+                    r[2] += v[0] + v[1] + v[3]
+    for a, nama in LIMIT_BERKAS.items():
+        x = acuan_akun(hari.get(a, {}), muat_json(folder / nama, {}).get("riwayat") or [], kini)
+        if x:
+            hasil[a] = x
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".token-acuan-")
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"dibuat": kini, "akun": hasil, "domain": domain_jatah(hasil)}, fh, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, folder / "token-acuan.json")
 
 
 def sid_dari(f):
@@ -692,6 +796,10 @@ def main():
         json.dump(rinci, fh, ensure_ascii=False, separators=(",", ":"))
     os.chmod(tmp, 0o644)
     os.replace(tmp, out_i)
+    try:
+        tulis_acuan(hasil["pengguna"], out.parent)
+    except (OSError, ValueError, KeyError, TypeError) as e:  # patokan tidak boleh menggagalkan rekap utama
+        print(f"token-acuan gagal: {e}", file=sys.stderr)
     if a.setor:
         # sidik tanpa `dibuat`: nilai itu berubah tiap putaran walau isinya sama
         sidik = hashlib.sha256(json.dumps({k: v for k, v in hasil.items() if k != "dibuat"}, sort_keys=True).encode()).hexdigest()

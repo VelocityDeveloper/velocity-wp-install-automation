@@ -7,7 +7,7 @@ import Ikon from '../components/Ikon.vue'
 import Dialog from '../components/Dialog.vue'
 import MenuAksi from '../components/MenuAksi.vue'
 import BaganAlur from '../components/BaganAlur.vue'
-import { kirim } from '../api.js'
+import { kirim, pakaiPolling } from '../api.js'
 import { konfirmasi } from '../konfirmasi.js'
 
 const UKURAN_HALAMAN = 25
@@ -80,10 +80,14 @@ const lamaBaris = (x) => {
   const t = l.terakhir
   return t ? { teks: durasi(t.detik), mode: t.mode, judul: `Run ${t.mode || ''} ${jamMenit(t.mulai)} → Telegram terkirim ${jamMenit(t.selesai)}${t.hasil ? ` (${t.hasil})` : ''}` } : null
 }
+const jatahTeks = (p) => p < 0.1 ? '<0,1' : '≈' + p.toLocaleString('id-ID', { maximumFractionDigits: p < 10 ? 1 : 0 })
 // Total token AI per domain (x.token dari API): Claude + model lain di halaman AI Model
 const angkaToken = (n) => n >= 1e6 ? `${(n / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 1 })} jt` : n >= 1e3 ? `${Math.round(n / 1e3).toLocaleString('id-ID')} rb` : String(n)
+// Perkiraan % jatah mingguan per domain (claude-pakai → /brain/token-acuan.json), keterangan rumus di /token
+const { data: acuanJatah } = pakaiPolling('/brain/token-acuan.json', 300000)
 const tokenBaris = (x) => {
   const t = x.token
+  const jatah = acuanJatah.value?.domain?.[x.domain]
   if (!t || !t.total) return null
   const r = t.run_terakhir
   const judul = [
@@ -91,8 +95,9 @@ const tokenBaris = (x) => {
     `Claude: ${t.claude.token.toLocaleString('id-ID')} (${t.claude.panggilan} permintaan${t.claude.model.length ? `, ${t.claude.model.join(', ')}` : ''}${t.claude.biaya_usd ? `, ≈ $${t.claude.biaya_usd}` : ''})`,
     `Model lain: ${t.lain.token.toLocaleString('id-ID')} (${t.lain.panggilan} panggilan${t.lain.model.length ? `, ${t.lain.model.join(', ')}` : ''})`,
     r ? `Run terakhir ${r.mode || r.run}: ${(r.claude + r.lain).toLocaleString('id-ID')} token` : '',
+    jatah?.persen ? `Perkiraan ${jatahTeks(jatah.persen)}% jatah mingguan Claude (bukan angka resmi)` : '',
   ].filter(Boolean).join('\n')
-  return { teks: angkaToken(t.total), claude: t.claude.token ? angkaToken(t.claude.token) : '', lain: t.lain.token ? angkaToken(t.lain.token) : '', judul }
+  return { teks: angkaToken(t.total), claude: t.claude.token ? angkaToken(t.claude.token) : '', lain: t.lain.token ? angkaToken(t.lain.token) : '', jatah: jatah?.persen ? jatahTeks(jatah.persen) : '', judul }
 }
 // Median run apply 30 hari terakhir: patokan lama install satu situs
 const lamaApply = computed(() => {
@@ -364,7 +369,7 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
                 </template>
                 <span v-else-if="!tokenBaris(x)" class="redup">-</span>
                 <span v-if="tokenBaris(x)" class="kecil token" :title="tokenBaris(x).judul">
-                  {{ tokenBaris(x).teks }} token<template v-if="tokenBaris(x).claude && tokenBaris(x).lain"> · C {{ tokenBaris(x).claude }} · lain {{ tokenBaris(x).lain }}</template><template v-else-if="tokenBaris(x).claude"> · Claude</template>
+                  {{ tokenBaris(x).teks }} token<template v-if="tokenBaris(x).claude && tokenBaris(x).lain"> · C {{ tokenBaris(x).claude }} · lain {{ tokenBaris(x).lain }}</template><template v-else-if="tokenBaris(x).claude"> · Claude</template><template v-if="tokenBaris(x).jatah"> · {{ tokenBaris(x).jatah }}% jatah</template>
                 </span>
               </td>
               <td class="kol-aksi">

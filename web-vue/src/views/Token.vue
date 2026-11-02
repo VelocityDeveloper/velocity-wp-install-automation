@@ -17,6 +17,8 @@ const { data: limit2, galat: galatLimit2 } = pakaiPolling('/brain/limit-2.json',
 const { data: akunInstaller } = pakaiPolling('/brain/claude-akun.json', 60000)
 // Rincian installer per bagian (usage.jsonl installer, Claude & gateway) → /brain/token-installer.json
 const { data: dataInstaller } = pakaiPolling('/brain/token-installer.json', 60000)
+// Patokan 1% jatah mingguan per akun, dari siklus yang sudah selesai (claude-pakai) → /brain/token-acuan.json
+const { data: dataAcuan } = pakaiPolling('/brain/token-acuan.json', 300000)
 
 const RENTANG = [['1', 'Hari ini'], ['kemarin', 'Kemarin'], ['7', '7 hari'], ['30', '30 hari'], ['semua', 'Semua']]
 const JALUR = { telegram: 'Telegram', desktop: 'Desktop', terminal: 'Terminal SSH', otomasi: 'Otomasi' }
@@ -40,6 +42,7 @@ const DAFTAR_AKUN = computed(() => data.value?.akun || [{ kunci: '1', label: 'Cl
 const akun = tabUrl('akun', '1', { boleh: ['1', '2'] })
 const akunSesi = (s) => (s.akun || '1') === akun.value
 const limit = computed(() => akun.value === '2' ? limit2.value : limit1.value)
+const acuan = computed(() => dataAcuan.value?.akun?.[akun.value] || null)
 const galatLimit = computed(() => akun.value === '2' ? galatLimit2.value : galatLimit1.value)
 // Urutan tabel: kolom + arah; klik judul kolom yang sama membalik arah
 const urut = ref({ kolom: 'total', naik: false })
@@ -385,6 +388,14 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
           </span>
         </div>
       </div>
+      <p v-if="acuan" class="acuan-jatah">
+        <b>Patokan 1% jatah mingguan</b> ≈ {{ usd.format(acuan.usd_per_persen) }}
+        <span class="redup">({{ usd.format(acuan.rendah) }}–{{ usd.format(acuan.tinggi) }}) · {{ pendek(acuan.token_per_persen) }} token, {{ pendek(acuan.tanpa_cache_per_persen) }} tanpa cache baca · dari {{ acuan.siklus.length }} siklus selesai</span>
+        <Info label="Tentang patokan jatah" rata="kanan">
+          <p>Biaya dan token tiap siklus mingguan yang sudah selesai dibagi puncak persennya, lalu diambil nilai tengah. Perkiraan, bukan angka resmi Anthropic. Patokan terbaik memakai biaya, karena total token didominasi cache baca yang murah.</p>
+          <ul><li v-for="s in acuan.siklus" :key="s.dari">{{ s.dari }} s/d {{ s.sampai }}: puncak {{ Math.round(s.puncak) }}%, {{ usd.format(s.biaya) }} → {{ usd.format(s.usd_per_persen) }} per 1%</li></ul>
+        </Info>
+      </p>
       <template v-if="titikLimit.length > 1">
         <h3 class="sub">Riwayat 8 hari</h3>
         <GrafikGaris :titik="titikLimit" :seri="SERI_LIMIT" :format-waktu="formatWaktuLimit" :tinggi="170" />
@@ -609,6 +620,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
         <li><b>Jenis penggunaan</b> ditebak dari pesan pertama sesi (domain, kata seperti eksekusi/revisi/installer). <b>Installer otomatis</b> = agen desain installer yang jalan tanpa transkrip, diambil dari catatan pemakaian installer. Tebakan salah bisa dikoreksi per sesi di <code>/var/lib/velocity/claude-pakai/jenis.json</code> (<code>{"&lt;id sesi&gt;": "revisi_web"}</code>).</li>
         <li>Tanda <b>konteks besar</b>: tiap panggilan membaca ulang lebih dari 300 rb token. Biasanya karena sesi terlalu panjang; mulai sesi baru atau <code>/clear</code> untuk tugas berbeda supaya kuota lebih hemat.</li>
         <li>Ada dua langganan: <b>Claude 1</b> (<code>claude</code>, Telegram, installer) dan <b>Claude 2</b> (<code>claude2</code>, mulai 5 Okt 2026). Tab akun menyaring semua angka di halaman ini. Sesi sebelum 5 Okt otomatis masuk Claude 1.</li>
+        <li><b>Patokan 1% jatah</b> = biaya siklus mingguan yang sudah selesai dibagi puncak persennya, nilai tengah sampai 4 siklus terakhir; rentangnya lebar karena tiap siklus berbeda campuran model dan pemakaian tanpa transkrip belum lengkap sebelum 2 Nov 2026. Persen per domain di halaman installer = biaya domain dibagi patokan akun yang dipakai run-nya.</li>
         <li>Token dihitung dari transkrip lokal, bukan dari tagihan Anthropic. Batas pemakaian diambil langsung dari Anthropic per akun.</li>
       </ul>
     </section>
@@ -699,6 +711,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .batas h3, .judul-info { display: inline-flex; align-items: center; gap: 4px; }
 .batas-angka { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .sub { margin: 14px 0 4px; }
+.acuan-jatah { margin: 12px 0 0; font-size: 13px; }
 .persen { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .persen small { font-size: 14px; font-weight: 600; color: var(--teks-3); margin-left: 2px; }
 .meter.tebal { height: 8px; }
