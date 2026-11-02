@@ -165,12 +165,18 @@ function vmr_terpakai() {
         $wpdb->get_col("SELECT m.meta_value FROM {$wpdb->postmeta} m JOIN {$wpdb->posts} p ON p.ID=m.post_id WHERE p.post_type NOT IN('attachment','revision') AND m.$kunci"),
         $wpdb->get_col("SELECT meta_value FROM {$wpdb->termmeta} WHERE $kunci")
     );
+    // ID polos di theme_mods: velocity-perusahaan2 dkk. menyimpan gambar sebagai ID (nanggroe.org 2 Nov).
+    $mods = (array) get_theme_mods();
+    $mod_id = [];
+    array_walk_recursive($mods, function ($v) use (&$mod_id) {
+        if (is_scalar($v) && preg_match_all('#(?<![\d.])\d+(?![\d.])#', (string) $v, $m)) $mod_id += array_flip($m[0]);
+    });
     $hasil = [];
     foreach (get_posts(['post_type' => 'attachment', 'post_mime_type' => 'image', 'numberposts' => -1, 'post_status' => 'any', 'fields' => 'ids']) as $id) {
         $i = pathinfo((string) get_attached_file($id));
         if (empty($i['filename'])) continue;
         $re = '#' . preg_quote($i['filename'], '#') . '(-\d+x\d+|-scaled)?\.' . preg_quote($i['extension'], '#') . '#';
-        $ada = (int) get_theme_mod('custom_logo') === $id || (int) get_option('site_icon') === $id;
+        $ada = isset($mod_id[$id]) || (int) get_option('site_icon') === $id;
         foreach ($semua as $v) { if ($ada) break; $ada = preg_match($re, (string) $v) === 1; }
         foreach ($meta_id as $v) { if ($ada) break; $ada = preg_match('#(?<![\d.])' . $id . '(?![\d.])#', (string) $v) === 1; }
         foreach (array_merge($teks, $opsi) as $v) { if ($ada) break; $ada = preg_match('#wp-image-' . $id . '\b|"id":' . $id . '\b|"attachment_id";i:' . $id . ';|\bids="[^"]*\b' . $id . '\b#', (string) $v) === 1; }
