@@ -143,7 +143,7 @@ async function simpanIdentitas() {
           <button v-if="d.contoh" type="button" class="tombol garis kecil" @click="keContoh">Kelola contoh</button>
           <button v-if="srv?.kondisi === 'mati'" type="button" class="tombol kecil" :disabled="menyalakan" @click="nyalakanDev">{{ menyalakan ? 'Menyalakan…' : 'Aktifkan dev' }}</button>
           <a v-else-if="srv?.port && srv.kondisi !== 'tidak_ada'" class="tombol garis kecil" :href="alamatDev(srv.port, srvLanIp)" target="_blank" rel="noopener"><Ikon nama="luar" :ukuran="16" /> Buka dev :{{ srv.port }}</a>
-          <button v-if="!nonaktif" type="button" class="tombol garis kecil" @click="statusBuka = true">Tunda / Batal</button>
+          <button v-if="!nonaktif" type="button" class="tombol garis kecil tunda" @click="statusBuka = true">Tunda / Batal</button>
           <button v-if="!terinstall" type="button" class="tombol garis kecil" @click="bukaIdentitas"><Ikon nama="sunting" :ukuran="16" /> Ubah identitas / relasi</button>
           <button v-if="!d.app && !d.install?.status" type="button" class="tombol bahaya kecil" @click="hapusBuka = true"><Ikon nama="sampah" :ukuran="16" /> Hapus</button>
         </div>
@@ -288,4 +288,6 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
   .stepper button small { display: none; }
   .stepper button b { font-size: 12px; }
 }
+.tombol.tunda { color: var(--bahaya); border-color: rgba(255, 107, 107, .5); }
+.tombol.tunda:hover { background: rgba(255, 107, 107, .1); border-color: var(--bahaya); }
 </style>

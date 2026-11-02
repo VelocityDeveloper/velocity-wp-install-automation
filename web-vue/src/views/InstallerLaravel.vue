@@ -316,8 +316,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .tombol-status { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 10px; border-radius: 999px; border: 1px solid var(--garis); background: var(--kartu); color: var(--teks-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .tombol-status:hover { border-color: var(--aksen-terang); color: var(--teks); }
 .tombol-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--baik); }
-.tombol-tunda { padding: 3px 8px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--teks-2); font: inherit; font-size: 12px; cursor: pointer; }
-.tombol-tunda:hover, .tombol-tunda:focus-visible { color: var(--teks); border-color: var(--garis); }
+.tombol-tunda { padding: 3px 8px; border-radius: 999px; border: 1px solid rgba(255, 107, 107, .5); background: none; color: var(--bahaya); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.tombol-tunda:hover, .tombol-tunda:focus-visible { background: rgba(255, 107, 107, .1); border-color: var(--bahaya); }
 .tombol-status.ditunda i { background: var(--waspada); }
 .tombol-status.batal i { background: var(--bahaya); }
 .tombol-hapus { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--teks-2); cursor: pointer; }
