@@ -321,13 +321,15 @@ BAHAN_KELUARAN = {'saran': ('catatan', 'dokumen'), 'rangkuman': ('catatan', 'dok
 KONTEN_MODE = {'statis': 'Statis', 'bersekat': 'Konten bersekat', 'page_builder': 'Page builder'}
 
 # Status project (permintaan user 2026-10-05): brief yang tidak deal dengan klien ditandai Batal/Ditunda supaya daftar
-# /installer/laravel tidak menumpuk; Selesai (5 Okt) = project rampung/serah terima, ikut dikunci seperti Batal/Ditunda. proyek.json `status` {nilai, alasan, oleh, waktu}; tanpa field = aktif.
+# /installer/laravel tidak menumpuk. proyek.json `status` {nilai, alasan, oleh, waktu}; tanpa field = aktif.
+# Selesai manual dihapus 2 Nov (permintaan user): Selesai kini hanya dari tahap pipeline; Ditunda/Batal wajib alasan.
 # Project nonaktif: semua aksi ditolak (`proyek_nonaktif`) kecuali mengubah status, dan laravel-agen-lanjut melewatinya.
-STATUS_PROYEK = {'aktif': 'Aktif', 'selesai': 'Selesai', 'ditunda': 'Ditunda', 'batal': 'Batal'}
+STATUS_PROYEK = {'aktif': 'Aktif', 'ditunda': 'Ditunda', 'batal': 'Batal'}
 
 
 def status_proyek(p):
-    return (p.get('status') or {}).get('nilai') or 'aktif'
+    nilai = (p.get('status') or {}).get('nilai')
+    return nilai if nilai in STATUS_PROYEK else 'aktif'
 
 
 def versi_brief(p):
@@ -902,6 +904,8 @@ def ubah_status(slug, payload):
     if nilai not in STATUS_PROYEK:
         raise ValueError('status_tidak_sah')
     alasan = str(payload.get('alasan') or '').strip()[:500]
+    if nilai != 'aktif' and not alasan:
+        raise ValueError('alasan_wajib')
     if nilai != 'aktif' and pekerjaan(slug):
         raise ValueError('sedang_berjalan')
     if nilai == 'aktif':
@@ -1790,7 +1794,7 @@ AKSI_POST = {
     'acc_desain': acc_desain,
 }
 KODE_GALAT = {'server_tidak_dikenal': 404, 'server_selalu_nyala': 409, 'systemctl_gagal': 500, 'sedang_berjalan': 409, 'slug_dipakai': 409, 'folder_exists': 409, 'sudah_diinstall': 409,
-              'sudah_dikunci': 409, 'proyek_nonaktif': 409, 'konfirmasi_salah': 400, 'url_tidak_sah': 400, 'preview_belum_diatur': 503, 'payload_too_large': 413, 'db_root_missing': 503, 'no_port': 503, 'tidak_ada': 404}
+              'sudah_dikunci': 409, 'proyek_nonaktif': 409, 'alasan_wajib': 400, 'konfirmasi_salah': 400, 'url_tidak_sah': 400, 'preview_belum_diatur': 503, 'payload_too_large': 413, 'db_root_missing': 503, 'no_port': 503, 'tidak_ada': 404}
 
 
 def handle(metode, path, query, payload):

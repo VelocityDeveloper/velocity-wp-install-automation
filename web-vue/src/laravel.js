@@ -24,10 +24,10 @@ export const TAHAP = [
 ]
 export const indeksTahap = (t) => (t === 'selesai' ? TAHAP.length : TAHAP.findIndex((x) => x.kunci === t))
 
-// Status project (5 Okt): brief tidak deal → Batal/Ditunda, rampung → Selesai; keluar dari daftar aktif. Nilai = scripts/laravel_proyek.py STATUS_PROYEK
+// Status project (5 Okt): brief tidak deal → Batal/Ditunda; keluar dari daftar aktif. Nilai = scripts/laravel_proyek.py STATUS_PROYEK
+// Selesai manual dihapus 2 Nov: Selesai hanya dari tahap pipeline (p.tahap === 'selesai').
 export const STATUS_PROYEK = {
   aktif: { label: 'Aktif', ket: 'Project berjalan seperti biasa.' },
-  selesai: { label: 'Selesai', ket: 'Project rampung / sudah serah terima; bisa diaktifkan lagi bila ada pekerjaan.', kelas: 'info' },
   ditunda: { label: 'Ditunda', ket: 'Menunggu keputusan klien; bisa diaktifkan lagi.', kelas: 'waspada' },
   batal: { label: 'Batal', ket: 'Tidak deal; data tetap tersimpan.', kelas: 'bahaya' },
 }
@@ -52,6 +52,7 @@ const PESAN = {
   proyek_nonaktif: 'Project berstatus Batal/Ditunda. Aktifkan kembali dulu untuk melanjutkan.',
   konfirmasi_salah: 'Ketik ID project persis untuk konfirmasi hapus.',
   status_tidak_sah: 'Status tidak dikenal.',
+  alasan_wajib: 'Alasan Ditunda/Batal wajib diisi.',
   invalid_judul: 'Judul wajib diisi, tanpa tanda kutip, $, \\, |, &, ;, < atau >.',
   invalid_klien: 'Nama klien memuat karakter terlarang.',
   invalid_oleh: 'Masuk dulu lewat tombol "Masuk dengan VD.net".',

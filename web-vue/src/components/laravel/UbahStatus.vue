@@ -15,7 +15,7 @@ watch(() => props.p, (p) => {
 async function simpan() {
   st.mengirim = true
   try {
-    const r = await aksi(props.p.slug, 'status', { nilai: st.nilai, alasan: st.alasan.trim() })
+    const r = await aksi(props.p.slug, 'status', { nilai: st.nilai, alasan: st.nilai === 'aktif' ? '' : st.alasan.trim() })
     emit('ubah')
     // Status tersimpan; galat cabut/terbit ulang preview ditampilkan, dialog tetap terbuka
     if (r?.galat_preview) st.galat = `Status tersimpan, tetapi preview gagal diperbarui: ${r.galat_preview}`
@@ -35,14 +35,14 @@ async function simpan() {
         </label>
       </div>
       <p class="ket redup">{{ STATUS_PROYEK[st.nilai]?.ket }}</p>
-      <textarea v-if="st.nilai !== 'aktif'" v-model="st.alasan" rows="2" maxlength="500" aria-label="Alasan (opsional)"
-        :placeholder="st.nilai === 'selesai' ? 'Catatan (opsional) — mis. sudah serah terima ke klien' : 'Alasan (opsional) — mis. klien memilih vendor lain'" />
+      <textarea v-if="st.nilai !== 'aktif'" v-model="st.alasan" rows="2" maxlength="500" required aria-label="Alasan (wajib)"
+        placeholder="Alasan (wajib) — mis. klien memilih vendor lain" />
       <p v-if="p.job && st.nilai !== 'aktif'" class="pesan-status waspada">Masih ada proses berjalan; tunggu selesai dulu.</p>
       <p v-if="!namaSaya.trim()" class="pesan-status waspada">Masuk dulu lewat "Masuk dengan VD.net".</p>
       <p v-if="st.galat" class="pesan-status bahaya">{{ st.galat }}</p>
       <div class="aksi-dialog">
         <button type="button" class="tombol garis" @click="emit('tutup')">Tutup</button>
-        <button type="submit" class="tombol" :disabled="!namaSaya.trim() || st.mengirim || st.nilai === (p.status_proyek || 'aktif')">{{ st.mengirim ? 'Menyimpan…' : 'Simpan' }}</button>
+        <button type="submit" class="tombol" :disabled="!namaSaya.trim() || st.mengirim || (st.nilai !== 'aktif' && !st.alasan.trim()) || (st.nilai === (p.status_proyek || 'aktif') && st.alasan.trim() === (p.status_info?.alasan || ''))">{{ st.mengirim ? 'Menyimpan…' : 'Simpan' }}</button>
       </div>
     </form>
   </Dialog>
@@ -53,11 +53,10 @@ async function simpan() {
 .form-status .aksi-dialog { margin-top: 4px; }
 .untuk { margin: -6px 0 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .untuk code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; margin-right: 4px; }
-.segmen { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu-2); }
+.segmen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--kartu-2); }
 .segmen label { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 8px; border-radius: 9px; font-size: 13.5px; font-weight: 600; color: var(--teks-2); cursor: pointer; transition: background .15s, color .15s; }
 .segmen label:hover { color: var(--teks); }
 .segmen label i { width: 8px; height: 8px; border-radius: 50%; background: var(--baik); flex: none; }
-.segmen .selesai i { background: var(--aksen-terang); }
 .segmen .ditunda i { background: var(--waspada); }
 .segmen .batal i { background: var(--bahaya); }
 .segmen label.dipilih { background: var(--kartu); color: var(--teks); box-shadow: 0 1px 3px rgba(0, 0, 0, .25), inset 0 0 0 1px var(--garis); }

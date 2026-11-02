@@ -50,13 +50,14 @@ async function buat() {
   }
 }
 
-// Filter progress = tahap project saat ini; project selesai hanya tampil di "Aktif".
-// Project Selesai/Batal/Ditunda hanya tampil di tab statusnya, tidak ikut tab tahap & peringatan review.
+// Filter progress = tahap project saat ini. Selesai = tahap pipeline selesai (otomatis, 2 Nov), tidak ikut "Aktif".
+// Project Batal/Ditunda (manual) hanya tampil di tab statusnya, tidak ikut tab tahap & peringatan review.
 const SARING = [{ nilai: 'semua', label: 'Aktif' }, ...TAHAP.map((t) => ({ nilai: t.kunci, label: t.label })),
   { nilai: 'selesai', label: 'Selesai', status: true }, { nilai: 'ditunda', label: 'Ditunda', status: true }, { nilai: 'batal', label: 'Batal', status: true }]
 const saring = tabUrl('tahap', 'semua', { boleh: SARING.map((s) => s.nilai) })
 const aktif = (p) => (p.status_proyek || 'aktif') === 'aktif'
-const cocok = (p, n) => (n in STATUS_PROYEK ? p.status_proyek === n : aktif(p) && (n === 'semua' || p.tahap === n))
+const cocok = (p, n) => (n in STATUS_PROYEK ? p.status_proyek === n
+  : aktif(p) && (n === 'semua' ? p.tahap !== 'selesai' : p.tahap === n))
 // Cari domain: cocokkan ke domain, folder On Progress, judul, klien, slug & nama app (domain kadang hanya ada di judul)
 const cari = ref('')
 const cocokCari = (p) => {
@@ -224,9 +225,10 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
             </div>
             <div class="p-kanan">
               <span class="redup">{{ p.pm ? `PM ${p.pm} · ` : '' }}{{ waktuLalu(p.dibuat) }}</span>
-              <button type="button" class="tombol-status" :class="p.status_proyek || 'aktif'" :title="`Ubah status ${p.slug}`" @click.prevent.stop="ubahStatus = p">
-                <i aria-hidden="true" />{{ STATUS_PROYEK[p.status_proyek || 'aktif']?.label }}<span aria-hidden="true" class="panah">▾</span>
+              <button v-if="!aktif(p)" type="button" class="tombol-status" :class="p.status_proyek" :title="`Ubah status ${p.slug}`" @click.prevent.stop="ubahStatus = p">
+                <i aria-hidden="true" />{{ STATUS_PROYEK[p.status_proyek]?.label }}<span aria-hidden="true" class="panah">▾</span>
               </button>
+              <button v-else-if="!p.job" type="button" class="tombol-tunda" :title="`Tunda atau batalkan ${p.slug}`" @click.prevent.stop="ubahStatus = p">Tunda/Batal</button>
               <button v-if="!p.app && !p.install?.status" type="button" class="tombol-hapus" :title="`Hapus ${p.slug}`" :aria-label="`Hapus ${p.slug}`" @click.prevent.stop="hapusProyek = p">
                 <Ikon nama="sampah" :ukuran="15" />
               </button>
@@ -314,7 +316,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .tombol-status { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 10px; border-radius: 999px; border: 1px solid var(--garis); background: var(--kartu); color: var(--teks-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .tombol-status:hover { border-color: var(--aksen-terang); color: var(--teks); }
 .tombol-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--baik); }
-.tombol-status.selesai i { background: var(--aksen-terang); }
+.tombol-tunda { padding: 3px 8px; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--teks-2); font: inherit; font-size: 12px; cursor: pointer; }
+.tombol-tunda:hover, .tombol-tunda:focus-visible { color: var(--teks); border-color: var(--garis); }
 .tombol-status.ditunda i { background: var(--waspada); }
 .tombol-status.batal i { background: var(--bahaya); }
 .tombol-hapus { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--teks-2); cursor: pointer; }
