@@ -407,8 +407,10 @@ def minta_listing(manifest, cfg, domain, layanan):
     permintaan = f"""Situs: {cfg.get('site_title') or domain} ({domain}). Tema situs: katalog "Listing" (aslinya untuk
 agen properti) — tiap listing punya judul, foto, kategori, lokasi, harga, dan isi.
 
-Tugas: susun 6 LISTING untuk seksi "Listing" situs ini.
-- Bila dokumen klien memuat produk/unit/paket yang ditawarkan beserta keterangannya, salin itu (contoh=false).
+Tugas: susun LISTING untuk seksi "Listing" situs ini.
+- Bila dokumen klien memuat produk/unit/paket yang ditawarkan beserta keterangannya, salin itu (contoh=false),
+  SATU listing per produk (maks 8). Jangan mengulang produk yang sama dengan judul/kategori lain demi
+  mencapai 6 — 2 produk di materi = 2 listing.
 - Bila TIDAK ada (mis. "materi menyusul"), buat 6 listing CONTOH yang masuk akal untuk jenis usaha klien
   (contoh=true): travel umroh → paket umroh/haji, dealer → unit kendaraan, agen properti → rumah/ruko/tanah,
   dst. Harga contoh wajar pasar Indonesia, nama tanpa merek pihak lain.
@@ -446,6 +448,11 @@ DOKUMEN KLIEN:
         except (TypeError, ValueError):
             continue
         listing = [p for p in data.get('listing') or [] if isinstance(p, dict) and str(p.get('judul') or '').strip()]
+        # AI mengulang 2 produk materi jadi 6 listing (perumahangunungsariindah.com 2026-11-03).
+        unik = {}
+        for p in listing:
+            unik.setdefault(re.sub(r'\W+', ' ', str(p['judul'])).strip().lower(), p)
+        listing = list(unik.values())
         if listing:
             data['listing'] = listing[:8]
             data['model'] = model.get('id')

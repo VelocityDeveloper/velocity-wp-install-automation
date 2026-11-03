@@ -7,11 +7,14 @@ menu, catatan .txt. Foto, video, dan file desain dilewati.
 Teks ini dikirim ke API AI eksternal, jadi baris kredensial selalu dibuang dan
 bagian data pribadi pemilik di form ditandai supaya tidak ditampilkan di situs.
 """
+import csv
 import re
 import shutil
 import subprocess
 import tempfile
 import unicodedata
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 from client_form import berkas_form, extract_text
@@ -21,9 +24,50 @@ OCR_PAGES = 6
 
 # Presentasi (.pptx dsb.) diubah ke PDF dulu lewat LibreOffice — company profile
 # sering dikirim sebagai PowerPoint (chindrasantipratama.com 2026-09-26).
-DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt'} | PRESENTASI
+# .xlsx/.csv: data listing/produk klien sering dikirim sebagai spreadsheet
+# (perumahangunungsariindah.com "Form data pkm.xlsx" terlewat 2026-10-31).
+DOC_EXTS = {'.pdf', '.docx', '.doc', '.txt', '.xlsx', '.csv'} | PRESENTASI
 # Dokumen yang belum bisa dibaca: dicatat supaya tidak hilang diam-diam.
-UNSUPPORTED_EXTS = {'.xls', '.xlsx', '.csv', '.odt', '.rtf', '.pages', '.key', '.numbers'}
+UNSUPPORTED_EXTS = {'.xls', '.odt', '.rtf', '.pages', '.key', '.numbers'}
+_XNS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+_RNS = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
+
+
+def teks_xlsx(path):
+    """Baris 'sel | sel | ...' per sheet, hanya pustaka standar (openpyxl tidak terpasang).
+    Nilai sel = nilai tersimpan (hasil rumus terakhir), bukan rumusnya."""
+    with zipfile.ZipFile(path) as z:
+        nama = set(z.namelist())
+        shared = []
+        if 'xl/sharedStrings.xml' in nama:
+            for si in ET.fromstring(z.read('xl/sharedStrings.xml')).iter(_XNS + 'si'):
+                shared.append(''.join(t.text or '' for t in si.iter(_XNS + 't')))
+        rels = {r.get('Id'): r.get('Target') for r in ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))}
+        lines = []
+        for sh in ET.fromstring(z.read('xl/workbook.xml')).iter(_XNS + 'sheet'):
+            target = rels.get(sh.get(_RNS + 'id'), '').lstrip('/')
+            target = target if target.startswith('xl/') else 'xl/' + target
+            if target not in nama:
+                continue
+            lines.append(f'[Sheet {sh.get("name")}]')
+            for row in ET.fromstring(z.read(target)).iter(_XNS + 'row'):
+                sel = []
+                for c in row.iter(_XNS + 'c'):
+                    t, v = c.get('t'), c.find(_XNS + 'v')
+                    if t == 'inlineStr':
+                        val = ''.join(x.text or '' for x in c.iter(_XNS + 't'))
+                    elif v is None or v.text is None:
+                        continue
+                    elif t == 's':
+                        val = shared[int(v.text)]
+                    else:
+                        val = v.text
+                    val = ' '.join(val.split())
+                    if val:
+                        sel.append(val)
+                if sel:
+                    lines.append(' | '.join(sel))
+        return lines
 # Dokumen yang biasanya paling kaya isi didahulukan saat anggaran karakter habis.
 PRIORITY = re.compile(r'profil|profile|compro|konsep|isian|menu|katalog', re.I)
 # Materi.docx trimurtiekapaksi.com (±7.500 karakter) terpotong di 7.000: bagian Pendaftaran,
@@ -36,8 +80,9 @@ CRED = re.compile(r'pass(word)?|kata ?sandi|\bsandi\b|user ?name|\blogin\b|cpane
 GUIDE = re.compile(r'^(silahkan|silakan|misal|contoh|jika bingung|untuk isi|pada gambar|\(tampilan|'
                    r'nama domain adalah|responsive desain itu|hyperlink|dapat di ?lihat|\*)', re.I)
 ALLOWED = re.compile(r"[A-Za-z0-9\s.,:;!?'\"()\[\]\-/&@+%#=_]")
-PERSONAL_START = re.compile(r'data pribadi pemilik', re.I)
-PERSONAL_END = re.compile(r'apakah desain|warna tema|konsep desain|responsive', re.I)
+# "BIO DATA PEMILIK WEB" = sheet xlsx perumahangunungsariindah.com 2026-10-31.
+PERSONAL_START = re.compile(r'data pribadi pemilik|bio ?data pemilik', re.I)
+PERSONAL_END = re.compile(r'apakah desain|warna tema|konsep desain|responsive|^data website', re.I)
 # Label form yang berisi data pribadi pemilik, bukan data usaha.
 PERSONAL_LABELS = re.compile(r'^(nama anda|nama pemilik|email|e-mail|whatsapp|no hp|no\. hp)', re.I)
 
@@ -91,8 +136,13 @@ def _doc_lines(path):
             return lines
         if ext == '.txt':
             return path.read_text(errors='replace').splitlines()
+        if ext == '.xlsx':
+            return teks_xlsx(path)
+        if ext == '.csv':
+            return [' | '.join(c.strip() for c in r if c.strip())
+                    for r in csv.reader(path.read_text(errors='replace').splitlines())]
         return extract_text(path)  # .docx / .doc, dideteksi lewat magic bytes
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, zipfile.BadZipFile, ET.ParseError, KeyError):
         return []
 
 
@@ -167,7 +217,7 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DO
                                               or 'credential' in path.name.lower()):
             continue
         lines = [' '.join(str(l).split()) for l in _doc_lines(path)]
-        if path in form:
+        if path in form or path.suffix.lower() in ('.xlsx', '.csv'):
             lines = _mark_personal(lines)
         text = '\n'.join(_clean_lines(lines))
         if len(text) < 40:

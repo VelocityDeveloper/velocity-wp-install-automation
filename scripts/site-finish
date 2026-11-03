@@ -286,12 +286,12 @@ def _foto_layak(path):
 
 
 def foto_dokumen(folder):
-    """[(berkas, lebar, tinggi)] foto dari .docx/.pptx klien, diekstrak ke FOTO_DOKUMEN/<domain>/,
+    """[(berkas, lebar, tinggi)] foto dari .docx/.pptx/.xlsx klien, diekstrak ke FOTO_DOKUMEN/<domain>/,
     urut sesuai dokumen; hanya yang lolos _foto_layak, tanpa duplikat (md5)."""
     import hashlib
     import zipfile
     keluar = FOTO_DOKUMEN / folder.name
-    dokumen = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in ('.docx', '.pptx')
+    dokumen = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in ('.docx', '.pptx', '.xlsx')
                      and not p.name.startswith('~$')
                      and not any(BUKAN_FOTO_KLIEN.search(b) or DOKUMEN_PRIBADI.search(b)
                                  for b in p.relative_to(folder).parts))
@@ -300,7 +300,7 @@ def foto_dokumen(folder):
         awalan = re.sub(r'[^a-z0-9]+', '-', dok.stem.lower()).strip('-')[:40] or 'dokumen'
         try:
             with zipfile.ZipFile(dok) as z:
-                nama = [n for n in z.namelist() if re.match(r'(word|ppt)/media/', n) and Path(n).suffix.lower() in IMG_EXT]
+                nama = [n for n in z.namelist() if re.match(r'(word|ppt|xl)/media/', n) and Path(n).suffix.lower() in IMG_EXT]
                 nomor = lambda n: int((re.search(r'(\d+)', Path(n).stem) or [0, 0])[1])
                 for n in sorted(nama, key=nomor):
                     tujuan = keluar / f'{awalan}-{Path(n).stem}{Path(n).suffix.lower()}'
