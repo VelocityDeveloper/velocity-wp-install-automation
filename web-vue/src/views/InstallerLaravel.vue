@@ -239,7 +239,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
             <template v-if="p.onprogress">On Progress: {{ p.onprogress }}</template><template v-else>belum ada relasi On Progress</template>
             <template v-if="p.brief_versi"> · brief v{{ p.brief_versi }}</template>
             <template v-if="p.fitur_total"> · {{ p.fitur_total }} fitur, agen {{ hariJam(p.jam_agen) }}, webmaster {{ hariJam(p.jam_webmaster) }}, total {{ hariJam(p.jam_agen + p.jam_webmaster) }}</template>
-            <template v-if="'token' in p"> · <span class="token" :title="p.token ? judulToken(p.token) : 'Belum ada pemakaian token Claude'">{{ angkaToken(p.token?.total || 0) }} token</span></template>
+            <template v-if="'token' in p"> · <button v-if="p.token" type="button" class="token tombol-token" :title="judulToken(p.token) + '\nKlik untuk rincian per alur'" @click.prevent.stop="router.push(`/token/proyek?cari=${p.slug}`)">{{ angkaToken(p.token.total) }} token</button><span v-else class="token" title="Belum ada pemakaian token Claude">0 token</span></template>
           </p>
           <p v-if="!aktif(p) && p.status_info" class="redup meta alasan">
             {{ STATUS_PROYEK[p.status_proyek]?.label }} oleh {{ p.status_info.oleh }} {{ waktuLalu(p.status_info.waktu) }}<template v-if="p.status_info.alasan"> — {{ p.status_info.alasan }}</template>
@@ -328,6 +328,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .meta { margin: 0; }
 .pil.server.mati { color: var(--teks-3); background: var(--kartu); }
 .meta .token { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.meta .tombol-token { all: unset; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.meta .tombol-token:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 2px; }
 .stepper { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .stepper li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--teks-3); padding-top: 8px; border-top: 3px solid var(--garis); flex-wrap: wrap; }
 .stepper li i { width: 8px; height: 8px; border-radius: 50%; background: var(--garis); flex: none; }

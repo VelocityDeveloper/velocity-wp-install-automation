@@ -368,9 +368,9 @@ function tutupAlur() { alur.value.buka = false; clearInterval(pollAlur); pollAlu
                   <span v-if="lamaBaris(x).mode" class="kecil tahap">{{ lamaBaris(x).mode }}</span>
                 </template>
                 <span v-else-if="!tokenBaris(x)" class="redup">-</span>
-                <span v-if="tokenBaris(x)" class="kecil token" :title="tokenBaris(x).judul">
+                <router-link v-if="tokenBaris(x)" class="kecil token" :to="`/token/proyek?cari=${x.domain}`" :title="tokenBaris(x).judul + '\nKlik untuk rincian per alur'">
                   {{ tokenBaris(x).teks }} token<template v-if="tokenBaris(x).claude && tokenBaris(x).lain"> · C {{ tokenBaris(x).claude }} · lain {{ tokenBaris(x).lain }}</template><template v-else-if="tokenBaris(x).claude"> · Claude</template><template v-if="tokenBaris(x).jatah"> · {{ tokenBaris(x).jatah }}% jatah</template>
-                </span>
+                </router-link>
               </td>
               <td class="kol-aksi">
                 <button type="button" class="tombol garis kecil" aria-haspopup="menu" @click="menu.tampilkan($event.currentTarget, aksiBaris(x))">Aksi <span aria-hidden="true">▾</span></button>

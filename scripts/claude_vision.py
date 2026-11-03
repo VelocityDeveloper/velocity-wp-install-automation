@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -85,6 +86,12 @@ def tanya(prompt, gambar, timeout=300, sisi=512, log=None):
             if log:
                 log(f'vision: gagal:{type(e).__name__}')
             return None
+        try:  # catat pemakaian (claude -p tanpa transkrip) ke usage.jsonl
+            sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+            from catat_claude import catat_claude
+            catat_claude(hasil, 'claude-vision', 'claude_vision', tahap=Path(sys.argv[0]).name)  # tahap = skrip pemanggil (alur)
+        except Exception:
+            pass
         if hasil.get('is_error'):
             if log:
                 log(f"vision: gagal:{str(hasil.get('result', ''))[:120]}")

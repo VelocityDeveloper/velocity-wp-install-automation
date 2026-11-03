@@ -242,7 +242,8 @@ def claude_call(system_prompt, user_prompt, model, timeout=None):
         baris = {'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain_proses(),
                  'run': os.environ.get('VELOCITY_RUN_ID', ''), 'mode': MODE, 'peran': model.get('peran', ''),
                  'script': Path(sys.argv[0]).name, 'sumber': 'claude', 'model_id': model.get('id', ''), 'model': nama,
-                 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+                 'permintaan': 1, 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+                 'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
                  'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': ok}
         try:
             with open(AI_USAGE, 'a') as f:

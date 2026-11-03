@@ -183,6 +183,12 @@ def jalankan(arg, paksa=False, coba=False):
         hasil = json.loads(run.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         return f'gagal:{type(e).__name__}', lama.get('data')
+    try:  # catat pemakaian (claude -p tanpa transkrip) ke usage.jsonl
+        sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+        from catat_claude import catat_claude
+        catat_claude(hasil, 'redaksi-klien', 'redaksi_klien', domain=domain)
+    except Exception:
+        pass
     data = hasil.get('structured_output')
     if not isinstance(data, dict) or hasil.get('is_error'):
         return f"gagal:{str(hasil.get('result') or 'tanpa_json')[:200]}", lama.get('data')

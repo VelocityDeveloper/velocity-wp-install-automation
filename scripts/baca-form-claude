@@ -32,7 +32,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import client_form  # noqa: E402
-from folder_klien import folder_klien  # noqa: E402
+from folder_klien import domain_folder, folder_klien  # noqa: E402
 
 TUGAS = HERE.parent / 'templates' / 'baca-form-claude' / 'tugas.md'
 ON_PROGRESS = Path('/home/On Progress')
@@ -176,7 +176,7 @@ def main():
         print(f'form_claude: gagal:{type(e).__name__}')
         return 0
     data = hasil.get('structured_output')
-    catat_pemakaian(DC, folder.name, hasil)
+    catat_pemakaian(DC, domain_folder(folder), hasil)
     if not isinstance(data, dict) or hasil.get('is_error'):
         print(f"form_claude: gagal:{str(hasil.get('result') or 'tanpa_json')[:200]}")
         return 0

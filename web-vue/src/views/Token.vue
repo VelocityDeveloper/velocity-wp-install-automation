@@ -469,6 +469,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
         <div class="tab" role="tablist" aria-label="Rincian pemakaian">
           <button v-for="t in TAB" :id="`tab-${t.kunci}`" :key="t.kunci" type="button" role="tab" :aria-selected="tab === t.kunci" :aria-controls="`panel-${t.kunci}`" :class="{ aktif: tab === t.kunci }" @click="tab = t.kunci">{{ t.label }}</button>
         </div>
+        <router-link to="/token/proyek" class="ke-proyek">Per project &amp; alur →</router-link>
         <span class="redup">{{ tab === 'jenis' && ['1', 'kemarin'].includes(rentang) ? 'token per hari (14 hari terakhir), klik jenis untuk menyaring' : TAB.find((t) => t.kunci === tab).ket }}</span>
       </div>
       <div v-if="tab === 'orang'" id="panel-orang" role="tabpanel" aria-labelledby="tab-orang">
@@ -648,6 +649,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .tab { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); }
 .tab button { border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; }
 .tab button.aktif { background: var(--aksen); color: #fff; }
+.ke-proyek { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .tab-akun { justify-self: start; }
 .tab-akun button { display: grid; justify-items: start; gap: 1px; padding: 8px 18px; font-size: 14px; }
 .akun-installer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--teks-2); }

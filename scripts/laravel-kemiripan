@@ -178,6 +178,12 @@ Skala: 90+ hampir sama, 75–89 mirip dengan beda kecil, 50–74 beda jelas, <50
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         log(f'Kemiripan GAGAL: {type(e).__name__}: {str(e)[:300]}')
         return None
+    try:  # catat pemakaian (claude -p tanpa transkrip) ke usage.jsonl
+        sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+        from catat_claude import catat_claude
+        catat_claude(keluar, 'laravel-kemiripan', 'laravel_kemiripan', domain=slug, run=f'laravel-kemiripan-{slug}', mode=f'kemiripan_{mode}')
+    except Exception:
+        pass
     data = keluar.get('structured_output')
     if not isinstance(data, dict) or keluar.get('is_error'):
         log(f"Kemiripan GAGAL: {str(keluar.get('result') or 'tanpa keluaran')[:300]}")

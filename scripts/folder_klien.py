@@ -12,7 +12,19 @@ from pathlib import Path
 
 ON_PROGRESS = Path('/home/On Progress')
 PETA = Path('/var/lib/velocity/installer/subfolder-crm.json')
+DOMAIN_RE = re.compile(r'(?:[a-z0-9-]+\.)+[a-z]{2,}')
 SUBFOLDER_RE = re.compile(r'\bsub\s*-?\s*folder\b\s*[:=\-]?\s*(.+)', re.I)
+
+
+def domain_folder(folder):
+    """Domain pemilik folder bahan: subfolder boleh bernama "x.com baru" / "redesign x.com" / "baru" (induknya x.com).
+    Dipakai saat mencatat token supaya masuk ke project domain itu, bukan ke nama folder."""
+    folder = Path(folder)
+    for nama in (folder.name, folder.parent.name):
+        m = DOMAIN_RE.search(nama.lower())
+        if m:
+            return m.group(0)
+    return folder.name
 
 
 def subfolder_dari_deskripsi(teks):

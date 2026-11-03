@@ -24,6 +24,7 @@ const Brain = () => import('./views/Brain.vue')
 const Paket = () => import('./views/Paket.vue')
 const AiModel = () => import('./views/AiModel.vue')
 const Token = () => import('./views/Token.vue')
+const TokenProyek = () => import('./views/TokenProyek.vue')
 const Projects = () => import('./views/Projects.vue')
 const Tutorial = () => import('./views/Tutorial.vue')
 const NotifEmail = () => import('./views/NotifEmail.vue')
@@ -59,6 +60,7 @@ const routes = [
   { path: '/installer/laravel/:id(project-\\d+)', component: LaravelProyek, meta: { judul: 'Project Aplikasi Custom' } },
   { path: '/ai', component: AiModel, meta: { judul: 'AI Model' } },
   { path: '/token', component: Token, meta: { judul: 'Token Usage' } },
+  { path: '/token/proyek', component: TokenProyek, meta: { judul: 'Token per Project' } },
   { path: '/paket', component: Paket, meta: { judul: 'Paket' } },
   { path: '/projects', component: Projects, meta: { judul: 'Project Lokal' } },
   { path: '/tutorial', component: Tutorial, meta: { judul: 'Statistik Tutorial' } },

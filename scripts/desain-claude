@@ -347,6 +347,9 @@ def jalankan_claude(folder, env, menit, prompt):
         '--disallowedTools', 'WebFetch', 'WebSearch', 'Agent', 'Read(//etc/**)', 'Read(//root/**)',
         'Read(//home/**)', 'Read(//var/lib/velocity/secret/**)', 'Read(//var/lib/velocity/installer/**)',
     ]
+    sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+    from catat_claude import HitungUsage
+    hitung = HitungUsage()
     mulai = time.time()
     hasil, kode = {}, None
     permintaan = {}  # model -> id respons API (satu id = satu request)
@@ -366,6 +369,7 @@ def jalankan_claude(folder, env, menit, prompt):
             if ev.get('type') == 'assistant':
                 pesan = ev.get('message') or {}
                 permintaan.setdefault(pesan.get('model') or '-', set()).add(pesan.get('id'))
+                hitung.tambah(pesan)
                 for blok in (ev.get('message') or {}).get('content') or []:
                     ringkas = ringkas_langkah(blok)
                     if ringkas:
@@ -378,6 +382,7 @@ def jalankan_claude(folder, env, menit, prompt):
     if not hasil and kode not in (0, None):
         kode = 'timeout' if time.time() - mulai >= menit * 60 - 5 else kode
     durasi = round((time.time() - mulai) / 60, 1)
+    hitung.isi_bila_terputus(hasil)  # timeout/mati sebelum event result: token yang sudah terpakai tetap tercatat
     hasil['permintaan_per_model'] = {m: len(i) for m, i in permintaan.items()}
     hasil['opus_terbaru'] = opus
     (folder / 'claude' / 'sesi.json').write_text(json.dumps(
@@ -415,7 +420,8 @@ def catat_pemakaian(domain, hasil):
             'model': model, 'permintaan': n, 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar,
             'total_tokens': masuk + baca + buat + keluar, 'input_tokens': masuk, 'cache_read_tokens': baca,
             'cache_creation_tokens': buat, 'biaya_usd': round(float(u.get('costUSD') or 0), 4),
-            'ok': not hasil.get('is_error'), 'giliran': hasil.get('num_turns'),
+            'ok': not hasil.get('is_error') and not hasil.get('parsial'), 'giliran': hasil.get('num_turns'),
+            **({'parsial': True} if hasil.get('parsial') else {}),
         }
         try:
             with open(AI_USAGE, 'a') as f:

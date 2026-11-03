@@ -997,6 +997,8 @@ def main():
         return 2
     cfg = read_manifest(args[0])
     domain, da_user = cfg.get('domain', '').lower(), cfg.get('da_user', '')
+    if domain:  # manifest di luar <domain>.txt (uji --coba): token foto tetap masuk ke domain ini
+        os.environ.setdefault('VELOCITY_DOMAIN', domain)
     key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
     isi_berkas = GENERATED_DIR / f'{domain}-tema.json'
     if isi_berkas.is_file():

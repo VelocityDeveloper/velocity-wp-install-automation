@@ -405,6 +405,9 @@ def jalankan_claude(DC, app_dir, prompt, menit, env):
         'Bash(git checkout:*)', 'Read(//etc/**)', 'Read(//root/**)', 'Read(//var/lib/velocity/**)',
         'Read(./.env)', 'Edit(./.env)', 'Write(./.env)',
     ]
+    sys.path.insert(0, '/opt/velocity-wp-install-automation/scripts')
+    from catat_claude import HitungUsage
+    hitung = HitungUsage()
     mulai = time.time()
     hasil, permintaan = {}, set()
     proses = subprocess.Popen(perintah, cwd=app_dir, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
@@ -419,6 +422,7 @@ def jalankan_claude(DC, app_dir, prompt, menit, env):
             if ev.get('type') == 'assistant':
                 pesan = ev.get('message') or {}
                 permintaan.add(pesan.get('id'))
+                hitung.tambah(pesan)
                 for blok in pesan.get('content') or []:
                     r = ringkas_langkah(blok)
                     if r:
@@ -432,6 +436,7 @@ def jalankan_claude(DC, app_dir, prompt, menit, env):
     hasil['timeout'] = not hasil.get('type') and time.time() - mulai >= menit * 60 - 5
     hasil['kode_keluar'] = kode
     hasil['permintaan'] = len(permintaan)
+    hitung.isi_bila_terputus(hasil)  # timeout/mati sebelum event result: token yang sudah terpakai tetap tercatat
     return hasil
 
 
@@ -445,8 +450,9 @@ def catat_pemakaian(DC, slug, fid, hasil):
             'sumber': 'claude', 'model_id': 'claude-code', 'model': model, 'permintaan': hasil.get('permintaan') or 1,
             'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
             'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
-            'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error'),
+            'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error') and not hasil.get('parsial'),
             'giliran': hasil.get('num_turns'),
+            **({'parsial': True} if hasil.get('parsial') else {}),
         }
         try:
             with open(DC.AI_USAGE, 'a') as f:

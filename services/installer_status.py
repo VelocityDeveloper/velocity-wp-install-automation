@@ -3277,7 +3277,7 @@ def token_domain(domain):
                 continue
             if not isinstance(b, dict) or not b.get('domain'):
                 continue
-            d = per.setdefault(b['domain'], {'claude': {'token': 0, 'panggilan': 0, 'model': set(), 'biaya_usd': 0.0},
+            d = per.setdefault(token_alur.domain_bersih(b['domain']), {'claude': {'token': 0, 'panggilan': 0, 'model': set(), 'biaya_usd': 0.0},
                                              'lain': {'token': 0, 'panggilan': 0, 'model': set()},
                                              'runs': {}})
             sisi = d['claude' if b.get('sumber') == 'claude' else 'lain']
@@ -3670,6 +3670,7 @@ def start_run(domain: str, mode: str):
 # Data, tahap, dan aksi ada di scripts/laravel_proyek.py (dipakai juga laravel-brief / laravel-agen).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 import laravel_proyek  # noqa: E402
+import token_alur  # noqa: E402
 
 # --- AI Model Management ---
 
@@ -4552,6 +4553,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             self._send_json(ai_token_usage())
+            return
+        if path == '/api/ai/token-proyek':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            q = parse_qs(parsed.query)
+            dari, sampai = (q.get('dari') or [''])[0], (q.get('sampai') or [''])[0]
+            if any(t and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', t) for t in (dari, sampai)):
+                self._send_json({'error': 'tanggal tidak valid'}, 400)
+                return
+            self._send_json(token_alur.rekap(dari, sampai))
             return
         if path.startswith('/api/ai/content/'):
             if not _check_auth(self):
