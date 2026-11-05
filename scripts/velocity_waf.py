@@ -145,7 +145,8 @@ def http(domain, ua):
     return o.strip()
 def restart():
     if LEWAT_NGINX:
-        k, o = jalan('nginx -t && systemctl reload nginx', 60)
+        # ulimit: shell SSH = 1024 fd, nginx -t buka semua log vhost (sanke ±15rb) → EMFILE
+        k, o = jalan('ulimit -n 65535; nginx -t && systemctl reload nginx', 60)
         time.sleep(2)
         return k, o.strip()[-300:]
     k, o = jalan(['/usr/local/lsws/bin/lswsctrl', 'restart'], 120)

@@ -100,6 +100,11 @@ SecRule REQUEST_FILENAME "@rx /wp-content/(?:cache|upgrade|upgrade-temp-backup)/
 # Eksploit Podlove Podcast Publisher image cache (unduh berkas PHP dari URL luar)
 SecRule ARGS_NAMES "@streq podlove_image_cache_url" \
     "id:7700214,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Eksploit Podlove image cache'"
+# Unggahan berekstensi ganda x.php.jpg / x.phtml.png / x.php%00.jpg (uji celah filter unggahan; WordPress menyimpannya jadi
+# x.php_.jpg = pos cPGuard "PHP or JS in image" 3 Nov). Nama berkas sah praktis tak pernah memuat ".php." di tengah.
+# Unggahan .php langsung sudah ditangani CRS 933110. Antivirus: VD.Upload.EkstensiGanda / VD.PHP.DalamGambar.
+SecRule FILES|FILES_NAMES "@rx \.(?:php\d?|phtml|pht|phar|phps|shtml)(?:[\x00\s_~-]|%00)*\.(?:[\w-]+\.)*(?:ico|png|jpe?g|gif|webp|bmp|avif|svg|txt|pdf)$" \
+    "id:7700225,phase:2,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Unggahan berkas berekstensi ganda .php*.jpg'"
 SecRule REQUEST_FILENAME "@rx /\.[^/]+\.php\d?$" \
     "id:7700211,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Berkas PHP tersembunyi'"
 # URL berisi /wp-content/uploads/ ≥3 kali (scraper rusak membaca srcset)
@@ -142,6 +147,19 @@ SecRule ARGS:action "@streq mk_file_folder_manager" \
     "id:7700221,phase:2,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - wp-file-manager membuat berkas PHP (webshell)',chain"
     SecRule ARGS:cmd "@rx ^(?:mkfile|rename|upload|put|paste|extract)$" "t:none,t:lowercase,chain"
     SecRule ARGS:name|FILES|ARGS:content "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$|<\?(?:php|=)" "t:none,t:urlDecodeUni,t:lowercase"
+# Kampanye backdoor 26 Okt (sandi admin bocor): plugin palsu wp-pup-plugin ("Polycraft Metamirror") membuka REST
+# polyreorder-stream-<hex>/v1 ber-permission __return_true; Hello Dolly palsu menulis wp-actions.php di akar situs = API
+# tambah/ubah/hapus pos ber-api_secret (ponpeshp, twmtr, transindonews). WordPress & plugin sah tak punya wp-actions.php /
+# namespace poly*-*/vN. Ukur log akses 7 hari 7 server: wp-actions.php 0 hit; REST poly 2.062 hit HANYA di 2 situs terinfeksi
+# — semuanya beacon JS sisipan plugin dari browser pengunjung & crawler (POST + Referer situs sendiri, 3×/tampilan, 74 IP ≥5×,
+# termasuk Googlebot/TikTokSpider; jawaban = konten sisipan/cloaking). Maka 7700223/7700224 nolog: tetap 403 tetapi TIDAK
+# dihitung BFM (IP pembaca/CGNAT tak diblokir CSF), terlihat di access log. wp-actions.php hanya dipanggil operator → log/BFM.
+SecRule REQUEST_FILENAME "@rx /wp-actions\.php$" \
+    "id:7700222,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - API backdoor wp-actions.php (kampanye wp-pup)'"
+SecRule REQUEST_FILENAME "@rx /wp-json/+poly[a-z0-9]*-[a-z0-9-]*/v\d+(?:/|$)" \
+    "id:7700223,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - REST backdoor poly*-*/v1 (wp-pup-plugin, tanpa log)'"
+SecRule ARGS:/^rest[^a-z0-9]route$/ "@rx ^/*poly[a-z0-9]*-[a-z0-9-]*/v\d+(?:/|$)" \
+    "id:7700224,phase:2,t:none,t:urlDecodeUni,t:removeWhitespace,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - REST backdoor poly*-*/v1 via rest_route (wp-pup-plugin, tanpa log)'"
 
 # ---- 3. Traversal, wrapper PHP, null byte ----
 SecRule REQUEST_URI_RAW "@rx %00" \
@@ -214,3 +232,11 @@ SecRule REQUEST_FILENAME "@endsWith /wp-comments-post.php" \
         "t:none,t:urlDecodeUni,t:htmlEntityDecode,t:compressWhitespace,t:lowercase"
 SecRule ARGS_POST:newcontent "@rx (?:slot\s*gacor|situs\s*(?:slot|judi|toto|togel)|togel\s*online|maxwin|scatter\s*hitam|rtp\s*(?:live|slot)|sbobet|mahjong\s*ways|pola\s*gacor|pkv\s*games)" \
     "id:7700703,phase:2,t:none,t:htmlEntityDecode,t:compressWhitespace,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Sisipan judi lewat editor berkas tema/plugin'"
+# Spam pencarian judi (jurnalisbicara.com sanke, 3 Nov 2026): istilah di jalur /search/<istilah>/feed (7700701 hanya ARGS) dan
+# ?s= ber-"merek" [situs.tld] / judi Tionghoa (博彩/投注). Ukur log sanke 3 Nov: 72 dari 1.423 pencarian kena (36 jurnalisbicara,
+# sisanya spam 博彩 di 5 situs), 0 salah tangkap; pencarian biasa (label/medan, 2026, fifgroup) lolos. Tanpa hitungan BFM (Googlebot).
+SecRule REQUEST_FILENAME "@rx ^/search/." \
+    "id:7700704,phase:1,t:none,t:urlDecodeUni,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Spam judi di jalur pencarian /search/',chain"
+    SecRule REQUEST_FILENAME "@rx (?:togel|toto[\s+]*(?:togel|macau|slot|sgp|hk)|slot[\s+]*(?:gacor|online|88|777|thailand|dana|pulsa|zeus|deposit|terpercaya|resmi|mpo)|situs[\s+]*(?:slot|judi|toto|togel|gacor)|judi[\s+]*(?:online|slot|bola)|gacor|maxwin|scatter[\s+]*hitam|rtp[\s+]*(?:live|slot)|bandar[\s+]*(?:togel|slot|judi|bola|ceme)|sbobet|mahjong[\s+]*ways|bocoran[\s+]*(?:slot|rtp|hk|sgp)|agen[\s+]*(?:slot|judi|togel|bola)|pkv[\s+]*games|casino|kasino|poker[\s+]*online|bonus[\s+]*new[\s+]*member|deposit[\s+]*(?:dana|pulsa)|link[\s+]*alternatif|daftar[\s+]*(?:slot|togel)|博彩|赌|投注|[\[\(<>~][\s+~]*[a-z0-9-]{3,}\.[a-z]{2,6}[\s+~]*[\]\)<>~])" "t:none,t:urlDecodeUni,t:compressWhitespace,t:lowercase"
+SecRule ARGS_GET:s "@rx (?:togel|toto[\s+]*(?:togel|macau|slot|sgp|hk)|slot[\s+]*(?:gacor|online|88|777|thailand|dana|pulsa|zeus|deposit|terpercaya|resmi|mpo)|situs[\s+]*(?:slot|judi|toto|togel|gacor)|judi[\s+]*(?:online|slot|bola)|gacor|maxwin|scatter[\s+]*hitam|rtp[\s+]*(?:live|slot)|bandar[\s+]*(?:togel|slot|judi|bola|ceme)|sbobet|mahjong[\s+]*ways|bocoran[\s+]*(?:slot|rtp|hk|sgp)|agen[\s+]*(?:slot|judi|togel|bola)|pkv[\s+]*games|casino|kasino|poker[\s+]*online|bonus[\s+]*new[\s+]*member|deposit[\s+]*(?:dana|pulsa)|link[\s+]*alternatif|daftar[\s+]*(?:slot|togel)|博彩|赌|投注|[\[\(<>~][\s+~]*[a-z0-9-]{3,}\.[a-z]{2,6}[\s+~]*[\]\)<>~])" \
+    "id:7700705,phase:1,t:none,t:urlDecodeUni,t:compressWhitespace,t:lowercase,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'judi',msg:'Velocity WAF - Spam judi/merek situs di pencarian ?s='"
