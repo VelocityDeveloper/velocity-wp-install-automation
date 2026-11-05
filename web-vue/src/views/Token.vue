@@ -1,9 +1,11 @@
 <script setup>
 // Token Usage: pemakaian token Claude Code per orang (Telegram, desktop, terminal SSH, otomasi).
 // Data dari timer claude-pakai (scripts/claude-pakai) tiap menit → /brain/token.json (hanya LAN/Tailscale).
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { pakaiPolling, angka, tanggalWaktu, waktuLalu } from '../api.js'
 import GrafikBatangTumpuk from '../components/GrafikBatangTumpuk.vue'
+import BilahTahap from '../components/BilahTahap.vue'
+import { rekapTahap } from '../tahapToken.js'
 import GrafikGaris from '../components/GrafikGaris.vue'
 import { tabUrl } from '../laravel.js'
 import Info from '../components/Info.vue'
@@ -20,9 +22,9 @@ const { data: dataInstaller } = pakaiPolling('/brain/token-installer.json', 6000
 // Patokan 1% jatah mingguan per akun, dari siklus yang sudah selesai (claude-pakai) → /brain/token-acuan.json
 const { data: dataAcuan } = pakaiPolling('/brain/token-acuan.json', 300000)
 
-const RENTANG = [['1', 'Hari ini'], ['kemarin', 'Kemarin'], ['7', '7 hari'], ['30', '30 hari'], ['semua', 'Semua']]
-const JALUR = { telegram: 'Telegram', desktop: 'Desktop', terminal: 'Terminal SSH', otomasi: 'Otomasi' }
-const rentang = ref('7')
+const RENTANG = [['minggu', 'Mingguan'], ['1', 'Hari ini'], ['kemarin', 'Kemarin'], ['7', '7 hari'], ['30', '30 hari'], ['semua', 'Semua'], ['tanggal', 'Pilih tanggal']]
+const JALUR = { telegram: 'Telegram', desktop: 'Desktop', terminal: 'Terminal SSH', otomasi: 'Otomasi', bot: 'Bot Velocity' }
+const rentang = ref('minggu')
 const jalur = ref('')
 const model = ref('')
 const cari = ref('')
@@ -70,13 +72,212 @@ const hariWIB = (geser = 0) => {
   d.setUTCDate(d.getUTCDate() + geser)
   return d.toISOString().slice(0, 10)
 }
+// Siklus reset mingguan (WIB): Claude 1 Selasa 10.00, Claude 2 Minggu 04.00. Data token per hari penuh, jadi hari reset
+// dihitung masuk siklus baru (pemakaian sebelum jam reset di hari itu ikut siklus baru).
+const SIKLUS = { 1: { hari: 2, jam: 10 }, 2: { hari: 0, jam: 4 } }
+const mingguKe = ref(0) // 0 = siklus berjalan, 1 = siklus lalu, dst.
+const tglDari = ref(hariWIB(-6))
+const tglSampai = ref(hariWIB())
+const mulaiMinggu = (k) => { // epoch detik awal siklus k ke belakang
+  const { hari, jam } = SIKLUS[akun.value] || SIKLUS[1], kini = Date.now() + 7 * 3600e3
+  const d = new Date(kini) // jam dinding WIB dibaca sebagai UTC
+  d.setUTCHours(jam, 0, 0, 0)
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() - hari + 7) % 7))
+  if (d.getTime() > kini) d.setUTCDate(d.getUTCDate() - 7)
+  d.setUTCDate(d.getUTCDate() - 7 * k)
+  return (d.getTime() - 7 * 3600e3) / 1000
+}
+const tglWIB = (t) => new Date((t + 7 * 3600) * 1000).toISOString().slice(0, 10)
+const daftarMinggu = computed(() => Array.from({ length: 8 }, (_, k) => {
+  const a = mulaiMinggu(k), b = a + 7 * 86400
+  return { k, label: `${jamReset(a)} – ${jamReset(b)}${k === 0 ? ' · berjalan' : ''}` }
+}))
 const batas = computed(() => {
+  if (rentang.value === 'minggu') {
+    const k = Math.min(7, Math.max(0, Number(mingguKe.value) || 0))
+    return { dari: tglWIB(mulaiMinggu(k)), sampai: k === 0 ? hariWIB() : tglWIB(mulaiMinggu(k - 1) - 86400) }
+  }
+  if (rentang.value === 'tanggal') {
+    const [a, b] = [tglDari.value, tglSampai.value].sort()
+    return { dari: a || '', sampai: b || '9999-12-31' }
+  }
   if (rentang.value === 'semua') return { dari: '', sampai: '9999-12-31' }
   if (rentang.value === 'kemarin') return { dari: hariWIB(-1), sampai: hariWIB(-1) }
   return { dari: hariWIB(-(Number(rentang.value) - 1)), sampai: hariWIB() }
 })
 const dalamRentang = (tgl) => tgl >= batas.value.dari && tgl <= batas.value.sampai
 
+// Total token per alur installer (usage.jsonl lewat /api/ai/token-proyek). Rentangnya punya filter sendiri (?alur=):
+// Mingguan = siklus berjalan akun terpilih, Bulanan = sejak tanggal 1 bulan ini; keduanya sampai hari ini (WIB).
+const WAKTU_ALUR = [['minggu', 'Mingguan'], ['bulan', 'Bulanan']]
+const waktuAlur = tabUrl('alur', 'minggu', { boleh: WAKTU_ALUR.map(([k]) => k) })
+const batasAlur = computed(() => {
+  const sampai = hariWIB()
+  return { dari: waktuAlur.value === 'bulan' ? `${sampai.slice(0, 7)}-01` : tglWIB(mulaiMinggu(0)), sampai }
+})
+const urlAlur = computed(() => `/api/ai/token-proyek?dari=${batasAlur.value.dari}&sampai=${batasAlur.value.sampai}`)
+const { data: dataAlur, galat: galatAlur, muatUlang: muatAlur } = pakaiPolling(() => urlAlur.value, 300000)
+watch(urlAlur, muatAlur)
+// Nama yang mudah dibaca untuk kartu ini saja. token_alur.py sengaja tidak diubah: label di sana baru berlaku sesudah
+// installer-status direstart, dan /token/proyek masih memakainya.
+const LABEL_ALUR = {
+  fse: 'Terapkan desain tema', diagram: 'Diagram data & alur', susun: 'Susun dokumen rancangan',
+  'desain_claude:halaman': 'Desain halaman', 'desain_claude:tema': 'Desain tema', desain_claude: 'Desain (catatan lama)',
+  tema: 'Penyesuaian tema', permintaan_claude: 'Permintaan dari form', konten: 'Penulisan konten',
+}
+const SERI_INSTALLER = [
+  { kunci: 'wordpress', label: 'WordPress', pendek: 'WordPress', warna: '#3987e5' },
+  { kunci: 'laravel', label: 'Aplikasi Custom', pendek: 'Custom', warna: '#d95926' },
+]
+const alurInstaller = computed(() => SERI_INSTALLER.map(({ kunci, label, pendek: labelPendek, warna }) => {
+  const per = {}
+  for (const p of dataAlur.value?.proyek || []) {
+    if (p.jenis !== kunci) continue
+    for (const a of p.alur) {
+      // Agen per fitur (F01, F02, ...) dan baca gambar per skrip digabung jadi satu alur
+      const nama = a.kunci.startsWith('agen:') ? 'Pembuatan fitur' : a.kelompok === 'Baca gambar' ? 'Baca gambar' : LABEL_ALUR[a.kunci] || a.label
+      const t = per[nama] ||= { nama, total: 0, panggilan: 0, biaya: 0, tanpaBiaya: 0, proyek: new Set() }
+      if (!a.biaya_usd || a.parsial) t.tanpaBiaya++
+      t.total += a.total
+      t.panggilan += a.panggilan
+      t.biaya += a.biaya_usd
+      t.proyek.add(p.id)
+    }
+  }
+  const baris = Object.values(per).sort((a, b) => b.total - a.total)
+  const total = baris.reduce((n, b) => n + b.total, 0)
+  // Satu project bisa menentukan seluruh angka installer: disebut bila mengambil lebih dari separuh
+  const proyek = (dataAlur.value?.proyek || []).filter((p) => p.jenis === kunci)
+  const teratas = proyek.reduce((m, p) => (!m || p.total > m.total ? p : m), null)
+  const dominan = teratas && teratas.total > total / 2 ? teratas : null
+  return { kunci, label, labelPendek, warna, baris, total, jumlahProyek: proyek.length, dominan }
+}))
+// Porsi per tahap pengerjaan per installer (Brief → Review untuk Aplikasi Custom), rentang = filter kartu ini
+const tahapInstaller = computed(() => ['laravel', 'wordpress'].map((k) => {
+  const daftar = (dataAlur.value?.proyek || []).filter((p) => p.jenis === k)
+  return { kunci: k, label: SERI_INSTALLER.find((s) => s.kunci === k).label, n: daftar.length, tahap: rekapTahap(k, daftar) }
+}).filter((r) => r.n))
+const alurKosong = computed(() => alurInstaller.value.every((i) => !i.baris.length))
+// Grafik token installer per hari (WordPress + Aplikasi Custom bertumpuk). Rentangnya sendiri, tidak ikut Mingguan/Bulanan;
+// API mengirim `harian` untuk semua tanggal. Mulai dari hari pertama ada data bila lebih pendek dari rentang.
+const rentangAlurHarian = ref('30')
+const SERI_ALUR_HARIAN = SERI_INSTALLER.map(({ kunci, label, warna }) => ({ kunci, label, warna }))
+const alurHarian = computed(() => {
+  const per = dataAlur.value?.harian || {}
+  const ada = Object.keys(per).filter((t) => Object.values(per[t]).some(Boolean)).sort()
+  if (!ada.length) return []
+  const n = Number(rentangAlurHarian.value)
+  const mulai = n && hariWIB(-(n - 1)) > ada[0] ? hariWIB(-(n - 1)) : ada[0]
+  const hasil = []
+  for (let d = new Date(mulai + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= hariWIB(); d.setUTCDate(d.getUTCDate() + 1)) {
+    const k = d.toISOString().slice(0, 10)
+    hasil.push({ tgl: k, nilai: { ...(per[k] || {}) } })
+  }
+  return hasil
+})
+const jumlahAlurHari = (h) => SERI_INSTALLER.reduce((a, s) => a + (h.nilai[s.kunci] || 0), 0)
+// Tiga hari tertinggi diberi angka; hari yang berdekatan (< 3 hari) dilewati supaya labelnya tidak bertumpuk
+const alurHariTeratas = computed(() => {
+  const dipilih = []
+  const jarak = (a, b) => Math.abs(new Date(a) - new Date(b)) / 86400e3
+  for (const h of alurHarian.value.filter(jumlahAlurHari).sort((a, b) => jumlahAlurHari(b) - jumlahAlurHari(a))) {
+    if (dipilih.length === 3) break
+    if (dipilih.every((t) => jarak(t, h.tgl) >= 3)) dipilih.push(h.tgl)
+  }
+  return dipilih
+})
+const rataAlurHarian = computed(() => {
+  const lengkap = alurHarian.value.filter((h) => h.tgl !== hariWIB())
+  return lengkap.length ? lengkap.reduce((a, h) => a + jumlahAlurHari(h), 0) / lengkap.length : 0
+})
+const totalAlur = computed(() => alurInstaller.value.reduce((n, i) => n + i.total, 0))
+// Satu daftar untuk kedua installer. Alur bernama sama tetap berdampingan. Alur di bawah 1% total gabungan dilipat per
+// installer; alur kecil yang hanya satu tetap tampil sendiri.
+const AMBANG_ALUR = 0.01
+const barisGabungan = computed(() => {
+  const besar = [], grup = []
+  for (const i of alurInstaller.value) {
+    const kecil = i.baris.filter((b) => b.total < totalAlur.value * AMBANG_ALUR)
+    const lipat = kecil.length > 1
+    for (const b of i.baris) if (!lipat || !kecil.includes(b)) besar.push({ ...b, i })
+    if (!lipat) continue
+    const jumlah = (k) => kecil.reduce((n, b) => n + b[k], 0)
+    grup.push({ i, grup: true, nama: `Alur kecil ${i.labelPendek} (${kecil.length})`, total: jumlah('total'), biaya: jumlah('biaya'), tanpaBiaya: jumlah('tanpaBiaya'), anak: kecil.map((b) => ({ ...b, i, induk: true })) })
+  }
+  const perNama = {}
+  for (const b of besar) perNama[b.nama] = (perNama[b.nama] || 0) + b.total
+  besar.sort((a, b) => perNama[b.nama] - perNama[a.nama] || a.nama.localeCompare(b.nama) || b.total - a.total)
+  grup.sort((a, b) => b.total - a.total)
+  return [...besar, ...grup]
+})
+const barisTampil = computed(() => barisGabungan.value.flatMap((b) => (b.grup && alurBuka.value.has(kunciBaris(b.i, b)) ? [b, ...b.anak] : [b])))
+// Batang total dan batang alur memakai satu skala, jadi panjangnya bisa dibandingkan di seluruh kartu
+const puncakAlur = computed(() => Math.max(1, ...alurInstaller.value.map((i) => i.total)))
+// API mengembalikan rentang yang dipakai: bila beda dari pilihan sekarang, angka yang tampil masih milik rentang lama
+const alurMemperbarui = computed(() => Boolean(dataAlur.value) && (dataAlur.value.dari !== batasAlur.value.dari || dataAlur.value.sampai !== batasAlur.value.sampai))
+const mencobaAlur = ref(false)
+async function cobaLagiAlur() {
+  mencobaAlur.value = true
+  await muatAlur()
+  mencobaAlur.value = false
+}
+const tautanProyek = computed(() => {
+  return { path: '/token/proyek', query: { ...batasAlur.value } }
+})
+const tautanDominan = (p) => ({ path: '/token/proyek', query: { cari: p.id, ...batasAlur.value } })
+// Kartu tab mengikuti rentang atas halaman, bukan filter kartu alur
+const tautanTab = computed(() => {
+  const { dari, sampai } = batas.value, query = {}
+  if (dari) query.dari = dari
+  if (sampai !== '9999-12-31') query.sampai = sampai
+  return { path: '/token/proyek', query }
+})
+// Lencana menyebut kontrol di atas yang memang sedang diubah
+const lencanaAlur = computed(() => {
+  const adaRentang = rentang.value !== 'minggu' || Boolean(mingguKe.value)
+  const adaSaringan = Boolean(jalur.value || model.value || cari.value || jenis.value || divisi.value)
+  if (adaRentang && adaSaringan) return 'rentang & saringan di atas tidak berlaku'
+  if (adaRentang) return 'rentang di atas tidak berlaku'
+  return adaSaringan ? 'saringan di atas tidak berlaku' : ''
+})
+const FORMAT_TGL = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+const tglPendek = (t) => FORMAT_TGL.format(new Date(`${t}T00:00:00Z`))
+const rentangAlur = computed(() => {
+  const { dari, sampai } = batasAlur.value, tahun = sampai.slice(0, 4)
+  if (dari === sampai) return `${tglPendek(dari)} ${tahun}`
+  if (dari.slice(0, 4) !== tahun) return `${tglPendek(dari)} ${dari.slice(0, 4)} – ${tglPendek(sampai)} ${tahun}`
+  if (dari.slice(5, 7) === sampai.slice(5, 7)) return `${Number(dari.slice(8))}–${tglPendek(sampai)} ${tahun}`
+  return `${tglPendek(dari)} – ${tglPendek(sampai)} ${tahun}`
+})
+const labelAkun = computed(() => DAFTAR_AKUN.value.find((a) => a.kunci === akun.value)?.label || `Claude ${akun.value}`)
+const alurBuka = ref(new Set())
+const kunciBaris = (i, b) => `${i.kunci}|${b.grup ? '__kecil' : b.nama}`
+function alihAlur(i, b) {
+  const k = kunciBaris(i, b)
+  if (!alurBuka.value.delete(k)) alurBuka.value.add(k)
+}
+// tanpaBiaya = gabungan project + alur yang biayanya nol (model tanpa harga) atau terputus sebelum biaya tercatat
+const biayaAlur = (b) => {
+  if (!b.biaya) return 'biaya tidak tercatat'
+  const n = b.biaya < 0.005 ? '<$0.01' : usd.format(b.biaya)
+  return `setara ${n}${b.tanpaBiaya ? ' (sebagian)' : ''}`
+}
+// Satu satuan di seluruh kartu: "841,7 rb" di samping "62 jt" mudah terbaca lebih besar
+const jtAlur = (n) => {
+  const j = (n || 0) / 1e6
+  if (!j) return '0 jt'
+  if (j < 0.01) return '<0,01 jt'
+  return `${j.toLocaleString('id-ID', { maximumFractionDigits: j < 10 ? 2 : 1 })} jt`
+}
+const persenAlur = (n, t) => {
+  const p = t ? n / t * 100 : 0
+  return p > 0 && p < 0.1 ? '<0,1%' : `${p.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`
+}
+
+// Biaya relatif per juta token (setara API): Opus 5.5 input 4, tulis cache 8, baca cache 0,2, output 20; Sonnet ×0,6 dan Haiku ×0,2 = perkiraan.
+// Dipakai hanya sebagai bobot pembagian persen jatah, bukan angka tagihan.
+const faktorModel = (m) => /haiku/.test(m) ? 0.2 : /sonnet/.test(m) ? 0.6 : 1
+const biayaV = (m, v) => faktorModel(m) * (v[0] * 4 + v[1] * 8 + v[2] * 0.2 + v[3] * 20) / 1e6
 const nol = () => ({ input: 0, tulis: 0, baca: 0, output: 0, panggilan: 0 })
 function tambah(t, v) { t.input += v[0]; t.tulis += v[1]; t.baca += v[2]; t.output += v[3]; t.panggilan += v[4] }
 const total = (t) => t.input + t.tulis + t.baca + t.output
@@ -84,6 +285,7 @@ const total = (t) => t.input + t.tulis + t.baca + t.output
 const KOLOM = {
   nama: (o) => o.nama.toLowerCase(),
   total: (o) => total(o.t),
+  jatah: (o) => o.persenJatah ?? -1,
   masuk: (o) => o.t.input + o.t.tulis,
   baca: (o) => o.t.baca,
   output: (o) => o.t.output,
@@ -102,38 +304,57 @@ const daftarDivisi = computed(() => data.value?.divisi || [])
 // Model yang pernah dipakai, untuk pilihan saring
 const daftarModel = computed(() => {
   const m = new Set()
-  for (const o of data.value?.pengguna || []) for (const s of o.sesi) for (const pm of Object.values(s.hari)) for (const k of Object.keys(pm)) m.add(k)
+  for (const o of pengguna.value || []) for (const s of o.sesi) for (const pm of Object.values(s.hari)) for (const k of Object.keys(pm)) m.add(k)
   return [...m].sort()
 })
+
+// Baris otomasi ber-pemilik (agent → Yaya, office → Afif) tampil sebagai sesi orang itu
+const pengguna = computed(() => {
+  const semua = data.value?.pengguna || [], nama = new Set(semua.map((o) => o.nama))
+  return semua.filter((o) => !nama.has(o.pemilik)).map((o) => {
+    const milik = semua.filter((x) => x.pemilik === o.nama)
+    return milik.length ? { ...o, sesi: [...o.sesi, ...milik.flatMap((x) => x.sesi)] } : o
+  })
+})
+
+// Porsi tiap jalur dari total orang, terbesar dulu
+const urutJalur = (perJalur, t) => Object.entries(perJalur)
+  .map(([j, x]) => { const p = total(x) / (total(t) || 1) * 100; return { j, t: x, persen: p > 0 && p < 1 ? '<1%' : `${Math.round(p)}%` } })
+  .sort((a, b) => total(b.t) - total(a.t))
 
 // Per orang: jumlah dalam rentang + rincian per jalur, per model, per sesi
 const orang = computed(() => {
   const hasil = [], q = cari.value.trim().toLowerCase()
-  for (const o of data.value?.pengguna || []) {
+  for (const o of pengguna.value || []) {
     if (q && !o.nama.toLowerCase().includes(q)) continue
     if (divisi.value && (o.divisi || '') !== divisi.value) continue
     const t = nol(), perJalur = {}, perModel = {}, perJenis = {}, sesi = []
+    let biaya = 0
     for (const s of o.sesi) {
       if (!akunSesi(s)) continue
       if (jalur.value && s.jalur !== jalur.value) continue
       if (jenis.value && (s.jenis || 'lainnya') !== jenis.value) continue
       const ts = nol()
+      let biayaSesi = 0
       for (const [tgl, pm] of Object.entries(s.hari)) {
         if (!dalamRentang(tgl)) continue
         for (const [m, v] of Object.entries(pm)) {
           if (model.value && m !== model.value) continue
           tambah(ts, v)
           tambah(perModel[m] ||= nol(), v)
+          biayaSesi += biayaV(m, v)
         }
       }
       if (!ts.panggilan) continue
+      biaya += biayaSesi
       for (const k of Object.keys(t)) { t[k] += ts[k]; (perJalur[s.jalur] ||= nol())[k] += ts[k]; (perJenis[s.jenis || 'lainnya'] ||= nol())[k] += ts[k] }
-      sesi.push({ ...s, t: ts })
+      sesi.push({ ...s, t: ts, biaya: biayaSesi })
     }
     if (!t.panggilan) continue
-    sesi.sort((a, b) => (b.akhir || 0) - (a.akhir || 0))
-    hasil.push({ nama: o.nama, divisi: o.divisi || '', t, sesi, perJalur, perModel, perJenis, teridentifikasi: !/^(Belum teridentifikasi|Otomasi|SSH password)/.test(o.nama) })
+    sesi.sort((a, b) => total(b.t) - total(a.t))
+    hasil.push({ nama: o.nama, divisi: o.divisi || '', t, biaya, persenJatah: null, sesi, perJalur, jalurUrut: urutJalur(perJalur, t), perModel, perJenis, teridentifikasi: !/^(Belum teridentifikasi|Otomasi|SSH password|Bot Velocity)/.test(o.nama) })
   }
+  for (const h of hasil) h.persenJatah = jatahDariBiaya(h.biaya)
   const nilai = KOLOM[urut.value.kolom], arah = urut.value.naik ? 1 : -1
   return hasil.sort((a, b) => {
     const x = nilai(a), y = nilai(b)
@@ -141,15 +362,44 @@ const orang = computed(() => {
   })
 })
 
-// Per jenis (dalam rentang & saringan): jumlah, persen, sesi
+// Urutan daftar sesi di rincian orang (o.sesi sudah urut token dari orang)
+const urutSesi = ref('token')
+const sesiTampil = (o) => (urutSesi.value === 'waktu'
+  ? [...o.sesi].sort((a, b) => (b.mulai || b.akhir || 0) - (a.mulai || a.akhir || 0))
+  : o.sesi).slice(0, 30)
+
+// Baris jumlah tabel Per orang: semua kolom dari orang yang tampil
+const jumlahOrang = computed(() => {
+  const j = { t: nol(), persen: 0, adaPersen: false, sesi: 0, aktif: 0 }
+  for (const o of orang.value) {
+    for (const k of Object.keys(j.t)) j.t[k] += o.t[k]
+    if (o.persenJatah != null) { j.persen += o.persenJatah; j.adaPersen = true }
+    j.sesi += o.sesi.length; j.aktif += KOLOM.aktif(o)
+  }
+  return j
+})
+
+const jumlahKolom = (k) => {
+  const j = jumlahOrang.value, t = j.t
+  if (!orang.value.length) return ''
+  return { nama: `${orang.value.length} orang`, total: pendek(total(t)), jatah: j.adaPersen ? persenJatahTeks(j.persen) + '%' : '–',
+    masuk: pendek(t.input + t.tulis), baca: pendek(t.baca), output: pendek(t.output), sesi: String(j.sesi), aktif: String(j.aktif || '–') }[k] || ''
+}
+// Bagian jatah mingguan dari biaya: persen terpakai pada rentang × porsi biaya terhadap semua pemakaian akun itu
+function jatahDariBiaya(biaya) {
+  const pr = persenRentang.value, bs = biayaSemua.value
+  return pr != null && bs ? pr * biaya / bs : null
+}
+// Per jenis (dalam rentang & saringan): jumlah, persen, sesi, % jatah
 const perJenis = computed(() => {
   const m = {}
   for (const o of orang.value) for (const s of o.sesi) {
-    const r = (m[s.jenis || 'lainnya'] ||= { t: nol(), sesi: 0 })
+    const r = (m[s.jenis || 'lainnya'] ||= { t: nol(), sesi: 0, biaya: 0 })
+    r.biaya += s.biaya
     tambah(r.t, [s.t.input, s.t.tulis, s.t.baca, s.t.output, s.t.panggilan]); r.sesi++
   }
   const semuaT = Math.max(1, total(semua.value))
-  return daftarJenis.value.filter((j) => m[j.kunci]).map((j) => ({ ...j, ...m[j.kunci], persen: total(m[j.kunci].t) / semuaT * 100 }))
+  return daftarJenis.value.filter((j) => m[j.kunci]).map((j) => ({ ...j, ...m[j.kunci], persen: total(m[j.kunci].t) / semuaT * 100, persenJatah: jatahDariBiaya(m[j.kunci].biaya) }))
 })
 
 // Installer per bagian dalam rentang: urut biaya (Claude) lalu token. Gateway GPT/Mimo tidak tercatat biayanya.
@@ -161,7 +411,8 @@ const perBagian = computed(() => {
   for (const [tgl, pb] of Object.entries(d.hari || {})) {
     if (!dalamRentang(tgl)) continue
     for (const [b, x] of Object.entries(pb)) {
-      const r = (m[b] ||= { kunci: b, token: 0, output: 0, baca: 0, biaya: 0, panggilan: 0, gagal: 0, domain: new Set(), model: new Set() })
+      const r = (m[b] ||= { kunci: b, token: 0, output: 0, baca: 0, biaya: 0, biayaAkun: 0, panggilan: 0, gagal: 0, domain: new Set(), model: new Set() })
+      r.biayaAkun += x.akun?.[akun.value] || 0
       r.token += x.v[0]; r.output += x.v[1]; r.baca += x.v[2]; r.biaya += x.v[3]; r.panggilan += x.v[4]; r.gagal += x.v[5]
       x.domain.forEach((v) => r.domain.add(v)); x.model.forEach((v) => r.model.add(v))
     }
@@ -172,7 +423,7 @@ const perBagian = computed(() => {
   return {
     token: baris.reduce((a, r) => a + r.token, 0), biaya,
     baris: baris.map((r) => ({ ...r, label: d.bagian?.[r.kunci]?.[0] || r.kunci, kelompok: d.bagian?.[r.kunci]?.[1] || 'lain',
-      persen: r.token / tok * 100, persenBiaya: biaya ? r.biaya / biaya * 100 : 0, nDomain: r.domain.size, model: [...r.model].join(', ') }))
+      persen: r.token / tok * 100, persenBiaya: biaya ? r.biaya / biaya * 100 : 0, persenJatah: r.biayaAkun ? jatahDariBiaya(r.biayaAkun) : null, nDomain: r.domain.size, model: [...r.model].join(', ') }))
       .sort((a, b) => b.biaya - a.biaya || b.token - a.token),
   }
 })
@@ -180,7 +431,7 @@ const perBagian = computed(() => {
 // Token per tanggal per jenis, ikut saringan orang/divisi/jalur/jenis/model (tanpa rentang)
 const perTanggal = computed(() => {
   const per = {}
-  for (const o of data.value?.pengguna || []) {
+  for (const o of pengguna.value || []) {
     if (cari.value.trim() && !o.nama.toLowerCase().includes(cari.value.trim().toLowerCase())) continue
     if (divisi.value && (o.divisi || '') !== divisi.value) continue
     for (const s of o.sesi) {
@@ -280,7 +531,7 @@ const stat = computed(() => [
   ['Orang / sumber', data.value ? angka(orang.value.length) : null, ''],
 ])
 const KEPALA = [
-  ['nama', 'Orang', ''], ['divisi', 'Divisi', 'sembunyi-hp'], ['total', 'Total', 'kanan'], ['masuk', 'Input + cache tulis', 'sembunyi-hp kanan'],
+  ['nama', 'Orang', ''], ['divisi', 'Divisi', 'sembunyi-hp'], ['total', 'Total', 'kanan'], ['jatah', '% jatah', 'kanan'], ['masuk', 'Input + cache tulis', 'sembunyi-hp kanan'],
   ['baca', 'Cache baca', 'sembunyi-hp kanan'], ['output', 'Output', 'kanan'], ['sesi', 'Sesi', 'sembunyi-hp kanan'],
   ['aktif', 'Sesi aktif', 'sembunyi-hp kanan'],
 ]
@@ -292,19 +543,71 @@ const sisaWaktu = (reset) => {
   return j >= 24 ? `${Math.floor(j / 24)} hari ${j % 24} jam` : j ? `${j} jam ${m} mnt` : `${m} mnt`
 }
 const jamReset = (reset) => reset ? new Date(reset * 1000).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-'
+// Perkiraan jatah mingguan habis: laju kenaikan persen 7 hari dalam 24 jam terakhir (jendela mingguan yang sama), diteruskan linear.
+const prakiraanHabis = computed(() => {
+  const m = limit.value?.mingguan
+  if (!m?.reset) return null
+  const kini = Date.now() / 1000, kunci = Math.round(m.reset / 3600)
+  const t = (limit.value.riwayat || []).filter((r) => r.minggu && r.t >= kini - 86400 && Math.round(r.minggu.reset / 3600) === kunci)
+  if (t.length < 2 || t[t.length - 1].t - t[0].t < 3600) return null
+  const laju = (t[t.length - 1].minggu.persen - t[0].minggu.persen) / (t[t.length - 1].t - t[0].t) // poin per detik
+  if (laju <= 0) return { lewat: false, teks: 'Tidak ada pemakaian 24 jam terakhir, jatah cukup sampai reset.' }
+  const habis = kini + Math.max(0, 100 - m.persen) / laju
+  const dasar = `Laju 24 jam terakhir ±${Math.round(laju * 86400)}%/hari`
+  return habis < m.reset
+    ? { lewat: true, teks: `${dasar} → perkiraan habis ${jamReset(habis)} (${sisaWaktu(habis)} lagi), sebelum reset.` }
+    : { lewat: false, teks: `${dasar} → jatah cukup sampai reset.` }
+})
 const BULAN_PANJANG = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
 const namaBulan = (ym) => ym ? `${BULAN_PANJANG[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}` : ''
 // Token bulan berjalan (WIB) dari transkrip lokal, tanpa saringan halaman
 const tokenBulanIni = computed(() => {
   const awal = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 8)
   let n = 0
-  for (const o of data.value?.pengguna || []) for (const s of o.sesi) if (akunSesi(s)) for (const [tgl, pm] of Object.entries(s.hari)) {
+  for (const o of pengguna.value || []) for (const s of o.sesi) if (akunSesi(s)) for (const [tgl, pm] of Object.entries(s.hari)) {
     if (tgl.startsWith(awal)) for (const v of Object.values(pm)) n += v[0] + v[1] + v[2] + v[3]
   }
   return n
 })
 const SERI_LIMIT = [{ kunci: 'lima', label: '5 jam', warna: '#5b8cff' }, { kunci: 'minggu', label: '7 hari', warna: '#26a88e' }]
-const titikLimit = computed(() => (limit.value?.riwayat || []).map((r) => ({ t: r.t, lima: r.lima?.persen ?? 0, minggu: r.minggu?.persen ?? 0 })))
+const titikLimit = computed(() => (limit.value?.riwayat || []).filter((r) => dalamRentang(new Date(r.t * 1000 + 7 * 3600e3).toISOString().slice(0, 10))).map((r) => ({ t: r.t, lima: r.lima?.persen ?? 0, minggu: r.minggu?.persen ?? 0 })))
+// Pemakaian per hari (poin % dari jatah mingguan) = kenaikan persen 7 hari antar titik riwayat.
+// Titik pertama sesudah reset mulai ~0; reset berbeda dengan persen besar = ganti akun, bukan pemakaian.
+const persenHariSemua = computed(() => {
+  const hari = {}
+  let prev = null
+  for (const r of limit.value?.riwayat || []) {
+    const p = r.minggu?.persen
+    if (p == null) continue
+    const kunci = Math.round(r.minggu.reset / 3600)
+    const naik = !prev ? 0 : prev.kunci === kunci ? Math.max(0, p - prev.p) : (p <= 5 ? p : 0)
+    prev = { kunci, p }
+    const tgl = new Date(r.t * 1000 + 7 * 3600e3).toISOString().slice(0, 10)
+    hari[tgl] = (hari[tgl] || 0) + naik
+  }
+  return hari
+})
+const persenHarian = computed(() => Object.entries(persenHariSemua.value).filter(([tgl]) => dalamRentang(tgl)).map(([tgl, n]) => ({ tgl, n })))
+// Persen jatah mingguan terpakai dalam rentang: mode Mingguan = puncak persen siklus itu (angka asli /usage);
+// rentang lain = jumlah kenaikan per hari. Dibagi ke orang menurut bobot biaya (biayaV), dari semua orang di akun itu.
+const persenRentang = computed(() => {
+  const r = limit.value?.riwayat
+  if (!r?.length) return null
+  if (rentang.value === 'minggu') {
+    const k = Math.min(7, Math.max(0, Number(mingguKe.value) || 0)), kunci = Math.round((mulaiMinggu(k) + 7 * 86400) / 3600)
+    const p = r.filter((x) => x.minggu && Math.round(x.minggu.reset / 3600) === kunci).map((x) => x.minggu.persen)
+    if (p.length) return Math.max(...p)
+  }
+  return persenHarian.value.reduce((a, h) => a + h.n, 0)
+})
+const biayaSemua = computed(() => {
+  let n = 0
+  for (const o of pengguna.value || []) for (const s of o.sesi) if (akunSesi(s)) for (const [tgl, pm] of Object.entries(s.hari)) {
+    if (dalamRentang(tgl)) for (const [m, v] of Object.entries(pm)) n += biayaV(m, v)
+  }
+  return n
+})
+const persenJatahTeks = (p) => p == null ? '–' : p < 10 ? p.toFixed(1) : String(Math.round(p))
 const formatWaktuLimit = (t, lengkap) => new Date(t * 1000).toLocaleString('id-ID', lengkap
   ? { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }
   : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -368,6 +671,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
           </div>
           <div class="meter tebal" :class="tingkat(j?.persen)" role="meter" :aria-valuenow="j?.persen" aria-valuemin="0" aria-valuemax="100" :aria-label="`Batas ${judul} terpakai`"><i :style="{ width: `${Math.min(100, j?.persen || 0)}%` }" /></div>
           <span v-if="judul === 'Mingguan' && limit.mingguan_model.length" class="kecil">{{ limit.mingguan_model.map((m) => `Khusus ${m.nama} ${m.persen}%`).join(' · ') }}</span>
+          <span v-if="judul === 'Mingguan' && prakiraanHabis" class="kecil prakiraan" :class="{ bahaya: prakiraanHabis.lewat }">{{ prakiraanHabis.teks }}</span>
         </div>
         <div class="batas-item">
           <div class="batas-kepala">
@@ -397,8 +701,12 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
         </Info>
       </p>
       <template v-if="titikLimit.length > 1">
-        <h3 class="sub">Riwayat 8 hari</h3>
+        <h3 class="sub">Riwayat {{ rentang === 'tanggal' ? `${batas.dari} s/d ${batas.sampai}` : RENTANG.find(([k]) => k === rentang)[1].toLowerCase() }}</h3>
         <GrafikGaris :titik="titikLimit" :seri="SERI_LIMIT" :format-waktu="formatWaktuLimit" :tinggi="170" />
+        <h3 class="sub">Pemakaian per hari <small class="kecil">(% dari jatah mingguan, perkiraan ±1)</small></h3>
+        <ul class="persen-harian">
+          <li v-for="h in persenHarian" :key="h.tgl"><span>{{ formatTanggal(h.tgl, true) }}</span><b>{{ Math.round(h.n) }}%</b></li>
+        </ul>
       </template>
     </section>
 
@@ -406,6 +714,14 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
       <div class="segmen" role="radiogroup" aria-label="Rentang waktu">
         <button v-for="[k, l] in RENTANG" :key="k" type="button" role="radio" :aria-checked="rentang === k" :class="{ aktif: rentang === k }" @click="rentang = k">{{ l }}</button>
       </div>
+      <select v-if="rentang === 'minggu'" v-model.number="mingguKe" aria-label="Pilih siklus mingguan">
+        <option v-for="m in daftarMinggu" :key="m.k" :value="m.k">{{ m.label }}</option>
+      </select>
+      <span v-if="rentang === 'tanggal'" class="rentang-tanggal">
+        <input v-model="tglDari" type="date" aria-label="Dari tanggal" :max="tglSampai || undefined">
+        <span class="redup">s/d</span>
+        <input v-model="tglSampai" type="date" aria-label="Sampai tanggal" :min="tglDari || undefined">
+      </span>
       <select v-model="divisi" aria-label="Saring divisi">
         <option value="">Semua divisi</option>
         <option v-for="d in daftarDivisi" :key="d" :value="d">{{ d }}</option>
@@ -464,12 +780,93 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
       <p v-else class="redup">Memuat…</p>
     </section>
 
+    <section class="kartu" aria-labelledby="judul-alur">
+      <div class="kartu-judul">
+        <h2 id="judul-alur" class="judul-info">Token per alur installer
+          <Info label="Tentang token per alur installer"><p>Jumlah semua project dari catatan installer, per alur, gabungan semua akun Claude. WordPress dan Aplikasi Custom memakai skala batang yang sama, dan persen dihitung dari total keduanya. Alur di bawah 1% digabung per installer dan bisa dibuka. Rentangnya dipilih di kartu ini; rentang waktu dan saringan orang, divisi, jalur, jenis, dan model di atas tidak berlaku.</p><p>Mingguan memakai siklus berjalan akun yang dipilih, jadi pindah akun bisa mengubah angkanya. Bulanan dihitung sejak tanggal 1 bulan ini. Keduanya sampai hari ini.</p><p>Sumbernya berbeda dari kartu lain di halaman ini yang memakai transkrip sesi, jadi angkanya tidak bisa dijumlahkan. Sesi Claude manual tidak termasuk. Biaya adalah setara harga API dan hanya tercatat untuk Claude.</p></Info>
+        </h2>
+        <div class="aksi-alur">
+          <div class="segmen" role="group" aria-label="Rentang token per alur">
+            <button v-for="[k, l] in WAKTU_ALUR" :key="k" type="button" :class="{ aktif: waktuAlur === k }" :aria-pressed="waktuAlur === k" @click="waktuAlur = k">{{ l }}</button>
+          </div>
+          <router-link :to="tautanProyek" class="ke-proyek">Per project &amp; alur →</router-link>
+        </div>
+      </div>
+      <div class="ket-alur">
+        <p class="ket-utama">
+          <span>{{ rentangAlur }} · semua project, gabungan semua akun<template v-if="waktuAlur === 'minggu'"> · tanggal mengikuti siklus {{ labelAkun }}</template></span>
+          <span v-if="lencanaAlur" class="lencana-alur">{{ lencanaAlur }}</span>
+        </p>
+        <p class="ket-lanjut"><template v-if="!lencanaAlur">Rentang dan saringan di atas tidak berlaku. </template>Jangan dijumlahkan dengan kartu lain.</p>
+      </div>
+      <div v-if="galatAlur" class="galat-alur" role="alert">
+        <span class="pesan-status bahaya">Data alur tidak terbaca.</span>
+        <button type="button" class="coba-alur" :disabled="mencobaAlur" @click="cobaLagiAlur">{{ mencobaAlur ? 'Memuat…' : 'Coba lagi' }}</button>
+      </div>
+      <p v-else-if="!dataAlur" class="redup">Memuat…</p>
+      <template v-else>
+        <p v-if="alurMemperbarui" class="redup memperbarui-alur" role="status">Memperbarui…</p>
+        <p v-if="alurKosong" class="redup" :class="{ 'alur-memuat': alurMemperbarui }">Tidak ada pemakaian dalam rentang ini.</p>
+        <div v-else class="alur-installer" :class="{ 'alur-memuat': alurMemperbarui }">
+          <p class="dasar-alur">Total kedua installer <b :title="angka(totalAlur)">{{ jtAlur(totalAlur) }}</b> = 100%</p>
+          <ul class="total-daftar" aria-label="Total per installer">
+            <li v-for="i in alurInstaller" :key="i.kunci" class="total-alur">
+              <span class="nama">{{ i.label }}</span>
+              <span class="tag-alur">{{ angka(i.jumlahProyek) }} project</span>
+              <span class="batang-alur"><span v-if="i.total" class="porsi" aria-hidden="true" :style="{ flexBasis: `${i.total / puncakAlur * 100}%` }"><i :style="{ background: i.warna }" /></span></span>
+              <b :title="angka(i.total)">{{ jtAlur(i.total) }}</b>
+              <span class="persen-alur">{{ persenAlur(i.total, totalAlur) }}</span>
+              <span v-if="i.dominan" class="dominan-alur">{{ jtAlur(i.dominan.total) }} ({{ Math.round(i.dominan.total / i.total * 100) }}%) dari <router-link :to="tautanDominan(i.dominan)" :title="i.dominan.nama || undefined">{{ i.dominan.id }}</router-link></span>
+            </li>
+          </ul>
+          <div class="tahap-alur" aria-label="Porsi token per tahap pengerjaan">
+            <h3>Porsi per tahap pengerjaan
+              <Info label="Tentang porsi per tahap"><p>Bagian token tiap tahap dari total installer itu, untuk semua project dalam rentang kartu ini. Arahkan kursor ke bilah untuk melihat alur terbesar di tahap itu; rincian per project ada di halaman Per project &amp; alur.</p><p>Aplikasi Custom: Brief mencakup saran platform, contoh tampilan, PRD, dan ERD/flowchart. Install tidak memakai AI. Review belum tercatat terpisah, jadi revisi saat review masih masuk Agen.</p></Info>
+            </h3>
+            <div v-for="r in tahapInstaller" :key="r.kunci" class="tahap-baris">
+              <p><b>{{ r.label }}</b> <span class="redup">{{ angka(r.n) }} project</span></p>
+              <BilahTahap :tahap="r.tahap" :format="pendek" :judul="`Porsi token per tahap ${r.label}`" />
+            </div>
+          </div>
+          <ul class="daftar-alur" aria-label="Token per alur, WordPress dan Aplikasi Custom">
+            <li v-for="b in barisTampil" :key="b.grup ? kunciBaris(b.i, b) : `${b.induk ? 'anak' : 'baris'}|${kunciBaris(b.i, b)}`">
+              <button type="button" class="baris-alur" :class="{ 'baris-anak': b.induk }" :aria-expanded="alurBuka.has(kunciBaris(b.i, b))" @click="alihAlur(b.i, b)">
+                <span class="nama">{{ b.nama }}</span>
+                <span class="tag-alur">{{ b.i.labelPendek }}</span>
+                <span class="batang-alur">
+                  <span v-if="b.total" class="porsi" aria-hidden="true" :style="{ flexBasis: `${b.total / puncakAlur * 100}%` }"><i :style="{ background: b.i.warna }" /></span>
+                  <small v-if="b.grup" class="biaya-grup">{{ biayaAlur(b) }}</small>
+                </span>
+                <b :title="angka(b.total)">{{ jtAlur(b.total) }}</b>
+                <span class="persen-alur">{{ persenAlur(b.total, totalAlur) }}</span>
+                <span class="panah-alur" aria-hidden="true">›</span>
+              </button>
+              <p v-if="!b.grup && alurBuka.has(kunciBaris(b.i, b))" class="rinci-alur">{{ b.i.label }} · {{ angka(b.total) }} token · {{ angka(b.panggilan) }} permintaan · {{ b.proyek.size }} project · {{ biayaAlur(b) }}</p>
+            </li>
+          </ul>
+        </div>
+      </template>
+      <div v-if="dataAlur && !galatAlur && alurHarian.length" class="alur-harian">
+        <div class="kartu-judul">
+          <h3>Token installer per hari <span class="redup">· rata-rata harian {{ jtAlur(rataAlurHarian) }}</span></h3>
+          <div class="segmen" role="group" aria-label="Rentang grafik installer per hari">
+            <button v-for="[k, l] in RENTANG_HARIAN" :key="k" type="button" :class="{ aktif: rentangAlurHarian === k }" :aria-pressed="rentangAlurHarian === k" @click="rentangAlurHarian = k">{{ l }}</button>
+          </div>
+        </div>
+        <ul class="legenda" aria-label="Legenda installer">
+          <li v-for="s in SERI_ALUR_HARIAN" :key="s.kunci"><i :style="{ background: s.warna }" />{{ s.label }}</li>
+        </ul>
+        <GrafikBatangTumpuk judul="Token installer per hari, WordPress dan Aplikasi Custom" :hari="alurHarian" :seri="SERI_ALUR_HARIAN" :format="pendek" :format-tanggal="formatTanggal" :label-nilai="alurHariTeratas" />
+        <p class="redup ket-alur-harian">Rentang grafik ini dipilih sendiri, tidak ikut Mingguan/Bulanan. Rata-rata tidak menghitung hari ini.</p>
+      </div>
+    </section>
+
     <section class="kartu">
       <div class="kartu-judul">
         <div class="tab" role="tablist" aria-label="Rincian pemakaian">
           <button v-for="t in TAB" :id="`tab-${t.kunci}`" :key="t.kunci" type="button" role="tab" :aria-selected="tab === t.kunci" :aria-controls="`panel-${t.kunci}`" :class="{ aktif: tab === t.kunci }" @click="tab = t.kunci">{{ t.label }}</button>
         </div>
-        <router-link to="/token/proyek" class="ke-proyek">Per project &amp; alur →</router-link>
+        <router-link :to="tautanTab" class="ke-proyek">Per project &amp; alur →</router-link>
         <span class="redup">{{ tab === 'jenis' && ['1', 'kemarin'].includes(rentang) ? 'token per hari (14 hari terakhir), klik jenis untuk menyaring' : TAB.find((t) => t.kunci === tab).ket }}</span>
       </div>
       <div v-if="tab === 'orang'" id="panel-orang" role="tabpanel" aria-labelledby="tab-orang">
@@ -481,18 +878,19 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                 <button type="button" class="urut" :class="{ aktif: urut.kolom === k }" @click="urutkan(k)">
                   {{ l }}<span class="panah" aria-hidden="true">{{ urut.kolom === k ? (urut.naik ? '▲' : '▼') : '↕' }}</span>
                 </button>
+                <div v-if="jumlahKolom(k)" class="jumlah-kolom" title="Jumlah semua orang yang tampil">{{ jumlahKolom(k) }}</div>
               </th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!data && !galat"><td colspan="8" class="redup">Memuat…</td></tr>
-            <tr v-else-if="data && !orang.length"><td colspan="8" class="redup">Tidak ada pemakaian yang cocok dengan saringan ini.</td></tr>
+            <tr v-if="!data && !galat"><td colspan="9" class="redup">Memuat…</td></tr>
+            <tr v-else-if="data && !orang.length"><td colspan="9" class="redup">Tidak ada pemakaian yang cocok dengan saringan ini.</td></tr>
             <template v-for="o in orang" :key="o.nama">
               <tr class="baris" :class="{ terbuka: buka === o.nama }" tabindex="0" :aria-expanded="buka === o.nama"
                   @click="buka = buka === o.nama ? null : o.nama" @keydown.enter.prevent="buka = buka === o.nama ? null : o.nama">
                 <td>
                   <b :class="{ redup: !o.teridentifikasi }">{{ o.nama }}</b>
-                  <span class="kecil">{{ Object.keys(o.perJalur).map((j) => JALUR[j]).join(' · ') }}</span>
+                  <span class="kecil">{{ o.jalurUrut.map((x) => `${JALUR[x.j]} ${x.persen}`).join(' · ') }}</span>
                   <div class="meter" :title="`${Math.round(total(o.t) / total(semua) * 100)}% dari total`"><i :style="{ width: `${total(o.t) / terbesar * 100}%` }" /></div>
                 </td>
                 <td class="sembunyi-hp">
@@ -502,6 +900,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                   <span v-else class="redup">–</span>
                 </td>
                 <td class="kanan" :title="angka(total(o.t))"><b>{{ pendek(total(o.t)) }}</b></td>
+                <td class="kanan" title="Perkiraan bagian dari jatah mingguan akun ini pada rentang terpilih (dibagi menurut biaya)">{{ persenJatahTeks(o.persenJatah) }}<small v-if="o.persenJatah != null" class="redup">%</small></td>
                 <td class="sembunyi-hp kanan" :title="angka(o.t.input + o.t.tulis)">{{ pendek(o.t.input + o.t.tulis) }}</td>
                 <td class="sembunyi-hp kanan" :title="angka(o.t.baca)">{{ pendek(o.t.baca) }}</td>
                 <td class="kanan" :title="angka(o.t.output)">{{ pendek(o.t.output) }}</td>
@@ -509,12 +908,12 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                 <td class="sembunyi-hp kanan" title="Sesi yang prosesnya masih berjalan"><span v-if="KOLOM.aktif(o)" class="lencana hijau">{{ KOLOM.aktif(o) }}</span><span v-else class="redup">–</span></td>
               </tr>
               <tr v-if="buka === o.nama" class="rinci">
-                <td colspan="8">
+                <td colspan="9">
                   <div class="rinci-isi">
                     <div>
                       <h3>Per jalur</h3>
                       <ul class="daftar">
-                        <li v-for="(t, j) in o.perJalur" :key="j"><span>{{ JALUR[j] }}</span><b :title="angka(total(t))">{{ pendek(total(t)) }}</b></li>
+                        <li v-for="x in o.jalurUrut" :key="x.j"><span>{{ JALUR[x.j] }} <small class="jalur-persen">{{ x.persen }}</small></span><b :title="angka(total(x.t))">{{ pendek(total(x.t)) }}</b></li>
                       </ul>
                       <h3>Per jenis</h3>
                       <ul class="daftar">
@@ -526,9 +925,15 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                       </ul>
                     </div>
                     <div>
-                      <h3>Sesi ({{ o.sesi.length }})</h3>
+                      <div class="sesi-kepala">
+                        <h3>Sesi ({{ o.sesi.length }})</h3>
+                        <div class="segmen" role="group" aria-label="Urutkan sesi">
+                          <button type="button" :class="{ aktif: urutSesi === 'token' }" :aria-pressed="urutSesi === 'token'" @click="urutSesi = 'token'">Token terboros</button>
+                          <button type="button" :class="{ aktif: urutSesi === 'waktu' }" :aria-pressed="urutSesi === 'waktu'" @click="urutSesi = 'waktu'">Terbaru</button>
+                        </div>
+                      </div>
                       <ul class="sesi">
-                        <li v-for="s in o.sesi.slice(0, 30)" :key="s.sid">
+                        <li v-for="s in sesiTampil(o)" :key="s.sid">
                           <div><span v-if="s.mulai" class="lencana biru mulai-sesi" :title="'Sesi dimulai ' + tanggalWaktu(s.mulai)">Mulai {{ tanggalWaktu(s.mulai) }}</span>
                             <span class="judul-sesi">{{ s.judul || '(tanpa judul)' }}</span>
                             <span class="kecil">{{ labelJenis(s.jenis) }} · {{ JALUR[s.jalur] }} · {{ s.asal }} · {{ tanggalWaktu(s.akhir) }} · <code>{{ s.sid.slice(0, 8) }}</code></span></div>
@@ -554,7 +959,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
         <GrafikBatangTumpuk :hari="hariGrafik" :seri="daftarJenis" :format="pendek" :format-tanggal="formatTanggal" />
         <div class="tabel-wadah">
           <table class="tabel jenis-tabel">
-            <thead><tr><th>Jenis</th><th class="kanan">Total</th><th class="kanan">Porsi</th><th class="sembunyi-hp kanan">Output</th><th class="sembunyi-hp kanan">Sesi</th><th class="sembunyi-hp kanan">Rata-rata/sesi</th></tr></thead>
+            <thead><tr><th>Jenis</th><th class="kanan">Total</th><th class="kanan">Porsi</th><th class="kanan" title="Perkiraan bagian dari jatah mingguan akun ini pada rentang terpilih (dibagi menurut biaya)">% jatah</th><th class="sembunyi-hp kanan">Output</th><th class="sembunyi-hp kanan">Sesi</th><th class="sembunyi-hp kanan">Rata-rata/sesi</th></tr></thead>
             <tbody>
               <tr v-for="j in perJenis" :key="j.kunci" class="baris" :class="{ terbuka: jenis === j.kunci }" tabindex="0" :aria-pressed="jenis === j.kunci"
                   @click="jenis = jenis === j.kunci ? '' : j.kunci" @keydown.enter.prevent="jenis = jenis === j.kunci ? '' : j.kunci">
@@ -562,6 +967,7 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
                   <div class="porsi"><i :style="{ width: `${j.persen}%`, background: j.warna }" /></div></td>
                 <td class="kanan" :title="angka(total(j.t))"><b>{{ pendek(total(j.t)) }}</b></td>
                 <td class="kanan">{{ j.persen < 1 ? '<1' : Math.round(j.persen) }}%</td>
+                <td class="kanan sel-jatah">{{ persenJatahTeks(j.persenJatah) }}<small v-if="j.persenJatah != null" class="kecil">%</small></td>
                 <td class="sembunyi-hp kanan" :title="angka(j.t.output)">{{ pendek(j.t.output) }}</td>
                 <td class="sembunyi-hp kanan">{{ j.sesi }}</td>
                 <td class="sembunyi-hp kanan">{{ pendek(total(j.t) / j.sesi) }}</td>
@@ -574,12 +980,13 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
           <p v-if="!perBagian.baris.length" class="redup">Installer tidak memanggil AI dalam rentang ini.</p>
           <div v-else class="tabel-wadah">
             <table class="tabel jenis-tabel">
-              <thead><tr><th>Bagian</th><th class="kanan">Biaya</th><th class="kanan">Token</th><th class="sembunyi-hp kanan">Output</th><th class="sembunyi-hp kanan">Panggilan</th><th class="sembunyi-hp kanan">Domain</th><th class="sembunyi-hp kanan">Rata-rata/domain</th><th class="sembunyi-hp">Model</th></tr></thead>
+              <thead><tr><th>Bagian</th><th class="kanan">Biaya</th><th class="kanan" title="Perkiraan bagian dari jatah mingguan Claude 1 pada rentang terpilih. Hanya panggilan yang memakai akun ini; model gateway tidak memakai jatah Claude.">% jatah</th><th class="kanan">Token</th><th class="sembunyi-hp kanan">Output</th><th class="sembunyi-hp kanan">Panggilan</th><th class="sembunyi-hp kanan">Domain</th><th class="sembunyi-hp kanan">Rata-rata/domain</th><th class="sembunyi-hp">Model</th></tr></thead>
               <tbody>
                 <tr v-for="b in perBagian.baris" :key="b.kunci">
                   <td>{{ b.label }}<span class="kecil"> · {{ b.kelompok === 'wp' ? 'WordPress' : b.kelompok === 'laravel' ? 'Laravel' : b.kelompok === 'custom' ? 'Paket custom' : 'lain' }}</span>
                     <div class="porsi"><i :style="{ width: `${b.persenBiaya || b.persen}%`, background: 'var(--aksen)' }" /></div></td>
                   <td class="kanan"><b>{{ b.biaya ? usd.format(b.biaya) : '–' }}</b><span v-if="b.biaya" class="kecil"> {{ b.persenBiaya < 1 ? '<1' : Math.round(b.persenBiaya) }}%</span></td>
+                  <td class="kanan sel-jatah">{{ persenJatahTeks(b.persenJatah) }}<small v-if="b.persenJatah != null" class="kecil">%</small></td>
                   <td class="kanan" :title="angka(b.token)">{{ pendek(b.token) }}</td>
                   <td class="sembunyi-hp kanan" :title="angka(b.output)">{{ pendek(b.output) }}</td>
                   <td class="sembunyi-hp kanan">{{ angka(b.panggilan) }}<span v-if="b.gagal" class="kecil"> ({{ b.gagal }} gagal)</span></td>
@@ -621,7 +1028,9 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
         <li><b>Jenis penggunaan</b> ditebak dari pesan pertama sesi (domain, kata seperti eksekusi/revisi/installer). <b>Installer otomatis</b> = agen desain installer yang jalan tanpa transkrip, diambil dari catatan pemakaian installer. Tebakan salah bisa dikoreksi per sesi di <code>/var/lib/velocity/claude-pakai/jenis.json</code> (<code>{"&lt;id sesi&gt;": "revisi_web"}</code>).</li>
         <li>Tanda <b>konteks besar</b>: tiap panggilan membaca ulang lebih dari 300 rb token. Biasanya karena sesi terlalu panjang; mulai sesi baru atau <code>/clear</code> untuk tugas berbeda supaya kuota lebih hemat.</li>
         <li>Ada dua langganan: <b>Claude 1</b> (<code>claude</code>, Telegram, installer) dan <b>Claude 2</b> (<code>claude2</code>, mulai 5 Okt 2026). Tab akun menyaring semua angka di halaman ini. Sesi sebelum 5 Okt otomatis masuk Claude 1.</li>
-        <li><b>Patokan 1% jatah</b> = biaya siklus mingguan yang sudah selesai dibagi puncak persennya, nilai tengah sampai 4 siklus terakhir; rentangnya lebar karena tiap siklus berbeda campuran model dan pemakaian tanpa transkrip belum lengkap sebelum 2 Nov 2026. Persen per domain di halaman installer = biaya domain dibagi patokan akun yang dipakai run-nya.</li>
+        <li><b>Mingguan</b> (bawaan) mengikuti siklus reset akun: Claude 1 Selasa 10.00, Claude 2 Minggu 04.00; pilih siklus lain di sebelahnya. Data token per hari penuh, jadi hari reset ikut siklus baru. <b>Pilih tanggal</b> membuka rentang bebas.</li>
+        <li><b>% jatah</b> per orang = persen jatah mingguan terpakai pada rentang (mode Mingguan: puncak persen siklus itu dari <code>/usage</code>; rentang lain: jumlah kenaikan per hari) × bagian biaya orang itu dari semua orang di akun. Biaya = bobot setara API (Opus 5.5; Sonnet ×0,6, Haiku ×0,2 perkiraan), karena ±97% token adalah cache baca yang murah. Pemakaian tanpa transkrip baru tercatat sejak 2 Nov 2026, jadi minggu-minggu sebelumnya terbagi ke orang yang tercatat. Perkiraan, bukan angka resmi.</li>
+        <li><b>% jatah</b> per jenis dan per bagian installer memakai rumus yang sama (persen terpakai pada rentang × porsi biaya). <b>Patokan 1% jatah</b> = biaya siklus mingguan yang sudah selesai dibagi puncak persennya, nilai tengah sampai 4 siklus terakhir; rentangnya lebar karena tiap siklus berbeda campuran model dan pemakaian tanpa transkrip belum lengkap sebelum 2 Nov 2026. Persen per domain di halaman installer = biaya domain dibagi patokan akun yang dipakai run-nya.</li>
         <li>Token dihitung dari transkrip lokal, bukan dari tagihan Anthropic. Batas pemakaian diambil langsung dari Anthropic per akun.</li>
       </ul>
     </section>
@@ -639,6 +1048,9 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .tag-divisi.aktif { background: var(--tag-aktif); border-color: var(--aksen-terang); color: var(--teks-kuat); }
 .saring { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .saring select { width: auto; min-width: 170px; }
+.rentang-tanggal { display: inline-flex; align-items: center; gap: 6px; }
+.rentang-tanggal input[type=date] { width: auto; }
+.saring .segmen { flex-wrap: wrap; }
 .saring input[type=search] { width: auto; flex: 1 1 180px; max-width: 280px; }
 .reset { border: 0; background: transparent; color: var(--aksen-terang); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 4px; }
 .urut { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
@@ -658,12 +1070,16 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .akun-installer .titik.kuning { background: var(--waspada); }
 .email-akun { font-size: 11.5px; font-weight: 500; opacity: .75; }
 .tab button:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
+.jalur-persen { color: var(--teks-3); font-size: 12px; }
+.sesi-kepala { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.sesi-kepala h3 { margin: 0; }
 .segmen { display: inline-flex; padding: 3px; border: 1px solid var(--garis); border-radius: var(--radius-kecil); background: var(--panel); }
 .segmen button { border: 0; background: transparent; color: var(--teks-2); padding: 7px 14px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .segmen button.aktif { background: var(--aksen); color: #fff; }
 .segmen button:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
 .kanan { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .baris { cursor: pointer; }
+.jumlah-kolom { margin-top: 3px; font-size: 12px; font-weight: 600; color: var(--teks); }
 .baris:hover td, .baris.terbuka td { background: var(--kartu-2); }
 .baris:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: -2px; }
 .baris .meter { margin-top: 8px; max-width: 260px; }
@@ -678,6 +1094,12 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .sesi b, .daftar b { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .judul-sesi { overflow-wrap: anywhere; }
 .mulai-sesi { margin-right: 6px; white-space: nowrap; }
+.tahap-alur { display: grid; gap: 14px; margin: 16px 0; padding: 14px 0; border-top: 1px solid var(--garis); border-bottom: 1px solid var(--garis); }
+.tahap-alur h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--teks); display: flex; align-items: center; gap: 6px; }
+.tahap-baris p { margin: 0 0 6px; font-size: 13px; }
+.alur-harian { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--garis); }
+.alur-harian h3 { font-size: 14px; font-weight: 600; margin: 0; color: var(--teks); }
+.ket-alur-harian { margin: 8px 0 0; font-size: 12px; }
 .legenda { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--teks-2); }
 .legenda li { display: inline-flex; align-items: center; gap: 7px; }
 .legenda i, .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -696,6 +1118,63 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .hari-teratas li::before { content: counter(no) '.'; color: var(--teks-3); width: 18px; flex: none; }
 .hari-teratas li span { margin-right: auto; }
 @media (max-width: 760px) { .harian-rinci { grid-template-columns: minmax(0, 1fr); gap: 18px; } }
+.aksi-alur { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.ket-alur { display: grid; gap: 2px; margin: 0 0 14px; font-size: 12.5px; line-height: 1.5; }
+.ket-alur p { margin: 0; }
+.ket-utama { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; color: var(--teks); font-weight: 600; }
+.ket-lanjut { color: var(--teks-3); }
+.lencana-alur { display: inline-block; padding: 1px 8px; border: 1px solid var(--garis); border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--waspada); white-space: nowrap; }
+.galat-alur { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.galat-alur .pesan-status { margin: 0; }
+.coba-alur { padding: 6px 12px; border: 1px solid var(--garis); border-radius: var(--radius-kecil); background: var(--panel); color: var(--teks); font-size: 13px; font-weight: 600; cursor: pointer; }
+.coba-alur:disabled { opacity: .6; cursor: default; }
+.coba-alur:focus-visible, .baris-alur:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
+.memperbarui-alur { margin: 0 0 8px; font-size: 12.5px; }
+.alur-memuat { opacity: .5; transition: opacity .15s; }
+/* Jumlah kolom dan bentuk baris mengikuti lebar kartu, bukan layar: lebar kartu ikut berubah oleh sidebar */
+.alur-installer { container-type: inline-size; }
+.dasar-alur { margin: 0 0 6px; font-size: 12.5px; color: var(--teks-2); }
+.dasar-alur b { color: var(--teks); font-variant-numeric: tabular-nums; }
+.alur-installer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.alur-installer .total-daftar { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--garis); }
+.baris-alur, .total-alur { display: grid; grid-template-columns: minmax(0, 190px) 66px minmax(0, 1fr) 56px 48px 10px; align-items: center; gap: 10px; width: 100%; padding: 5px 4px; font-size: 13px; color: var(--teks-2); text-align: left; }
+.baris-alur { border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.total-alur { row-gap: 2px; }
+.total-alur .nama { color: var(--teks); font-weight: 600; }
+.baris-alur:hover, .baris-alur[aria-expanded="true"] { background: var(--kartu-2); }
+.baris-alur .nama, .total-alur .nama { overflow-wrap: anywhere; }
+.baris-anak .nama { padding-left: 12px; }
+.tag-alur { color: var(--teks-3); font-size: 12px; white-space: nowrap; }
+.batang-alur { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.batang-alur .porsi { flex: 0 0 auto; display: block; margin: 0; min-width: 3px; max-width: none; height: 12px; border-radius: 0; background: transparent; }
+.total-alur .porsi { height: 16px; }
+.batang-alur .porsi i { width: 100%; border-radius: 0 4px 4px 0; }
+.biaya-grup { min-width: 0; font-size: 12px; color: var(--teks-2); }
+.baris-alur b, .total-alur b, .persen-alur { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.baris-alur b, .total-alur b { color: var(--teks); }
+.persen-alur { color: var(--teks-3); }
+.dominan-alur { grid-column: 3 / -1; font-size: 12.5px; overflow-wrap: anywhere; }
+.dominan-alur a { color: var(--aksen-terang); font-weight: 600; }
+.panah-alur { color: var(--teks-3); font-size: 15px; line-height: 1; transition: transform .12s; }
+.baris-alur[aria-expanded="true"] .panah-alur { transform: rotate(90deg); }
+.rinci-alur { margin: 2px 0 8px; padding: 0 4px; font-size: 12.5px; line-height: 1.5; color: var(--teks-2); overflow-wrap: anywhere; }
+/* Di bawah 640 px kolom nama memakan batang (1024 dengan sidebar hanya tersisa 164 px): nama dan batang dua lapis */
+@container (max-width: 639px) {
+  .baris-alur, .total-alur { grid-template-columns: 62px minmax(0, 1fr) auto 48px 10px; grid-template-areas: "nama nama total persen panah" "tag batang batang batang batang"; gap: 5px 8px; padding: 7px 4px; }
+  .baris-alur .tag-alur, .total-alur .tag-alur { grid-area: tag; }
+  .baris-alur .nama, .total-alur .nama { grid-area: nama; }
+  .baris-alur .batang-alur, .total-alur .batang-alur { grid-area: batang; }
+  .baris-alur b, .total-alur b { grid-area: total; }
+  .baris-alur .persen-alur, .total-alur .persen-alur { grid-area: persen; }
+  .baris-alur .panah-alur { grid-area: panah; }
+  .dominan-alur { grid-column: 1 / -1; }
+}
+/* Area ketuk di layar sentuh; tampilan dengan kursor tidak berubah */
+@media (pointer: coarse) {
+  .aksi-alur .segmen button, .coba-alur, .baris-alur { min-height: 44px; }
+  .ke-proyek { display: inline-block; padding-block: 12px; }
+  .dominan-alur a { display: inline-block; padding-block: 13px; margin-block: -11px; }
+}
 .installer-rinci h3 { margin: 0 0 4px; font-size: 15px; }
 .installer-rinci .kecil { color: var(--teks-3); font-size: 12px; }
 .porsi { margin-top: 7px; max-width: 260px; height: 5px; border-radius: 999px; background: var(--kartu-2); overflow: hidden; }
@@ -714,12 +1193,17 @@ const namaModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 .batas-angka { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .sub { margin: 14px 0 4px; }
 .acuan-jatah { margin: 12px 0 0; font-size: 13px; }
+.sel-jatah { white-space: nowrap; }
 .persen { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .persen small { font-size: 14px; font-weight: 600; color: var(--teks-3); margin-left: 2px; }
 .meter.tebal { height: 8px; }
 .meter.kuning i { background: var(--waspada); }
 .meter.merah i { background: var(--bahaya); }
 .batas .kecil { color: var(--teks-3); font-size: 12px; }
+.persen-harian { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.persen-harian li { display: flex; gap: 6px; align-items: baseline; padding: 4px 10px; border: 1px solid var(--garis); border-radius: var(--radius-kecil); background: var(--panel); font-size: 12.5px; color: var(--teks-2); }
+.persen-harian b { color: var(--teks-kuat); font-variant-numeric: tabular-nums; }
+.batas .prakiraan.bahaya { color: var(--bahaya); }
 .kecil-daftar { margin-top: 4px; font-size: 12.5px; color: var(--teks-2); gap: 4px; }
 @media (max-width: 900px) {
   .batas { grid-template-columns: minmax(0, 1fr); }
