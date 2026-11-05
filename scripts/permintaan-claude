@@ -283,7 +283,7 @@ def jalankan_claude(kerja, env, menit, prompt):
             if ev.get('type') == 'assistant':
                 pesan = ev.get('message') or {}
                 permintaan.setdefault(pesan.get('model') or '-', set()).add(pesan.get('id'))
-                hitung.tambah(pesan)
+                hitung.tambah(pesan, ev.get('parent_tool_use_id'))
                 for blok in pesan.get('content') or []:
                     # Perintah alat sudah dicatat alat sendiri (agen › wp/php/unggah ...).
                     if blok.get('type') == 'tool_use' and blok.get('name') == 'Bash':
@@ -303,6 +303,8 @@ def jalankan_claude(kerja, env, menit, prompt):
     hasil['permintaan_per_model'] = {m: len(i) for m, i in permintaan.items()}
     hasil['opus_terbaru'] = opus
     (kerja / 'sesi.json').write_text(json.dumps(dict(hasil, kode_keluar=kode, menit=durasi), ensure_ascii=False, indent=1))
+    # Sesudah sesi.json ditulis: rincian hanya ke usage.jsonl (catat_pemakaian), tidak ke folder kerja
+    hasil['rincian'] = hitung.rincian(hasil)  # bagian run yang paling banyak makan token (/token/proyek)
     return kode, durasi, hasil
 
 
@@ -323,6 +325,7 @@ def catat_pemakaian(domain, hasil):
             'cache_read_tokens': baca, 'cache_creation_tokens': buat, 'biaya_usd': round(float(u.get('costUSD') or 0), 4),
             'ok': not hasil.get('is_error') and not hasil.get('parsial'), 'giliran': hasil.get('num_turns'),
             **({'parsial': True} if hasil.get('parsial') else {}),
+            **({'rincian': hasil.pop('rincian')} if hasil.get('rincian') else {}),  # baris model pertama saja
         }
         try:
             with open(DC.AI_USAGE, 'a') as f:

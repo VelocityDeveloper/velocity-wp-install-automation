@@ -71,14 +71,21 @@ def jenis_project(domain, peran):
     return None
 
 
-def kunci_alur(jenis, b):
-    """-> (urutan, kelompok, label, kunci) satu baris usage."""
+def kunci_alur(jenis, b, revisi_awal=None):
+    """-> (urutan, kelompok, label, kunci) satu baris usage. revisi_awal = {fid: epoch revisi pertama} project Laravel.
+
+    Run agen yang mengerjakan revisi = tahap Review: ditandai `tahap: review` oleh laravel-agen (sejak 5 Nov 2026), atau
+    untuk catatan lama, run yang selesai sesudah revisi pertama fitur itu diminta (fitur.json revisi[].waktu). Revisi
+    hanya bisa diminta saat fitur sudah selesai dikerjakan, jadi run sesudahnya pasti run revisi."""
     peran, mode = b.get('peran') or '-', b.get('mode') or ''
     if jenis == 'laravel':
         if peran == 'laravel_agen':
             m = RE_FITUR.search(b.get('run') or '')
             fid = m.group(1) if m else '?'
             nomor = int(fid[1:]) if fid[1:].isdigit() else 999
+            awal = (revisi_awal or {}).get(fid)
+            if b.get('tahap') == 'review' or (awal and _epoch(b.get('ts')) >= awal):
+                return 200 + nomor, 'Review', f'Revisi {fid}', f'review:{fid}'
             return 100 + nomor, 'Agen fitur', f'Agen {fid}', f'agen:{fid}'
         k = ALUR_LARAVEL.get(mode)
         return (*k, mode) if k else (80, 'Lainnya', mode or peran, mode or peran)
@@ -113,6 +120,23 @@ def _tanggal(ts):
         return datetime.fromisoformat(str(ts)).astimezone(WIB).strftime('%Y-%m-%d')
     except ValueError:
         return ''
+
+
+def _epoch(ts):
+    try:
+        return datetime.fromisoformat(str(ts)).timestamp()
+    except ValueError:
+        return 0
+
+
+def _revisi_awal(slug, dasar):
+    """{fid: epoch revisi pertama} dari fitur.json; {} bila tidak ada."""
+    try:
+        fitur = json.loads((dasar / slug / 'fitur.json').read_text())
+        return {x['id']: min(int(r['waktu']) for r in x['revisi'] if r.get('waktu'))
+                for x in fitur if any(r.get('waktu') for r in x.get('revisi') or [])}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
 
 
 def _token(b):
@@ -159,7 +183,7 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
         baris = []
     per, total, luar = {}, _kosong(), {'total': 0, 'baris': 0, 'per_peran': {}}
     # Token per tanggal per installer untuk grafik harian: semua tanggal, tidak ikut dari/sampai
-    harian = {}
+    harian, revisi = {}, {}
     for b in baris:
         tgl = _tanggal(b.get('ts'))
         domain, peran = domain_bersih(b.get('domain')), str(b.get('peran') or '-')
@@ -176,7 +200,9 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
             luar['per_peran'][peran] = luar['per_peran'].get(peran, 0) + tok['total']
             continue
         p = per.setdefault(domain, {'id': domain, 'jenis': jenis, **_kosong(), 'model': set(), 'alur': {}})
-        urut, grup, label, kunci = kunci_alur(jenis, b)
+        if jenis == 'laravel' and domain not in revisi:
+            revisi[domain] = _revisi_awal(domain, Path(dasar_laravel))
+        urut, grup, label, kunci = kunci_alur(jenis, b, revisi.get(domain))
         a = p['alur'].setdefault(kunci, {'kunci': kunci, 'urut': urut, 'kelompok': grup, 'label': label, **_kosong(), 'model': set()})
         model = b.get('model') or b.get('model_id') or '-'
         for t in (total, p, a):
@@ -191,8 +217,8 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
             a.pop('urut')
             a['model'] = sorted(a['model'])
             a['biaya_usd'] = round(a['biaya_usd'], 4)
-            if a['kunci'].startswith('agen:'):
-                a['judul'] = fitur.get(a['kunci'][5:], '')
+            if a['kunci'].startswith(('agen:', 'review:')):
+                a['judul'] = fitur.get(a['kunci'].split(':', 1)[1], '')
         p['alur'] = alur
         p['model'] = sorted(p['model'])
         p['biaya_usd'] = round(p['biaya_usd'], 4)
@@ -202,3 +228,67 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
     luar['per_peran'] = dict(sorted(luar['per_peran'].items(), key=lambda kv: -kv[1]))
     return {'proyek': hasil, 'total': total, 'di_luar_project': luar, 'harian': dict(sorted(harian.items())),
             'dari': dari, 'sampai': sampai, 'file': str(berkas)}
+
+
+def rincian_alur(id_proyek, kunci, berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL, batas=40):
+    """Rincian satu poin alur (GET /api/ai/token-proyek/rincian): daftar run + gabungan bagian yang makan token.
+    Seluruh riwayat project, tanpa saringan tanggal. Satu run = baris-baris usage berurutan dengan skrip & run yang sama
+    yang ditulis dalam selang <= 3 detik (satu baris per model; ts dibuat ulang per baris). `rincian` per run hanya ada untuk run agen sejak 5 Nov 2026 (catat_claude.HitungUsage)."""
+    try:
+        baris = _baca(Path(berkas))
+    except OSError:
+        baris = []
+    domain = domain_bersih(id_proyek)
+    revisi = None
+    jalan, total, akhir = [], _kosong(), {}
+    alat, berinci = {}, {'run': 0, 'total': 0, 'giliran': 0, 'konteks_awal': 0, 'konteks_akhir': 0, 'output': 0}
+    for b in baris:
+        if domain_bersih(b.get('domain')) != domain:
+            continue
+        jenis = jenis_project(domain, str(b.get('peran') or '-'))
+        if not jenis:
+            continue
+        if jenis == 'laravel' and revisi is None:
+            revisi = _revisi_awal(domain, Path(dasar_laravel))
+        if kunci_alur(jenis, b, revisi)[3] != kunci:
+            continue
+        tok = _token(b)
+        _tambah(total, b, tok)
+        k, detik = (b.get('script'), b.get('run')), _epoch(b.get('ts'))
+        j = akhir.get(k)
+        if not j or abs(detik - j['_detik']) > 3:
+            j = akhir[k] = {'ts': str(b.get('ts') or ''), **_kosong(), 'giliran': 0, 'model': [], '_detik': detik}
+            jalan.append(j)
+        j['_detik'] = detik
+        _tambah(j, b, tok)
+        j['giliran'] = max(j['giliran'], int(b.get('giliran') or 0))
+        j['model'].append(b.get('model') or b.get('model_id') or '-')
+        r = b.get('rincian')
+        if isinstance(r, dict) and r.get('alat'):
+            j['rincian'] = r
+    # Penyebut persen = total semua model run berinci (subagen bisa memakai model lain di baris lain)
+    for j in jalan:
+        r = j.get('rincian')
+        if not r:
+            continue
+        berinci['run'] += 1
+        berinci['total'] += j['total']
+        for x in ('giliran', 'konteks_awal', 'konteks_akhir', 'output'):
+            berinci[x] += int(r.get(x) or 0)
+        for nama, a in r['alat'].items():
+            g = alat.setdefault(nama, {'n': 0, 'tambah': 0, 'beban': 0, 'run': 0})
+            for x in ('n', 'tambah', 'beban'):
+                g[x] += int(a.get(x) or 0)
+            g['run'] += 1
+    daftar = sorted(jalan, key=lambda j: j['ts'], reverse=True)
+    for j in daftar:
+        j.pop('_detik', None)
+        j['biaya_usd'] = round(j['biaya_usd'], 4)
+        for x in ('mulai', 'terakhir'):
+            j.pop(x, None)
+    total['biaya_usd'] = round(total['biaya_usd'], 4)
+    total['giliran'] = sum(j['giliran'] for j in daftar)
+    terbesar = max(daftar, key=lambda j: j['total'], default=None)
+    return {'id': domain, 'kunci': kunci, 'total': total, 'jumlah_run': len(daftar), 'run': daftar[:batas],
+            'run_terbesar': terbesar, 'berinci': berinci,
+            'alat': dict(sorted(alat.items(), key=lambda kv: -kv[1]['beban']))}

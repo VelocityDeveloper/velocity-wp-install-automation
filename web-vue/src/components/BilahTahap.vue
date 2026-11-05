@@ -9,6 +9,7 @@ const props = defineProps({
   format: { type: Function, required: true },
   judul: { type: String, default: 'Porsi token per tahap' },
   ringkas: { type: Boolean, default: false },
+  ketNol: { type: Function, default: () => 'belum tercatat' }, // teks legenda untuk tahap tanpa token
 })
 
 const total = computed(() => props.tahap.reduce((n, t) => n + t.total, 0))
@@ -58,7 +59,7 @@ const ringkasan = computed(() => `${props.judul}: ${isi.value.map((t) => `${t.la
         <i :style="{ background: t.total ? t.warna : 'var(--garis)' }" />
         <span>{{ t.label }}</span>
         <b>{{ t.total ? persenTahap(t.total, total) : '–' }}</b>
-        <small class="redup">{{ t.total ? format(t.total) : 'belum tercatat' }}</small>
+        <small class="redup">{{ t.total ? format(t.total) : ketNol(t) }}</small>
       </li>
     </ul>
     <span v-else-if="terbesar" class="ket-ringkas redup">{{ terbesar.label }} {{ persenTahap(terbesar.total, total) }} <span class="sr">· {{ ringkasan }}</span></span>

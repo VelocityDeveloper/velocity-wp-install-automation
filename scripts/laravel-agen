@@ -422,7 +422,7 @@ def jalankan_claude(DC, app_dir, prompt, menit, env):
             if ev.get('type') == 'assistant':
                 pesan = ev.get('message') or {}
                 permintaan.add(pesan.get('id'))
-                hitung.tambah(pesan)
+                hitung.tambah(pesan, ev.get('parent_tool_use_id'))
                 for blok in pesan.get('content') or []:
                     r = ringkas_langkah(blok)
                     if r:
@@ -437,10 +437,11 @@ def jalankan_claude(DC, app_dir, prompt, menit, env):
     hasil['kode_keluar'] = kode
     hasil['permintaan'] = len(permintaan)
     hitung.isi_bila_terputus(hasil)  # timeout/mati sebelum event result: token yang sudah terpakai tetap tercatat
+    hasil['rincian'] = hitung.rincian(hasil)  # bagian run yang paling banyak makan token (/token/proyek)
     return hasil
 
 
-def catat_pemakaian(DC, slug, fid, hasil):
+def catat_pemakaian(DC, slug, fid, hasil, revisi=False):
     for model, u in (hasil.get('modelUsage') or {}).items():
         masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
         keluar = int(u.get('outputTokens') or 0)
@@ -452,7 +453,9 @@ def catat_pemakaian(DC, slug, fid, hasil):
             'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
             'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': not hasil.get('is_error') and not hasil.get('parsial'),
             'giliran': hasil.get('num_turns'),
+            **({'tahap': 'review'} if revisi else {}),  # run revisi = tahap Review di /token/proyek (token_alur.py)
             **({'parsial': True} if hasil.get('parsial') else {}),
+            **({'rincian': hasil.pop('rincian')} if hasil.get('rincian') else {}),  # baris model pertama saja
         }
         try:
             with open(DC.AI_USAGE, 'a') as f:
@@ -706,7 +709,7 @@ def main():
                 log('Menunggu antrean agen Claude (agen lain sedang bekerja)…')
                 fcntl.flock(kunci, fcntl.LOCK_EX)
             hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f, app_dir), menit, env)
-        catat_pemakaian(DC, slug, fid, hasil)
+        catat_pemakaian(DC, slug, fid, hasil, adalah_revisi)
         hari_ini = datetime.now().strftime('%Y-%m-%d')
         L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).setdefault('riwayat_menit', []).append(
             {'hari': hari_ini, 'menit': hasil['menit']}))

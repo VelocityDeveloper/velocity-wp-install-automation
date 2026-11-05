@@ -4565,6 +4565,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(token_alur.rekap(dari, sampai))
             return
+        if path == '/api/ai/token-proyek/rincian':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            q = parse_qs(parsed.query)
+            pid, kunci = (q.get('id') or [''])[0], (q.get('kunci') or [''])[0]
+            if not re.fullmatch(r'[\w.\- ]{1,120}', pid) or not re.fullmatch(r'[\w:.\-]{1,80}', kunci):
+                self._send_json({'error': 'parameter tidak valid'}, 400)
+                return
+            self._send_json(token_alur.rincian_alur(pid, kunci))
+            return
         if path.startswith('/api/ai/content/'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)

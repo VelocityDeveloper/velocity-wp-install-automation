@@ -150,6 +150,11 @@ def env_akun(akun):
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_AKUN")}
     if akun != "1":
         env["CLAUDE_CONFIG_DIR"] = AKUN[akun]
+    # Hemat konteks agen (5 Nov 2026): tanpa ini tiap panggilan membawa definisi lengkap ~90 alat MCP
+    # (konektor claude.ai Canva/Zoom/Docs + laravel-boost), konteks awal 105 rb -> 37 rb token.
+    # Tool search = definisi alat MCP dimuat hanya saat dibutuhkan. Bisa ditimpa lewat env pemanggil.
+    env.setdefault("ENABLE_TOOL_SEARCH", "true")
+    env.setdefault("ENABLE_CLAUDEAI_MCP_SERVERS", "false")
     return env
 
 

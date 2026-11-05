@@ -1,14 +1,13 @@
 // Tahap pengerjaan project untuk rekap token (/token dan /token/proyek). Data alur dari /api/ai/token-proyek.
-// Aplikasi Custom mengikuti langkah installer Laravel (Brief → Review); WordPress memakai kelompok alur dari token_alur.py.
+// Aplikasi Custom mengikuti langkah installer Laravel (Brief → Review, tanpa Install karena tahap itu tidak memakai AI); WordPress memakai kelompok alur dari token_alur.py.
 // Warna = slot kategori tetap (--seri-N di style.css), mengikuti tahap, bukan peringkat.
 
 export const TAHAP = {
   laravel: [
     { kunci: 'brief', label: 'Brief', ket: 'Saran platform, rangkuman, contoh tampilan, PRD, ERD & flowchart' },
     { kunci: 'estimasi', label: 'Estimasi', ket: 'Fitur & jam' },
-    { kunci: 'install', label: 'Install', ket: 'Kerangka + repo (tanpa AI, belum ada catatan token)' },
     { kunci: 'agen', label: 'Agen', ket: 'Agen per fitur & cek kemiripan aplikasi' },
-    { kunci: 'review', label: 'Review', ket: 'Belum tercatat terpisah: revisi saat review masih masuk Agen' },
+    { kunci: 'review', label: 'Review', ket: 'Run agen untuk revisi dari webmaster. Revisi lewat sesi Claude di luar installer belum termasuk' },
     { kunci: 'lain', label: 'Lainnya', ket: 'Alur yang belum dipetakan ke tahap' },
   ],
   wordpress: [
@@ -26,6 +25,7 @@ const BRIEF_LARAVEL = new Set(['saran', 'rangkuman', 'contoh', 'contoh_revisi', 
 
 export function tahapAlur(jenis, a) {
   if (jenis === 'laravel') {
+    if (a.kunci.startsWith('review:')) return 'review'
     if (a.kunci.startsWith('agen:') || a.kunci === 'kemiripan_app') return 'agen'
     if (a.kunci === 'estimasi') return 'estimasi'
     if (BRIEF_LARAVEL.has(a.kunci)) return 'brief'
@@ -44,7 +44,7 @@ export function rekapTahap(jenis, proyek) {
       const t = per[tahapAlur(jenis, a)]
       t.total += a.total
       t.biaya += a.biaya_usd || 0
-      const nama = a.kunci.startsWith('agen:') ? 'Agen per fitur' : a.label
+      const nama = a.kunci.startsWith('agen:') ? 'Agen per fitur' : a.kunci.startsWith('review:') ? 'Revisi per fitur' : a.label
       t.alur[nama] = (t.alur[nama] || 0) + a.total
     }
   }

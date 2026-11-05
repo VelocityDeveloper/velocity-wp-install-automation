@@ -58,7 +58,8 @@ const NAV = [
   // Grup bersub-menu: induknya tombol buka-tutup, bukan tautan
   { grup: 'claude', label: 'AI & Claude', ikon: 'claude', anak: [
     { ke: '/ai', label: 'AI Model', ikon: 'ai' },
-    { ke: '/token', label: 'Token Usage', ikon: 'token' },
+    { ke: '/token', label: 'Token Usage', ikon: 'token', tepat: true },
+    { ke: '/token/proyek', label: 'Token per Project', ikon: 'proyek' },
     { ke: '/brain', label: 'Brain', ikon: 'brain' },
   ] },
   { grup: 'pc', label: 'PC Lokal', ikon: 'komputer', anak: [
