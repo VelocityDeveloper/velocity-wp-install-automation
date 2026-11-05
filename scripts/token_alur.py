@@ -22,6 +22,8 @@ BUKAN_SITUS = re.compile(r'(?:^|\.)velocity\.ai\.id$')
 PERAN_INTERNAL = re.compile(r'^(?:office_|agen_)')
 
 # kunci alur -> (urutan, kelompok, label). Urutan mengikuti jalannya alur di installer.
+# Dashboard memetakan ulang alur Laravel ke tahap Brief/Estimasi/Install/Agen/Review di web-vue/src/tahapToken.js
+# (BRIEF_LARAVEL): mode baru di sini perlu ditambahkan juga di sana, kalau tidak masuk tahap "Lainnya".
 ALUR_LARAVEL = {
     'saran': (10, 'Brief', 'Saran platform'),
     'rangkuman': (20, 'Brief', 'Rangkuman konsep'),
@@ -156,12 +158,18 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
     except OSError:
         baris = []
     per, total, luar = {}, _kosong(), {'total': 0, 'baris': 0, 'per_peran': {}}
+    # Token per tanggal per installer untuk grafik harian: semua tanggal, tidak ikut dari/sampai
+    harian = {}
     for b in baris:
         tgl = _tanggal(b.get('ts'))
+        domain, peran = domain_bersih(b.get('domain')), str(b.get('peran') or '-')
+        jenis = jenis_project(domain, peran)
+        if jenis and tgl:
+            h = harian.setdefault(tgl, {})
+            h[jenis] = h.get(jenis, 0) + _token(b)['total']
         if (dari and tgl < dari) or (sampai and tgl > sampai):
             continue
-        domain, peran, tok = domain_bersih(b.get('domain')), str(b.get('peran') or '-'), _token(b)
-        jenis = jenis_project(domain, peran)
+        tok = _token(b)
         if not jenis:
             luar['total'] += tok['total']
             luar['baris'] += 1
@@ -192,4 +200,5 @@ def rekap(dari='', sampai='', berkas=AI_USAGE, dasar_laravel=PROYEK_LARAVEL):
     hasil.sort(key=lambda p: -p['total'])
     total['biaya_usd'] = round(total['biaya_usd'], 4)
     luar['per_peran'] = dict(sorted(luar['per_peran'].items(), key=lambda kv: -kv[1]))
-    return {'proyek': hasil, 'total': total, 'di_luar_project': luar, 'dari': dari, 'sampai': sampai, 'file': str(berkas)}
+    return {'proyek': hasil, 'total': total, 'di_luar_project': luar, 'harian': dict(sorted(harian.items())),
+            'dari': dari, 'sampai': sampai, 'file': str(berkas)}

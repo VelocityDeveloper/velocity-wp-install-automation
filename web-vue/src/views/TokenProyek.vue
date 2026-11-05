@@ -5,6 +5,8 @@ import { ref, computed, watch } from 'vue'
 import { pakaiPolling, angka, tanggalWaktu, waktuLalu } from '../api.js'
 import { tabUrl } from '../laravel.js'
 import Info from '../components/Info.vue'
+import BilahTahap from '../components/BilahTahap.vue'
+import { TAHAP, tahapAlur, rekapTahap, persenTahap } from '../tahapToken.js'
 
 const cari = tabUrl('cari', '')
 const jenis = tabUrl('jenis', '', { boleh: ['wordpress', 'laravel'] })
@@ -88,21 +90,33 @@ const alih = (p) => {
   dibuka.value = buka
   ditutup.value = tutup
 }
-// Alur dikelompokkan berurutan; baris kelompok muncul saat kelompoknya berganti
+// Alur dikelompokkan per tahap pengerjaan (urutan tahap di tahapToken.js); urutan alur di dalam tahap tetap dari API
+// Tab tahap per project (seperti stepper installer). Kosong = semua tahap. Disimpan per project, tidak di URL.
+const tahapPilih = ref({})
+const pilihTahap = (p, k) => { tahapPilih.value = { ...tahapPilih.value, [p.id]: tahapPilih.value[p.id] === k ? '' : k } }
 const barisAlur = (p) => {
   const hasil = []
-  let kini = null
-  for (const a of p.alur) {
-    if (a.kelompok !== kini) {
-      kini = a.kelompok
-      const anggota = p.alur.filter((x) => x.kelompok === kini)
-      const tambah = (k) => anggota.reduce((n, x) => n + (x[k] || 0), 0)
-      hasil.push({ kelompok: kini, kunci: `k:${kini}`, total: tambah('total'), biaya_usd: tambah('biaya_usd'), parsial: tambah('parsial') })
-    }
-    hasil.push(a)
+  const pilih = tahapPilih.value[p.id]
+  for (const t of TAHAP[p.jenis]) {
+    if (pilih && t.kunci !== pilih) continue
+    const anggota = p.alur.filter((a) => tahapAlur(p.jenis, a) === t.kunci)
+    if (!anggota.length) continue
+    const tambah = (k) => anggota.reduce((n, x) => n + (x[k] || 0), 0)
+    hasil.push({ kelompok: t.label, warna: t.warna, kunci: `k:${t.kunci}`, total: tambah('total'), biaya_usd: tambah('biaya_usd'), parsial: tambah('parsial') })
+    hasil.push(...anggota)
   }
   return hasil
 }
+// Porsi per tahap: ringkasan semua project yang tampil (per installer) dan bilah kecil per project
+const tahapProyek = new WeakMap()
+const tahapDari = (p) => {
+  if (!tahapProyek.has(p)) tahapProyek.set(p, rekapTahap(p.jenis, [p]))
+  return tahapProyek.get(p)
+}
+const ringkasTahap = computed(() => Object.keys(JENIS).map((k) => {
+  const daftar = proyek.value.filter((p) => p.jenis === k)
+  return { kunci: k, label: JENIS[k], n: daftar.length, tahap: rekapTahap(k, daftar) }
+}).filter((r) => r.n).sort((a, b) => (a.kunci === 'laravel' ? -1 : 1)))
 const persen = (n, p) => {
   if (!p.total) return '–'
   const nilai = n / p.total * 100
@@ -208,6 +222,16 @@ const terakhirDipakai = computed(() => (data.value?.proyek || []).reduce((m, p) 
         <span v-if="memperbarui" class="status-muat" role="status">Memperbarui…</span>
       </p>
 
+      <section v-if="data && ringkasTahap.length" class="ringkas-tahap" aria-label="Porsi token per tahap">
+        <h2 class="judul-tahap">Porsi token per tahap
+          <Info label="Tentang porsi per tahap"><p>Gabungan semua project yang tampil, ikut saringan di atas. Arahkan kursor ke bilah untuk melihat alur terbesar di tahap itu.</p><p>Aplikasi Custom: Brief mencakup saran platform, contoh tampilan, PRD, dan ERD/flowchart. Install tidak memakai AI. Review belum tercatat terpisah, jadi revisi saat review masih masuk Agen. WordPress memakai kelompok alur installer.</p></Info>
+        </h2>
+        <div v-for="r in ringkasTahap" :key="r.kunci" class="tahap-installer">
+          <p class="nama-tahap"><b>{{ r.label }}</b> <span class="redup">{{ angka(r.n) }} project · {{ pendek(r.tahap.reduce((n, t) => n + t.total, 0)) }} token</span></p>
+          <BilahTahap :tahap="r.tahap" :format="pendek" :judul="`Porsi token per tahap ${r.label}`" />
+        </div>
+      </section>
+
       <div v-if="data || !galat || memperbarui" class="tabel-wadah">
         <label class="urut-hp">
           <span class="redup">Urutkan</span>
@@ -271,6 +295,7 @@ const terakhirDipakai = computed(() => (data.value?.proyek || []).reduce((m, p) 
                       <span v-if="p.parsial" class="lencana kuning" title="Ada proses yang terputus, jadi biaya project ini lebih besar dari angka yang tampil">ada biaya belum lengkap</span>
                       <span v-if="p.nama" class="kecil">{{ p.nama }}</span>
                       <span class="kecil">{{ p.alur.length }} alur · terakhir {{ tanggalWaktu(p.terakhir) }}</span>
+                      <BilahTahap class="bilah-proyek" ringkas :tahap="tahapDari(p)" :format="pendek" :judul="`Porsi token per tahap ${p.id}`" />
                       <span class="rincian-ringkas">{{ persen(p.total, jumlah) }} dari total tampil · {{ rincian(p) }}</span>
                       <span v-if="p.parsial && terbuka(p)" class="ket-terputus">Terputus: proses berhenti sebelum selesai. Tokennya terhitung, biayanya belum diketahui.</span>
                     </span>
@@ -282,9 +307,25 @@ const terakhirDipakai = computed(() => (data.value?.proyek || []).reduce((m, p) 
                 <td class="kanan" data-label="Biaya">{{ biaya(p) }}</td>
               </tr>
               <template v-if="terbuka(p)">
+                <tr class="baris-tab-tahap">
+                  <td colspan="9">
+                    <div class="tab-tahap" role="group" :aria-label="`Tahap pengerjaan ${p.id}`">
+                      <button type="button" class="langkah" :class="{ aktif: !tahapPilih[p.id] }" :aria-pressed="!tahapPilih[p.id]" @click="tahapPilih = { ...tahapPilih, [p.id]: '' }">
+                        <b>Semua</b><span class="redup">{{ pendek(p.total) }} token</span><span class="persen-langkah">100%</span>
+                      </button>
+                      <button v-for="t in tahapDari(p)" :key="t.kunci" type="button" class="langkah" :class="{ aktif: tahapPilih[p.id] === t.kunci, nol: !t.total }"
+                              :aria-pressed="tahapPilih[p.id] === t.kunci" :disabled="!t.total" :title="t.ket" @click="pilihTahap(p, t.kunci)">
+                        <b><i :style="{ background: t.total ? t.warna : 'var(--garis)' }" aria-hidden="true" />{{ t.label }}</b>
+                        <span class="redup">{{ t.total ? `${pendek(t.total)} token` : 'belum tercatat' }}</span>
+                        <span class="persen-langkah">{{ t.total ? persenTahap(t.total, p.total) : '–' }}</span>
+                        <span class="meter" aria-hidden="true"><i v-if="t.total" :style="{ width: `${t.total / (p.total || 1) * 100}%`, background: t.warna }" /></span>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
                 <template v-for="a in barisAlur(p)" :key="p.id + a.kunci">
                   <tr v-if="a.kelompok && !a.label" class="baris-kelompok">
-                    <td>{{ a.kelompok }}</td>
+                    <td><i class="swatch-tahap" :style="{ background: a.warna }" aria-hidden="true" />{{ a.kelompok }}</td>
                     <td class="kanan" data-label="Total" :title="angka(a.total)">{{ pendek(a.total) }}</td>
                     <td class="kanan kolom-rinci">{{ persen(a.total, p) }}</td>
                     <td colspan="5" class="kolom-rinci" />
@@ -384,6 +425,24 @@ const terakhirDipakai = computed(() => (data.value?.proyek || []).reduce((m, p) 
 .baris-kelompok td:first-child { padding-left: 30px; }
 .baris-alur td:first-child { padding-left: 42px; }
 .tombol-reset { margin-left: 8px; }
+.ringkas-tahap { display: grid; gap: 14px; margin: 0 0 16px; padding: 14px 14px 16px; border: 1px solid var(--garis); border-radius: 12px; }
+.judul-tahap { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.nama-tahap { margin: 0 0 6px; font-size: 13px; }
+.bilah-proyek { display: block; margin-top: 6px; max-width: 360px; }
+.baris-tab-tahap td { padding: 10px 5px 4px 30px; background: var(--kartu-2); }
+.tab-tahap { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.langkah { display: grid; gap: 2px; text-align: left; padding: 9px 11px; border: 1px solid var(--garis); border-radius: 10px; background: var(--kartu); color: var(--teks-2); font: inherit; font-size: 12px; cursor: pointer; }
+.langkah b { display: flex; align-items: center; gap: 6px; color: var(--teks); font-size: 13px; }
+.langkah b i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.langkah .persen-langkah { color: var(--teks); font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+.langkah .meter { display: block; height: 4px; border-radius: 2px; background: var(--garis); overflow: hidden; margin-top: 3px; }
+.langkah .meter i { display: block; height: 100%; min-width: 2px; }
+.langkah:hover:not(:disabled) { border-color: var(--aksen-terang); }
+.langkah.aktif { border-color: var(--aksen); box-shadow: inset 0 0 0 1px var(--aksen); }
+.langkah.nol { cursor: default; opacity: .65; }
+.langkah:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 2px; }
+@container (max-width: 559px) { .baris-tab-tahap td { padding-left: 10px; } .tab-tahap { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.swatch-tahap { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px; }
 .lebih { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 
 /* Kolom rincian disembunyikan menurut lebar area tabel; angkanya pindah ke .rincian-ringkas */

@@ -36,6 +36,8 @@
   --cahaya-1: rgba(61, 107, 255, .14);
   --cahaya-2: rgba(38, 168, 142, .07);
   --tag: #1d2342; --tag-garis: #2c3358; --tag-teks: #b9c0e0; --tag-aktif: #2b3a6b;
+  /* Slot warna kategori tetap untuk grafik (lolos validator dataviz di --kartu); dipakai menurut urutan, tidak diputar */
+  --seri-1: #3987e5; --seri-2: #d95926; --seri-3: #199e70; --seri-4: #c98500; --seri-5: #d55181; --seri-6: #008300;
   --radius: 16px;
   --radius-kecil: 10px;
   color-scheme: dark;
@@ -74,6 +76,7 @@
   --cahaya-1: rgba(47, 91, 234, .08);
   --cahaya-2: rgba(31, 143, 120, .05);
   --tag: #eef1f9; --tag-garis: #d3d9ea; --tag-teks: #454d70; --tag-aktif: #dfe7ff;
+  --seri-1: #2a78d6; --seri-2: #d65a24; --seri-3: #148a60; --seri-4: #a87100; --seri-5: #c4467c; --seri-6: #008300; /* semua >= 3:1 di putih */
   color-scheme: light;
 }
 
