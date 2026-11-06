@@ -108,8 +108,8 @@ def rapikan(data):
     slug_terpakai = set()
     # Jumlah layanan mengikuti materi klien (maks 9): batas lama 4 membuat layanan ke-5/6 di materi
     # tidak pernah tampil, padahal beranda Paket E menyusun 4 sebaris, 5 = 3+2 di tengah, 6 = 3+3
-    # (permintaan user 2026-09-30, trimurtiekapaksi.com).
-    for l in (data.get('layanan') or [])[:9]:
+    # (permintaan user 2026-09-30, trimurtiekapaksi.com). Maks 12 sejak 2026-11-06 (nobrandalpha.com: 10 jasa klien).
+    for l in (data.get('layanan') or [])[:12]:
         judul = teks(l.get('judul'), 60)
         if not judul:
             continue
@@ -368,7 +368,7 @@ Kembalikan JSON dengan bentuk persis:
 "judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
 "slogan":"","profil":"","visi":"","misi":[""],"moto":"",
 "struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
-Jumlah wajib: layanan = SETIAP layanan/program/bidang yang dijabarkan tersendiri di form atau dokumen klien (bagian bernomor, bonus/fasilitas utama seperti "Free ..." termasuk; paket yang terdiri dari beberapa bidang dipecah per bidang) — semua, minimal 3, maksimal 9; kalau klien tidak merinci: 4, "rincian" tiap layanan = SEMUA poin materi layanan itu dari dokumen klien (maksimal 12; tanpa materi: 3) — satu poin per butir, maksimal 80 karakter, jangan menggabungkan banyak poin jadi satu butir panjang, produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
+Jumlah wajib: layanan = SETIAP layanan/program/bidang yang dijabarkan tersendiri di form atau dokumen klien (bagian bernomor, bonus/fasilitas utama seperti "Free ..." termasuk; paket yang terdiri dari beberapa bidang dipecah per bidang) — semua, minimal 3, maksimal 12; kalau klien tidak merinci: 4, "rincian" tiap layanan = SEMUA poin materi layanan itu dari dokumen klien (maksimal 12; tanpa materi: 3) — satu poin per butir, maksimal 80 karakter, jangan menggabungkan banyak poin jadi satu butir panjang, produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
     for percobaan in range(2):
         # Prompt isi contoh panjang: beri waktu lebih dari bawaan 120 detik.
         jawab = gen.ai_call(sistem, permintaan, model,
@@ -790,6 +790,15 @@ def main():
         print('konten: manifest tidak valid')
         return 2
     simpanan = GENERATED_DIR / f'{domain}-tema.json'
+    # Materi Drive yang datang sesudah isi contoh dibuat (nobrandalpha.com 2026-11-06: dokumen per jasa masuk
+    # 30 menit sesudah instalasi, layanan situs tetap karangan dari compro) -> isi contoh dibuat ulang.
+    from client_docs import sidik_materi
+    sidik = sidik_materi(folder_klien(domain))
+    if not segar and simpanan.is_file():
+        lama = json.loads(simpanan.read_text()).get('_materi')
+        if lama is not None and set(sidik) - set(lama):
+            print(f"konten: materi klien baru {sorted(set(sidik) - set(lama))[:6]}, isi contoh dibuat ulang")
+            segar = True
     if segar or not simpanan.is_file():
         gen = muat_generator(manifest)
         try:
@@ -799,10 +808,14 @@ def main():
             print(f'konten: gagal membuat isi contoh ({e})')
             return 1
         GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        isi['_materi'] = sidik
         simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
         print(f"konten: isi contoh dibuat ({', '.join(x['judul'] for x in (isi.get('rubrik') or isi['layanan']))})")
     else:
         isi = json.loads(simpanan.read_text())
+        if isi.get('_materi') is None:  # isi lama tanpa sidik: dicatat, tidak dibuat ulang
+            isi['_materi'] = sidik
+            simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
         if sesuaikan_compro(isi, domain, sumber_klien=teks_klien(domain)):
             simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
             print(f"konten: isi tersimpan disesuaikan dengan company profile "

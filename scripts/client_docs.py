@@ -8,6 +8,7 @@ Teks ini dikirim ke API AI eksternal, jadi baris kredensial selalu dibuang dan
 bagian data pribadi pemilik di form ditandai supaya tidak ditampilkan di situs.
 """
 import csv
+import hashlib
 import re
 import shutil
 import subprocess
@@ -72,7 +73,8 @@ def teks_xlsx(path):
 PRIORITY = re.compile(r'profil|profile|compro|konsep|isian|menu|katalog', re.I)
 # Materi.docx trimurtiekapaksi.com (±7.500 karakter) terpotong di 7.000: bagian Pendaftaran,
 # kuota, dan tagline penutup tidak pernah sampai ke AI (2026-09-30).
-TOTAL_BUDGET = 24000
+# 36000 sejak 2026-11-06 (nobrandalpha.com: compro ID+EN + NIB menghabiskan 24000, dokumen per jasa terlewat).
+TOTAL_BUDGET = 36000
 PER_DOC_BUDGET = 12000
 # Sengaja tanpa \b di belakang "pass": form nyata menulis "Passwordnya: ...".
 CRED = re.compile(r'pass(word)?|kata ?sandi|\bsandi\b|user ?name|\blogin\b|cpanel|\bpin\b|token|api[ _-]?key', re.I)
@@ -209,8 +211,17 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DO
     # yang hanya terbaca lewat OCR dan menghabiskan anggaran karakter.
     files.sort(key=lambda p: (p not in form,
                               not PRIORITY.search(p.name), p.suffix.lower() == '.pdf', str(p).lower()))
-    used = 0
+    used, sidik = 0, set()
     for path in files:
+        # Salinan berkas yang sama di subfolder (compro/<compro>.pdf, nobrandalpha.com 2026-11-06) dibaca sekali.
+        h = hashlib.sha1()
+        with path.open('rb') as f:  # dibaca bertahap: katalog PDF klien bisa >150 MB
+            for blok in iter(lambda: f.read(1 << 20), b''):
+                h.update(blok)
+        h = h.hexdigest()
+        if h in sidik:
+            continue
+        sidik.add(h)
         name = str(path.relative_to(folder))
         # Manifest/catatan hosting (<domain>.txt) berisi kredensial, bukan data usaha.
         if path.suffix.lower() == '.txt' and (path.stem.strip().lower() == folder.name.lower()
@@ -232,6 +243,15 @@ def collect_client_docs(folder, total_budget=TOTAL_BUDGET, per_doc_budget=PER_DO
         result['sources'].append((name, text))
         used += len(text)
     return result
+
+
+def sidik_materi(folder):
+    """['<jalur relatif>:<ukuran>'] dokumen materi klien (tanpa catatan hosting) — penanda materi baru menyusul."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    return sorted(f'{p.relative_to(folder)}:{p.stat().st_size}' for p in folder.rglob('*')
+                  if p.is_file() and p.suffix.lower() in DOC_EXTS and p.stem.strip().lower() != folder.name.lower())
 
 
 def format_for_prompt(fields, docs):

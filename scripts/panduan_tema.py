@@ -8,6 +8,8 @@ Panduan ditulis bebas oleh pembuat tema, jadi AI menerjemahkannya sekali per ver
 sha GitHub) menjadi aturan berstruktur, lalu aturan divalidasi terhadap kode tema yang terpasang:
 
   sidebar     susunan widget Main Sidebar: [{nama, id_base, opsi_option, opsi}]  (null = tidak diatur)
+  footer      widget per area footer, urut Footer 1..N: [[{...seperti sidebar}], ...]  (null = tidak diatur;
+              2026-11-06 nobrandalpha.com: footer velocity-sekolah1 kosong karena hanya sidebar yang dibaca)
   logo        ukuran render logo header {lebar, tinggi} + latar_putih bila tidak kontras
   galeri_min  jumlah foto galeri beranda minimal
   layanan_min jumlah layanan minimal
@@ -33,7 +35,9 @@ TOKEN_FILE = Path(os.environ.get('WP_INSTALL_GITHUB_TOKEN_FILE') or '/etc/veloci
 UA = {'User-Agent': 'velocity-installer/1.0'}
 SLUG_RE = re.compile(r'^[a-z0-9-]+$')
 # Widget bawaan WordPress yang boleh disebut panduan walau tidak ada di kode tema.
-WIDGET_INTI = ('recent-posts', 'search', 'categories', 'archives', 'text', 'custom_html', 'media_image', 'nav_menu')
+# calendar dkk. ditambah 2026-11-06 (nobrandalpha.com: widget kalender panduan velocity-sekolah1 ditolak).
+WIDGET_INTI = ('recent-posts', 'search', 'categories', 'archives', 'text', 'custom_html', 'media_image', 'nav_menu',
+               'calendar', 'tag_cloud', 'pages', 'meta', 'rss', 'recent-comments', 'media_gallery')
 
 
 def _token():
@@ -93,33 +97,42 @@ def kode_widget(info, batas=30_000):
     return ''.join(bagian)
 
 
+def _widget(sb, kode, alasan):
+    """Daftar widget aturan yang id_base/opsi-nya ada di kode tema, atau None."""
+    if not isinstance(sb, list):
+        return None
+    daftar = []
+    for it in sb[:6]:
+        if not isinstance(it, dict):
+            continue
+        base = str(it.get('id_base') or '')
+        opsi_nama = str(it.get('opsi_option') or '')
+        if not re.match(r'^[a-z0-9_-]+$', base) or (base not in WIDGET_INTI and f"'{base}'" not in kode
+                                                     and f'"{base}"' not in kode):
+            alasan.append(f'widget_tidak_ada_di_tema:{base or "-"}')
+            continue
+        if opsi_nama and opsi_nama != f'widget_{base}' and not re.search(r"['\"]" + re.escape(opsi_nama) + r"['\"]", kode):
+            alasan.append(f'opsi_widget_tidak_ada_di_tema:{opsi_nama}')
+            continue
+        opsi = it.get('opsi') if isinstance(it.get('opsi'), dict) else {}
+        opsi = {str(k): v for k, v in opsi.items() if isinstance(v, (str, int, float, bool))}
+        daftar.append({'nama': str(it.get('nama') or base)[:80], 'id_base': base,
+                       'opsi_option': opsi_nama, 'opsi': opsi})
+    return daftar or None
+
+
 def validasi(aturan, info):
     """Buang bagian aturan yang tidak cocok dengan kode tema. -> (aturan bersih, daftar alasan)."""
     alasan = []
     kode = '\n'.join(info['file'].values())
-    bersih = {'sidebar': None, 'logo': None, 'galeri_min': None, 'layanan_min': None,
+    bersih = {'sidebar': _widget(aturan.get('sidebar'), kode, alasan), 'footer': None, 'logo': None,
+              'galeri_min': None, 'layanan_min': None,
               'adaptor': str(aturan.get('adaptor') or '').strip()[:2000],
               'manual': [str(x)[:200] for x in (aturan.get('manual') or []) if str(x).strip()][:10]}
-    sb = aturan.get('sidebar')
-    if isinstance(sb, list):
-        daftar = []
-        for it in sb[:6]:
-            if not isinstance(it, dict):
-                continue
-            base = str(it.get('id_base') or '')
-            opsi_nama = str(it.get('opsi_option') or '')
-            if not re.match(r'^[a-z0-9_-]+$', base) or (base not in WIDGET_INTI and f"'{base}'" not in kode
-                                                         and f'"{base}"' not in kode):
-                alasan.append(f'widget_tidak_ada_di_tema:{base or "-"}')
-                continue
-            if opsi_nama and opsi_nama != f'widget_{base}' and not re.search(r"['\"]" + re.escape(opsi_nama) + r"['\"]", kode):
-                alasan.append(f'opsi_widget_tidak_ada_di_tema:{opsi_nama}')
-                continue
-            opsi = it.get('opsi') if isinstance(it.get('opsi'), dict) else {}
-            opsi = {str(k): v for k, v in opsi.items() if isinstance(v, (str, int, float, bool))}
-            daftar.append({'nama': str(it.get('nama') or base)[:80], 'id_base': base,
-                           'opsi_option': opsi_nama, 'opsi': opsi})
-        bersih['sidebar'] = daftar or None
+    if isinstance(aturan.get('footer'), list):
+        bersih['footer'] = [_widget(a, kode, alasan) or [] for a in aturan['footer'][:4]]
+        if not any(bersih['footer']):
+            bersih['footer'] = None
     lg = aturan.get('logo')
     if isinstance(lg, dict):
         try:
@@ -146,7 +159,7 @@ def minta_ai(gen, model, tema, teks, info):
     permintaan = f"""Tema WordPress aktif: {tema} versi {info.get('versi')}.
 Pembuat tema menulis panduan pengisian data situs ({BERKAS}) di bawah. Installer sudah otomatis mengerjakan:
 template beranda + pengaturan Customizer beranda (adaptor terpisah), Site Identity (logo, judul, tagline, ikon),
-Header Image, Gallery Post Type + shortcode VD Gallery, dan widget footer.
+Header Image, Gallery Post Type + shortcode VD Gallery.
 
 TUGAS: ubah panduan jadi aturan berikut. Isi null untuk bagian yang TIDAK disebut panduan — jangan menebak.
 - "sidebar": widget yang diminta panduan untuk sidebar utama (Main Sidebar), urut, atau null kalau panduan tidak
@@ -156,6 +169,11 @@ TUGAS: ubah panduan jadi aturan berikut. Isi null untuk bagian yang TIDAK disebu
   "widget_<id_base>", untuk widget lama yang memakai get_option('...') tulis nama option itu), "opsi" (objek
   pengaturan instance dengan NAMA FIELD dari kode dan nilai bawaan yang masuk akal dari kode form widget,
   mis. judul "Artikel Terbaru"; semua field yang dibaca fungsi tampil widget harus ada).
+- "footer": daftar per area footer (Footer 1, Footer 2, ...) berisi widget dengan format sama seperti "sidebar",
+  atau null kalau panduan tidak mengatur footer.
+- Isi widget yang menurut panduan berupa DATA KLIEN (bukan shortcode/teks tetap) tulis dengan penanda, jangan teks
+  deskripsi: "{{{{tentang}}}}" (gambar + profil singkat), "{{{{kontak}}}}" (alamat/telepon/WA/email),
+  "{{{{layanan}}}}" (daftar layanan). Shortcode yang disebut panduan ditulis apa adanya.
 - "logo": {{"lebar": px, "tinggi": px, "latar_putih": true/false}} kalau panduan menyebut ukuran logo header /
   latar putih bila tidak kontras, selain itu null.
 - "galeri_min": jumlah gambar galeri beranda minimal yang disebut panduan, atau null.
@@ -186,7 +204,8 @@ KODE WIDGET TEMA:
 
 def aturan(gen, model, tema, teks, sha, info):
     """Aturan tervalidasi untuk panduan versi ini (tembolok per tema + sha). -> (aturan|None, alasan)."""
-    simpan = FOLDER / f"{tema}-{sha[:12]}-aturan.json"
+    # -v2: aturan footer + penanda isi (2026-11-06); tembolok lama tanpa bagian itu disusun ulang AI.
+    simpan = FOLDER / f"{tema}-{sha[:12]}-aturan-v2.json"
     try:
         mentah = json.loads(simpan.read_text())
     except (OSError, ValueError):

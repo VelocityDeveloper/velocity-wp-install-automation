@@ -117,6 +117,11 @@ def rencana(menu, layanan):
             butir['anak'].append({'label': a['judul'], 'jenis': 'halaman', 'slug': s, 'induk': induk,
                                   'induk_peran': butir.get('peran', '')})
             halaman.append({'slug': s, 'judul': a['judul'], 'induk': m['judul'], 'catatan': a['catatan'], 'anak': []})
+        # Form tanpa submenu layanan: tiap layanan (>= 2) jadi submenu jangkar /layanan/#slug
+        # (nobrandalpha.com 2026-11-06: 9 jasa klien hanya bisa dicari di satu halaman panjang Services).
+        if butir.get('peran') == 'layanan' and not butir['anak'] and len(layanan) >= 2:
+            butir['anak'] = [{'label': l['judul'], 'jenis': 'jangkar', 'url': f"/layanan/#{l['slug']}"}
+                             for l in layanan if l.get('judul') and l.get('slug')]
         hasil.append(butir)
     # Halaman bawaan yang tidak disebut form.
     ada = {b.get('peran') for b in hasil} | {a.get('peran') for b in hasil for a in b['anak']}

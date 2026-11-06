@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client_form import read_client_form
-from client_docs import collect_client_docs, format_for_prompt
+from client_docs import collect_client_docs, format_for_prompt, sidik_materi
 from content_sanitize import buang_kalimat_meragukan, clean_html
 from folder_klien import folder_klien
 
@@ -691,7 +691,11 @@ def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
 ARTIKEL_BLOK_BERITA = {'velocity-berita6': [5, 5, 5, 5], 'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
                        'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6],
                        'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4],
-                       'velocity-berita15': [6, 6, 6, 6, 6, 4]}
+                       'velocity-berita15': [6, 6, 6, 6, 6, 4],
+                       # Tema non-berita berblok kategori di beranda (nobrandalpha.com 2026-11-06: news4 = galeri 8
+                       # artikel, news1 = 1 + 4, sisanya 2 -> galeri bolong dengan 2 artikel/kategori). Urutan menurun;
+                       # theme-paket-biasa langkah 2c memasang kategori terbanyak ke blok yang paling butuh.
+                       'velocity-sekolah1': [8, 5, 2, 2, 2, 2]}
 assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
 
 
@@ -1014,8 +1018,16 @@ def main():
     # Tanpa ini AI hanya menerima nama & alamat dan menulis konten generik.
     # Dokumen (termasuk OCR PDF hasil scan, yang lambat) hanya dibaca kalau memang
     # perlu generate; apply ulang memakai konten tersimpan.
-    need_ai = not (load_saved(GENERATED_DIR / f'{domain}-pages.json')
-                   and load_saved(GENERATED_DIR / f'{domain}-articles.json'))
+    # Materi Drive yang menyusul sesudah konten dibuat (nobrandalpha.com 2026-11-06: dokumen per jasa datang
+    # 30 menit sesudah instalasi) -> halaman dibuat ulang; halaman yang sudah disunting tetap dilindungi md5.
+    sidik_berkas = GENERATED_DIR / f'{domain}-materi.json'
+    sidik = sidik_materi(folder_klien(domain))
+    sidik_lama = load_saved(sidik_berkas)
+    materi_baru = sorted(set(sidik) - set(sidik_lama)) if isinstance(sidik_lama, list) else []
+    if materi_baru:
+        log(f'Materi klien baru sejak konten dibuat: {materi_baru[:6]} -> halaman dibuat ulang')
+    need_ai = materi_baru or not (load_saved(GENERATED_DIR / f'{domain}-pages.json')
+                                  and load_saved(GENERATED_DIR / f'{domain}-articles.json'))
     docs = (collect_client_docs(folder_klien(domain)) if need_ai
             else {'sources': [], 'unreadable': [], 'skipped': [], 'unsupported': []})
     for name, text in docs['sources']:
@@ -1038,7 +1050,7 @@ def main():
     # Generate pages
     # Apply ulang memakai konten yang sudah pernah dibuat: tanpa biaya AI lagi dan
     # tanpa artikel ganda (slug hasil AI berbeda setiap kali dibuat).
-    pages = load_saved(GENERATED_DIR / f'{domain}-pages.json')
+    pages = None if materi_baru else load_saved(GENERATED_DIR / f'{domain}-pages.json')
     if pages:
         log('Pakai konten halaman tersimpan')
     else:
@@ -1063,6 +1075,7 @@ def main():
     
     pages_file = GENERATED_DIR / f'{domain}-pages.json'
     pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+    sidik_berkas.write_text(json.dumps(sidik))
     log(f'Pages saved: {pages_file}')
     
     # Generate articles
@@ -1077,6 +1090,8 @@ def main():
     butuh = []
     if berita:
         per_kategori = max(per_kategori, int(cfg.get('articles_per_rubrik', '3')))
+    if kategori:
+        # Juga tema non-berita berblok kategori (velocity-sekolah1, nobrandalpha.com 2026-11-06).
         tema = tema_aktif(domain, da_user, ssh_port, ssh_user, target_host)
         butuh = ARTIKEL_BLOK_BERITA.get(tema, [])
         if butuh:
