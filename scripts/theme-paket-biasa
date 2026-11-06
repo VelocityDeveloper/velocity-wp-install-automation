@@ -1118,6 +1118,9 @@ if (empty($d['berita'])) {
             }
         } catch (Throwable $t) { echo 'tampilan: blok_kategori_customizer_gagal:' . $t->getMessage() . "\n"; }
     }
+    // Satu blok berita saja (velocity-perusahaan1 velocity_news): "Show All" memang benar, artikel tak kembar
+    // (gudang-industri.com 2026-11-06: diisi kategori -> beranda hanya 2 artikel + isian beranda ikut terlewat).
+    if (count($blok_kat) < 2) { $blok_kat = []; }
     // Blok yang paling banyak menampilkan artikel dapat kategori terbanyak (nobrandalpha.com 2026-11-06: sekolah1
     // news4 = galeri 8 artikel, news1 = 1 + 4; selaras ARTIKEL_BLOK_BERITA di ai-content-generator.py).
     $butuh_blok = ['velocity-sekolah1' => ['news4' => 8, 'news1' => 5]][get_stylesheet()] ?? [];
@@ -1306,7 +1309,9 @@ if ($berita_depan) {
     $kini = []; foreach (array_keys($mods) as $k) { $kini[$k] = get_theme_mod($k, null); }
     $bawaan = $d['bawaan'][$tema] ?? [];
     $sama = fn($x, $y) => (is_scalar($x) || $x === null) && (is_scalar($y) || $y === null) ? (string) $x === (string) $y : wp_json_encode($x) === wp_json_encode($y);
-    $kosong = !array_filter($kini, fn($v, $k) => $v !== null && $v !== '' && $v !== [] && !(array_key_exists($k, $bawaan) && $sama($v, $bawaan[$k])),
+    // Kategori yang ditulis langkah 2c sendiri bukan suntingan orang.
+    $kosong = !array_filter($kini, fn($v, $k) => $v !== null && $v !== '' && $v !== [] && !(array_key_exists($k, $bawaan) && $sama($v, $bawaan[$k]))
+                            && (string) ($st['blok_kat'][$k] ?? '') !== (string) $v,
                             ARRAY_FILTER_USE_BOTH);
     $sidik_kini = md5(wp_json_encode($kini));
     if ($kosong || ($st['mods'][$tema] ?? '') === $sidik_kini) {
