@@ -578,8 +578,9 @@ def tautan_email(email):
 def tombol_wa(k):
     if not k.get('wa2'):
         return f'<p><a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{k["wa"]}" target="_blank" rel="noopener">Chat via WhatsApp</a></p>'
+    nomor = (k['wa'], k['wa2'], *(w for w, _ in k.get('wa_lain', ())))
     return ('<p>' + ''.join(f'<a class="btn btn-sm vk-tombol w-100 mt-2" href="https://wa.me/{n}" target="_blank" rel="noopener">Chat WhatsApp Admin {i}</a>'
-                            for i, n in enumerate((k['wa'], k['wa2']), 1)) + '</p>')
+                            for i, n in enumerate(nomor, 1)) + '</p>')
 
 
 def daftar_kontak(k, alamat=True):
@@ -595,6 +596,8 @@ def daftar_kontak(k, alamat=True):
     if k.get('wa2'):
         # Klien mengirim 2 nomor: keduanya tampil (user 2026-10-01).
         baris.append(f'<li><i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{k["wa2"]}" target="_blank" rel="noopener">WhatsApp {e(k["wa2_tampil"])}</a></li>')
+    for w, t in k.get('wa_lain', ()):
+        baris.append(f'<li><i class="bi bi-whatsapp" aria-hidden="true"></i> <a href="https://wa.me/{w}" target="_blank" rel="noopener">WhatsApp {e(t)}</a></li>')
     if k['email']:
         baris.append(f'<li><i class="bi bi-envelope" aria-hidden="true"></i> {tautan_email(k["email"])}</li>')
     return '<ul class="vk-kontak">' + ''.join(baris) + '</ul>' if baris else ''
@@ -2361,8 +2364,9 @@ def main():
               'area': dk.get('AREA', ''),
               # Nomor kedua klien (user 2026-10-01); situs yang sudah ter-deploy tetap satu nomor.
               'wa2': '' if SITUS_LAMA else dk.get('WA2', ''),
-              'wa2_tampil': '' if SITUS_LAMA else (dk.get('TELP2', '') or ('0' + dk['WA2'][2:] if dk.get('WA2') else ''))}
-    if kontak['telp'] and wa and re.sub(r'\D', '', kontak['telp']).lstrip('0') in (wa[2:], kontak['wa2'][2:]):
+              'wa2_tampil': '' if SITUS_LAMA else (dk.get('TELP2', '') or ('0' + dk['WA2'][2:] if dk.get('WA2') else '')),
+              'wa_lain': [] if SITUS_LAMA else dk.get('WA_LAIN', [])}
+    if kontak['telp'] and wa and re.sub(r'\D', '', kontak['telp']).lstrip('0') in (wa[2:], kontak['wa2'][2:], *(w[2:] for w, _ in kontak['wa_lain'])):
         kontak['telp'] = ''  # nomor yang sama cukup tampil sebagai WhatsApp
     print(f"tampilan: kontak alamat={'ya' if kontak['alamat'] else '-'} wa={'ya' if wa else '-'} "
           f"email={'publik' if kontak['email'] else 'tidak_ada'}")

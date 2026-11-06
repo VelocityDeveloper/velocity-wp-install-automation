@@ -821,12 +821,15 @@ def data_klien(domain, nama=''):
         alamat_publik = alamat_publik or bio['alamat']
     # Nomor kedua dari sumber yang sama dengan nomor pertama (user 2026-10-01: klien mengirim
     # 2 nomor → WA mengambang 2 kontak & kontak menampilkan 2 nomor).
-    wa2, telp2 = next(((w, t) for w, t in nomor_wa_semua(sumber_wa if wa else '') if w != wa), ('', ''))
+    # Nomor ketiga dst. ikut tampil (user 2026-11-06, sablonbalon.com: "kontak utk di web di masukkan semua").
+    lain = [(w, t) for w, t in nomor_wa_semua(sumber_wa if wa else '') if w != wa]
+    wa2, telp2 = lain[0] if lain else ('', '')
     return {
         'NAMA': nama[:80],
         'WA': wa,
         'WA2': wa2,
         'TELP2': telp2[:25],
+        'WA_LAIN': [(w, t[:25]) for w, t in lain[1:]],
         'TELP': telp[:25],
         'EMAIL': penerima or f'admin@{domain}',
         'EMAIL_PUBLIK': email_publik,
