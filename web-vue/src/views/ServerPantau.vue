@@ -21,6 +21,9 @@ const KAT = [
   { k: 'sistem', label: 'Sistem', ikon: 'server' },
 ]
 const WARNA = { normal: 'hijau', waspada: 'kuning', bahaya: 'merah' }
+const LABEL = { normal: 'Normal', waspada: 'Waspada', bahaya: 'Bahaya' }
+const nilaiRapi = (v) => (typeof v === 'number' ? Number(v.toFixed(1)).toLocaleString('id-ID') : v)
+const judulRapi = (t) => String(t).replace(/(\d+)\.0(?=%|\s|$)/g, '$1')
 const AKSI = {
   blokir_ip: 'Blokir IP 1 jam', hapus_frozen: 'Hapus email frozen', tahan_pengirim: 'Bekukan antrean pengirim',
   lepas_pengirim: 'Lepas antrean pengirim', jalankan_antrean: 'Proses antrean',
@@ -123,7 +126,7 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
       <!-- Ubin ringkasan per kategori -->
       <div class="ubin-baris">
         <div v-for="k in KAT" :key="k.k" class="ubin" :class="statusKat(k.k)">
-          <div class="ubin-kepala"><Ikon :nama="k.ikon" :ukuran="16" /> {{ k.label }} <span class="lencana" :class="WARNA[statusKat(k.k)]">{{ statusKat(k.k) }}</span></div>
+          <div class="ubin-kepala"><Ikon :nama="k.ikon" :ukuran="16" /> {{ k.label }} <span class="lencana" :class="WARNA[statusKat(k.k)]">{{ LABEL[statusKat(k.k)] }}</span></div>
           <b class="ubin-angka">{{ angka(ubin[k.k].utama) }}</b>
           <span class="redup">{{ ubin[k.k].sat }}</span>
           <small class="redup blok">{{ ubin[k.k].ket }}</small>
@@ -136,16 +139,20 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
           <div class="kartu-judul"><h2 id="judul-usulan"><Ikon nama="perisai" :ukuran="16" /> Tindakan terukur <span v-if="usulan.length" class="hitung">{{ usulan.length }}</span></h2></div>
           <p v-if="!usulan.length" class="bersih"><Ikon nama="centang" :ukuran="16" /> Tidak ada tindakan yang perlu diambil sekarang.</p>
           <ul class="daftar">
-            <li v-for="u in usulan" :key="u.host + u.id">
-              <div class="baris-atas">
-                <span class="lencana" :class="WARNA[u.tingkat]">{{ u.tingkat }}</span>
-                <b>{{ AKSI[u.aksi] }}</b><code v-if="u.target !== 'semua'" class="putus">{{ u.target }}</code>
-                <span class="redup">· {{ u.server }}</span>
+            <li v-for="u in usulan" :key="u.host + u.id" class="usulan" :class="u.tingkat">
+              <div class="usulan-isi">
+                <div class="baris-atas">
+                  <span class="lencana" :class="WARNA[u.tingkat]">{{ LABEL[u.tingkat] }}</span>
+                  <b>{{ u.server }}</b>
+                  <span class="redup">·</span>
+                  <span>{{ AKSI[u.aksi] }}</span>
+                  <code v-if="u.aksi !== 'hapus_frozen' && u.target !== 'semua'" class="putus target">{{ u.target }}</code>
+                </div>
+                <p class="redup kecil-teks">{{ u.alasan }}</p>
+                <p class="dampak"><Ikon nama="peringatan" :ukuran="14" /> <span>{{ u.dampak }}</span></p>
               </div>
-              <p class="redup kecil-teks">{{ u.alasan }}</p>
-              <p class="dampak"><Ikon nama="peringatan" :ukuran="14" /> {{ u.dampak }}</p>
               <button type="button" class="tombol kecil" :class="u.tingkat === 'bahaya' ? 'bahaya' : 'waspada'" :disabled="sedang[u.host + u.id]" @click="jalankan(u)">
-                {{ sedang[u.host + u.id] ? 'Menjalankan…' : AKSI[u.aksi] }}</button>
+                {{ sedang[u.host + u.id] ? 'Menjalankan…' : 'Jalankan' }}</button>
             </li>
           </ul>
         </section>
@@ -154,12 +161,12 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
         <section class="kartu" aria-labelledby="judul-sinyal">
           <div class="kartu-judul"><h2 id="judul-sinyal"><Ikon nama="peringatan" :ukuran="16" /> Sinyal aktif <span v-if="sinyal.length" class="hitung">{{ sinyal.length }}</span></h2></div>
           <p v-if="!sinyal.length" class="bersih"><Ikon nama="centang" :ukuran="16" /> Semua metrik di bawah ambang.</p>
-          <ul class="daftar rapat">
+          <ul class="sinyal">
             <li v-for="(x, i) in sinyal" :key="i">
-              <span class="lencana" :class="WARNA[x.tingkat]">{{ x.tingkat }}</span>
-              <span class="lencana abu">{{ KAT.find((k) => k.k === x.kat)?.label }}</span>
-              <b>{{ x.server }}</b> {{ x.judul }}
-              <small v-if="Array.isArray(x.ambang)" class="redup">(ambang {{ x.ambang.join(' / ') }})</small>
+              <span class="lencana" :class="WARNA[x.tingkat]">{{ LABEL[x.tingkat] }}</span>
+              <b>{{ x.server }}</b>
+              <span class="sinyal-judul">{{ judulRapi(x.judul) }}<small v-if="Array.isArray(x.ambang)" class="redup"> · ambang {{ x.ambang.map(nilaiRapi).join(' / ') }}</small></span>
+              <span class="kat redup"><Ikon :nama="KAT.find((k) => k.k === x.kat)?.ikon" :ukuran="13" /> {{ KAT.find((k) => k.k === x.kat)?.label }}</span>
             </li>
           </ul>
         </section>
@@ -167,20 +174,20 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
 
       <!-- Matriks server -->
       <section class="kartu" aria-labelledby="judul-matriks">
-        <div class="kartu-judul"><h2 id="judul-matriks"><Ikon nama="server" :ukuran="16" /> Semua server</h2><span class="redup">Klik baris untuk rincian</span></div>
+        <div class="kartu-judul"><h2 id="judul-matriks"><Ikon nama="server" :ukuran="16" /> Semua server</h2><span class="redup kecil-teks">Klik baris untuk rincian &amp; tren 1 jam</span></div>
         <div class="tabel-wadah">
-          <table class="tabel">
+          <table class="tabel matriks">
             <thead><tr><th scope="col">Server</th><th scope="col">Antrean</th><th scope="col">Spam</th><th scope="col">Peretasan</th><th scope="col">DDoS</th><th scope="col">Sistem</th></tr></thead>
             <tbody>
               <tr v-for="s in servers" :key="s.host" class="bisa-klik" :class="{ terpilih: pilih === s.host }" tabindex="0"
                   @click="pilih = pilih === s.host ? '' : s.host" @keydown.enter="pilih = pilih === s.host ? '' : s.host">
-                <td><b>{{ s.name }}</b><span class="kecil">{{ s.ok ? `${s.data.detik} dtk · ${waktuLalu(s.data.t)}` : `gagal: ${s.error}` }}</span></td>
+                <td><b>{{ s.name }}</b><span class="kecil">{{ s.ok ? waktuLalu(s.data.t) : `gagal: ${s.error}` }}</span></td>
                 <template v-if="s.ok">
-                  <td><span class="titik" :class="WARNA[s.status.email]"></span>{{ s.data.email?.antrean?.ada ? angka(s.data.email.antrean.total) : 'tanpa exim' }}<span class="kecil">{{ s.data.email?.antrean?.ada ? `${angka(s.data.email.antrean.frozen)} frozen` : '' }}</span></td>
-                  <td><span class="titik" :class="WARNA[s.status.spam]"></span>{{ angka((s.data.email?.log?.spam_ditolak || 0) + (s.data.email?.log?.rbl_ditolak || 0)) }}<span class="kecil">ditolak</span></td>
-                  <td><span class="titik" :class="WARNA[s.status.retas]"></span>{{ angka(s.data.retas.lfd.blokir) }} LFD<span class="kecil">{{ angka(s.data.retas.waf.tolak) }} WAF · {{ angka(s.data.email?.log?.auth_gagal) }} auth</span></td>
-                  <td><span class="titik" :class="WARNA[s.status.ddos]"></span>{{ angka(s.data.ddos.syn_recv) }} SYN<span class="kecil">{{ angka(s.data.ddos.web) }} web · {{ s.lonjakan?.length ? `${s.lonjakan.length} lonjakan` : 'tanpa lonjakan' }}</span></td>
-                  <td><span class="titik" :class="WARNA[s.status.sistem]"></span>load {{ s.data.sistem.load?.[0] }}<span class="kecil">{{ s.data.sistem.cpu }} CPU · RAM {{ s.data.sistem.ram_persen }}%</span></td>
+                  <td><span class="titik" :class="WARNA[s.status.email]"></span><template v-if="s.data.email?.antrean?.ada">{{ angka(s.data.email.antrean.total) }} pesan</template><span v-else class="redup">tanpa email</span><span class="kecil">{{ s.data.email?.antrean?.ada ? `${angka(s.data.email.antrean.frozen)} frozen` : '' }}</span></td>
+                  <td><span class="titik" :class="WARNA[s.status.spam]"></span>{{ angka((s.data.email?.log?.spam_ditolak || 0) + (s.data.email?.log?.rbl_ditolak || 0)) }} ditolak<span class="kecil">{{ angka(s.data.email?.log?.dilarang_kirim || 0) }} kiriman ditahan</span></td>
+                  <td><span class="titik" :class="WARNA[s.status.retas]"></span>{{ angka(s.data.retas.lfd.blokir) }} diblokir<span class="kecil">{{ angka(s.data.retas.waf.tolak) }} WAF{{ s.data.email?.log ? ` · ${angka(s.data.email.log.auth_gagal)} login gagal` : '' }}</span></td>
+                  <td><span class="titik" :class="WARNA[s.status.ddos]"></span>{{ angka(s.data.ddos.syn_recv) }} SYN<span class="kecil">{{ angka(s.data.ddos.web) }} koneksi web{{ s.lonjakan?.length ? ` · ${s.lonjakan.length} lonjakan` : '' }}</span></td>
+                  <td><span class="titik" :class="WARNA[s.status.sistem]"></span>load {{ nilaiRapi(s.data.sistem.load?.[0]) }} / {{ s.data.sistem.cpu }} CPU<span class="kecil">RAM {{ nilaiRapi(s.data.sistem.ram_persen) }}% · disk {{ nilaiRapi(Math.max(0, ...Object.values(s.data.sistem.disk || {}))) }}%</span></td>
                 </template>
                 <td v-else colspan="5" class="redup">Server tidak terjangkau</td>
               </tr>
@@ -282,12 +289,16 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
 </template>
 
 <style scoped>
+.halaman { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1400px; }
+.halaman > * { min-width: 0; }
+.kepala-aksi { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.kartu-judul h2 { display: flex; align-items: center; gap: 6px; margin: 0; }
 .langsung { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--teks-2); }
 .langsung i { width: 8px; height: 8px; border-radius: 50%; background: var(--baik); box-shadow: 0 0 0 3px rgba(52, 199, 123, .2); animation: denyut 2s infinite; }
 .langsung.basi i { background: var(--waspada); animation: none; }
 @keyframes denyut { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .langsung i { animation: none; } }
-.ubin-baris { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.ubin-baris { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .ubin { background: var(--kartu); border: 1px solid var(--garis); border-radius: var(--radius, 16px); padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; }
 .ubin.waspada { border-color: rgba(232, 181, 74, .45); }
 .ubin.bahaya { border-color: rgba(255, 107, 107, .55); }
@@ -295,11 +306,23 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
 .ubin-kepala .lencana { margin-left: auto; }
 .ubin-angka { font-size: 26px; font-variant-numeric: tabular-nums; color: var(--teks-kuat); margin-top: 6px; }
 .blok { display: block; }
-.dua-kolom { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.dua-kolom { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px; align-items: start; }
+.daftar > li.usulan { grid-template-columns: minmax(0, 1fr) auto; align-items: center; justify-items: stretch; gap: 12px; border-left: 3px solid var(--waspada); }
+.daftar > li.usulan.bahaya { border-left-color: var(--bahaya); }
+.usulan-isi { display: grid; gap: 4px; min-width: 0; }
+.usulan .tombol { white-space: nowrap; }
+.target { font-size: 12px; }
+.sinyal { list-style: none; margin: 0; padding: 0; display: grid; }
+.sinyal li { display: grid; grid-template-columns: 74px 78px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--garis); font-size: 13px; }
+.sinyal li:last-child { border-bottom: 0; }
+.sinyal .lencana { justify-self: start; }
+.sinyal .kat { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+@media (max-width: 640px) { .sinyal li { grid-template-columns: auto minmax(0, 1fr); } .sinyal .kat { grid-column: 2; } }
+.matriks td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.matriks td:first-child { width: 1%; padding-right: 28px; }
+.matriks .kecil { padding-left: 14px; margin-top: 2px; }
 .daftar { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .daftar > li { border: 1px solid var(--garis); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; justify-items: start; }
-.daftar.rapat > li { display: block; padding: 8px 10px; }
-.daftar.rapat .lencana { margin-right: 4px; }
 .baris-atas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .dampak { margin: 0; font-size: 13px; color: var(--waspada); display: flex; gap: 6px; align-items: flex-start; }
 .kecil-teks { margin: 0; font-size: 12.5px; }
@@ -324,6 +347,7 @@ const jam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '
 .rinci-kisi dd { margin: 0; font-variant-numeric: tabular-nums; }
 .top { list-style: none; margin: 0; padding: 0; font-size: 12.5px; display: grid; gap: 3px; }
 .top li { display: flex; justify-content: space-between; gap: 8px; }
-.putus { word-break: break-all; }
+.putus { overflow-wrap: anywhere; }
+.sinyal-judul { overflow-wrap: break-word; word-break: normal; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
