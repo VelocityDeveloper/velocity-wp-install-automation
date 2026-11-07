@@ -40,6 +40,7 @@ const NAV = [
   // VelocityGuard = sistem keamanan server buatan sendiri pengganti cPGuard (alamat tetap /server/…)
   { grup: 'velocityguard', label: 'VelocityGuard', ikon: 'perisai', anak: [
     { ke: '/server/velocityguard', label: 'Celah & Insiden', ikon: 'perisai' },
+    { ke: '/server/pantau', label: 'Pantauan Realtime', ikon: 'pantau' },
     { ke: '/server/proteksi', label: 'Proteksi', ikon: 'perisai' },
     { ke: '/server/antivirus', label: 'Antivirus', ikon: 'virus' },
     { ke: '/server/waf', label: 'WAF', ikon: 'waf' },

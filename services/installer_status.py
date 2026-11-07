@@ -2433,6 +2433,10 @@ server_judi.pasang(lambda: _daftar_server(), lambda: ssh_key_file(), kirim_teleg
 # Deteksi lonjakan request per domain + penilaian AI (mode deteksi), logika di services/server_lonjakan.py
 import server_lonjakan  # noqa: E402
 server_lonjakan.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
+
+# Pantauan Realtime (antrean email, spam, peretasan, DDoS, sistem) satu panel /server/pantau, logika di services/server_pantau.py
+import server_pantau  # noqa: E402
+server_pantau.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), lambda p: firewall_aksi(p))
 # VelocityGuard: laporan celah harian, kandidat virtual patch, catatan insiden (services/velocityguard.py)
 import velocityguard  # noqa: E402
 velocityguard.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
@@ -4370,6 +4374,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(server_lonjakan.riwayat((parse_qs(parsed.query).get('server') or [''])[0]))
             return
+        if path == '/api/servers/pantau':
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            self._send_json(server_pantau.ringkasan())
+            return
         if path == '/api/servers/judi':
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
@@ -4613,6 +4623,7 @@ class Handler(BaseHTTPRequestHandler):
                           '/api/servers/waf/aksi', '/api/servers/waf/setelan',
                           '/api/servers/bfm/aksi', '/api/servers/bfm/setelan',
                           '/api/servers/limit/aksi',
+                          '/api/servers/pantau/aksi', '/api/servers/pantau/lepas',
                           '/api/servers/cms/scan',
                           '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek',
                           '/api/servers/guard/celah/scan', '/api/servers/guard/insiden',
@@ -4752,6 +4763,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
                 obj, kode = (bfm_aksi if path == '/api/servers/bfm/aksi' else bfm_setelan)(payload)
+                self._send_json(obj, kode)
+                return
+            if path in ('/api/servers/pantau/aksi', '/api/servers/pantau/lepas'):
+                # Blokir IP / hapus email frozen / bekukan antrean di server produksi: Origin wajib sama dengan Host
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = (server_pantau.aksi if path.endswith('/aksi') else server_pantau.lepas_pengirim)(payload)
                 self._send_json(obj, kode)
                 return
             if path == '/api/servers/limit/aksi':
@@ -4958,4 +4978,5 @@ if __name__ == '__main__':
     threading.Thread(target=server_cms.jadwal_jalan, daemon=True).start()
     threading.Thread(target=velocityguard.jadwal_jalan, daemon=True).start()
     threading.Thread(target=server_lonjakan.jalan, daemon=True).start()
+    threading.Thread(target=server_pantau.jalan, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', 9121), Handler).serve_forever()
