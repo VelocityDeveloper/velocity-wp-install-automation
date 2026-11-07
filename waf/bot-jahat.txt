@@ -52,3 +52,5 @@ seoscanners.net
 ltx71
 inboundlinks.win
 sitebot
+# Pemindai CVE-2026-119977 (/wp-content/upgrade/, 4 Nov)
+exploit-rce

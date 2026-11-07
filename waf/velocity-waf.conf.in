@@ -97,6 +97,11 @@ SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php\d?|phtml|phar|pht|s
 # Folder cache plugin & upgrade WordPress tak pernah berisi PHP yang dipanggil langsung (webshell Podlove, a4tech.php dkk.)
 SecRule REQUEST_FILENAME "@rx /wp-content/(?:cache|upgrade|upgrade-temp-backup)/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
     "id:7700213,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/cache atau upgrade'"
+# CVE-2026-119977 (RCE race saat update WP lewat /wp-content/upgrade/, KEV CISA 3 Nov): folder upgrade hanya dipakai PHP
+# di server (wp-admin/update.php, WP-CLI) lewat sistem berkas — TIDAK PERNAH diakses lewat HTTP. Ukur 7 Nov (24 j, 7 server):
+# 295 request, 0 POST, 0 dari IP tim/server, semuanya pemindai (UA Android 7 palsu, "research") → blok semua akses HTTP.
+SecRule REQUEST_FILENAME "@rx /wp-content/(?:upgrade|upgrade-temp-backup)(?:/|$)" \
+    "id:7700226,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses HTTP ke wp-content/upgrade (CVE-2026-119977)'"
 # Eksploit Podlove Podcast Publisher image cache (unduh berkas PHP dari URL luar)
 SecRule ARGS_NAMES "@streq podlove_image_cache_url" \
     "id:7700214,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Eksploit Podlove image cache'"
