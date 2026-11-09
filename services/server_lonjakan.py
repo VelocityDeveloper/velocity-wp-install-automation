@@ -20,6 +20,7 @@ import urllib.request
 from pathlib import Path
 
 import server_judi
+import gerbang_notif
 
 AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_lonjakan_agent.py'
 DIR = Path('/var/lib/velocity/server-lonjakan')
@@ -121,17 +122,30 @@ def nilai_ai(l, t):
             'pola_regex': str(d.get('pola_regex') or '')[:200], 'alasan': str(d.get('alasan') or '')[:300], 'model': m['model']}
 
 
-def _notif(srv, l, pola):
-    """Satu pesan per domain: semua template tidak natural pada kejadian yang baru mulai."""
+def _ada_5xx(l):
+    """Indikasi 5xx: ≥10% hit template lonjakan berstatus 5xx (minimal 10 hit)."""
+    total = lima = 0
+    for t in l.get('template') or []:
+        for k, n in (t.get('status') or {}).items():
+            total += n
+            lima += n if str(k).startswith('5') else 0
+    return lima >= 10 and lima >= 0.1 * max(total, 1)
+
+
+def _notif(srv, l, pola, menit=0, ada_5xx=False):
+    """Satu pesan RINGKAS per domain (maks 2 pola teratas). Gerbang notif (7 Nov 2026): dikirim hanya bila lonjakan
+    berlangsung >30 mnt atau ada indikasi 5xx; kejadian singkat masuk ringkasan harian saat reda. Kembalikan putusan."""
     e = html.escape
-    teks = (f"🚨 <b>VelocityGuard · Lonjakan tidak natural</b> (pemantau lonjakan: tanpa tindakan otomatis, WAF tetap jalan)\n"
-            f"Server: {e(srv['name'])} · <b>{e(l['domain'])}</b>\n"
-            f"{l['per_menit']}/mnt (normal {l['baseline']}/mnt, {l['kali']}×) · {l['ip_unik']} IP")
-    for t, ai in pola:
-        teks += (f"\n\n• <code>{e(t['template'])}</code> — {t['hit']} hit, {t['ip_unik']} IP, maks {t['maks_per_ip']}/IP\n"
-                 f"AI: {e(ai['jenis'])} (yakin {ai['yakin']}) → usulan <b>{e(ai['usulan'])}</b>\n{e(ai['alasan'])}"
-                 + (f"\nRegex: <code>{e(ai['pola_regex'])}</code>" if ai['pola_regex'] else ''))
-    _kirim_tg(teks + "\n\nNotif berikutnya untuk domain ini hanya saat reda.")
+    teks = (f"🚨 <b>VelocityGuard · Lonjakan</b> {e(srv['name'])} · <b>{e(l['domain'])}</b>\n"
+            f"{l['per_menit']}/mnt ({l['kali']}× normal) · {l['ip_unik']} IP · berlangsung ±{round(menit)} mnt"
+            + (" · ⚠️ respons 5xx" if ada_5xx else ''))
+    for t, ai in sorted(pola, key=lambda x: -x[0]['hit'])[:2]:
+        teks += (f"\n• <code>{e(t['template'][:80])}</code> {t['hit']} hit/{t['ip_unik']} IP — "
+                 f"{e(ai['jenis'])} {ai['yakin']}%, usul {e(ai['usulan'])}")
+    if len(pola) > 2:
+        teks += f"\n(+{len(pola) - 2} pola lain di dashboard)"
+    return _kirim_tg(teks + "\nNotif berikutnya hanya saat reda.", 'lonjakan_mulai', srv['name'], l['domain'],
+                     {'menit': round(menit), 'ada_5xx': ada_5xx, 'per_menit': l['per_menit']})
 
 
 def _diblok(t):
@@ -169,14 +183,23 @@ def periksa_server(srv, key, s):
             continue
         kd = f"{srv['host']}|{l['domain']}"
         if kd not in aktif:
-            _notif(srv, l, pola)
-            aktif[kd] = {'mulai': kini, 'puncak': 0}
-        aktif[kd]['terakhir'] = kini
-        aktif[kd]['puncak'] = max(aktif[kd]['puncak'], l['per_menit'])
+            aktif[kd] = {'mulai': kini, 'puncak': 0, 'diputus': False, 'notif': False}
+        a = aktif[kd]
+        a['terakhir'] = kini
+        a['puncak'] = max(a['puncak'], l['per_menit'])
+        # entri lama (sebelum gerbang) tak punya 'diputus' → dianggap sudah dinotifkan seperti dulu
+        if not a.get('diputus', True):
+            menit, lima = (kini - a['mulai']) / 60, _ada_5xx(l)
+            if gerbang_notif.syarat('lonjakan_mulai', {'menit': menit, 'ada_5xx': lima}):
+                a['diputus'] = True
+                a['notif'] = _notif(srv, l, pola, menit, lima) == gerbang_notif.KIRIM
     for kd in [kd for kd in aktif if kd.startswith(srv['host'] + '|') and kini - aktif[kd]['terakhir'] >= REDA]:
         a = aktif.pop(kd)
+        # gerbang: "reda" hanya dikirim bila notif mulainya terkirim; selain itu masuk ringkasan (1 hitungan per kejadian)
         _kirim_tg(f"✅ <b>VelocityGuard · Lonjakan reda</b>\nServer: {html.escape(srv['name'])} · <b>{html.escape(kd.split('|', 1)[1])}</b>\n"
-                  f"Berlangsung ±{round((a['terakhir'] - a['mulai']) / 60)} mnt, puncak {a['puncak']}/mnt.")
+                  f"Berlangsung ±{round((a['terakhir'] - a['mulai']) / 60)} mnt, puncak {a['puncak']}/mnt.",
+                  'lonjakan_reda', srv['name'], kd.split('|', 1)[1],
+                  {'mulai_terkirim': bool(a.get('notif', True)), 'menit': round((a['terakhir'] - a['mulai']) / 60), 'puncak': a['puncak']})
     for k in [k for k, v in k_ai.items() if kini - v['t'] >= JEDA_AI]:  # cache basi dibuang agar berkas tak membengkak
         del k_ai[k]
     _simpan()

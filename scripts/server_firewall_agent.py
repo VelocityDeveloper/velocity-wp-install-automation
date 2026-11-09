@@ -98,13 +98,67 @@ def jaringan(teks):
         return None
 
 
+# Aturan lanjutan CSF per port dari dashboard: tcp|in|d=22,80|s=1.2.3.4
+RE_LANJUT = re.compile(r'^(?:tcp|udp)\|in\|d=([\d,_]+)\|s=([^|\s]+)$', re.I)
+
+
+def urai_lanjut(teks):
+    """'tcp|in|d=22|s=1.2.3.4' → ('1.2.3.4', '22'); selain itu (teks, None)."""
+    m = RE_LANJUT.match(teks)
+    return (m.group(2), m.group(1).replace('_', '-')) if m and jaringan(m.group(2)) else (teks, None)
+
+
+def port_sah(p):
+    """'22, 80' → '22,80'; kosong → ''; tidak sah → None. Hanya port tunggal (1–65535), maks. 10."""
+    s = re.sub(r'\s', '', str(p.get('port') or ''))
+    if not s:
+        return ''
+    daftar = s.split(',')
+    if len(daftar) > 10 or not all(x.isdigit() and 0 < int(x) < 65536 for x in daftar):
+        return None
+    return ','.join(str(int(x)) for x in daftar)
+
+
+def port_konfig(berkas, pola, bawaan):
+    m = re.search(pola, baca(berkas), re.M | re.I)
+    return m.group(1) if m else bawaan
+
+
+# Port yang diserang, ditebak dari pemicu di pesan/komentar lfd & BFM (lfd tidak mencatat port tujuan)
+PORT_PEMICU = {'sshd': 'SSH', 'ftpd': '21 · FTP', 'imapd': '143,993 · IMAP', 'pop3d': '110,995 · POP3',
+               'smtpauth': '25,465,587 · SMTP', 'eximsyntax': '25 · SMTP', 'directadmin': 'DA', 'mod_security': '80,443 · Web'}
+_port_lokal = {}
+
+
+def port_serang(teks):
+    m = re.search(r'\((\w+)\)', teks or '')
+    k = m.group(1).lower() if m else ''
+    if k.startswith('vwaf') or (teks or '').startswith('BFM: wordpress'):
+        return '80,443 · Web'
+    v = PORT_PEMICU.get(k)
+    if v == 'SSH':
+        if 'ssh' not in _port_lokal:
+            _port_lokal['ssh'] = port_konfig('/etc/ssh/sshd_config', r'^\s*Port\s+(\d+)', '22')
+        return _port_lokal['ssh'] + ' · SSH'
+    if v == 'DA':
+        if 'da' not in _port_lokal:
+            _port_lokal['da'] = port_konfig('/usr/local/directadmin/conf/directadmin.conf', r'^port=(\d+)', '2222')
+        return _port_lokal['da'] + ' · DirectAdmin'
+    if (teks or '').startswith('BFM: '):  # BFM DirectAdmin lain: ssh1=, ftp1=, exim1=…
+        b = re.match(r'BFM: ([a-z]+)', teks).group(1)
+        return {'ftp': '21 · FTP', 'exim': '25,465,587 · SMTP', 'dovecot': '143,993 · IMAP', 'directadmin': port_serang('(directadmin)'),
+                'sshd': port_serang('(sshd)'), 'ssh': port_serang('(sshd)')}.get(b)
+    return v
+
+
 def daftar_deny():
     out = []
     for b in baris_data('/etc/csf/csf.deny'):
         if b.lower().startswith('include'):
             continue
         ip, ket, waktu = pecah(b)
-        out.append({'ip': ip, 'ket': ket, 'waktu': waktu, 'sumber': sumber(ket)})
+        ip, port = urai_lanjut(ip)
+        out.append({'ip': ip, 'port': port, 'serang': port_serang(ket), 'ket': ket, 'waktu': waktu, 'sumber': sumber(ket)})
     return out
 
 
@@ -116,8 +170,11 @@ def daftar_allow():
             berkas = ip.split(None, 1)[1] if ' ' in ip else ''
             out.append({'ip': ip, 'ket': ket, 'include': True, 'isi': sum(1 for _ in baris_data(berkas)) if berkas else 0})
             continue
-        # Aturan lanjutan (tcp|out|u=0) tetap ditampilkan, tapi tidak bisa dihapus dari dashboard
-        out.append({'ip': ip, 'ket': ket, 'waktu': waktu, 'aturan': not jaringan(ip), 'sumber': sumber(ket)})
+        # Aturan lanjutan (tcp|out|u=0) tetap ditampilkan, tapi tidak bisa dihapus dari dashboard; kecuali per port (tcp|in|d=..|s=IP)
+        asli = ip
+        ip, port = urai_lanjut(ip)
+        out.append({'ip': ip, 'port': port, 'asli': asli, 'ket': ket, 'waktu': waktu, 'aturan': not jaringan(ip),
+                    'sumber': sumber(ket)})
     return out
 
 
@@ -134,7 +191,7 @@ def daftar_sementara(berkas):
             continue
         if sisa > 0:
             ket = '|'.join(p[5:]).strip()
-            out.append({'ip': p[1], 'port': p[2] or '*', 'arah': p[3], 'sisa': int(sisa), 'ket': ket,
+            out.append({'ip': p[1], 'port': p[2] or '*', 'arah': p[3], 'sisa': int(sisa), 'ket': ket, 'serang': port_serang(ket),
                         'waktu': int(p[0]), 'sumber': sumber(ket)})
     return out
 
@@ -210,7 +267,7 @@ def tolak_blokir(net):
         return 'ip_kantor'
     if any(cocok(net, x) for x in ip_server()):
         return 'ip_server'
-    if any(not d.get('include') and not d.get('aturan') and cocok(net, d['ip']) for d in daftar_allow()):
+    if any(not d.get('include') and not d.get('aturan') and not d.get('port') and cocok(net, d['ip']) for d in daftar_allow()):
         return 'ada_di_whitelist'
     return None
 
@@ -225,11 +282,13 @@ def blokir(p):
     alasan = tolak_blokir(net)
     if alasan:
         return {'ok': False, 'error': alasan}
-    ttl = int(p.get('ttl') or 0)
+    ttl, port = int(p.get('ttl') or 0), port_sah(p)
+    if port is None:
+        return {'ok': False, 'error': 'port_tidak_sah'}
     if ttl:
-        kode, keluar = jalan(['csf', '-td', p['ip'], str(ttl), keterangan(p)])
+        kode, keluar = jalan(['csf', '-td', p['ip'], str(ttl)] + (['-p', port, '-d', 'in'] if port else []) + [keterangan(p)])
     else:
-        kode, keluar = jalan(['csf', '-d', p['ip'], keterangan(p)])
+        kode, keluar = jalan(['csf', '-d', 'tcp|in|d=%s|s=%s' % (port, p['ip']) if port else p['ip'], keterangan(p)])
     return {'ok': kode == 0, 'keluaran': keluar.strip()[-400:], 'cek': cek(p)}
 
 
@@ -241,13 +300,20 @@ def lepas(p):
 
 
 def izinkan(p):
-    kode, keluar = jalan(['csf', '-a', p['ip'], keterangan(p)])
+    port = port_sah(p)
+    if port is None:
+        return {'ok': False, 'error': 'port_tidak_sah'}
+    kode, keluar = jalan(['csf', '-a', 'tcp|in|d=%s|s=%s' % (port, p['ip']) if port else p['ip'], keterangan(p)])
     return {'ok': kode == 0, 'keluaran': keluar.strip()[-400:], 'cek': cek(p)}
 
 
 def cabut_izin(p):
-    kode, keluar = jalan(['csf', '-ar', p['ip']])
-    return {'ok': kode == 0, 'keluaran': keluar.strip()[-400:], 'cek': cek(p)}
+    _, keluar = jalan(['csf', '-ar', p['ip']])
+    for d in daftar_allow():  # whitelist per port: csf -ar butuh teks aturan persis
+        if d.get('port') and d['ip'] == p['ip']:
+            keluar += jalan(['csf', '-ar', d['asli']])[1]
+    sisa = [d for d in daftar_allow() if not d.get('aturan') and d['ip'] == p['ip']]
+    return {'ok': not sisa, 'keluaran': keluar.strip()[-400:], 'cek': cek(p)}
 
 
 def atur(p):
@@ -355,7 +421,7 @@ def log(p):
         pm = RE_PEMICU.search(isi)
         ev = {'t': int(t), 'jenis': jenis_lfd(isi), 'sumber': 'lfd', 'pesan': isi[:300],
               'ip': ip.group(1) if ip and jaringan(ip.group(1)) else None, 'cc': cc.group(1) if cc else None,
-              'pemicu': pm.group(1) if pm else None}
+              'pemicu': pm.group(1) if pm else None, 'serang': port_serang(isi)}
         if ev['ip'] and ev['ip'] == kantor:
             ev['kantor'] = True
         out.append(ev)
@@ -364,11 +430,12 @@ def log(p):
         if d['sumber'] != 'lfd' and d['waktu'] and d['waktu'] >= batas:
             cc = RE_CC.search(d['ket'])
             out.append({'t': d['waktu'], 'jenis': 'blokir', 'sumber': d['sumber'], 'ip': d['ip'], 'cc': cc.group(1) if cc else None,
-                        'pemicu': (re.match(r'BFM: ([\w]+?)\d*=', d['ket']) or [None, None])[1], 'pesan': d['ket'][:300]})
+                        'pemicu': (re.match(r'BFM: ([\w]+?)\d*=', d['ket']) or [None, None])[1], 'pesan': d['ket'][:300],
+                        'serang': d['serang']})
     for d in daftar_sementara('/var/lib/csf/csf.tempban'):
         if d['waktu'] >= batas and not d['ket'].startswith('lfd'):
             out.append({'t': d['waktu'], 'jenis': 'blokir', 'sumber': sumber(d['ket']), 'ip': d['ip'], 'cc': None,
-                        'pemicu': None, 'pesan': ('Blokir sementara: ' + d['ket'])[:300], 'sementara': True})
+                        'pemicu': None, 'pesan': ('Blokir sementara: ' + d['ket'])[:300], 'sementara': True, 'serang': d['serang']})
     out.sort(key=lambda e: -e['t'])
     hitung = {}
     for e in out:
@@ -424,6 +491,7 @@ def waf(p):
     acara, total = [], 0
     hitung = {'kode': {}, 'aturan': {}, 'domain': {}, 'ip': {}, 'kategori': {}}
     jam = {}
+    blokir = {}  # per jam: hit diblokir non-bot (tanpa Warning/dicatat) → notif lonjakan serangan
     if berkas:
         try:
             proc = subprocess.Popen(['grep', '-h', 'ModSecurity: '] + berkas, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -460,6 +528,11 @@ def waf(p):
             ember = t - t % 3600
             jam.setdefault(ember, {}).setdefault(kat, 0)
             jam[ember][kat] += 1
+            if kat != 'bot' and kode != 'deteksi':
+                b = blokir.setdefault(ember, {'n': 0, 'ip': set(), 'aturan': {}})
+                b['n'] += 1
+                b['ip'].add(ip)
+                b['aturan'][f['msg'] or 'id ' + f['id']] = b['aturan'].get(f['msg'] or 'id ' + f['id'], 0) + 1
             acara.append({'t': t, 'ip': ip, 'kode': kode, 'msg': f['msg'][:200], 'id': f['id'], 'domain': f['hostname'].lower(),
                           'uri': f['uri'][:200], 'kategori': kat, 'cpguard': 'cpguard' in f['file'].lower() or 'cPGuard' in f['msg']})
             if len(acara) > maks * 4:
@@ -473,7 +546,10 @@ def waf(p):
     opsi = baca('/usr/local/directadmin/custombuild/options.conf')
     mod = re.search(r'^modsecurity=(.*)$', opsi, re.M)
     rs = re.search(r'^modsecurity_ruleset=(.*)$', opsi, re.M)
-    return {'ok': True, 'hari': hari, 'total': total, 'teratas': teratas, 'jam': sorted(jam.items()), 'acara': acara[:maks],
+    return {'ok': True, 'hari': hari, 'total': total, 'teratas': teratas, 'jam': sorted(jam.items()),
+            'jam_blokir': [[t, {'n': b['n'], 'ip': len(b['ip']), 'aturan': sorted(b['aturan'].items(), key=lambda x: -x[1])[:3]}]
+                           for t, b in sorted(blokir.items())],
+            'acara': acara[:maks],
             'berkas': len(berkas), 'modsecurity': mod.group(1).strip() if mod else None,
             'ruleset': rs.group(1).strip() if rs else None, 'cpguard_rules': os.path.isfile('/etc/cpguard/cpguard_modsec100.conf'),
             'velocity_waf': (baca('/etc/velocity-waf/VERSI').strip() or 'terpasang') if any(os.path.isfile('/etc/modsecurity.d/velocity-waf.conf' + x) for x in ('', '.main'))  # .main = DA nginx (sanke)
@@ -824,6 +900,8 @@ def jalankan(kode):
     if fw:
         aksi_pc = AKSI_PC.get(p.get('aksi'))
         fungsi = (lambda q: aksi_pc(fw, q)) if aksi_pc else (lambda q: {'ok': False, 'error': 'hanya_csf'})
+        if p.get('port'):  # shortcut: port hanya untuk CSF; firewalld/ufw per port belum dibuat
+            fungsi = lambda q: {'ok': False, 'error': 'port_hanya_csf'}
     if not fungsi:
         hasil = {'ok': False, 'error': 'aksi_tidak_dikenal'}
     elif p.get('aksi') not in ('ringkas', 'atur', 'log', 'waf') and not jaringan(p.get('ip') or ''):

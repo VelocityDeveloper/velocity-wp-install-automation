@@ -1,0 +1,1225 @@
+#!/usr/bin/env python3
+"""
+AI Content Generator for Velocity WP Install
+Reads manifest + client folder data, calls OpenAI-compatible API,
+generates pages (Home, Profile, Gallery, Contact) + articles via WP-CLI
+"""
+import collections
+import hashlib
+import html
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from client_form import read_client_form
+from client_docs import collect_client_docs, format_for_prompt
+from content_sanitize import buang_kalimat_meragukan, clean_html
+from folder_klien import folder_klien
+
+CONTENT_RULES = """Aturan konten (wajib):
+- Gunakan HANYA fakta dari data klien di atas: nama usaha, produk/layanan, keunggulan, sejarah, visi-misi, area layanan, alamat, kontak. Jangan mengarang nomor telepon, alamat, harga, angka, penghargaan, atau klaim yang tidak ada di data. Kalau suatu info tidak ada, lewati tanpa menulis contoh palsu.
+- Bagian bertanda DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau WhatsApp pribadi pemilik. Kontak publik ambil dari "Kontak utk di web" atau kontak di dokumen perusahaan.
+- Jangan pernah menulis bahwa suatu informasi belum tersedia, tidak tercantum, atau tidak ada di data — cukup lewati bagiannya. Jangan menulis sertifikasi, garansi, layanan gratis, lama pengalaman, atau jumlah proyek/klien kecuali tertulis di data klien.
+- Abaikan teks panduan bawaan template form (mis. "Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
+- Kalau klien menjelaskan isi halaman, susunan menu, produk, atau layanan, ikuti dan jabarkan dari situ.
+- Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto, galeri, peta, dan tombol WhatsApp dipasang otomatis oleh sistem dari file klien."""
+
+# Artikel contoh portal berita: pengetahuan umum per rubrik. CONTENT_RULES ("HANYA
+# fakta dari data klien") membuat AI menolak rubrik umum seperti Rasa/Tokoh
+# (anaksegalabangsa.com 2026-09-14) karena prompt berita tidak memuat data klien.
+ATURAN_BERITA = """Aturan konten (wajib):
+- Tulis pengetahuan umum yang benar dan tidak diperdebatkan. Jangan mengarang angka, harga, penghargaan, kutipan, atau klaim yang tidak bisa diperiksa.
+- Jangan menyebut nama, alamat, email, atau nomor telepon siapa pun, termasuk pemilik situs.
+- Jangan menulis tag <img>, <figure>, <iframe>, <form>, URL gambar, atau kata "placeholder"/teks contoh. Foto utama dipasang otomatis oleh sistem."""
+
+PENOLAKAN_AI = re.compile(r'data klien|belum tersedia|tidak tersedia|tidak dapat (menulis|membuat)|maaf,? saya', re.I)
+
+CREDENTIAL_RE = re.compile(r'^\s*(pass(word)?|user(name)?|sandi|login)\s*[:=]', re.I | re.M)
+
+MANIFEST = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+ON_PROGRESS = Path('/home/On Progress')
+MODE = os.environ.get('INSTALL_MODE', 'dry-run')
+AI_CONFIG_DIR = Path('/var/lib/velocity/ai')
+AI_MODELS = AI_CONFIG_DIR / 'models.json'
+GENERATED_DIR = AI_CONFIG_DIR / 'generated'
+LOG_FILE = Path('/var/lib/velocity/installer') / f'ai-{MANIFEST.stem}.log' if MANIFEST else Path('/dev/null')
+# Satu baris JSON per panggilan AI; dijumlah per domain & run di halaman /ai/ (GET /api/ai/usage).
+AI_USAGE = AI_CONFIG_DIR / 'usage.jsonl'
+
+def log(msg):
+    ts = subprocess.run(['date', '-Is'], capture_output=True, text=True).stdout.strip()
+    line = f'[{ts}] {msg}'
+    print(line, file=sys.stderr)
+    with open(LOG_FILE, 'a') as f:
+        f.write(line + '\n')
+
+def read_manifest(path):
+    cfg = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' not in line:
+                continue
+            k, v = line.split('=', 1)
+            k = re.sub(r'[\s\r]', '', k)
+            v = v.strip()
+            if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', k):
+                cfg[k] = v
+    return cfg
+
+def read_client_data(folder):
+    """Read client .txt notes plus the FORM ISIAN document the client filled in"""
+    data = {}
+    folder = Path(folder)
+    for f in sorted(folder.glob('*.txt')):
+        # Nama file kredensial tidak selalu persis '<domain>.txt' (mis. ada spasi
+        # sebelum ekstensi), jadi cocokkan longgar lalu saring lagi lewat isinya —
+        # file ini berisi username/password dan tidak boleh sampai ke API AI.
+        if f.stem.strip().lower() == folder.name.strip().lower():
+            continue
+        body = f.read_text(errors='replace').strip()
+        if CREDENTIAL_RE.search(body):
+            log(f'Skip {f.name}: berisi kredensial, tidak dikirim ke AI')
+            continue
+        data[f.stem] = body
+    form = read_client_form(folder)
+    for label, value in form['fields'].items():
+        data.setdefault(label, value)
+    if form['fields']:
+        log(f'Client form fields: {len(form["fields"])}')
+    if form['unreadable']:
+        log(f'Client form unreadable (butuh penanganan manual): {form["unreadable"]}')
+    return data
+
+def load_ai_models():
+    try:
+        if AI_MODELS.is_file():
+            return json.loads(AI_MODELS.read_text())
+    except (OSError, ValueError):
+        pass
+    return {'models': [], 'default_provider': 'openai'}
+
+def get_default_model():
+    data = load_ai_models()
+    models = data.get('models', [])
+    for m in models:
+        if m.get('is_default'):
+            return m
+    return models[0] if models else None
+
+
+def get_model(peran):
+    """Model untuk satu fungsi installer (halaman /ai/ → models.json 'pemakaian').
+
+    peran: konten (halaman & artikel), isi_contoh (paket-g-konten), foto (paket-g-foto),
+    fse (fse-apply). Tanpa pilihan, atau model pilihannya sudah dihapus: model default."""
+    data = load_ai_models()
+    pilihan = str((data.get('pemakaian') or {}).get(peran) or '')
+    model = None
+    for m in data.get('models', []):
+        if pilihan and m.get('id') == pilihan:
+            model = m
+    model = model or get_default_model()
+    # peran ikut dibawa ke ai_call supaya token tercatat per fungsi.
+    return dict(model, peran=peran) if model else None
+
+
+def domain_proses():
+    """Domain yang sedang dikerjakan: dari installer-runner (VELOCITY_DOMAIN), atau nama
+    manifest /home/project/<domain>/<domain>.txt kalau script dijalankan sendiri."""
+    if os.environ.get('VELOCITY_DOMAIN'):
+        return os.environ['VELOCITY_DOMAIN']
+    for a in sys.argv[1:]:
+        if a.endswith('.txt'):
+            return Path(a).stem
+    return ''
+
+
+def catat_token(model, usage, model_jawab, ok):
+    """Tulis pemakaian token satu panggilan AI ke usage.jsonl. Tidak boleh menggagalkan run."""
+    import fcntl
+    from datetime import datetime, timezone
+    try:
+        prompt = int(usage.get('prompt_tokens') or 0)
+        jawaban = int(usage.get('completion_tokens') or 0)
+        baris = {
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'domain': domain_proses(),
+            'run': os.environ.get('VELOCITY_RUN_ID', ''),
+            'mode': MODE,
+            'peran': model.get('peran', ''),
+            'script': Path(sys.argv[0]).name,
+            'model_id': model.get('id', ''),
+            'model': model_jawab or model.get('model', ''),
+            'prompt_tokens': prompt,
+            'completion_tokens': jawaban,
+            'total_tokens': int(usage.get('total_tokens') or prompt + jawaban),
+            'ok': ok,
+        }
+        with open(AI_USAGE, 'a') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+    except Exception as e:
+        log(f'WARNING: pemakaian token tidak tercatat: {e}')
+
+_BAHASA = {}
+
+
+def bahasa_situs(domain=None):
+    """'en' | 'id' untuk domain yang dikerjakan (VELOCITY_DOMAIN dari installer-runner).
+    VELOCITY_BAHASA memaksa nilainya (uji)."""
+    paksa = os.environ.get('VELOCITY_BAHASA', '').strip().lower()
+    if paksa in ('en', 'id'):
+        return paksa
+    domain = domain or os.environ.get('VELOCITY_DOMAIN', '')
+    if not domain:
+        return 'id'
+    if domain not in _BAHASA:
+        try:
+            from client_form import bahasa_situs as dari_form
+            _BAHASA[domain] = dari_form(folder_klien(domain))
+        except Exception:
+            _BAHASA[domain] = 'id'
+    return _BAHASA[domain]
+
+
+def prompt_bahasa(system_prompt, user_prompt):
+    """Situs berbahasa Inggris (form klien, 2026-09-30 cepadtl.org): semua prompt penulis konten
+    ditulis untuk bahasa Indonesia, jadi instruksinya dialihkan di satu tempat ini."""
+    if bahasa_situs() != 'en':
+        return system_prompt, user_prompt
+    def ganti(t):
+        t = re.sub(r'\bBahasa Indonesia\b', 'English', t)
+        t = re.sub(r'\bberbahasa Indonesia\b', 'in English', t, flags=re.I)
+        return re.sub(r'\bIndonesian\b', 'English', t)
+    catatan = ('\n\nLANGUAGE OVERRIDE: the client ordered an ENGLISH website. Write every visible text '
+               '(titles, headings, body, excerpts, menu labels, category names, taglines, button labels) in '
+               'natural English, even when these instructions, examples, or the client data are in Indonesian. '
+               'Slugs in English too. Keep proper names, phone numbers, emails, and URLs unchanged.')
+    return ganti(system_prompt) + catatan, ganti(user_prompt)
+
+
+# Model berjenis agen Claude Code (halaman /ai/, provider 'claude_code', permintaan user 2026-09-30):
+# dipanggil lewat `claude -p` tanpa tools, bukan endpoint. Prompt lewat stdin (argv dibatasi 128 KB).
+# Lewat pembungkus claude-akun: pindah otomatis ke langganan Claude 2 bila Claude 1 kena/mendekati limit.
+CLAUDE_CLI = str(Path(__file__).resolve().parent / 'claude-akun')
+CLAUDE_KUNCI = Path('/etc/velocity/secrets/anthropic_api_key')
+
+
+def claude_call(system_prompt, user_prompt, model, timeout=None):
+    import fcntl
+    from datetime import datetime, timezone
+    env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
+    try:
+        kunci = CLAUDE_KUNCI.read_text().strip()
+        if kunci:
+            env['ANTHROPIC_API_KEY'] = kunci
+    except OSError:
+        pass
+    batas = max(timeout or int(os.environ.get('VELOCITY_AI_TIMEOUT', '120')), 300)
+    cmd = [CLAUDE_CLI, '-p', '--model', model.get('model') or 'opus', '--system-prompt', system_prompt,
+           '--output-format', 'json', '--no-session-persistence', '--tools', '']
+    try:
+        r = subprocess.run(cmd, input=user_prompt, capture_output=True, text=True, timeout=batas,
+                           env=env, cwd='/tmp', check=False)
+        hasil = json.loads(r.stdout or '{}')
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f'ERROR: agen Claude gagal: {type(e).__name__}: {e}')
+        catat_token(model, {}, '', False)
+        return None
+    ok = not hasil.get('is_error') and bool(str(hasil.get('result') or '').strip())
+    for nama, u in (hasil.get('modelUsage') or {}).items():
+        masuk, baca, buat = (int(u.get(k) or 0) for k in ('inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+        keluar = int(u.get('outputTokens') or 0)
+        baris = {'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'domain': domain_proses(),
+                 'run': os.environ.get('VELOCITY_RUN_ID', ''), 'mode': MODE, 'peran': model.get('peran', ''),
+                 'script': Path(sys.argv[0]).name, 'sumber': 'claude', 'model_id': model.get('id', ''), 'model': nama,
+                 'permintaan': 1, 'prompt_tokens': masuk + baca + buat, 'completion_tokens': keluar, 'total_tokens': masuk + baca + buat + keluar,
+                 'input_tokens': masuk, 'cache_read_tokens': baca, 'cache_creation_tokens': buat,
+                 'biaya_usd': round(float(u.get('costUSD') or 0), 4), 'ok': ok}
+        try:
+            with open(AI_USAGE, 'a') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.write(json.dumps(baris, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+    if not ok:
+        log(f"ERROR: agen Claude tanpa jawaban: {str(hasil.get('result') or r.stderr or 'kosong')[:300]}")
+        return None
+    content = str(hasil['result']).strip()
+    if content.startswith('```'):
+        lines = content.split('\n')[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        content = '\n'.join(lines)
+    return content
+
+
+def ai_call(system_prompt, user_prompt, model, timeout=None, max_tokens=None):
+    """Call OpenAI-compatible API (atau agen Claude Code bila provider model 'claude_code').
+
+    `timeout` detik (bawaan VELOCITY_AI_TIMEOUT atau 120). Prompt panjang seperti isi
+    contoh tema butuh lebih lama: 2026-09-16 layanan AI melambat (prompt satu kalimat
+    saja 57 detik) sehingga dua percobaan isi contoh habis waktu dan gagal.
+    """
+    system_prompt, user_prompt = prompt_bahasa(system_prompt, user_prompt)
+    if model.get('provider') == 'claude_code':
+        return claude_call(system_prompt, user_prompt, model, timeout)
+    api_key = model.get('api_key', '')
+    if not api_key:
+        log('ERROR: API key not found in model config')
+        return None
+    
+    endpoint = model.get('endpoint', 'https://api.openai.com/v1')
+    model_name = model.get('model', '')
+    temperature = model.get('temperature', 0.7)
+    # Model penalar (mis. xiaomi/mimo-v2.5) menghabiskan jatah ini untuk berpikir dan
+    # mengembalikan content KOSONG kalau jatahnya habis — gejalanya panggilan "berhasil"
+    # (token tercatat) tapi tanpa jawaban (medikaklinikteknologi.com, 2026-09-16).
+    max_tokens = max_tokens or model.get('max_tokens') or 4096
+    
+    payload = json.dumps({
+        'model': model_name,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt}
+        ],
+        'temperature': temperature,
+        'max_tokens': max_tokens
+    }).encode()
+    
+    req = urllib.request.Request(
+        f'{endpoint}/chat/completions',
+        data=payload,
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+    )
+    
+    tercatat = False
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or int(os.environ.get('VELOCITY_AI_TIMEOUT', '120'))) as resp:
+            result = json.loads(resp.read())
+            catat_token(model, result.get('usage') or {}, result.get('model', ''), True)
+            tercatat = True
+            pilihan = result['choices'][0]
+            content = pilihan['message'].get('content') or ''
+            if not content.strip():
+                log(f"ERROR: jawaban AI kosong (finish_reason={pilihan.get('finish_reason')}, "
+                    f"completion_tokens={(result.get('usage') or {}).get('completion_tokens')}, "
+                    f"max_tokens={max_tokens})")
+                return None
+            # Strip markdown code fences
+            content = content.strip()
+            if content.startswith('```'):
+                lines = content.split('\n')
+                if lines[0].strip().startswith('```'):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == '```':
+                    lines = lines[:-1]
+                content = '\n'.join(lines)
+            return content
+    except Exception as e:
+        log(f'ERROR: AI API call failed: {e}')
+        if not tercatat:
+            catat_token(model, {}, '', False)
+        return None
+
+def ai_json_list(system_prompt, user_prompt, model, jenis):
+    """Panggil AI dan urai array JSON; satu kali ulang kalau JSON-nya rusak.
+
+    centralimpex.com (2026-09-16/17): jawaban AI sesekali terpotong atau berkutip tak
+    di-escape ("Unterminated string", "Expecting property name"), sehingga semua halaman
+    atau satu kategori artikel hilang dari instalasi."""
+    for percobaan in (1, 2):
+        prompt = user_prompt if percobaan == 1 else (
+            user_prompt + '\n\nIMPORTANT: your previous answer was not valid JSON. Return ONLY a complete, '
+            'valid JSON array: escape every double quote inside strings as \\", no trailing commas, '
+            'and keep each content within the requested length so the array is not cut off.')
+        # Jatah 4096 bawaan habis dipakai model penalar untuk berpikir sehingga array
+        # halaman terpotong di dua percobaan (ruangdesaininteriorku.com 2026-09-21,
+        # completion_tokens=4096 tepat di batas).
+        response = ai_call(system_prompt, prompt, model,
+                           max_tokens=int(os.environ.get('VELOCITY_AI_MAX_TOKENS_JSON', '16384')))
+        if not response:
+            # Jawaban kosong (finish_reason=stop tanpa isi) juga sesekali terjadi — ulang.
+            continue
+        try:
+            # strict=False: baris baru/tab mentah di dalam teks HTML jawaban AI membuat
+            # json.loads gagal "Invalid control character" (sobirin-advokat.com 2026-09-16).
+            hasil = json.loads(response, strict=False)
+        except json.JSONDecodeError as e:
+            log(f'ERROR: Failed to parse {jenis} JSON (percobaan {percobaan}): {e}')
+            log(f'Response: {response[:500]}')
+            continue
+        if not isinstance(hasil, list):
+            log('ERROR: AI response is not a JSON array')
+            return None
+        if percobaan > 1:
+            log(f'{jenis} JSON valid pada percobaan {percobaan}')
+        return hasil
+    return None
+
+
+def materi_hilang(docs, pages, materi):
+    """Baris materi klien (selain FORM ISIAN) yang tidak muncul di halaman hasil AI.
+
+    Dicocokkan longgar: huruf/angka saja, 24 karakter pertama tiap baris (judul bagian,
+    butir daftar). Baris pendek (<4 huruf) & pemisah dilewati."""
+    def polos(t):
+        return re.sub(r'[^0-9a-z]+', '', html.unescape(re.sub(r'<[^>]+>', ' ', str(t))).lower())
+    # Hanya halaman profile: beranda velocity-pakete tidak mencetak isi halaman Beranda.
+    isi = polos(' '.join(str(p.get('content') or '') for p in pages or []
+                         if isinstance(p, dict) and (p.get('slug') == 'profile' or str(p.get('slug') or '').startswith('materi-'))))
+    hilang = []
+    for nama, teks in docs['sources']:
+        if nama not in materi:
+            continue
+        for baris in teks.splitlines():
+            k = polos(baris)
+            if len(k) >= 4 and k[:24] not in isi:
+                hilang.append(baris.strip())
+    return hilang
+
+
+def materi_banyak_menu(cfg, domain):
+    """Materi klien dibagi ke beberapa menu: Paket E/F tanpa susunan menu di form (menu form milik scripts/menu-form)."""
+    import client_form
+    import plugin_api
+    return plugin_api.paket_ef(cfg.get('paket', '')) and not client_form.susunan_menu(folder_klien(domain))
+
+
+def generate_pages(site_title, domain, client_info, model, materi=(), banyak_menu=False):
+    """Generate 4 pages: Home, Profile, Gallery, Contact
+
+    materi: nama dokumen klien selain FORM ISIAN (Materi.docx, compro). Isinya wajib tampil
+    utuh — batas 300-500 kata dulu membuat AI meringkas materi 7.000 karakter jadi beberapa
+    paragraf, daftar poin/tahapan/keunggulan hilang (trimurtiekapaksi.com 2026-09-29)."""
+    system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
+    
+    client_info = client_info.strip() or '(tidak ada data klien)'
+    
+    panjang_profil = '300-500 words'
+    aturan_materi = ''
+    if materi:
+        panjang_profil = 'as long as needed to hold the whole client material (no word limit)'
+        aturan_materi = f"""
+MATERI KLIEN ({', '.join(materi)}) WAJIB DIMUAT SELURUHNYA di halaman "profile" (Tentang Kami) — halaman "home" pada banyak tema tidak ditampilkan:
+- setiap bagian materi menjadi <h2>/<h3> dengan judul dari materi, urutan mengikuti materi;
+- setiap butir daftar (poin keunggulan, materi pelajaran, tahapan/jadwal, sasaran/peserta, fasilitas, catatan penting, ajakan pendaftaran, lokasi) ditulis sebagai <ul><li> — SEMUA butir, jangan diringkas, digabung, atau dibuang;
+- kalimat materi boleh dirapikan ejaannya tetapi maknanya tetap; emoji boleh dibuang;
+- kontak (telepon/WA/email) cukup di halaman "contact".
+"""
+
+    halaman_materi = ''
+    if materi and banyak_menu:
+        # adzkirarentcar.com 2026-11-02 (user): compro + price list + paket wisata jangan ditumpuk di Tentang Kami.
+        aturan_materi = aturan_materi.replace('di halaman "profile" (Tentang Kami)', 'di halaman "profile" (Tentang Kami) dan halaman "materi-*"') + """
+PEMBAGIAN MATERI KE BEBERAPA MENU — jangan menumpuk semua di Tentang Kami:
+- "profile" hanya: tentang perusahaan, sejarah, visi-misi, nilai, keunggulan, ringkasan layanan, area layanan;
+- bagian materi yang panjang atau berdiri sendiri (daftar harga/price list, armada/produk, destinasi, paket, syarat & ketentuan, portofolio, daftar klien, dan sejenisnya) masing-masing menjadi satu halaman tambahan: slug "materi-<nama-pendek>", title singkat (maks. 3 kata) dari judul bagian di materi — paling banyak 4 halaman tambahan;
+- tabel harga ditulis sebagai <table class="table table-bordered">; tiap isi materi hanya di satu halaman;
+- materi pendek yang tidak perlu halaman sendiri tetap di "profile". Materi tanpa bagian seperti itu: tanpa halaman tambahan.
+"""
+        halaman_materi = '\n  {"slug":"materi-<nama-pendek>","title":"<judul menu>","content":"<HTML utuh bagian materi>"},'
+
+    user_prompt = f"""Generate WordPress page content for a website with these details:
+- Site title: {site_title}
+- Domain: {domain}
+- Client data:
+{client_info}
+
+{CONTENT_RULES}
+{aturan_materi}
+Generate 4 pages (plus any "materi-*" pages required above) plus a tagline. Return JSON array:
+[
+  {{"slug":"home","title":"Home","content":"<HTML homepage: hero heading and intro, products/services, advantages, call to action. 300-500 words.>"}},
+  {{"slug":"profile","title":"Profil","content":"<HTML company/organization profile. Include history, vision-mission, values, or team ONLY when they appear in the client data; silently skip missing parts. Never write that some information is unavailable or not provided. {panjang_profil}.>"}},
+{halaman_materi}
+  {{"slug":"gallery","title":"Gallery","content":"<HTML short intro for the photo gallery describing the client's products or activities. 60-120 words. Photos are added automatically.>"}},
+  {{"slug":"contact","title":"Kontak","content":"<HTML contact info: public phone/WhatsApp, email, address, opening hours only if present in client data, plus an invitation to get in touch. 80-200 words. No form, no map.>"}},
+  {{"slug":"tagline","title":"Tagline","content":"<client's slogan if present, otherwise a plain-text summary of the business, max 8 words, no HTML>"}}
+]
+
+Use Indonesian language. Content should be professional HTML without images, forms, iframes, or placeholders."""
+    
+    return ai_json_list(system_prompt, user_prompt, model, 'pages')
+
+def rapikan_artikel(daftar, category):
+    """Artikel valid saja, dengan nama kolom baku.
+
+    AI kadang memakai kolom berbahasa Indonesia ("judul", "isi", "ringkasan"):
+    anaksegalabangsa.com menyimpan 3 artikel Pendidikan dengan judul, slug, dan
+    isi kosong, yang lalu diam-diam tidak terbit."""
+    hasil = []
+    for a in daftar if isinstance(daftar, list) else []:
+        if not isinstance(a, dict):
+            continue
+        judul = str(a.get('title') or a.get('judul') or '').strip()
+        isi = str(a.get('content') or a.get('isi') or a.get('konten') or '').strip()
+        if not judul or len(re.sub(r'<[^>]+>', ' ', isi).split()) < 120:
+            continue
+        # AI yang menolak menulis tetap mengisi kolom lengkap ("Data Klien Belum
+        # Tersedia untuk Artikel Rubrik Tokoh", 166 kata) dan lolos batas panjang.
+        if PENOLAKAN_AI.search(judul) or PENOLAKAN_AI.search(isi[:600]):
+            continue
+        slug = re.sub(r'[^a-z0-9]+', '-', str(a.get('slug') or judul).lower()).strip('-')[:80]
+        hasil.append({'title': judul, 'slug': slug, 'category': category, 'content': isi,
+                      'excerpt': str(a.get('excerpt') or a.get('ringkasan') or '').strip()})
+    return hasil
+
+
+BIODATA_KUNCI = re.compile(r'^(alamat lengkap|nama anda|nama pemilik|whatsapp|no\.? ?wa|e-?mail|kodepos)$', re.I)
+
+
+def buang_data_pemilik(konten, client_data, materi_publik=''):
+    """Buang paragraf/butir yang memuat biodata pemilik dari isi halaman & artikel.
+
+    Aturan prompt melarangnya, tetapi halaman Hubungi Kami anaksegalabangsa.com
+    tetap terbit dengan "Alamat Media: Desa Kedanyang RT 4 RW 1" — alamat rumah
+    pemilik dari bagian biodata FORM ISIAN. Karena itu dijaga di kode.
+
+    materi_publik: teks dokumen klien selain FORM ISIAN. NAMA pemilik yang juga tertulis di
+    materi (struktur organisasi, daftar tim) memang untuk ditampilkan — lbhdkm.or.id 2026-09-29
+    kehilangan Ketua di Struktur Organisasi & Tim Hukum karena namanya sama dengan biodata."""
+    publik = re.sub(r'[^a-z]+', ' ', str(materi_publik or '').lower())
+    nilai = []
+    for kunci, isi in (client_data or {}).items():
+        if not BIODATA_KUNCI.match(str(kunci).strip()):
+            continue
+        teks = re.sub(r'\s+', ' ', str(isi or '')).strip().lower()
+        if re.match(r'nama', str(kunci).strip(), re.I):
+            inti = re.sub(r'[^a-z]+', ' ', teks.split(',')[0]).strip()  # tanpa gelar "S.H., M.H."
+            if len(inti) >= 6 and f' {inti} ' in f' {publik} ':
+                continue
+        # "Alamat lengkap: Balikpapan" hanyalah nama kota (allikan.com 2026-09-17): menyaringnya
+        # membuang 32 paragraf yang menyebut kota usaha. Alamat rumah punya angka atau >=3 kata.
+        if re.match(r'alamat', str(kunci).strip(), re.I) and not re.search(r'\d', teks) and len(teks.split()) < 3:
+            continue
+        angka = re.sub(r'\D', '', teks)
+        if len(angka) >= 8 and len(angka) >= len(re.sub(r'\W', '', teks)) * 0.7:
+            nilai.append(('angka', angka))
+        elif len(teks) >= 6:
+            nilai.append(('teks', teks))
+    if not nilai or not konten:
+        return konten, 0
+
+    def berisi_biodata(blok):
+        polos = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', blok)).strip().lower()
+        angka = re.sub(r'\D', '', polos)
+        return any((v in angka) if jenis == 'angka' else (v in polos) for jenis, v in nilai)
+
+    dibuang = [0]
+
+    def saring(m):
+        if berisi_biodata(m.group(0)):
+            dibuang[0] += 1
+            return '<!--biodata-dibuang-->'
+        return m.group(0)
+
+    hasil = re.sub(r'<(p|li|address|td)\b[^>]*>.*?</\1>', saring, str(konten), flags=re.S | re.I)
+    # Judul yang isinya langsung dibuang ("Alamat Media" di atas alamat pemilik)
+    # ikut dibuang, begitu pula judul yang kehilangan seluruh isinya.
+    hasil = re.sub(r'<h([2-4])\b[^>]*>[^<]*</h\1>\s*(?=<!--biodata-dibuang-->)', '', hasil, flags=re.I)
+    hasil = re.sub(r'\s*<!--biodata-dibuang-->\s*', '', hasil)
+    hasil = re.sub(r'<(ul|ol)\b[^>]*>\s*</\1>', '', hasil, flags=re.I)
+    hasil = re.sub(r'<h[2-4]\b[^>]*>[^<]*</h[2-4]>\s*(?=<h[1-4]\b|</section>|$)', '', hasil, flags=re.I)
+    return hasil, dibuang[0]
+
+
+def generate_articles(site_title, domain, client_info, model, num_articles=5, category='Blog',
+                      rincian_topik='', gaya='bisnis'):
+    """Artikel untuk satu kategori.
+
+    `category` bukan sekadar label yang ditempel: semua artikel dalam satu
+    panggilan harus benar-benar membahas layanan itu. Tanpa batasan ini, AI
+    menulis artikel umum lalu kategorinya jadi tidak nyambung — mis. artikel
+    interior masuk kategori "Bangun Baru".
+    """
+    system_prompt = "You are a professional Indonesian web content writer. Generate content in valid JSON format. All text content must be in Indonesian language. Output ONLY valid JSON array, no markdown fences, no extra text."
+    
+    client_info = client_info.strip() or '(tidak ada data klien)'
+    topik = f'{category}. {rincian_topik}'.strip() if rincian_topik else category
+    
+    if gaya == 'berita':
+        # Portal berita custom (2026-09-14): contoh artikel tidak boleh berupa
+        # laporan peristiwa karangan — situs berita yang menerbitkan kejadian,
+        # nama, atau kutipan fiktif sama dengan menyebar hoaks.
+        user_prompt = f"""Tulis {num_articles} artikel contoh untuk rubrik "{category}" di portal berita {site_title} ({domain}).
+Keterangan rubrik: {rincian_topik or category}
+
+ATURAN WAJIB:
+- Artikel informatif/feature yang TIDAK terikat peristiwa tertentu: penjelasan, panduan, tips, latar belakang isu umum yang sesuai rubrik.
+- JANGAN menulis laporan kejadian. JANGAN mengarang peristiwa, nama orang, nama instansi atau perusahaan tertentu, kutipan wawancara, angka statistik, tanggal, atau lokasi kejadian.
+- Gaya jurnalistik ringkas: paragraf pendek, subjudul <h2> bila perlu, judul menarik tetapi tidak clickbait.
+- Setiap artikel membahas sudut yang berbeda dan jelas termasuk rubrik "{category}".
+- Artikel ini pengetahuan umum sesuai rubrik, TIDAK membutuhkan data klien. Jangan menolak, jangan menulis bahwa data belum tersedia.
+
+{ATURAN_BERITA}
+
+Return JSON array:
+[
+  {{"title":"<judul>","slug":"<url-slug>","category":"{category}","content":"<isi HTML 350-550 kata>","excerpt":"<ringkasan 20-30 kata>"}}
+]"""
+        for percobaan in range(2):
+            response = ai_call(system_prompt, user_prompt, model)
+            if not response:
+                log(f'Artikel rubrik {category} percobaan {percobaan + 1}: AI tidak menjawab')
+                continue
+            try:
+                articles = rapikan_artikel(json.loads(response[response.find('['):response.rfind(']') + 1]), category)
+            except json.JSONDecodeError as e:
+                log(f'Artikel rubrik {category} percobaan {percobaan + 1}: JSON rusak ({e})')
+                continue
+            if articles:
+                return articles
+            log(f'Artikel rubrik {category} percobaan {percobaan + 1}: tidak ada artikel yang lengkap')
+        return None
+
+    user_prompt = f"""Generate {num_articles} blog articles for a website with these details:
+- Site title: {site_title}
+- Domain: {domain}
+- Client data:
+{client_info}
+
+TOPIC REQUIREMENT (most important):
+Every article MUST be about this one service: {topik}
+- Do not write about the client's other services.
+- Each article must cover a different angle of this service (persiapan, proses, pemilihan material, biaya, perawatan, kesalahan umum, dsb).
+- The article title must make the service recognisable to a reader.
+
+{CONTENT_RULES}
+
+Return JSON array:
+[
+  {{"title":"<article title>","slug":"<url-slug>","category":"{category}","content":"<article content in HTML, 400-600 words, professional Indonesian>","excerpt":"<short excerpt 20-30 words>"}}
+]
+
+Use Indonesian language. Ground the content in the client's actual field of business from the client data."""
+    
+    return ai_json_list(system_prompt, user_prompt, model, 'articles')
+
+def ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key):
+    """(perintah ssh, docroot) situs; staging velocitydeveloper.co lewat VELOCITY_LOKAL_* (installer-runner)."""
+    lokal_ssh, lokal_docroot = os.environ.get('VELOCITY_LOKAL_SSH', ''), os.environ.get('VELOCITY_LOKAL_DOCROOT', '')
+    if lokal_ssh and lokal_docroot:
+        return [lokal_ssh], lokal_docroot
+    return (['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+             '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}'],
+            f'/home/{da_user}/domains/{domain}/public_html')
+
+
+def kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host):
+    """Judul layanan dari child theme yang terpasang, untuk dipakai jadi kategori.
+
+    Dibaca dari situs, bukan dari berkas template di installer: awalan fungsi
+    tema berbeda per situs, dan menebaknya pernah membuat isi tidak cocok.
+    """
+    ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not ssh_key or not Path(ssh_key).is_file():
+        return []
+    # Judul + keterangan layanan: keterangannya dipakai sebagai batasan topik
+    # artikel, supaya isinya benar-benar tentang layanan itu.
+    skrip = (
+        "global $shortcode_tags; $jenis = ''; $daftar = null;"
+        "foreach (array_keys($shortcode_tags) as $t) {"
+        "  if (preg_match('/^([a-z0-9]+)_layanan$/', $t, $m) && function_exists($m[1] . '_data')) {"
+        "    $jenis = call_user_func($m[1] . '_data', 'jenis');"
+        "    $daftar = $jenis === 'berita' ? call_user_func($m[1] . '_data', 'rubrik') : call_user_func($m[1] . '_data', 'layanan');"
+        "    break;"
+        "  }"
+        "}"
+        # Tema FSE velocity-fse (scripts/fse-apply): rubrik/layanan tinggal di opsi velocity_situs.
+        "$s = get_option('velocity_situs');"
+        "if ($daftar === null && is_array($s) && !empty($s['jenis'])) {"
+        "  $jenis = $s['jenis'];"
+        "  $daftar = $jenis === 'berita' ? ($s['rubrik'] ?? array()) : ($s['layanan'] ?? array());"
+        "}"
+        "if ($jenis === 'berita') { echo \"#jenis\\tberita\\n\"; }"
+        "foreach ((array) $daftar as $l) {"
+        "  if (!empty($l['judul'])) {"
+        "    $r = !empty($l['rincian']) ? implode(', ', (array) $l['rincian']) : '';"
+        "    echo $l['judul'] . \"\\t\" . trim(($l['teks'] ?? '') . ' ' . $r) . \"\\n\";"
+        "  }"
+        "}"
+    )
+    ssh, docroot = ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key)
+    perintah = (f'php -d memory_limit=512M /usr/local/bin/wp eval {shlex.quote(skrip)} '
+                f'--path={docroot} --allow-root 2>/dev/null')
+    try:
+        hasil = subprocess.run(ssh + [perintah], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    layanan, jenis = [], ''
+    for baris in hasil.stdout.splitlines():
+        if baris.startswith('#jenis\t'):
+            jenis = baris.split('\t', 1)[1].strip()
+            continue
+        if not baris.strip():
+            continue
+        judul, _, keterangan = baris.partition('\t')
+        # Judul kategori dipakai apa adanya; batasi panjang agar wajar.
+        layanan.append({'judul': judul.strip()[:60], 'keterangan': keterangan.strip()[:400], 'jenis': jenis})
+    # Portal berita bisa punya lebih banyak rubrik daripada layanan perusahaan.
+    return layanan[:10 if jenis == 'berita' else 6]
+
+
+# Artikel minimal per kategori (urutan form) supaya blok beranda tema berita penuh. Kategori ke-N mengisi
+# blok Customizer ke-N (theme-paket-biasa mengurutkan kategori terbanyak artikel dulu, sama banyak = urutan
+# form), jadi daftar wajib tidak naik. velocity-berita1: Highlight carousel 8, Home 1–3 (1+4), Home 4–5 6
+# — ircamedia.com 2026-10-15 hanya 3 artikel per kategori sehingga blok beranda bolong.
+# velocity-berita4 (page-home.php): home_post_1–3 (1+4), 4 = 6, 5–7 = 4, 8 = 6; blok 8 butuh 6 sedangkan daftar
+# tidak boleh naik, jadi semua 6 — aksara-media.com 2026-10-15.
+# velocity-child-berita2: Highlight carousel (2 per slide), Home 1 (1+4), Home 2 (1+5), Home 3 (1+2); Home 2 butuh 6
+# — republikharmoni.com 2026-10-16 hanya 3 artikel per kategori sehingga Posts Home 1/2 bolong.
+# velocity-berita3: Carousel 6, Posts Home 1–3 (1+5), 4 (2+3), 5 = 5 — lensajogjanews.com 2026-10-18 3 per rubrik kurang.
+# velocity-berita5: Carousel 6, Headline 3, Kiri Atas 5, Kiri Bawah 4, Footer 1–3 (3) berputar per rubrik; Main 11
+# semua kategori — tribunnewsupdate.com 2026-10-20 3 per rubrik kurang.
+# velocity-berita14: Home 1 carousel 5, Home 2 = 4, Home 3 (offset 1 + 4) = 5, Home 4 (1+2) = 3, Home 6 (1+3) = 4;
+# Home 5 semua kategori — medanspot.com 2026-10-21 3 per rubrik kurang.
+# velocity-berita6: Posts Home 1 = 4, Home 2 = 5 (kategori ke-1/2), widget sidebar kategori ke-3 (4) dan ke-4 (5)
+# — baloypedia.id 2026-10-29 satu rubrik 3 artikel, beranda & sidebar bolong.
+ARTIKEL_BLOK_BERITA = {'velocity-berita6': [5, 5, 5, 5], 'velocity-berita1': [8, 6, 6, 6, 6, 6], 'velocity-berita4': [6] * 8,
+                       'velocity-berita3': [6, 6, 6, 6, 5, 5], 'velocity-child-berita2': [6, 6, 6],
+                       'velocity-berita5': [6, 6, 6], 'velocity-berita14': [5, 5, 5, 4, 4],
+                       'velocity-berita15': [6, 6, 6, 6, 6, 4]}
+assert all(all(a >= b for a, b in zip(v, v[1:])) for v in ARTIKEL_BLOK_BERITA.values())
+
+
+def tema_aktif(domain, da_user, ssh_port, ssh_user, target_host):
+    """Slug child theme aktif di situs ('' bila tak terbaca)."""
+    ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not ssh_key or not Path(ssh_key).is_file():
+        return ''
+    ssh, docroot = ssh_wp(da_user, domain, ssh_port, ssh_user, target_host, ssh_key)
+    perintah = (f"/usr/local/bin/wp eval 'echo get_stylesheet();' "
+                f'--path={docroot} --allow-root 2>/dev/null')
+    try:
+        hasil = subprocess.run(ssh + [perintah], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return hasil.stdout.strip()
+
+
+def artikel_bertahap(jumlah, site_title, domain, client_info, model, category, rincian, gaya):
+    """generate_articles maksimal 4 per panggilan (jumlah besar = jawaban AI terlalu panjang); panggilan
+    berikutnya diberi judul yang sudah ada supaya topiknya tidak berulang."""
+    hasil = []
+    while len(hasil) < jumlah:
+        sudah = '; '.join(str(a.get('title', '')) for a in hasil)
+        bagian = generate_articles(site_title, domain, client_info, model, min(4, jumlah - len(hasil)), category,
+                                   (rincian + (f' Jangan mengulang topik artikel: {sudah}.' if sudah else '')).strip(),
+                                   gaya) or []
+        if not bagian:
+            break
+        hasil.extend(bagian[:jumlah - len(hasil)])
+    return hasil
+
+
+def kategori_isi_contoh(domain):
+    """Layanan dari isi contoh (<domain>-tema.json, scripts/paket-g-konten) sebagai kategori artikel.
+
+    Child theme klasik (Paket E/F, dll.) tidak menyimpan daftar layanan, sehingga semua
+    artikel dulu masuk satu kategori "Blog" (sedotwcsrirejeki.com, rmbrentcar.com 2026-09-17)."""
+    try:
+        isi = json.loads((GENERATED_DIR / f'{domain}-tema.json').read_text())
+    except (OSError, ValueError):
+        return []
+    if isi.get('jenis') == 'berita':
+        return [{'judul': r['judul'], 'keterangan': str(r.get('teks') or ''), 'jenis': 'berita'}
+                for r in isi.get('rubrik') or [] if r.get('judul')]
+    return [{'judul': l['judul'], 'keterangan': ' '.join([str(l.get('teks') or '')] + list(l.get('rincian') or [])).strip()}
+            for l in isi.get('layanan') or [] if l.get('judul')]
+
+
+def publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun=()):
+    """Publish generated content to WordPress via SSH + WP-CLI"""
+    ssh_key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    if not ssh_key or not Path(ssh_key).is_file():
+        log('ERROR: SSH key not found')
+        return False
+    
+    # Situs di lokasi tidak baku (staging velocitydeveloper.co): pengganti ssh + docroot
+    # lewat VELOCITY_LOKAL_*, sama seperti scripts/fse-apply & scripts/site-finish.
+    lokal_ssh = os.environ.get('VELOCITY_LOKAL_SSH', '')
+    lokal_docroot = os.environ.get('VELOCITY_LOKAL_DOCROOT', '')
+    docroot = lokal_docroot or f'/home/{da_user}/domains/{domain}/public_html'
+
+    def wp_remote(cmd_script):
+        """Run WP-CLI command on remote server"""
+        full_cmd = f'''set -e
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+WP_BIN=""; for p in /usr/local/bin/wp /usr/bin/wp; do [[ -x "$p" ]] && WP_BIN="$p" && break; done
+[[ -n "$WP_BIN" ]] || {{ echo "wp-cli_missing"; exit 10; }}
+DOCROOT="{docroot}"
+{cmd_script}
+'''
+        try:
+            result = subprocess.run(
+                ([lokal_ssh] if lokal_ssh and lokal_docroot else
+                 ['ssh', '-i', ssh_key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+                  '-o', 'ConnectTimeout=15', '-p', str(ssh_port), f'{ssh_user}@{target_host}']) + ['bash', '-s'],
+                input=full_cmd, capture_output=True, text=True, timeout=120
+            )
+            return result.stdout.strip(), result.returncode
+        except Exception as e:
+            log(f'ERROR: SSH command failed: {e}')
+            return '', 1
+    
+    # Konten AI langsung mengisi halaman terbit buatan 1-Click Setup, tidak lagi
+    # jadi draft terpisah: dulu pengunjung melihat placeholder satu kalimat
+    # sementara konten sungguhan tertahan di draft Home/Profil/Gallery/Kontak.
+    # Halaman yang isinya sudah bukan placeholder (disunting manusia) dibiarkan.
+    # Beranda sudah dijadikan halaman depan oleh installer.
+    page_targets = {
+        'home': (('Beranda', 'Home'), 'Selamat datang di website kami.'),
+        'profile': (('Tentang Kami',), 'Halaman tentang kami.'),
+        'gallery': (('Galeri',), 'Halaman galeri.'),
+        'contact': (('Hubungi Kami',), 'Halaman hubungi kami.'),
+    }
+    # VELOCITY_CONTENT_REFRESH=1 (mode finish): timpa halaman target walau sudah
+    # bukan placeholder — untuk situs yang kontennya ditulis sebelum ada penanda
+    # md5 dan perlu dibersihkan (gambar karangan, placeholder).
+    refresh = '1' if os.environ.get('VELOCITY_CONTENT_REFRESH') == '1' else '0'
+    helpers = '''cur_md5() { $WP_BIN post get "$1" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null | md5sum | cut -d' ' -f1; }
+save_md5() { $WP_BIN post meta update "$1" _velocity_content_md5 "$(cur_md5 "$1")" --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true; }
+'''
+    pages_done = 0
+    for page in pages:
+        slug = re.sub(r'[^a-z0-9-]', '', str(page.get('slug', '')).lower())
+        content = clean_html(page.get('content', ''))
+        if slug not in page_targets or not content:
+            continue
+        titles, placeholder = page_targets[slug]
+        escaped_content = content.replace("'", "'\\''")
+        title_args = ' '.join(f"'{t}'" for t in titles)
+        cmd = helpers + f'''page_id=""
+for t in {title_args}; do
+  page_id=$($WP_BIN post list --post_type=page --post_status=publish --fields=ID,post_title --path="$DOCROOT" --allow-root 2>/dev/null | awk -F'\\t' -v t="$t" 'NR>1 && $2==t {{print $1; exit}}')
+  [[ -n "$page_id" ]] && break
+done
+if [[ -z "$page_id" ]]; then
+  page_id=$($WP_BIN post create --post_type=page --post_status=publish --post_title='{titles[0]}' --post_content='{escaped_content}' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null || true)
+  [[ -n "$page_id" ]] && save_md5 "$page_id" && echo "page_created:{slug}:$page_id"
+else
+  current=$($WP_BIN post get "$page_id" --field=post_content --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  stored=$($WP_BIN post meta get "$page_id" _velocity_content_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  fse_milik=$($WP_BIN post meta get "$page_id" _velocity_fse_md5 --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  fse_tata=$($WP_BIN post meta get "$page_id" _velocity_fse_layout --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  # Tema FSE (scripts/fse-apply): halaman ini milik fse-apply, isinya blok yang
+  # disusun dari data situs — tulisan AI TIDAK PERNAH menimpanya, termasuk di mode
+  # finish. Pengecualian refresh dulu ada di sini dan merusak situs: generator
+  # menulis ulang Tentang Kami/Galeri/Hubungi Kami jadi HTML polos, lalu
+  # `fse-apply --isi` menolak memperbaikinya karena isinya tidak lagi cocok dengan
+  # md5 miliknya ("sudah disunting orang") — blok kontak, media sosial, dan form
+  # pemesanan hilang permanen (bumiairchemitech.com, 2026-09-16).
+  if [[ -n "$fse_tata" || -n "$fse_milik" ]]; then
+    echo "page_kept_fse:{slug}:$page_id"
+  # Ditimpa hanya kalau masih placeholder, mode finish, atau isinya belum berubah
+  # sejak terakhir ditulis installer (md5 sama) — suntingan manusia tidak hilang.
+  elif [[ "$current" == '{placeholder}' || "{refresh}" == 1 ]] || {{ [[ -n "$stored" ]] && [[ "$stored" == "$(cur_md5 "$page_id")" ]]; }}; then
+    $WP_BIN post update "$page_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && save_md5 "$page_id" && echo "page_filled:{slug}:$page_id"
+  else
+    echo "page_kept:{slug}:$page_id"
+  fi
+fi
+# Draft buatan generator versi lama (slug home/profile/gallery/contact).
+for old in $($WP_BIN post list --post_type=page --post_status=draft --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null); do
+  $WP_BIN post delete "$old" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "old_draft_deleted:{slug}:$old"
+done'''
+        output, rc = wp_remote(cmd)
+        if 'page_created' in output or 'page_filled' in output:
+            pages_done += 1
+        log(f'Halaman {slug}: {" ".join(output.split()) or "tanpa_output"}')
+    
+    # Halaman materi-* (generate_pages banyak_menu) + butir menu sebelum Hubungi Kami. 2 halaman atau lebih
+    # dikelompokkan di bawah "Informasi" agar menu utama tidak turun jadi 2 baris.
+    materi_pages = [p for p in pages if str(p.get('slug', '')).startswith('materi-') and clean_html(p.get('content', ''))]
+    if materi_pages:
+        induk = len(materi_pages) >= 2
+        cmd = helpers + r'''MENU=$($WP_BIN menu list --fields=term_id,locations --format=csv --path="$DOCROOT" --allow-root 2>/dev/null | awk -F, 'NR>1 && /primary/ {print $1; exit}')
+POS=$($WP_BIN menu item list "$MENU" --fields=position,title --format=csv --path="$DOCROOT" --allow-root 2>/dev/null | awk -F, 'NR>1 && /Hubungi/ {print $1; exit}')
+INDUK=0
+'''
+        if induk:
+            cmd += r'''INDUK=$($WP_BIN menu item add-custom "$MENU" Informasi '#' ${POS:+--position=$POS} --porcelain --path="$DOCROOT" --allow-root 2>/dev/null); [[ -n "$POS" ]] && POS=$((POS+1))
+'''
+        for p in materi_pages:
+            slug_wp_m = re.sub(r'[^a-z0-9-]', '', str(p['slug']).lower())[len('materi-'):] or 'informasi'
+            judul = str(p.get('title') or slug_wp_m.replace('-', ' ').title()).strip()
+            cmd += f'''id=$($WP_BIN post list --post_type=page --name={shlex.quote(slug_wp_m)} --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -z "$id" ]]; then
+  id=$($WP_BIN post create --post_type=page --post_status=publish --post_title={shlex.quote(judul)} --post_name={shlex.quote(slug_wp_m)} --post_content={shlex.quote(clean_html(p['content']))} --path="$DOCROOT" --allow-root --porcelain 2>/dev/null)
+  [[ -n "$id" ]] && save_md5 "$id" && echo "page_created:{slug_wp_m}:$id"
+  if [[ -n "$id" && -n "$MENU" ]]; then
+    $WP_BIN menu item add-post "$MENU" "$id" --title={shlex.quote(judul)} --parent-id="$INDUK" ${{POS:+--position=$POS}} --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "menu:{slug_wp_m}"
+    [[ -n "$POS" ]] && POS=$((POS+1))
+  fi
+else
+  echo "page_kept:{slug_wp_m}:$id"
+fi
+'''
+        output, rc = wp_remote(cmd)
+        log(f'Halaman materi: {" ".join(output.split()) or "tanpa_output"}')
+        pages_done += output.count('page_created')
+
+    # Kategori disiapkan per artikel: artikel dikelompokkan mengikuti layanan
+    # klien, jadi satu situs bisa punya beberapa kategori sekaligus.
+    def id_kategori(nama):
+        aman = nama.replace("'", "'\\''")
+        keluaran, _ = wp_remote(f'''cat_id=$($WP_BIN term list category --name='{aman}' --field=term_id --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -z "$cat_id" ]]; then
+  cat_id=$($WP_BIN term create category '{aman}' --porcelain --path="$DOCROOT" --allow-root 2>/dev/null || true)
+  echo "category_created:$cat_id"
+else
+  echo "category_exists:$cat_id"
+fi''')
+        cocok = re.search(r'category_(?:created|exists):(\d+)', keluaran)
+        if cocok:
+            log(f'Kategori {nama}: {cocok.group(1)}')
+            return cocok.group(1)
+        log(f'Kategori {nama}: gagal dibuat')
+        return ''
+
+    peta_kategori = {}
+    for art in articles:
+        nama = str(art.get('category') or 'Blog')[:60]
+        if nama not in peta_kategori:
+            peta_kategori[nama] = id_kategori(nama)
+    
+    # Artikel contoh lama yang kategorinya sudah tidak dipakai situs (mis. semua
+    # "Blog" sebelum rubrik ada) dihapus — hanya kalau belum pernah disunting.
+    # "Belum disunting" = isinya masih sama dengan versi generator. Tanggal ubah tidak
+    # bisa dipakai: installer sendiri memperbarui artikel (terbitkan draft) di run yang sama.
+    for slug_lama, md5_isi, md5_baris in pensiun:
+        # `wp post get | md5sum` ikut menghitung baris baru di akhir keluaran WP-CLI:
+        # tanpa md5 isi + "\n" artikel yang tak pernah disentuh terbaca "disunting"
+        # dan tidak pernah dipensiunkan (glcagro.com 2026-09-15).
+        if not re.match(r'^[a-z0-9-]+$', str(slug_lama)) \
+                or not all(re.match(r'^[0-9a-f]{32}$', str(h)) for h in (md5_isi, md5_baris)):
+            continue
+        keluaran, _ = wp_remote(f'''pid=$($WP_BIN post list --post_type=post --post_status=publish --name='{slug_lama}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -n "$pid" ]]; then
+  h=$($WP_BIN post get "$pid" --field=post_content --path="$DOCROOT" --allow-root | md5sum | cut -d' ' -f1)
+  if [[ "$h" == "{md5_isi}" || "$h" == "{md5_baris}" ]]; then
+    $WP_BIN post delete "$pid" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_retired:{slug_lama}"
+  else
+    echo "article_retire_skip_edited:{slug_lama}"
+  fi
+fi''')
+        if keluaran:
+            log(f'Artikel lama {slug_lama}: {keluaran}')
+
+    # Create articles
+    articles_done = 0
+    for art in articles:
+        title = art.get('title', '')
+        slug = art.get('slug', '')
+        content = clean_html(art.get('content', ''))
+        excerpt = art.get('excerpt', '')
+        # Kategori artikel ini; kosong berarti pembuatannya gagal dan artikel
+        # dibiarkan tanpa kategori daripada masuk ke kategori yang salah.
+        cat_id = peta_kategori.get(str(art.get('category') or 'Blog')[:60], '')
+        
+        if not slug or not title:
+            continue
+        
+        escaped_title = title.replace("'", "'\\''")
+        escaped_content = content.replace("'", "'\\''")
+        escaped_excerpt = excerpt.replace("'", "'\\''")
+        
+        # Artikel langsung terbit; draft dari generator versi lama ikut diterbitkan.
+        # Status dicari satu per satu: dengan --post_status=any, WP_Query untuk satu
+        # slug menyembunyikan draft dari WP-CLI (tanpa user login), sehingga artikel
+        # dibuat ulang dengan slug "-2" dan draft lamanya tertinggal.
+        cmd = f'''post_id=$($WP_BIN post list --post_type=post --post_status=publish --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+[[ -n "$post_id" ]] || post_id=$($WP_BIN post list --post_type=post --post_status=draft --name='{slug}' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null | head -1)
+if [[ -n "$post_id" ]]; then
+  # Duplikat "-2" yang sempat terbit akibat bug di atas.
+  for dup in $($WP_BIN post list --post_type=post --post_status=publish --name='{slug}-2' --field=ID --path="$DOCROOT" --allow-root 2>/dev/null); do
+    $WP_BIN post delete "$dup" --force --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_duplicate_deleted:{slug}-2"
+  done
+fi
+if [[ -z "$post_id" ]]; then
+  post_id=$($WP_BIN post create --post_type=post --post_status=publish --post_title='{escaped_title}' --post_name='{slug}' --post_content='{escaped_content}' --post_excerpt='{escaped_excerpt}' --path="$DOCROOT" --allow-root --porcelain 2>/dev/null || true)
+  [[ -n "$post_id" ]] && echo "article_created:{slug}"
+  [[ -n "{cat_id}" && -n "$post_id" ]] && $WP_BIN post term set "$post_id" category {cat_id} --by=id --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true
+elif [[ "$($WP_BIN post get "$post_id" --field=post_status --path="$DOCROOT" --allow-root 2>/dev/null)" == draft ]]; then
+  $WP_BIN post update "$post_id" --post_status=publish --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_published:{slug}"
+elif [[ "{refresh}" == 1 ]]; then
+  $WP_BIN post update "$post_id" --post_content='{escaped_content}' --path="$DOCROOT" --allow-root >/dev/null 2>&1 && echo "article_refreshed:{slug}"
+else
+  echo "article_exists:{slug}"
+fi
+# Kategori diterapkan juga ke artikel lama yang terlanjur masuk Uncategorized.
+[[ -n "{cat_id}" && -n "$post_id" ]] && $WP_BIN post term set "$post_id" category {cat_id} --by=id --path="$DOCROOT" --allow-root >/dev/null 2>&1 || true'''
+        output, rc = wp_remote(cmd)
+        if 'article_duplicate_deleted' in output:
+            log(f'Duplikat dihapus: {slug}-2')
+        if 'article_created' in output or 'article_published' in output:
+            articles_done += 1
+            log(f'Artikel terbit: {slug}')
+    
+    log(f'Summary: {pages_done} pages, {articles_done} articles published')
+    return True
+
+def load_saved(path):
+    """Konten hasil generate sebelumnya, atau None kalau belum ada/rusak."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, list) and data else None
+
+def main():
+    if not MANIFEST or not MANIFEST.is_file():
+        log('ERROR: Manifest file required')
+        sys.exit(2)
+    
+    domain = MANIFEST.stem
+    log(f'AI content generation started for: {domain}')
+    
+    # Read manifest
+    cfg = read_manifest(MANIFEST)
+    site_title = cfg.get('site_title', domain)
+    da_user = cfg.get('da_user', '')
+    ssh_port = cfg.get('ssh_port', '22')
+    ssh_user = cfg.get('ssh_user', 'root')
+    target_host = cfg.get('target_host', '')
+    num_articles = int(cfg.get('num_articles', '5'))
+    article_category = cfg.get('article_category', 'Blog')
+    # Artikel dikelompokkan mengikuti layanan klien; berapa artikel per layanan
+    # bisa diatur lewat manifest.
+    per_kategori = max(1, int(cfg.get('articles_per_category', '2')))
+    
+    # Data klien (form isian, catatan, foto) ada di folder sync Google Drive.
+    # Folder manifest hanya berisi <domain>.txt hasil generate, jadi kalau cuma
+    # membaca itu, AI menulis konten generik tanpa data klien sama sekali.
+    client_data = {}
+    for folder in (MANIFEST.parent, folder_klien(domain)):
+        if folder.is_dir():
+            for k, v in read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    log(f'Client data files: {list(client_data.keys())}')
+    # Isi lengkap FORM ISIAN + dokumen lain (company profile, konsep, susunan menu).
+    # Tanpa ini AI hanya menerima nama & alamat dan menulis konten generik.
+    # Dokumen (termasuk OCR PDF hasil scan, yang lambat) hanya dibaca kalau memang
+    # perlu generate; apply ulang memakai konten tersimpan.
+    need_ai = not (load_saved(GENERATED_DIR / f'{domain}-pages.json')
+                   and load_saved(GENERATED_DIR / f'{domain}-articles.json'))
+    docs = (collect_client_docs(folder_klien(domain)) if need_ai
+            else {'sources': [], 'unreadable': [], 'skipped': [], 'unsupported': []})
+    for name, text in docs['sources']:
+        log(f'Dokumen klien: {name} ({len(text)} karakter)')
+    if docs['unreadable']:
+        log(f'Dokumen tidak terbaca (mis. PDF hasil scan): {docs["unreadable"]}')
+    if docs['skipped']:
+        log(f'Dokumen dilewati (anggaran karakter habis): {docs["skipped"]}')
+    if docs.get('unsupported'):
+        log(f'Dokumen format belum didukung (tidak dibaca): {docs["unsupported"]}')
+    client_info = format_for_prompt(client_data, docs)
+    
+    # Load AI model
+    model = get_model('konten')
+    if not model:
+        log('ERROR: No AI model configured')
+        sys.exit(2)
+    log(f'Using model: {model.get("name", model.get("id"))}')
+    
+    # Generate pages
+    # Apply ulang memakai konten yang sudah pernah dibuat: tanpa biaya AI lagi dan
+    # tanpa artikel ganda (slug hasil AI berbeda setiap kali dibuat).
+    pages = load_saved(GENERATED_DIR / f'{domain}-pages.json')
+    if pages:
+        log('Pakai konten halaman tersimpan')
+    else:
+        log('Generating pages...')
+        materi = [n for n, _ in docs['sources'] if n not in docs.get('form', ())]
+        pages = generate_pages(site_title, domain, client_info, model, materi, banyak_menu=materi_banyak_menu(cfg, domain))
+        if pages and materi:
+            # AI tetap suka melewatkan butir (Push-up/Sit-up hilang di trimurtiekapaksi.com
+            # 2026-09-30): sekali ulang dengan daftar baris yang belum termuat.
+            hilang = materi_hilang(docs, pages, materi)
+            log(f'Materi klien belum termuat: {len(hilang)} baris')
+            if len(hilang) > 3:
+                ulang = generate_pages(site_title, domain, client_info + '\n\nBARIS MATERI YANG WAJIB ADA '
+                                       '(sebelumnya terlewat):\n' + '\n'.join(hilang), model, materi,
+                                       banyak_menu=materi_banyak_menu(cfg, domain))
+                if ulang and len(materi_hilang(docs, ulang, materi)) < len(hilang):
+                    pages = ulang
+                    log(f'Materi klien belum termuat sesudah ulang: {len(materi_hilang(docs, pages, materi))} baris')
+    if not pages:
+        log('ERROR: Failed to generate pages')
+        sys.exit(3)
+    
+    pages_file = GENERATED_DIR / f'{domain}-pages.json'
+    pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+    log(f'Pages saved: {pages_file}')
+    
+    # Generate articles
+    articles = load_saved(GENERATED_DIR / f'{domain}-articles.json')
+    pensiun = []
+    kategori = kategori_layanan(domain, da_user, ssh_port, ssh_user, target_host)
+    if not kategori:
+        kategori = kategori_isi_contoh(domain)
+        if kategori:
+            log(f'Kategori dari layanan isi contoh: {", ".join(k["judul"] for k in kategori)}')
+    berita = bool(kategori) and kategori[0].get('jenis') == 'berita'
+    butuh = []
+    if berita:
+        per_kategori = max(per_kategori, int(cfg.get('articles_per_rubrik', '3')))
+        tema = tema_aktif(domain, da_user, ssh_port, ssh_user, target_host)
+        butuh = ARTIKEL_BLOK_BERITA.get(tema, [])
+        if butuh:
+            log(f'Artikel per kategori mengikuti blok beranda {tema}: {butuh}')
+    jumlah_ke = lambda i: max(per_kategori, butuh[i] if i < len(butuh) else 0)
+    nama_kategori = {k['judul'] for k in kategori}
+    if articles and kategori and not any(str(a.get('category')) in nama_kategori for a in articles):
+        # Artikel tersimpan dibuat sebelum kategori situs ada (mis. semua "Blog"):
+        # dibuat ulang per kategori, yang lama dipensiunkan bila belum disunting.
+        log(f'Artikel tersimpan tidak cocok kategori situs ({", ".join(sorted(nama_kategori))}), dibuat ulang')
+        pensiun = [(a.get('slug'), hashlib.md5(clean_html(a.get('content', '')).encode()).hexdigest(),
+                    hashlib.md5((clean_html(a.get('content', '')) + '\n').encode()).hexdigest())
+                   for a in articles if a.get('slug')]
+        articles = None
+        if not docs['sources']:
+            docs = collect_client_docs(folder_klien(domain))
+            client_info = format_for_prompt(client_data, docs)
+    if articles and kategori:
+        articles = [a for a in articles if str(a.get('title') or '').strip() and str(a.get('slug') or '').strip()]
+        # Kategori yang artikelnya kurang dari kebutuhan blok beranda juga dilengkapi, bukan hanya yang
+        # kosong (user 2026-10-28, benangrajanews.com: berita15 butuh 6, tiap rubrik baru 3).
+        ada = collections.Counter(str(a.get('category')) for a in articles)
+        kurang = [(i, k) for i, k in enumerate(kategori) if ada[k['judul']] < jumlah_ke(i)]
+        for i, k in kurang:
+            if not docs['sources']:
+                docs = collect_client_docs(folder_klien(domain))
+                client_info = format_for_prompt(client_data, docs)
+            tambah = jumlah_ke(i) - ada[k['judul']]
+            log(f'Kategori "{k["judul"]}" belum punya artikel lengkap, dibuatkan {tambah}')
+            judul_ada = '; '.join(str(a.get('title', '')) for a in articles if a.get('category') == k['judul'])
+            bagian = artikel_bertahap(tambah, site_title, domain, client_info, model, k['judul'],
+                                      (k.get('keterangan', '') + (f' Jangan mengulang topik artikel: {judul_ada}.' if judul_ada else '')).strip(),
+                                      'berita' if berita else 'bisnis')
+            for art in bagian:
+                art['category'] = k['judul']
+            articles.extend(bagian)
+    if articles:
+        log('Pakai konten artikel tersimpan (+ yang baru dilengkapi)')
+    else:
+        # Kategori mengikuti layanan (atau rubrik portal berita) yang benar-benar
+        # ada di child theme situs. Kalau temanya tidak punya daftar layanan
+        # (paket lain), kembali ke satu kategori seperti sebelumnya.
+        if kategori:
+            log(f'Kategori dari layanan situs: {", ".join(k["judul"] for k in kategori)}')
+            articles = []
+            for i, layanan in enumerate(kategori):
+                nama = layanan['judul']
+                log(f'Generating {jumlah_ke(i)} artikel untuk kategori "{nama}"...')
+                bagian = artikel_bertahap(jumlah_ke(i), site_title, domain, client_info, model,
+                                          nama, layanan.get('keterangan', ''),
+                                          'berita' if berita else 'bisnis')
+                for art in bagian:
+                    # Kategori dari AI kadang meleset; yang dipakai yang diminta.
+                    art['category'] = nama
+                articles.extend(bagian)
+        else:
+            log('Tema tanpa daftar layanan, memakai satu kategori')
+            articles = generate_articles(site_title, domain, client_info, model,
+                                         num_articles, article_category)
+    articles_file = GENERATED_DIR / f'{domain}-articles.json'
+    if articles:
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+        log(f'Articles saved: {articles_file}')
+    else:
+        # Halaman tetap diterbitkan: dulu exit di sini membuat halaman yang sudah jadi
+        # ikut tidak terpasang (sobirin-advokat.com tersisa placeholder semua).
+        log('ERROR: Failed to generate articles, halaman tetap diterbitkan')
+        articles = []
+    
+    # Biodata pemilik tidak boleh terbit, apa pun yang ditulis AI.
+    jumlah_buang = 0
+    if not docs['sources']:
+        docs = collect_client_docs(folder_klien(domain))
+    materi_publik = ' '.join(t for n, t in docs['sources'] if n not in docs.get('form', ()))
+    for daftar in (pages, articles):
+        for item in daftar if isinstance(daftar, list) else []:
+            if isinstance(item, dict) and item.get('content'):
+                item['content'], n = buang_data_pemilik(item['content'], client_data, materi_publik)
+                jumlah_buang += n
+    if jumlah_buang:
+        log(f'Data pribadi pemilik dibuang dari konten: {jumlah_buang} paragraf/butir')
+        pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+
+    # Catatan/penolakan AI ("... belum tersedia dalam data perusahaan") tidak boleh
+    # terbit, dan klaim (sertifikasi, garansi, gratis, angka pengalaman/proyek) di
+    # halaman hanya boleh kalau ada di data klien (jasakontraktorindo.com 2026-09-17).
+    # Klaim hanya dicek saat data klien lengkap terbaca (konten baru dibuat);
+    # artikel pengetahuan umum hanya disaring kalimat penolakannya.
+    alasan_buang = []
+    for daftar, data_cek in ((pages, client_info if need_ai else None), (articles, None)):
+        for item in daftar if isinstance(daftar, list) else []:
+            if isinstance(item, dict) and item.get('content') and item.get('slug') != 'tagline':
+                item['content'], alasan = buang_kalimat_meragukan(item['content'], data_cek)
+                alasan_buang += [f"{item.get('slug')}:{a}" for a in alasan]
+    if alasan_buang:
+        log(f'Kalimat meragukan dibuang: {len(alasan_buang)} ({", ".join(alasan_buang[:8])})')
+        pages_file.write_text(json.dumps(pages, indent=2, ensure_ascii=False))
+        articles_file.write_text(json.dumps(articles, indent=2, ensure_ascii=False))
+
+    # Dry-run: stop here
+    if MODE == 'dry-run':
+        log('DRY-RUN complete. Content generated but not published.')
+        print(json.dumps({
+            'status': 'dry_run',
+            'domain': domain,
+            'pages_file': str(pages_file),
+            'articles_file': str(articles_file),
+            'pages_count': len(pages),
+            'articles_count': len(articles)
+        }))
+        sys.exit(0)
+    
+    if MODE != 'apply':
+        log(f'ERROR: invalid INSTALL_MODE={MODE}')
+        sys.exit(2)
+    
+    # Apply: publish content
+    log('Publishing content to remote...')
+    # Manifest `tanpa_halaman=galeri,layanan` (yukpergimancing.com 2026-09-17): halaman yang sengaja
+    # dihapus tidak dibuat ulang oleh generator.
+    tanpa = {x.strip().lower() for x in cfg.get('tanpa_halaman', '').split(',') if x.strip()}
+    slug_wp = {'home': 'beranda', 'profile': 'tentang-kami', 'gallery': 'galeri', 'contact': 'hubungi-kami'}
+    if tanpa:
+        pages = [pg for pg in pages if slug_wp.get(str(pg.get('slug', '')).lower()) not in tanpa]
+    success = publish_content(domain, da_user, ssh_port, ssh_user, target_host, pages, articles, pensiun)
+    
+    if success:
+        log('AI content generation completed')
+        print(json.dumps({
+            'status': 'applied',
+            'domain': domain,
+            'pages_count': len(pages),
+            'articles_count': len(articles)
+        }))
+    else:
+        log('ERROR: Failed to publish content')
+        sys.exit(4)
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()

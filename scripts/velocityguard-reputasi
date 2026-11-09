@@ -12,7 +12,7 @@ tidak dihitung) 24 jam terakhir di error.log LiteSpeed
 setiap server. IP dipilih bila >= MIN_HIT hit, atau menyasar >= 2 domain, atau terlihat di >= 2 server. IP dari ip-putih,
 Cloudflare, mesin pencari, Automattic, server sendiri, dan jaringan lokal tidak pernah dimasukkan.
 Di server: ipset hash:ip `velocityguard_rep` (timeout 7 hari, diperbarui tiap kali IP terlihat lagi) + satu aturan
-iptables DROP di awal INPUT; /usr/local/csf/bin/csfpre.sh membuat ulang keduanya setiap `csf -r`. Hanya IPv4.
+iptables DROP di awal INPUT; /usr/local/csf/bin/csfpre.sh membuat ulang keduanya (isi dari /var/lib/velocityguard_rep.ipset) setiap `csf -r`. Hanya IPv4.
 Server: setelan.json VelocityGuard `reputasi_server` (bawaan = `celah_server`).
 """
 import ipaddress
@@ -44,60 +44,81 @@ PENGECUALIAN = [
     # lokal / khusus
     '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16',
     '224.0.0.0/3',
+    # klien tepercaya (IP NAT ISP bersama; tamu lain bisa memicu WAF)
+    '113.211.0.0/16',  # Maxis MY (NAT bersama), klien Mandiri Remittance 113.211.215.156 timeout 7 Nov 2026
 ]
 
 AMBIL = r'''
-import json, os, re, subprocess, time
+import glob, json, os, re, subprocess, time
 batas = time.time() - 86400
-d = '/usr/local/lsws/logs'
-berkas = [os.path.join(d, f) for f in os.listdir(d) if f.startswith('error.log') and os.path.getmtime(os.path.join(d, f)) >= batas]
+# LiteSpeed (DA) atau nginx + libmodsecurity v3 (atha: error_log per vhost); DA nginx (sanke) = /var/log/nginx/error_log
+calon = glob.glob('/usr/local/lsws/logs/error.log*') + glob.glob('/var/log/nginx/error.log*') + glob.glob('/var/log/nginx/error_log*') + glob.glob('/var/log/nginx/*/*error.log*')
+berkas = [f for f in calon if not f.endswith('.gz') and os.path.getmtime(f) >= batas]
 out = {}
 if berkas:
     p = subprocess.run(['grep', '-haF', 'tag "eksploit"'] + berkas, stdout=subprocess.PIPE)
-    pola = re.compile(r'^\[(\w{3} \w{3} +\d+ [\d:]+)\.\d+ (\d{4})\] \[error\] \[client ([0-9.]+)\] ModSecurity: Access denied.*tag "velocity-waf".*\[hostname "([^"]+)"\]')
+    pola = re.compile(r'^(?:\[(\w{3} \w{3} +\d+ [\d:]+)\.\d+ (\d{4})\] \[error\] |(\d{4}/\d\d/\d\d [\d:]+) \[\w+\] \d+#\d+: (?:\*\d+ )?)'
+                      r'\[client ([0-9.]+)\] ModSecurity: Access denied.*tag "velocity-waf".*\[hostname "([^"]+)"\]')
     for b in p.stdout.decode('utf-8', 'replace').splitlines():
         m = pola.match(b)
         if not m:
             continue
         try:
-            t = time.mktime(time.strptime(m.group(1) + ' ' + m.group(2), '%a %b %d %H:%M:%S %Y'))
+            if m.group(3):
+                t = time.mktime(time.strptime(m.group(3), '%Y/%m/%d %H:%M:%S'))
+            else:
+                t = time.mktime(time.strptime(m.group(1) + ' ' + m.group(2), '%a %b %d %H:%M:%S %Y'))
         except ValueError:
             continue
         if t < batas:
             continue
-        o = out.setdefault(m.group(3), [0, []])
+        o = out.setdefault(m.group(4), [0, []])
         o[0] += 1
-        if m.group(4) not in o[1] and len(o[1]) < 20:
-            o[1].append(m.group(4))
-print(json.dumps(out))
+        if m.group(5) not in o[1] and len(o[1]) < 20:
+            o[1].append(m.group(5))
+# IP milik server ini (IP sekunder situs ikut tercatat WAF lewat loopback/wp-cron) -> dikecualikan pemanggil
+milik = subprocess.run(['hostname', '-I'], stdout=subprocess.PIPE).stdout.decode().split()
+print(json.dumps({'ip': out, 'milik': milik}))
 '''
 
+SIMPAN = f'/var/lib/{SET}.ipset'  # `ipset save` set penuh (sisa timeout ikut); csf -r menjalankan `ipset flush` + `destroy` SEMUA set
 PRE = f'''# VELOCITYGUARD-REPUTASI MULAI (scripts/velocityguard-reputasi; isi ipset diisi ulang timer dashboard)
 ipset create {SET} hash:ip family inet timeout {TTL} maxelem 262144 -exist
+[ -f {SIMPAN} ] && ipset restore -exist < {SIMPAN}
 iptables -C INPUT -m set --match-set {SET} src -j DROP 2>/dev/null || iptables -I INPUT 1 -m set --match-set {SET} src -j DROP
 # VELOCITYGUARD-REPUTASI SELESAI'''
 
+# Blok csfpre selalu ditulis ulang agar perubahan PRE ikut terpasang di server lama.
 KIRIM = r'''
 set -e
 PRE=/usr/local/csf/bin/csfpre.sh
-if ! grep -q 'VELOCITYGUARD-REPUTASI MULAI' $PRE 2>/dev/null; then
-  [ -f $PRE ] || printf '#!/bin/sh\n' > $PRE
-  cat >> $PRE <<'EOF'
+[ -f $PRE ] || printf '#!/bin/sh\n' > $PRE
+sed -i '/VELOCITYGUARD-REPUTASI MULAI/,/VELOCITYGUARD-REPUTASI SELESAI/d' $PRE
+# csfpre.sh Aetherinox (atha) tanpa newline akhir → blok tersambung ke baris terakhir
+[ -z "$(tail -c1 $PRE)" ] || echo >> $PRE
+cat >> $PRE <<'EOF'
 @PRE@
 EOF
-  chmod 700 $PRE
-fi
+chmod 700 $PRE
+cat > @SIMPAN@.baru
 sh -c "$(sed -n '/VELOCITYGUARD-REPUTASI MULAI/,/VELOCITYGUARD-REPUTASI SELESAI/p' $PRE)"
-ipset restore -exist
-echo "isi=$(ipset list @SET@ -t | awk '/Number of entries/{print $4}')"
-'''.replace('@PRE@', PRE).replace('@SET@', SET)
+ipset restore -exist < @SIMPAN@.baru
+# simpan set penuh, bukan kiriman terakhir: csf restart tidak membuang akumulasi 7 hari
+ipset save @SET@ > @SIMPAN@.penuh && mv -f @SIMPAN@.penuh @SIMPAN@
+rm -f @SIMPAN@.baru
+echo "isi=$(ipset list @SET@ | grep -cE '^[0-9]+[.]')"
+'''.replace('@PRE@', PRE).replace('@SET@', SET).replace('@SIMPAN@', SIMPAN)
 
-STATUS = f'''echo "isi=$(ipset list {SET} -t 2>/dev/null | awk '/Number of entries/{{print $4}}')"
-iptables -L INPUT 1 -v -n -x 2>/dev/null | grep -q {SET} && echo "aturan=ya paket=$(iptables -L INPUT 1 -v -n -x | awk '{{print $1}}')" || echo "aturan=tidak"
+# Isi dihitung dari baris IP (ipset lama di Fahmi tak menampilkan "Number of entries"); aturan dicari di seluruh
+# INPUT karena csf menaruh DNS/LOCALINPUT/lo di atasnya sesudah csfpre.
+STATUS = f'''echo "isi=$(ipset list {SET} 2>/dev/null | grep -cE '^[0-9]+[.]')"
+r=$(iptables -L INPUT -v -n -x --line-numbers 2>/dev/null | grep "match-set {SET} ")
+[ -n "$r" ] && echo "aturan=ya baris=$(echo "$r" | awk '{{print $1}}') paket=$(echo "$r" | awk '{{print $2}}')" || echo "aturan=tidak"
 grep -q 'VELOCITYGUARD-REPUTASI MULAI' /usr/local/csf/bin/csfpre.sh 2>/dev/null && echo csfpre=ya || echo csfpre=tidak'''
 
 COPOT = f'''while iptables -D INPUT -m set --match-set {SET} src -j DROP 2>/dev/null; do :; done
 ipset destroy {SET} 2>/dev/null || true
+rm -f {SIMPAN}
 f=/usr/local/csf/bin/csfpre.sh
 [ -f $f ] && sed -i '/VELOCITYGUARD-REPUTASI MULAI/,/VELOCITYGUARD-REPUTASI SELESAI/d' $f
 echo selesai'''
@@ -107,9 +128,9 @@ def _rentang(daftar):
     return [ipaddress.ip_network(x, strict=False) for x in daftar]
 
 
-def pengecualian(servers):
+def pengecualian(servers, milik=()):
     putih = [b.split('#')[0].strip() for b in (AKAR / 'waf' / 'ip-putih.txt').read_text().splitlines()]
-    return _rentang([x for x in PENGECUALIAN + putih + [s['host'] for s in servers] if x and ':' not in x])
+    return _rentang([x for x in PENGECUALIAN + putih + [s['host'] for s in servers] + list(milik) if x and ':' not in x])
 
 
 def pilih(per_server, kecuali):
@@ -162,6 +183,7 @@ def uji_diri():
     h = pilih(ps, kec)
     assert set(h) == {'1.2.3.4', '5.6.7.8', '9.9.9.9'}, h
     assert h['5.6.7.8']['server'] == 2 and h['1.2.3.4']['hit'] == 5
+    assert '9.9.9.9' not in pilih(ps, kec + _rentang(['9.9.9.9']))  # IP milik server
     print('uji-diri OK')
 
 
@@ -176,15 +198,17 @@ def main():
         for srv in servers:
             print(srv['name'], ssh(srv, STATUS if arg == '--status' else COPOT).strip().replace('\n', ' '))
         return 0
-    per_server = {}
+    per_server, milik = {}, set()
     for srv in servers:
         try:
-            per_server[srv['host']] = json.loads(ssh(srv, 'nice -n 10 python3 -', AMBIL, batas=600))
+            r = json.loads(ssh(srv, 'nice -n 10 python3 -', AMBIL, batas=600))
+            per_server[srv['host']] = r['ip']
+            milik.update(r['milik'])
         except Exception as e:  # noqa: BLE001
             print(f"{srv['name']}: gagal ambil log ({e})", file=sys.stderr)
     if not per_server:
         raise SystemExit('semua server gagal dibaca — tidak ada yang dikirim')
-    terpilih = pilih(per_server, pengecualian(semua))
+    terpilih = pilih(per_server, pengecualian(semua, milik))
     ringkas = {'waktu': time.strftime('%Y-%m-%d %H:%M:%S'), 'jumlah': len(terpilih),
                'sumber': {h: len(d) for h, d in per_server.items()}, 'server': {}}
     print(f"IP eksploit 24 jam per server: {ringkas['sumber']} -> terpilih {len(terpilih)}")
@@ -194,7 +218,9 @@ def main():
         return 0
     if len(terpilih) > BATAS_DAFTAR:
         raise SystemExit(f'{len(terpilih)} IP > batas {BATAS_DAFTAR} — tidak dikirim, periksa sumber')
-    isi = ''.join(f'add {SET} {ip} timeout {TTL}\n' for ip in sorted(terpilih))
+    # del dulu: IP milik server yang terlanjur masuk set (timeout 7 hari) langsung dilepas
+    isi = ''.join(f'del {SET} {ip}\n' for ip in sorted(milik) if ':' not in ip)
+    isi += ''.join(f'add {SET} {ip} timeout {TTL}\n' for ip in sorted(terpilih))
     for srv in servers:
         try:
             ringkas['server'][srv['name']] = ssh(srv, KIRIM, isi).strip().splitlines()[-1]

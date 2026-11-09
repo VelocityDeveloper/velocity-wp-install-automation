@@ -66,6 +66,7 @@ const NAV = [
   { grup: 'pc', label: 'PC Lokal', ikon: 'komputer', anak: [
     { ke: '/berkas', label: 'File Manager', ikon: 'berkas' },
     { ke: '/projects', label: 'Project Lokal', ikon: 'proyek' },
+    { ke: '/staging', label: 'Staging', ikon: 'wordpress' },
   ] },
   { grup: 'pcbackup', label: 'PC Backup', ikon: 'nas', anak: [
     { ke: '/pc-backup/status', label: 'Status Backup', ikon: 'cadangan' },
@@ -77,6 +78,8 @@ const NAV = [
     { ke: '/notif-email', label: 'Notif Email', ikon: 'email' },
     { ke: '/tutorial', label: 'Statistik Tutorial', ikon: 'tutorial' },
     { ke: '/report', label: 'Report', ikon: 'laporan' },
+    { ke: '/object-storage', label: 'Object Storage', ikon: 'awan' },
+    { ke: '/migrasi', label: 'Migrasi Farnaz', ikon: 'server', tepat: true },
   ] },
 ]
 // tepat: hanya path itu sendiri (induk seperti /server tidak ikut aktif di /server/monitoring)

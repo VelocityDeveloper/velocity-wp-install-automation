@@ -48,7 +48,8 @@ SEGAR = 180       # detik: umur maksimal data batas sebelum disegarkan
 BASI = 1800       # detik: data batas lebih tua dari ini tidak dipercaya (anggap akun masih bisa)
 POLA_LIMIT = re.compile(r"usage limit reached|hit your (?:usage )?limit|(?:5-hour|weekly|session) limit reached"
                         r"|limit reached\s*[·∙|]|out of (?:extra )?usage", re.I)
-POLA_KREDIT = re.compile(r"credit balance is too low", re.I)
+# "specified API usage limits" (22 Okt 2026): batas belanja bulanan kunci API tercapai, sama-sama ke paket.
+POLA_KREDIT = re.compile(r"credit balance is too low|reached your specified API usage limits", re.I)
 KREDIT = DATA / "api-kredit-habis.json"
 KREDIT_JEDA = 3600  # detik: lama kunci API dilewati sesudah kredit habis
 

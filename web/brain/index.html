@@ -142,8 +142,13 @@ function dinamis(){
   for(const e of akt.alat||[]){if(now-e.t>3600)continue;const a=`sesi:${e.sesi}`,b=`tool:${e.tool}`;if(!ada.has(a)||!ada.has(b))continue;const k=a+'|'+b;if(!sudah.has(k)){sudah.add(k);links.push({source:a,target:b,kind:'pakai'})}}
   return{nodes,links};
 }
-function bangun(){if(!dasar)return;const d=dinamis();const tanda=d.nodes.map(n=>n.id).join()+'#'+d.links.map(l=>l.source+l.target).join();
-  const gabung={generated:dasar.generated,nodes:[...dasar.nodes,...d.nodes],links:[...dasar.links,...d.links]};
+// memory yang tak pernah tersentuh sesi (tak ada di akt.pakai) disembunyikan supaya graf ringan; muncul lagi lewat cari/fokus
+const munculkan=new Set();
+function tampak(n){return n.kind!=='memory'||!akt||!akt.pakai||n.id in akt.pakai||munculkan.has(n.id)}
+function munculkanId(id){if(byId.has(id)||!dasar||!dasar.nodes.some(n=>n.id===id))return byId.get(id);munculkan.add(id);tandaDinamis='';bangun();return byId.get(id)}
+function bangun(){if(!dasar)return;const d=dinamis();const dn=dasar.nodes.filter(tampak);const ada=new Set([...dn,...d.nodes].map(n=>n.id));
+  const tanda=dn.length+'#'+d.nodes.map(n=>n.id).join()+'#'+d.links.map(l=>l.source+l.target).join();
+  const gabung={generated:dasar.generated,nodes:[...dn,...d.nodes],links:[...dasar.links,...d.links].filter(l=>ada.has(l.source)&&ada.has(l.target))};
   // properti dinamis (hitungan, status hidup) tetap diperbarui walau strukturnya sama
   if(tanda===tandaDinamis&&N.length){for(const n of d.nodes){const o=byId.get(n.id);if(o)Object.assign(o,n,{x:o.x,y:o.y,vx:o.vx,vy:o.vy,fx:o.fx,fy:o.fy})}statistik();return}
   tandaDinamis=tanda;pasang(gabung);
@@ -212,7 +217,11 @@ function langkah(){
   // beragam membuat loop O(n²) ini ±10x lebih lambat
   const nv=vis.length,X=new Float64Array(nv),Y=new Float64Array(nv),RF=new Uint8Array(nv),FX=new Float64Array(nv),FY=new Float64Array(nv);
   for(let i=0;i<nv;i++){const n=vis[i];X[i]=n.x;Y[i]=n.y;RF[i]=n.kind==='ref'?1:0}
-  for(let i=0;i<nv;i++){const xi=X[i],yi=Y[i],ri=RF[i];for(let j=i+1;j<nv;j++){let dx=X[j]-xi,dy=Y[j]-yi;const d2=dx*dx+dy*dy||.01;if(d2>250000)continue;const f=(ri|RF[j]?120:380)/d2*panas,d=Math.sqrt(d2);dx=dx/d*f;dy=dy/d*f;FX[i]-=dx;FY[i]-=dy;FX[j]+=dx;FY[j]+=dy}}
+  // grid sel 500 (= batas jangkau): hanya pasangan di 9 sel tetangga yang dihitung. Tanpa ini 9.500 simpul × 300
+  // langkah awal membekukan halaman ±75 dtk — dan dashboard induk ikut beku karena iframe asal sama satu thread
+  const sel=new Map(),kunciSel=(cx,cy)=>cx*100003+cy,CX=new Int32Array(nv),CY=new Int32Array(nv);
+  for(let i=0;i<nv;i++){CX[i]=Math.floor(X[i]/500);CY[i]=Math.floor(Y[i]/500);const k=kunciSel(CX[i],CY[i]);let b=sel.get(k);if(!b)sel.set(k,b=[]);b.push(i)}
+  for(let i=0;i<nv;i++){const xi=X[i],yi=Y[i],ri=RF[i];for(let ox=-1;ox<=1;ox++)for(let oy=-1;oy<=1;oy++){const b=sel.get(kunciSel(CX[i]+ox,CY[i]+oy));if(!b)continue;for(const j of b){if(j<=i)continue;let dx=X[j]-xi,dy=Y[j]-yi;const d2=dx*dx+dy*dy||.01;if(d2>250000)continue;const f=(ri|RF[j]?120:380)/d2*panas,d=Math.sqrt(d2);dx=dx/d*f;dy=dy/d*f;FX[i]-=dx;FY[i]-=dy;FX[j]+=dx;FY[j]+=dy}}}
   for(let i=0;i<nv;i++){vis[i].vx+=FX[i];vis[i].vy+=FY[i]}
   for(const l of L){if(!terlihat(l.s)||!terlihat(l.t))continue;const pj=l.kind==='struktur'?(l.s.kind==='core'?170:l.s.kind==='hub'&&l.t.kind==='hub'?130:70):PANJANG[l.kind]||60;const kuat=(KUAT[l.kind]||.015)*(l.kind==='bagian'?1:.4);let dx=l.t.x-l.s.x,dy=l.t.y-l.s.y,d=Math.sqrt(dx*dx+dy*dy)||.01;const f=(d-pj)*kuat*panas;dx/=d;dy/=d;l.s.vx+=dx*f;l.s.vy+=dy*f;l.t.vx-=dx*f;l.t.vy-=dy*f}
   for(const n of vis){if(n.tj){const ka=(n.kind==='hub'?.05:.014)*panas;n.vx+=(n.tj[0]-n.x)*ka;n.vy+=(n.tj[1]-n.y)*ka}else{n.vx-=n.x*.002*panas;n.vy-=n.y*.002*panas}
@@ -437,7 +446,7 @@ function legenda(){const hit={};for(const n of N){const g=grupSimpul(n);if(g&&n.
 $('legend').addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b)return;const g=b.dataset.g;mati.has(g)?mati.delete(g):mati.add(g);panas=Math.max(panas,.3);legenda();daftar();ulang()});
 
 let tunda;$('q').addEventListener('input',e=>{if(!ISI)muatIsi();clearTimeout(tunda);tunda=setTimeout(()=>{cari=e.target.value.trim().toLowerCase();daftar();ulang()},120)});
-$('q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(tunda);cari=e.target.value.trim().toLowerCase();daftar();const cocokan=N.filter(x=>['memory','skill','proyek','sesi','tool'].includes(x.kind)&&terlihat(x)&&cocok(x));const skor=x=>{const l=(x.label||'').toLowerCase();return l===cari?2:l.includes(cari)?1:0};const n=cocokan.sort((a,b)=>skor(b)-skor(a)||b.deg-a.deg)[0];if(n)fokusKe(n)}if(e.key==='Escape'){e.target.value='';cari='';daftar();ulang()}});
+$('q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(tunda);cari=e.target.value.trim().toLowerCase();daftar();const cocokan=N.filter(x=>['memory','skill','proyek','sesi','tool'].includes(x.kind)&&terlihat(x)&&cocok(x));const skor=x=>{const l=(x.label||'').toLowerCase();return l===cari?2:l.includes(cari)?1:0};let n=cocokan.sort((a,b)=>skor(b)-skor(a)||b.deg-a.deg)[0];if(!n&&dasar){const h=dasar.nodes.filter(x=>!tampak(x)&&cocok(x)).sort((a,b)=>skor(b)-skor(a))[0];if(h)n=munculkanId(h.id)}if(n)fokusKe(n)}if(e.key==='Escape'){e.target.value='';cari='';daftar();ulang()}});
 
 function daftar(){if(!dasar)return;const rows=N.filter(n=>['memory','skill','ghost','proyek','sesi','tool'].includes(n.kind)&&terlihat(n)&&cocok(n));
   for(const n of rows){n.jenisTeks=JENIS_TEKS(n);const p=terakhirPakai.get(n.id);n.waktuUrut=n.kind==='sesi'||n.kind==='tool'?(n.terakhir||0):Math.max(n.updated||0,p?p.t:0)}
@@ -481,7 +490,7 @@ let genTerakhir=0;
 // Halaman Vue /brain mengendalikan graf mini lewat postMessage (asal sama): cari & fokus simpul,
 // nyala/matikan penanda masalah. Simpul yang dituju juga dinyalakan supaya mudah terlihat.
 addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||typeof e.data!=='object')return;const m=e.data;
-  if(m.brain==='fokus'){const n=byId.get(m.id);if(n){fokusKe(n);nyalakan(n,'klik',{dariInti:false})}}
+  if(m.brain==='fokus'){const n=munculkanId(m.id);if(n){fokusKe(n);nyalakan(n,'klik',{dariInti:false})}}
   else if(m.brain==='lepas'){pilih=null;detail();ulang()}
   else if(m.brain==='masalah'){tandaMasalah=!!m.on;ulang()}});
 // Isi lengkap memory/skill ada di isi.json (dipisah dari data.json oleh brain-data); dimuat sekali saat panel
@@ -489,7 +498,7 @@ addEventListener('message',e=>{if(e.origin!==location.origin||!e.data||typeof e.
 function tempelIsi(nodes){if(ISI)for(const n of nodes){const b=ISI[n.id];if(b)n.body=b}}
 function muatIsi(segar){if(janjiIsi&&!segar)return janjiIsi;janjiIsi=ambilJson('isi.json').then(d=>{if(d)ISI=d;tempelIsi(N);if(dasar)tempelIsi(dasar.nodes);detail();if(cari)daftar();ulang()}).catch(()=>{janjiIsi=null});return janjiIsi}
 async function muat(){try{const d=await ambilJson('data.json');if(!d){statistik();return}if(d.generated!==genTerakhir){const awal=!genTerakhir;genTerakhir=d.generated;dasar=d;tandaDinamis='';tempelIsi(d.nodes);if(ISI)muatIsi(true);
-    if(awal&&!akt)await pantau();bangun();if(awal){for(let i=0;i<300;i++)langkah();pas();pasAwal={...cam}}ulang()}else statistik()}catch(err){if(!dasar)$('side').innerHTML=`<p class="detail" style="color:var(--red)">Gagal memuat data.json (${esc(err.message)}).</p>`}}
+    if(awal&&!akt)await pantau();bangun();if(awal){let t0=performance.now();for(let i=0;i<300;i++){langkah();if(performance.now()-t0>30){await new Promise(r=>setTimeout(r));t0=performance.now()}}pas();pasAwal={...cam}}ulang()}else statistik()}catch(err){if(!dasar)$('side').innerHTML=`<p class="detail" style="color:var(--red)">Gagal memuat data.json (${esc(err.message)}).</p>`}}
 // Latar bintang: kanvas terpisah di bawah graf, 3 lapis paralaks mengikuti kamera, kelip + sesekali bintang jatuh.
 (()=>{const bc=$('bintang'),bx=bc.getContext('2d'),diam=matchMedia('(prefers-reduced-motion: reduce)').matches;
   let bw=0,bh=0,bd=1,bintang=[],jatuh=null,akhir=0;

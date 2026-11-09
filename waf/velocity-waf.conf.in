@@ -91,6 +91,11 @@ SecRule REQUEST_FILENAME "@rx (?:/terminal-xhr\.php|^/_profiler(?:/.*)?|^/vendor
 SecRule REQUEST_URI_RAW "@rx \.\.(?:;|%3b)" \
     "id:7700206,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Bypass path ..; (Tomcat/Spring)'"
 
+# Nama webshell umum di path mana pun (berkas tak pernah sah di situs klien). Lolos 200 7 Nov (Farnaz, solarprimaenergy.com):
+# rewrite pagination Beaver Builder "paged-N/N/" tak berjangkar akhir → /paged-8/9/wso.php merender beranda. Dampak log Farnaz: 0 hit sah.
+SecRule REQUEST_FILENAME "@rx /(?:wso\d*|c99|r57|b374k|alfa|indoxploit|shell|cmd)\.php$" \
+    "id:7700227,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Probe nama webshell umum (wso/c99/r57/shell/cmd)'"
+
 # PHP dijalankan dari folder unggahan / berkas PHP tersembunyi (ciri webshell)
 SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php\d?|phtml|phar|pht|shtml)$" \
     "id:7700210,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Menjalankan PHP di wp-content/uploads'"

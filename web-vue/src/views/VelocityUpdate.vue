@@ -102,6 +102,33 @@ function tren(a) {
   const kelas = !a.arah ? 'netral' : (naik === (a.arah === 'naik') ? 'baik' : 'buruk')
   return { kelas, panah: naik ? '↑' : '↓' }
 }
+// sortir kolom tabel metrik: klik judul kolom → terbesar dulu → terkecil dulu → urutan bawaan
+const urutTb = reactive({})
+function sortir(tb, j) {
+  if (!tb.sortir?.[j]) return
+  const u = urutTb[tb.judul]
+  urutTb[tb.judul] = u?.k !== j ? { k: j, turun: true } : u.turun ? { k: j, turun: false } : null
+}
+function urutan(tb) {
+  const idx = tb.baris.map((_, n) => n), u = urutTb[tb.judul], v = u && tb.sortir?.[u.k]
+  return v ? idx.sort((a, b) => u.turun ? v[b] - v[a] : v[a] - v[b]) : idx
+}
+// scrollbar geser kanan-kiri juga di atas tabel lebar, sinkron dengan scrollbar bawah
+const vGeserAtas = {
+  mounted(el) {
+    const atas = document.createElement('div')
+    atas.className = 'geser-atas'
+    atas.appendChild(document.createElement('div'))
+    el.before(atas)
+    atas.addEventListener('scroll', () => { el.scrollLeft = atas.scrollLeft })
+    el.addEventListener('scroll', () => { atas.scrollLeft = el.scrollLeft })
+    const ukur = () => { atas.firstChild.style.width = el.scrollWidth + 'px'; atas.hidden = el.scrollWidth <= el.clientWidth + 1 }
+    el._ro = new ResizeObserver(ukur)
+    el._ro.observe(el)
+    if (el.firstElementChild) el._ro.observe(el.firstElementChild)
+  },
+  unmounted(el) { el._ro?.disconnect() },
+}
 const periode = (m) => !m.periode ? ''
   : !m.periode.sebelum ? `kondisi per ${jamPendek(m.waktu)}`
     : `${tglPendek(m.periode.sebelum[0])}–${tglPendek(m.periode.sebelum[1])} vs ${tglPendek(m.periode.sesudah[0])}–${tglPendek(m.periode.sesudah[1])}`
@@ -435,19 +462,23 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
                 </tbody>
               </table>
             </div>
-            <div v-for="tb in m.tabel || []" :key="tb.judul" class="tabel-wadah">
+            <div v-for="tb in m.tabel || []" :key="tb.judul">
               <p class="redup">{{ tb.judul }}</p>
+              <div v-geser-atas class="tabel-wadah">
               <table class="tabel orang" :class="{ berdetail: tb.detail }">
-                <thead><tr><th v-for="(c, j) in tb.kolom" :key="c" :class="{ kanan: tb.kanan?.includes(j) }">{{ c }}</th></tr></thead>
+                <thead><tr><th v-for="(c, j) in tb.kolom" :key="c" :class="{ kanan: tb.kanan?.includes(j), 'bisa-urut': tb.sortir?.[j] }"
+                  :aria-sort="urutTb[tb.judul]?.k === j ? (urutTb[tb.judul].turun ? 'descending' : 'ascending') : undefined"
+                  :tabindex="tb.sortir?.[j] ? 0 : undefined" @click="sortir(tb, j)" @keydown.enter="sortir(tb, j)">{{ c }}<span v-if="tb.sortir?.[j]" class="panah">{{ urutTb[tb.judul]?.k === j ? (urutTb[tb.judul].turun ? '▼' : '▲') : '↕' }}</span></th></tr></thead>
                 <tbody>
-                  <template v-for="(b, i) in tb.baris" :key="i">
+                  <template v-for="i in urutan(tb)" :key="i">
                     <tr :class="{ 'ada-detail': tb.detail?.[i] }">
-                      <td v-for="(c, j) in b" :key="j" :class="{ kanan: tb.kanan?.includes(j) }">{{ typeof c === 'number' ? angka(c) : c }}</td>
+                      <td v-for="(c, j) in tb.baris[i]" :key="j" :class="{ kanan: tb.kanan?.includes(j) }">{{ typeof c === 'number' ? angka(c) : c }}</td>
                     </tr>
                     <tr v-if="tb.detail?.[i]" class="detail"><td :colspan="tb.kolom.length"><div class="detail-isi">{{ tb.detail[i] }}</div></td></tr>
                   </template>
                 </tbody>
               </table>
+              </div>
             </div>
             <div v-if="m.omzet?.length" class="tabel-wadah">
               <table class="tabel orang angka-kanan">
@@ -499,6 +530,32 @@ const sorotKartu = (u) => Object.values(u.metrik || {}).flatMap((m) => m.sorot |
                   <p v-for="x in o.sesi" :key="x.akhir + x.judul"><span class="redup">{{ jamPendek(x.akhir) }}</span> {{ x.judul }}</p>
                 </div>
                 <p v-if="o.domain_lain.length" class="wm-lain redup">Domain lain disentuh: {{ o.domain_lain.join(', ') }}</p>
+              </div>
+            </div>
+            <!-- metrik manual:<nama> dari Sekretaris: kartu bebas {nama, sub, tanda[], blok[{label, baris[]}]} -->
+            <p v-if="m.minggu_label" class="mg-pekan">Pekan {{ m.minggu_label }}</p>
+            <div v-if="m.kartu?.length" class="wm-grid" :class="{ 'mg-grid': m.minggu_label }">
+              <div v-for="o in m.kartu" :key="o.nama" class="wm-kartu" :class="{ ada_tanda: o.tanda?.length }">
+                <div class="wm-kepala"><b>{{ o.nama }}</b><span v-if="o.sub" class="redup">{{ o.sub }}</span></div>
+                <ul v-if="o.tanda?.length" class="wm-tanda"><li v-for="t in o.tanda" :key="t">{{ t }}</li></ul>
+                <!-- "blok_minggu": sesi Claude Senin–Minggu dari token.json (isi_minggu di velocity_update.py) -->
+                <ol v-if="o.minggu" class="mg-hari">
+                  <li v-for="h in o.minggu" :key="h.tgl" :class="{ 'hari-ini': h.hari_ini, nanti: h.nanti }">
+                    <div class="mg-tgl">
+                      <b>{{ h.hari }}</b><span class="redup">{{ h.tgl }}</span>
+                      <span v-if="h.sesi.length" class="mg-jml">{{ h.sesi.length }} sesi</span>
+                    </div>
+                    <ul v-if="h.sesi.length" class="mg-sesi">
+                      <li v-for="(x, i) in h.sesi" :key="i" :class="{ lanjut: x.jam === 'lanjut' }"><span class="mg-jam">{{ x.jam }}</span><span>{{ x.judul }}</span></li>
+                    </ul>
+                    <p v-else class="redup mg-kosong">{{ h.nanti ? 'belum berjalan' : 'tidak ada sesi' }}</p>
+                  </li>
+                </ol>
+                <div v-for="bl in o.blok || []" :key="bl.label" class="wm-blok">
+                  <span class="wm-label">{{ bl.label }}</span>
+                  <p v-if="!bl.baris?.length" class="redup">–</p>
+                  <p v-for="x in bl.baris" :key="x">{{ x }}</p>
+                </div>
               </div>
             </div>
             <details v-if="m.basi?.length" class="wm-basi">
@@ -718,6 +775,11 @@ button.angka:hover, button.angka.aktif { border-color: var(--aksen-terang); }
 .orang td { padding: 7px 10px; }
 .orang tr.minim td { color: var(--waspada); }
 .orang .kanan { text-align: right; }
+.orang th.bisa-urut { cursor: pointer; user-select: none; white-space: nowrap; }
+.orang th.bisa-urut:hover { color: var(--teks); }
+.panah { margin-left: 4px; font-size: 10px; color: var(--teks-3); }
+.geser-atas { overflow-x: auto; overflow-y: hidden; margin: 0 -4px; }
+.geser-atas > div { height: 1px; }
 .berdetail td { white-space: nowrap; }
 .berdetail tr.ada-detail td { border-bottom: 0; padding-bottom: 2px; }
 .berdetail tr.detail td { white-space: normal; padding-top: 0; font-size: 12px; line-height: 1.5; color: var(--teks-3); }
@@ -777,6 +839,26 @@ button.angka:hover, button.angka.aktif { border-color: var(--aksen-terang); }
 .wm-blok p { margin: 0; overflow-wrap: anywhere; }
 .wm-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--teks-2); }
 .wm-lain { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.mg-pekan { margin: 10px 0 0; font-size: 12.5px; font-weight: 600; color: var(--teks-2); }
+.mg-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); }
+.wm-kepala { flex-wrap: wrap; }
+.mg-hari { list-style: none; margin: 0; padding: 0; display: grid; }
+.mg-hari > li { display: grid; grid-template-columns: 96px 1fr; gap: 10px; padding: 7px 8px; border-top: 1px solid var(--garis); }
+.mg-hari > li.hari-ini { background: var(--aksen-lembut); border-radius: 8px; border-top-color: transparent; }
+.mg-hari > li.hari-ini + li { border-top-color: transparent; }
+.mg-hari > li.nanti { padding-block: 4px; opacity: .55; }
+.mg-tgl { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; line-height: 1.3; }
+.mg-tgl .redup { font-size: 12px; }
+.mg-jml { font-size: 11px; font-weight: 600; color: var(--teks-2); }
+.mg-sesi { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; line-height: 1.4; }
+.mg-sesi li { display: grid; grid-template-columns: 46px 1fr; gap: 6px; overflow-wrap: anywhere; }
+.mg-sesi li.lanjut { color: var(--teks-2); }
+.mg-jam { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--teks-3); padding-top: 1px; }
+.mg-kosong { margin: 0; font-size: 12.5px; align-self: center; }
+@media (max-width: 420px) {
+  .mg-hari > li { grid-template-columns: 1fr; gap: 4px; }
+  .mg-tgl { flex-direction: row; gap: 6px; align-items: baseline; }
+}
 .wm-basi { margin-top: 10px; font-size: 13px; }
 .wm-basi summary { cursor: pointer; color: var(--waspada); }
 </style>

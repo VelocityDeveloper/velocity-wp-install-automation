@@ -111,6 +111,19 @@
       "selalu_nyala": true
     },
     {
+      "id": "customer-vdnet",
+      "nama": "Customer VDNet (login customer)",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8240,
+      "url": "/customer-vdnet",
+      "folder": "/home/customer-vdnet",
+      "layanan": [
+        "customer-vdnet"
+      ],
+      "catatan": "Login customer, data dari API new-vdnet (customer-vdnet/customers/{id}). Repo Velocity-Developer/customer-vdnet. Hanya LAN/Tailscale (nginx allow)."
+    },
+    {
       "id": "elearning-vd",
       "nama": "Elearning",
       "jenis": "klien",
@@ -299,6 +312,84 @@
         "web-organisasi-queue"
       ],
       "catatan": "Dibuat installer Laravel 2026-10-20. Update: /root/web-organisasi/deploy-dev.sh"
+    },
+    {
+      "id": "lms-learning",
+      "nama": "lms learning",
+      "jenis": "internal",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8250,
+      "folder": "/home/lms-learning",
+      "layanan": [
+        "lms-learning-dev",
+        "lms-learning-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-24. Update: /root/lms-learning/deploy-dev.sh"
+    },
+    {
+      "id": "website-informasi-pariwisata-bat",
+      "nama": "website informasi pariwisata batara nexus",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8260,
+      "folder": "/home/website-informasi-pariwisata-bat",
+      "layanan": [
+        "website-informasi-pariwisata-bat-dev",
+        "website-informasi-pariwisata-bat-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-25. Update: /root/website-informasi-pariwisata-bat/deploy-dev.sh"
+    },
+    {
+      "id": "website-konsep-si-kemba-papua-te",
+      "nama": "website konsep si-kemba papua tengah (kebudayaan, bahasa, sastra)",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8280,
+      "folder": "/home/website-konsep-si-kemba-papua-te",
+      "layanan": [
+        "website-konsep-si-kemba-papua-te-dev",
+        "website-konsep-si-kemba-papua-te-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-28. Update: /root/website-konsep-si-kemba-papua-te/deploy-dev.sh"
+    },
+    {
+      "id": "web-monitoring-job-k3-po-visit-l",
+      "nama": "web monitoring job k3 (po, visit, laporan, suket instansi, invoice)",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8270,
+      "folder": "/home/web-monitoring-job-k3-po-visit-l",
+      "layanan": [
+        "web-monitoring-job-k3-po-visit-l-dev",
+        "web-monitoring-job-k3-po-visit-l-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-10-31. Update: /root/web-monitoring-job-k3-po-visit-l/deploy-dev.sh"
+    },
+    {
+      "id": "website-cetak-ijazah-stikes-yapi",
+      "nama": "website cetak ijazah stikes yapika (cek data otomatis, qr verifikasi)",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8290,
+      "folder": "/home/website-cetak-ijazah-stikes-yapi",
+      "layanan": [
+        "website-cetak-ijazah-stikes-yapi-dev",
+        "website-cetak-ijazah-stikes-yapi-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-11-03. Update: /root/website-cetak-ijazah-stikes-yapi/deploy-dev.sh"
+    },
+    {
+      "id": "chatbot-wa-web-konsep-skrining-b",
+      "nama": "chatbot WA + web konsep skrining baby blues EPDS (tesis, panel nakes)",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8300,
+      "folder": "/home/chatbot-wa-web-konsep-skrining-b",
+      "layanan": [
+        "chatbot-wa-web-konsep-skrining-b-dev",
+        "chatbot-wa-web-konsep-skrining-b-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-11-08. Update: /root/chatbot-wa-web-konsep-skrining-b/deploy-dev.sh"
     }
   ]
 }

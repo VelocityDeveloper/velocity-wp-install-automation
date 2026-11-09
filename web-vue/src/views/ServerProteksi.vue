@@ -61,6 +61,8 @@ const PESAN = {
   nilai_tidak_sah: 'Ada nilai setelan di luar batas yang diizinkan.',
   setelan_tidak_dikenal: 'Setelan itu tidak bisa diubah dari dashboard.',
   csf_restart_gagal: 'csf -r gagal — csf.conf dikembalikan ke salinan sebelumnya.',
+  port_tidak_sah: 'Port tidak sah: angka 1–65535, pisahkan dengan koma (maks. 10).',
+  port_hanya_csf: 'Blokir/whitelist per port hanya untuk server hosting (CSF).',
   ttl_tidak_didukung: 'ufw tidak mendukung blokir sementara — pilih Permanen.',
   hanya_csf: 'Hanya tersedia di server ber-CSF.',
   server_tidak_dikenal: 'Server tidak dikenal; muat ulang halaman.',
@@ -177,20 +179,24 @@ const DURASI = [
   { nilai: 3600, label: '1 jam' }, { nilai: 21600, label: '6 jam' }, { nilai: 86400, label: '24 jam' },
   { nilai: 604800, label: '7 hari' }, { nilai: 2592000, label: '30 hari' }, { nilai: 0, label: 'Permanen' },
 ]
-const dialog = reactive({ buka: false, jenis: 'blokir', ip: '', host: '', ttl: 86400, ket: '' })
+const dialog = reactive({ buka: false, jenis: 'blokir', ip: '', host: '', ttl: 86400, ket: '', port: '' })
 function bukaDialog(jenis, ip = '', host = '') {
   const h = host || terpilih.value?.host || 'semua'
-  Object.assign(dialog, { buka: true, jenis, ip, host: h, ttl: tanpaTtl(h) ? 0 : 86400, ket: '' })
+  Object.assign(dialog, { buka: true, jenis, ip, host: h, ttl: tanpaTtl(h) ? 0 : 86400, ket: '', port: '' })
 }
 watch(() => dialog.host, (h) => { if (tanpaTtl(h)) dialog.ttl = 0 })
+// Port hanya untuk CSF (server hosting); firewalld/ufw di PC kantor belum
+const dialogPort = computed(() => !pcKantor(servers.value.find((s) => s.host === dialog.host)))
 const judulDialog = computed(() => `${dialog.jenis === 'blokir' ? 'Blokir' : 'Whitelist'} IP`)
 async function kirimDialog() {
   const di = dialog.host === 'semua' ? 'semua server' : namaServer(dialog.host)
   const body = { aksi: dialog.jenis === 'blokir' ? 'blokir' : 'izinkan', ip: dialog.ip.trim(), server: dialog.host, ket: dialog.ket }
   if (dialog.jenis === 'blokir') body.ttl = dialog.ttl
+  if (dialogPort.value && dialog.port.trim()) body.port = dialog.port.trim()
+  const port = body.port ? ` (port ${body.port})` : ''
   const r = await aksi(body, dialog.jenis === 'blokir'
-    ? `${body.ip} diblokir ${DURASI.find((d) => d.nilai === dialog.ttl)?.label.toLowerCase()} di ${di}.`
-    : `${body.ip} masuk whitelist di ${di}.`)
+    ? `${body.ip}${port} diblokir ${DURASI.find((d) => d.nilai === dialog.ttl)?.label.toLowerCase()} di ${di}.`
+    : `${body.ip}${port} masuk whitelist di ${di}.`)
   if (r) dialog.buka = false
 }
 
@@ -240,7 +246,7 @@ const riwayatServer = computed(() => (riwayat.data.value?.riwayat || []).filter(
 const AKSI_LABEL = { blokir: ['merah', 'Blokir'], lepas: ['hijau', 'Lepas blokir'], izinkan: ['biru', 'Whitelist'], cabut_izin: ['kuning', 'Hapus whitelist'], atur: ['ungu', 'Ubah setelan'] }
 const ringkasRiwayat = (r) => (r.aksi === 'atur'
   ? Object.entries(r.setelan || {}).map(([k, v]) => `${k}=${v || '""'}`).join(', ')
-  : [r.ip, r.ttl ? `${DURASI.find((d) => d.nilai === r.ttl)?.label || `${r.ttl} dtk`}` : r.aksi === 'blokir' ? 'permanen' : '', r.ket].filter(Boolean).join(' · '))
+  : [r.ip, r.port && `port ${r.port}`, r.ttl ? `${DURASI.find((d) => d.nilai === r.ttl)?.label || `${r.ttl} dtk`}` : r.aksi === 'blokir' ? 'permanen' : '', r.ket].filter(Boolean).join(' · '))
 
 // ---- Setelan CSF/LFD ----
 const KELOMPOK_SETELAN = [
@@ -477,11 +483,12 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
               <p v-if="!denyTersaring.length" class="redup">Tidak ada blokir yang cocok.</p>
               <div v-else class="tabel-wadah">
                 <table class="tabel">
-                  <thead><tr><th scope="col">IP</th><th scope="col">Sumber</th><th scope="col">Alasan</th><th scope="col">Sejak</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
+                  <thead><tr><th scope="col">IP</th><th scope="col">Sumber</th><th scope="col">Port diserang</th><th scope="col">Alasan</th><th scope="col">Sejak</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
                   <tbody>
-                    <tr v-for="d in (tampilSemua ? denyTersaring : denyTersaring.slice(0, 50))" :key="d.ip">
-                      <td class="nowrap"><span v-if="negaraDari(d.ket)" class="kode-negara" :title="negara(negaraDari(d.ket)[1])">{{ negaraDari(d.ket)[1] }}</span> <code>{{ d.ip }}</code></td>
+                    <tr v-for="d in (tampilSemua ? denyTersaring : denyTersaring.slice(0, 50))" :key="d.ip + (d.port || '')">
+                      <td class="nowrap"><span v-if="negaraDari(d.ket)" class="kode-negara" :title="negara(negaraDari(d.ket)[1])">{{ negaraDari(d.ket)[1] }}</span> <code>{{ d.ip }}</code> <span v-if="d.port" class="lencana">port {{ d.port }}</span></td>
                       <td><span class="lencana" :class="KELAS_SUMBER[d.sumber]">{{ SUMBER[d.sumber] || d.sumber }}</span></td>
+                      <td class="nowrap">{{ d.serang || '-' }}</td>
                       <td class="ket">{{ alasanRingkas(d.ket) }}</td>
                       <td class="nowrap">{{ d.waktu ? tanggalWaktu(d.waktu) : '-' }}</td>
                       <td class="kanan"><button type="button" class="tombol garis kecil" :disabled="proses" @click="lepas(d.ip, terpilih.host)">Lepas</button></td>
@@ -504,11 +511,12 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
               <p v-if="!terpilih.sementara.length" class="redup">Tidak ada blokir sementara.</p>
               <div v-else class="tabel-wadah">
                 <table class="tabel">
-                  <thead><tr><th scope="col">IP</th><th scope="col">Sumber</th><th scope="col">Port / arah</th><th scope="col">Alasan</th><th scope="col">Sisa</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
+                  <thead><tr><th scope="col">IP</th><th scope="col">Sumber</th><th scope="col">Port diserang</th><th scope="col">Port diblokir</th><th scope="col">Alasan</th><th scope="col">Sisa</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
                   <tbody>
                     <tr v-for="d in sementaraTersaring" :key="d.ip + d.port">
                       <td class="nowrap"><code>{{ d.ip }}</code></td>
                       <td><span v-if="d.sumber" class="lencana" :class="KELAS_SUMBER[d.sumber]">{{ SUMBER[d.sumber] || d.sumber }}</span></td>
+                      <td class="nowrap">{{ d.serang || '-' }}</td>
                       <td class="nowrap">{{ d.port }} · {{ d.arah }}</td>
                       <td class="ket">{{ alasanRingkas(d.ket) }}</td>
                       <td class="nowrap">{{ sisa(d.sisa) }}</td>
@@ -530,8 +538,8 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
                 <table class="tabel">
                   <thead><tr><th scope="col">IP</th><th scope="col">Keterangan</th><th scope="col">Ditambahkan</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
                   <tbody>
-                    <tr v-for="a in allowTersaring" :key="a.ip">
-                      <td class="nowrap"><code>{{ a.ip }}</code> <span v-if="a.ip === terpilih.ip_kantor" class="lencana biru">KANTOR</span></td>
+                    <tr v-for="a in allowTersaring" :key="a.asli || a.ip">
+                      <td class="nowrap"><code>{{ a.ip }}</code> <span v-if="a.port" class="lencana">port {{ a.port }}</span> <span v-if="a.ip === terpilih.ip_kantor" class="lencana biru">KANTOR</span></td>
                       <td class="ket">{{ a.ket.replace(/^#\s*/, '') || '-' }}</td>
                       <td class="nowrap">{{ a.waktu ? tanggalWaktu(a.waktu) : '-' }}</td>
                       <td class="kanan"><button v-if="a.ip !== terpilih.ip_kantor" type="button" class="tombol garis kecil" :disabled="proses" @click="hapusWhitelist(a.ip, terpilih.host)">Hapus</button></td>
@@ -604,6 +612,9 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
             </optgroup>
           </select>
         </label>
+        <label v-if="dialogPort" class="isian"><span>Port (opsional)</span><input v-model="dialog.port" inputmode="numeric" placeholder="kosong = semua port · mis. 22 atau 80,443" autocomplete="off" spellcheck="false">
+          <small>TCP masuk. Isi bila hanya port tertentu yang {{ dialog.jenis === 'blokir' ? 'diblokir' : 'dibuka' }} untuk IP ini.</small>
+        </label>
         <div v-if="dialog.jenis === 'blokir'" class="isian">
           <span>Durasi</span>
           <div class="pil-durasi" role="radiogroup" aria-label="Durasi blokir">
@@ -615,6 +626,7 @@ const negara = (k) => { try { return (k && namaNegara?.of(k)) || k } catch { ret
         </div>
         <label class="isian"><span>{{ dialog.jenis === 'blokir' ? 'Alasan' : 'Keterangan' }}</span><input v-model="dialog.ket" maxlength="120" :placeholder="dialog.jenis === 'blokir' ? 'mis. brute force wp-login klien X' : 'mis. IP kantor klien X / server backup'"></label>
         <p v-if="dialog.jenis === 'izinkan' && pcKantor(servers.find((x) => x.host === dialog.host))" class="redup">Whitelist di PC kantor membuka SEMUA port untuk IP ini — pakai hanya untuk IP tepercaya.</p>
+        <p v-else-if="dialog.jenis === 'izinkan' && dialog.port.trim()" class="redup">Whitelist per port hanya membuka port itu; IP tetap bisa diblokir LFD/cPGuard.</p>
         <p v-else-if="dialog.jenis === 'izinkan'" class="redup">IP whitelist tidak pernah diblokir LFD maupun cPGuard di server itu — pakai hanya untuk IP tepercaya.</p>
         <p v-if="!oleh.trim()" class="pesan-status bahaya">Masuk dulu lewat tombol "Masuk dengan VD.net" di kanan atas.</p>
         <div class="dialog-aksi">

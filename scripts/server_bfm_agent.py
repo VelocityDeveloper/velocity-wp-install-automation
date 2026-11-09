@@ -112,7 +112,9 @@ def blok_perl(aturan, slot, sidik):
         '\tif (($globlogs{%s}{$lgfile}) and ($line =~ /^(?:\\[[^\\]]+\\] \\[(?:\\S*:)?error\\] |\\d{4}\\/\\d\\d\\/\\d\\d [\\d:]+ \\[\\w+\\] \\d+#\\d+: (?:\\*\\d+ )?)\\[client (\\S+)\\] ModSecurity: Access denied with code \\S+ .*?\\[id "(77\\d{5})"\\].*?\\[tag "velocity-waf"\\]/)) {' % slot,
         '\t\tmy ($ip, $id) = ($1, $2);',
         '\t\t$ip =~ s/^::ffff://;',
-        '\t\treturn 0 if $id =~ /^(?:77007\\d\\d|7700104|7700107|7700118|7700215)$/;',
+        # Aturan nolog (7700108/109/216/223/224) tetap tertulis "Access denied" di libmodsecurity v3 (nginx: sanke, atha)
+        # → dikecualikan di sini juga (26 Okt: uji 7700224 memblokir IP penguji 24 jam di atha & sanke).
+        '\t\treturn 0 if $id =~ /^(?:77007\\d\\d|7700104|7700107|7700108|7700109|7700118|7700215|7700216|7700223|7700224)$/;',
     ] + cabang + ['\t\t' + akhir, '\t}', SELESAI])
 
 
@@ -172,7 +174,7 @@ def simulasi(aturan, interval):
                     continue
                 mode[m.group(4)] += 1
                 rid = m.group(5)
-                if rid in ('7700104', '7700105', '7700107', '7700118', '7700215') or rid.startswith('77006') or rid.startswith('77007'):
+                if rid in ('7700104', '7700105', '7700107', '7700108', '7700109', '7700118', '7700215', '7700216', '7700223', '7700224') or rid.startswith('77006') or rid.startswith('77007'):
                     continue  # 77006 hanya dicatat; 77007 judi: Googlebot ikut mengakses link spam; 7700107 Meta: IP dipakai pratinjau FB/WA; 7700215 page/N artikel: IP residensial; 7700104/7700118 bot AI pencarian: IP dipakai juga ChatGPT-User/Perplexity-User
                 per.setdefault(kelompok(rid), {}).setdefault(m.group(3), []).append(t)
     hasil = {}

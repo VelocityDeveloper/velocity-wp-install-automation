@@ -91,7 +91,7 @@ bisa ditelusuri ke bahan. Gabungkan hal yang sama; utamakan yang berdampak.
 - diperbaiki: perbaikan/penyelesaian nyata (bug, revisi klien, fitur, deploy). area = project/domain/sistem.
 - kurang: yang belum beres, gagal, berulang, boros token, atau pola kesalahan yang perlu diperbaiki — sertakan saran konkret
   dan prioritas. pic = penanggung jawab tindak lanjutnya: nama orang persis seperti judul "## <nama>" di SESI CLAUDE
-  (orang yang menangani/memegang project itu hari ini; beberapa nama pisahkan koma). "Otomasi (installer & alat)" bila
+  (orang yang menangani/memegang project itu hari ini; beberapa nama pisahkan koma). nama baris "Otomasi · ..." atau "Otomasi (alat)" yang sesuai bila
   masalahnya di sistem otomatis tanpa pemilik jelas. "-" bila memang tidak bisa ditelusuri — jangan menebak.
 - Format isi/saran/catatan: daftar pakai baris "- " (satu poin per baris), perintah/berkas/kode diapit backtick.
   Item di dalam array (poin, berjalan_baik, perlu_perbaikan, saran, fokus_besok) TANPA awalan "- ".

@@ -1,0 +1,9 @@
+[Unit]
+Description=Kesiapan & progres migrasi Farnaz LiteSpeed -> nginx_apache (baca saja) untuk menu Pemantauan › Migrasi Farnaz
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=150
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/migrasi-farnaz --out /usr/share/nginx/html/brain/migrasi.json

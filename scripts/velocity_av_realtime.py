@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """VelocityGuard realtime — berkas web yang baru ditulis langsung diperiksa tanda tangan VD.* (jalan di server hosting).
 
-fanotify FAN_CLOSE_WRITE dengan tanda mount (satu tanda untuk seluruh mount /home, bukan watch per folder seperti
-inotify yang habis di jutaan folder). Setiap berkas yang selesai ditulis di /home/<akun>/domains/ diperiksa fungsi
+fanotify FAN_CLOSE_WRITE dengan tanda filesystem (satu tanda untuk seluruh filesystem /home, bukan watch per folder
+seperti inotify yang habis di jutaan folder). Tanda MOUNT tidak dipakai: tulisan PHP/user di CageFS lewat bind-mount
+lain sehingga tak terlihat (Farnaz 29 Okt: dropper mu-plugin 26 Okt lolos, uji vg-uji-*.php). Setiap berkas yang selesai ditulis di /home/<akun>/domains/ diperiksa fungsi
 periksa() dari agen antivirus (server_antivirus_agent.py, dipasang sebagai agen.py di folder yang sama), aturan
 ekstensi/ukuran sama dengan scan berkas.
 
 Setelan dari dashboard (aksi agen `realtime_setelan`): /var/lib/velocity-av/setelan.json {mode, putih}. Mode
 `otomatis` → berkas yang kena aturan sangat yakin (KARANTINA_OTOMATIS) langsung dikarantina lewat agen.karantina()
-(/root/velocity-karantina, bisa dikembalikan dari dashboard); berkas inti WP tidak pernah. Whitelist dilewati.
+(/root/velocity-karantina, bisa dikembalikan dari dashboard); berkas inti WP tidak pernah. Whitelist hanya meredam tanda curiga.
 
 Keluaran (dibaca dashboard lewat SSH, aksi agen `realtime`):
   /var/lib/velocity-av/temuan.jsonl   satu baris JSON per temuan (format sama dengan temuan scan + t, proses, pid)
@@ -36,8 +37,7 @@ TEMUAN = os.path.join(DATA, 'temuan.jsonl')
 DETAK = os.path.join(DATA, 'detak.json')
 SETELAN = os.path.join(DATA, 'setelan.json')
 # Hanya aturan yang praktis tak pernah positif palsu (diuji 139 rb PHP lokal); sisanya cukup dilaporkan
-KARANTINA_OTOMATIS = {'VD.PHP.EvalUnduhTag', 'VD.PHP.IncludeUnduh', 'VD.Webshell.Nama', 'VD.Webshell.FileManager',
-                      'VD.WP.PluginPalsu', 'VD.PHP.EvalInput', 'VD.WP.LoginPaksa'}
+KARANTINA_OTOMATIS = agen.PASTI_MALWARE
 BERKAS_INTI = ('/index.php', '/wp-config.php', '/.htaccess', '/wp-load.php', '/wp-settings.php')
 AKAR = '/home'
 MAKS_TEMUAN_BERKAS = 20 * 1024 * 1024  # temuan.jsonl diputar ke .1 bila lebih besar
@@ -48,6 +48,7 @@ FAN_CLOEXEC = 0x01
 FAN_CLASS_NOTIF = 0x00
 FAN_MARK_ADD = 0x01
 FAN_MARK_MOUNT = 0x10
+FAN_MARK_FILESYSTEM = 0x100
 AT_FDCWD = -100
 META = struct.Struct('=IBBHQii')  # fanotify_event_metadata: event_len, vers, reserved, metadata_len, mask, fd, pid
 
@@ -65,9 +66,11 @@ def pasang_fanotify():
     fd = libc.fanotify_init(FAN_CLOEXEC | FAN_CLASS_NOTIF, os.O_RDONLY | os.O_LARGEFILE | os.O_CLOEXEC)
     if fd < 0:
         raise OSError(ctypes.get_errno(), 'fanotify_init')
-    if libc.fanotify_mark(fd, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_CLOSE_WRITE, AT_FDCWD, AKAR.encode()) < 0:
-        raise OSError(ctypes.get_errno(), 'fanotify_mark ' + AKAR)
-    return fd
+    # Kernel lama (<4.20) tanpa FAN_MARK_FILESYSTEM → mundur ke tanda mount
+    for tanda in (FAN_MARK_FILESYSTEM, FAN_MARK_MOUNT):
+        if libc.fanotify_mark(fd, FAN_MARK_ADD | tanda, FAN_CLOSE_WRITE, AT_FDCWD, AKAR.encode()) == 0:
+            return fd
+    raise OSError(ctypes.get_errno(), 'fanotify_mark ' + AKAR)
 
 
 def muat_setelan(lama):
@@ -173,7 +176,7 @@ def jalan():
                     continue
                 path = os.readlink('/proc/self/fd/%d' % efd)
                 jenis = perlu_diperiksa(path)
-                if not jenis or agen.di_putih(path, setelan[0].get('putih')):
+                if not jenis:
                     continue
                 st = os.fstat(efd)
                 kunci = (st.st_size, st.st_mtime)
@@ -184,7 +187,7 @@ def jalan():
                 if teks is None:
                     continue
                 stat['diperiksa'] += 1
-                tanda = agen.periksa(path, 'php' if jenis[1] else jenis[0], teks)
+                tanda = agen.saring_putih(path, setelan[0].get('putih'), agen.periksa(path, 'php' if jenis[1] else jenis[0], teks))
                 if tanda:
                     stat['temuan'] += 1
                     baris = {'t': int(time.time()), 'path': path, 'user': path.split('/')[2], 'ukuran': st.st_size,

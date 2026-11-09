@@ -145,7 +145,7 @@ const pesanRingkas = (e) => e.pesan.replace(/^(lfd: |BFM: |velocity: )/, '').rep
                 <template v-if="e.ip"><span v-if="e.cc" class="kode-negara" :title="negara(e.cc)">{{ e.cc }}</span> <button type="button" class="ip" title="Cek IP ini di semua server" @click="emit('cek', e.ip)"><code>{{ e.ip }}</code></button></template>
                 <span v-else class="redup">-</span>
               </td>
-              <td class="pesan"><b v-if="e.pemicu" class="pemicu">{{ PEMICU[e.pemicu] || e.pemicu }}</b> {{ pesanRingkas(e) }}</td>
+              <td class="pesan"><b v-if="e.pemicu" class="pemicu">{{ PEMICU[e.pemicu] || e.pemicu }}</b> <span v-if="e.serang" class="lencana">port {{ e.serang }}</span> {{ pesanRingkas(e) }}</td>
               <td class="kanan">
                 <template v-if="e.ip">
                   <span v-if="status(e.ip, e.host) === 'allow'" class="lencana hijau">WHITELIST</span>

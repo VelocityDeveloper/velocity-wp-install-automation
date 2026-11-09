@@ -18,7 +18,7 @@ import os
 import re
 import time
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 LOG_DIR = '/var/log/httpd/domains'
 WAF_DIR = '/etc/velocity-waf'
@@ -27,16 +27,17 @@ BARIS = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d{3}) (\S+
 PROBE = re.compile(r'(?i)(/\.env|/\.git/|/\.svn/|/\.aws/|/\.ssh/|wp-config\.(php)?[._~-]?(bak|old|orig|save|txt|swp|zip)|'
                    r'wp-config\.php~|/phpunit/|eval-stdin\.php|/vendor/.+\.php|/(alfa|wso|c99|r57|b374k|marijuana|leaf)[\w-]*\.php|'
                    r'\.(sql|sql\.gz|bak|tar\.gz|tgz|zip|rar|7z)$|/phpinfo\.php|/info\.php|/adminer[\w.-]*\.php|/debug\.log$|'
-                   r'/server-status|/cgi-bin/.+|/_profiler|/actuator/|/\.DS_Store|/config\.json$|/sftp-config\.json)')
-# Titik masuk PHP normal WordPress (POST 2xx ke sini wajar)
+                   r'/server-status|/cgi-bin/.+|/_profiler|/actuator/|/\.DS_Store|/config\.json$|/sftp-config\.json|/terminal-xhr\.php|/\.\.;/)')
+# Titik masuk PHP normal WordPress (POST 2xx ke sini wajar); guest.vary.php juga di folder plugin yang di-rewrite hide-my-wp (/core/modules/…)
 POST_WAJAR = re.compile(r'(?i)^(/[^?]*)?/(index\.php|wp-login\.php|xmlrpc\.php|wp-cron\.php|wp-comments-post\.php|wp-trackback\.php|'
-                        r'wp-signup\.php|wp-activate\.php|wp-admin/.*|wp-content/plugins/litespeed-cache/guest\.vary\.php)$')
+                        r'wp-signup\.php|wp-activate\.php|wp-admin/.*|(?:.+/)?litespeed-cache/guest\.vary\.php|'
+                        r'wp-content/plugins/burst-statistics/endpoint\.php)$')
 
 
 def _post_wajar(path):
     # Titik masuk WP di subfolder (/staging/wp-cron.php) wajar, tapi tidak bila di bawah wp-content (folder buatan penyerang)
     rendah = path.lower()
-    return bool(POST_WAJAR.match(path)) and ('/wp-content/' not in rendah or rendah.endswith('/litespeed-cache/guest.vary.php'))
+    return bool(POST_WAJAR.match(path)) and ('/wp-content/' not in rendah or rendah.endswith(('/litespeed-cache/guest.vary.php', '/burst-statistics/endpoint.php')))
 
 
 BOT_UA = re.compile(r'(?i)(bot|crawl|spider|scan|python|curl|wget|go-http|java/|okhttp|httpclient|libwww|scrapy|headless|axios|node-fetch|php/|ruby|perl)')
@@ -131,19 +132,33 @@ def _php_baru(sejak):
                         st = os.lstat(p)
                     except OSError:
                         continue
-                    if st.st_mtime >= sejak and not (n == 'index.php' and st.st_size <= 64) and not _cache_aman(p):
+                    # 0 byte tak bisa menjalankan apa pun (view_<md5>.php = log debug WP Super Cache); bila nanti diisi, mtime berubah → tertangkap
+                    if st.st_mtime >= sejak and st.st_size and not (n == 'index.php' and st.st_size <= 64) and not _cache_aman(p):
                         out.append((p, int(st.st_mtime), st.st_size))
                         if len(out) >= 200:
                             return out
     return out
 
 
-def _pantau():  # baris pantau.txt hanya berjam (tanpa tanggal) → ambil 50 kejadian terakhir
-    out = []
+def _pantau(sejak):
+    # Baris pantau.txt hanya berjam; tanggal dari kepala "=== Uji mulai YYYY-MM-DD HH:MM:SS", jam mundur = ganti hari.
+    # Kejadian sebelum kepala pertama/di luar jendela diabaikan (dulu PULIH dari uji lama ikut terlapor tiap hari).
+    out, hari, jam_lalu = [], None, None
     try:
         with open(PANTAU, encoding='utf-8', errors='replace') as h:
             for b in h:
-                if 'PULIH' in b or 'JAGA' in b or 'CPU tinggi' in b:
+                m = re.search(r'Uji mulai (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})', b)
+                if m:
+                    hari, jam_lalu = datetime.strptime(m.group(1), '%Y-%m-%d'), m.group(2)
+                    continue
+                m = re.search(r'\b(\d{2}:\d{2}:\d{2})\b', b)
+                if not m or hari is None:
+                    continue
+                if m.group(1) < jam_lalu:
+                    hari += timedelta(days=1)
+                jam_lalu = m.group(1)
+                t = time.mktime(datetime.strptime(hari.strftime('%Y-%m-%d ') + jam_lalu, '%Y-%m-%d %H:%M:%S').timetuple())
+                if t >= sejak and ('PULIH' in b or 'JAGA' in b or 'CPU tinggi' in b):
                     out.append(b.strip()[:300])
     except OSError:
         return None
@@ -151,7 +166,7 @@ def _pantau():  # baris pantau.txt hanya berjam (tanpa tanggal) → ambil 50 kej
 
 
 def celah(p):
-    jam = int(p.get('jam') or 24)
+    jam = float(p.get('jam') or 24)  # pecahan dipakai cek ulang sesudah perbaikan
     sejak = time.time() - jam * 3600
     try:
         os.nice(15)
@@ -167,7 +182,7 @@ def celah(p):
         'probe_lolos': sorted(probe, reverse=True)[:60], 'n_probe_lolos': len(probe),
         'post_php': sorted(post_php, reverse=True)[:60], 'n_post_php': len(post_php),
         'pemindai': pemindai, 'bot_baru': bot_baru,
-        'php_baru': _php_baru(sejak), 'uji': _pantau(),
+        'php_baru': _php_baru(sejak), 'uji': _pantau(sejak),
         'cpguard_waf_off': os.path.exists('/etc/modsecurity.d/cpguard_waf.conf.off'),
     }
 

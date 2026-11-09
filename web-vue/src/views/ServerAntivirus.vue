@@ -122,7 +122,7 @@ const RENTANG = [
   { nilai: 30, label: '30 hari' }, { nilai: 0, label: 'Semua berkas' },
 ]
 const form = reactive({ akun: 'semua', hari: 1 })
-watch(pilih, () => { form.akun = 'semua'; form.hari = 1; lihatId.value = ''; filterTingkat.value = ''; filterJenis.value = ''; filterAi.value = ''; cariTemuan.value = '' })
+watch(pilih, () => { form.akun = 'semua'; form.hari = 1; lihatId.value = ''; filterTingkat.value = ''; filterJenis.value = ''; filterAi.value = ''; cariTemuan.value = ''; cariAkun.value = '' })
 const akunServer = computed(() => terpilih.value?.akun || [])
 const ringkasAtur = computed(() => {
   const j = jadwal.value
@@ -195,20 +195,10 @@ let timerScan = null
 const SEMUA = 'semua'
 const scanSelesai = computed(() => scanServer(terpilih.value?.host).filter((j) => j.status === 'selesai'))
 async function muatGabungan() {
-  const hasil = await Promise.all(scanSelesai.value.map((j) => minta(`/api/servers/antivirus/scan?id=${j.id}`)))
-  const temuan = new Map()
-  const besar = new Map()
-  for (const d of hasil) {
-    for (const t of d.temuan || []) if (!temuan.has(t.path) && !t.kini) temuan.set(t.path, { ...t, scan: d.mulai })
-    for (const b of d.besar || []) if (!besar.has(b.path)) besar.set(b.path, b)
-  }
+  const g = await minta(`/api/servers/antivirus/scan?gabung=${encodeURIComponent(terpilih.value?.host)}`)
   // Berkas yang dikarantina sesudah scan yang menemukannya tidak ditampilkan lagi
   const dikarantina = new Map((terpilih.value?.karantina || []).map((k) => [k.path, k.waktu]))
-  return {
-    id: SEMUA, status: 'selesai', gabung: hasil.length, host: terpilih.value?.host,
-    temuan: [...temuan.values()].filter((t) => !(dikarantina.get(t.path) > t.scan)),
-    besar: [...besar.values()], hasil: { besar: besar.size },
-  }
+  return { ...g, temuan: g.temuan.filter((t) => !(dikarantina.get(t.path) > t.scan)) }
 }
 // Gabungan untuk kartu ringkasan, terpisah dari scan yang sedang dilihat
 const gabungan = ref(null)
@@ -305,6 +295,19 @@ const temuanTersaring = computed(() => {
         || jenisTemuan(t).some((j) => j.label.toLowerCase().includes(q))))
     .sort((a, b) => (a.tingkat === b.tingkat ? b.mtime - a.mtime : a.tingkat === 'virus' ? -1 : 1))
 })
+// Daftar scan dikelompokkan per domain (temuan web/DB tanpa folder domain ikut domain web-nya, sisanya per akun); virus terbanyak dulu
+const grupDomain = computed(() => {
+  const m = new Map()
+  for (const t of temuanTersaring.value) {
+    const domain = domainDari(t.path) || t.web?.domain || ''
+    const k = `${t.user}|${domain}`
+    if (!m.has(k)) m.set(k, { k, domain, user: t.user, virus: 0, temuan: [] })
+    const g = m.get(k)
+    g.temuan.push(t)
+    if (t.tingkat === 'virus') g.virus++
+  }
+  return [...m.values()].sort((a, b) => b.virus - a.virus || b.temuan.length - a.temuan.length || a.domain.localeCompare(b.domain))
+})
 const hitungTingkat = computed(() => {
   const out = { virus: 0, curiga: 0, aman: 0, kini: 0 }
   for (const t of temuanDetail.value) out[t.kini ? 'kini' : t.aman ? 'aman' : t.tingkat]++
@@ -380,22 +383,6 @@ watch(() => tab.value === 'analisis-ai' && !!judi.value?.berjalan, (jalan) => {
   clearInterval(timerJudi); timerJudi = jalan ? setInterval(muatJudi, 5000) : null
 })
 onBeforeUnmount(() => clearInterval(timerJudi))
-async function bersihkanRiwayatJudi() {
-  if (perluNama()) return
-  const ya = await konfirmasi({ judul: 'Bersihkan riwayat penilaian?', teks: `Riwayat penilaian AI ${terpilih.value.name} dikosongkan dari tab ini (dipindah ke arsip di server dashboard, tidak dihapus). Tombol "Batalkan suspend" untuk akun yang disuspend AI ikut hilang dari daftar. Saran AI per berkas di daftar scan tetap ada.`, tombol: 'Bersihkan', kelas: 'bahaya' })
-  if (!ya) return
-  proses.value = true
-  try {
-    const r = await kirim('/api/servers/judi/bersihkan', { server: terpilih.value.host, oleh: oleh.value.trim() })
-    if (!r.ok) throw new Error(r.error)
-    Object.assign(pesan, { teks: `Riwayat dibersihkan (${r.dipindah} baris diarsipkan).`, galat: false })
-  } catch (e) {
-    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
-  } finally {
-    proses.value = false
-    muatJudi()
-  }
-}
 async function hentiJudi() {
   if (perluNama()) return
   try {
@@ -452,7 +439,7 @@ async function suspendJudi(d, aksi) {
   }
 }
 const JENIS_JUDI = { situs_judi: ['merah', 'Situs judi'], diretas: ['kuning', 'Diretas'], berita: ['hijau', 'Berita'], aman: ['hijau', 'Aman'] }
-const AKSI_JUDI = { suspend: 'Suspend akun', karantina: 'Karantina berkas', laporan: 'Laporan', dilewati: 'Daftar putih' }
+const AKSI_JUDI = { suspend: 'Suspend akun', karantina: 'Karantina berkas', laporan: 'Laporan', dilewati: 'Daftar putih', celah_ditutup: 'Celah masuk ditutup' }
 const CATAT_JUDI = { ringkas: 'Penilaian selesai', setelan: 'Setelan diubah', manual: 'Aksi manual', galat: 'Penilaian gagal' }
 // Penilaian terbaru per akun (keputusan sudah urut terbaru dulu), paling perlu ditangani di atas
 const filterJudi = ref('')
@@ -465,29 +452,45 @@ const judiAkun = computed(() => {
 })
 // Status tangani per akun dari gabungan semua scan: sisa = temuan belum aman/dikarantina/kini bersih, kecuali positif palsu AI
 const filterTangani = ref('')
+const cariAkun = ref('')
 const sisaAkun = computed(() => {
   const g = gabungan.value?.host === terpilih.value?.host ? gabungan.value : null
   if (!g) return null
   const m = new Map()
   for (const t of g.temuan) {
     if (t.aman || karantinaPath.value.has(t.path)) continue
-    const x = m.get(t.user) || { sisa: 0, fp: 0 }
+    const x = m.get(t.user) || { sisa: 0, fp: 0, bahaya: 0, cek: 0, baru: 0 }
     if (t.ai?.putusan === 'positif_palsu') x.fp++
-    else x.sisa++
+    else {
+      x.sisa++
+      if (t.ai?.putusan === 'berbahaya') x.bahaya++
+      else if (t.ai?.putusan === 'cek_manual') x.cek++
+      else x.baru++
+    }
     m.set(t.user, x)
   }
   return m
 })
+// Langkah wajib akun diretas: sandi WP + hosting diganti & dikirim ke klien. Catatan manual terbaru per akun (keputusan urut terbaru dulu).
+// shortcut: satu catatan berlaku untuk akun itu selamanya, walau diretas lagi sesudahnya — ikat ke waktu penilaian bila sering kambuh
+const celahDitutup = computed(() => {
+  const m = new Map()
+  for (const d of judi.value?.keputusan || []) if (d.dijalankan === 'celah_ditutup' && d.ok && !m.has(d.user)) m.set(d.user, d)
+  return m
+})
+const wajibCelah = (d) => d.ai?.jenis === 'diretas' && !celahDitutup.value.has(d.user)
 const tersuspend = (d) => (d.dijalankan === 'suspend' && d.ok) || (d.aksi === 'dilewati' && d.catatan === 'akun sudah tersuspend')
 // null = gabungan scan belum termuat
 function statusTangani(d) {
-  if (tersuspend(d)) return { sudah: true, label: 'Ditangani · tersuspend', sisa: 0, fp: 0 }
+  if (tersuspend(d)) return { sudah: true, label: 'Sudah ditangani · tersuspend', sisa: 0, fp: 0 }
   if (!sisaAkun.value) return null
   const x = sisaAkun.value.get(d.user) || { sisa: 0, fp: 0 }
-  return { ...x, sudah: !x.sisa, label: x.sisa ? `Belum ditangani · ${x.sisa} sisa` : 'Ditangani' }
+  // Status mengikuti temuan; sandi yang belum diganti tampil sebagai catatan terpisah (celah)
+  return { ...x, celah: wajibCelah(d), sudah: !x.sisa, label: x.sisa ? `Belum ditangani · ${x.sisa} sisa` : 'Sudah ditangani' }
 }
 const judiAkunTersaring = computed(() => judiAkun.value
   .filter((d) => !filterJudi.value || d.ai?.jenis === filterJudi.value)
+  .filter((d) => { const q = cariAkun.value.trim().toLowerCase(); return !q || [d.user, ...(d.domain || [])].some((x) => x.toLowerCase().includes(q)) })
   .filter((d) => !filterTangani.value || statusTangani(d)?.sudah === (filterTangani.value === 'sudah'))
   // Belum ditangani di atas; urutan jenis dari judiAkun tetap (sort stabil)
   .sort((a, b) => (statusTangani(a)?.sudah ? 1 : 0) - (statusTangani(b)?.sudah ? 1 : 0)))
@@ -504,10 +507,16 @@ function labelAksiJudi(d) {
 // ---- Saran aksi per penilaian Judi AI: disusun aturan tetap dari jenis penilaian + temuan scan akun itu ----
 const saran = reactive({ buka: false, d: null, memuat: false, galat: '', temuan: [] })
 const domainDari = (p) => (p || '').match(/\/domains\/([^/#]+)/)?.[1] || ''
-async function bukaSaran(d) {
-  Object.assign(saran, { buka: true, d, memuat: true, galat: '', temuan: [] })
+function bukaSaran(d) {
+  Object.assign(saran, { buka: true, d })
+  return muatSaran()
+}
+// Dari gabungan semua scan, bukan scan penilaian AI: yang sudah dibersihkan (lewat dashboard atau manual) tidak muncul lagi
+async function muatSaran() {
+  const d = saran.d
+  Object.assign(saran, { memuat: true, galat: '', temuan: [] })
   try {
-    const job = d.scan === SEMUA ? await muatGabungan() : await minta(`/api/servers/antivirus/scan?id=${d.scan}`)
+    const job = await muatGabungan()
     saran.temuan = (job.temuan || []).filter((t) => t.user === d.user && !t.aman)
   } catch (e) {
     saran.galat = `Temuan scan tidak bisa dimuat (${pesanGalat(e.message)}) — saran umum saja.`
@@ -522,8 +531,13 @@ const langkahSaran = computed(() => {
   const db = saran.temuan.filter((t) => t.db)
   const web = saran.temuan.filter((t) => t.web)
   const berkas = saran.temuan.filter((t) => !t.db && !t.web)
-  const cloak = (d.tanda || []).some((x) => /Cloaking|AlihGoogle|AlihReferer/.test(x))
+  const cloak = saran.temuan.some((t) => t.tanda.some((x) => /Cloaking|AlihGoogle|AlihReferer/.test(x.id)))
   const L = []
+  if (!saran.temuan.length && !saran.galat) {
+    L.push({ judul: 'Semua temuan sudah ditangani', teks: 'Tidak ada temuan aktif di akun ini menurut pemeriksaan terakhir. Penilaian AI di atas adalah catatan saat dinilai.' })
+    if (wajibCelah(d)) L.push(LANGKAH_CELAH)
+    return L
+  }
   // Saran per berkas dari Analisis AI (label "AI: …" di tab Scan); temuan DB tidak bisa ditandai aman
   const ai = (k) => [...berkas, ...db].filter((t) => t.ai?.putusan === k && !karantinaPath.value.has(t.path))
   const fp = ai('positif_palsu')
@@ -535,6 +549,12 @@ const langkahSaran = computed(() => {
   const semua = [...berkas, ...db]
   if (semua.length && semua.every((t) => t.ai?.putusan === 'positif_palsu') && !web.length) {
     L.push({ judul: 'Tidak ada yang perlu dibersihkan', teks: 'Semua temuan akun ini dinilai AI sebagai positif palsu.' })
+    return L
+  }
+  // Penilaian jenis akun lebih lama dari temuan ini: temuan tanpa putusan AI tidak boleh tertutup oleh "Berita"/"Aman"
+  const belumDinilai = semua.filter((t) => !t.ai && !karantinaPath.value.has(t.path))
+  if (belumDinilai.length && jenis !== 'diretas' && jenis !== 'situs_judi') {
+    L.push({ judul: `Belum dinilai AI: ${belumDinilai.length} temuan`, teks: 'Temuan ini belum masuk penilaian AI, jadi periksa sendiri: Lihat isinya, lalu karantina bila berbahaya (bisa dikembalikan dari tab Karantina). Berkas inti WordPress otomatis diganti salinan asli.', berkas: belumDinilai })
     return L
   }
   if (d.judi === false && jenis !== 'diretas') return L.length ? L : [{ judul: 'Belum ada saran per berkas', teks: 'Temuan akun ini belum dinilai AI per berkas — jalankan "Nilai semua yang belum ditangani".' }]
@@ -565,15 +585,41 @@ const langkahSaran = computed(() => {
     const inti = berkas.filter((t) => BERKAS_INTI_JUDI.test(t.path))
     if (inti.length) L.push({ judul: `Bersihkan manual ${inti.length} berkas inti`, teks: 'index.php / wp-config.php / .htaccess / wp-admin / wp-includes jangan dikarantina (situs mati) — hapus sisipannya, atau ganti wp-admin & wp-includes dengan salinan WordPress asli.', berkas: inti, manual: true })
     if (cloak) L.push({ judul: 'Hapus cloaking & minta Google index ulang', teks: 'Situs menampilkan isi berbeda ke Googlebot/pengunjung dari Google: cek .htaccess dan kode yang memeriksa User-Agent/Referer. Sesudah bersih, URL Inspection → Request indexing di Google Search Console.' })
-    L.push({ judul: 'Tutup celah masuk', teks: 'Ganti sandi admin WordPress & akun hosting, hapus admin tak dikenal, perbarui plugin/tema rentan (lihat Kerentanan CMS).', tautan: '/server/cms' })
+    L.push(jenis === 'diretas'
+      ? LANGKAH_CELAH
+      : { judul: 'Tutup celah masuk', teks: 'Ganti sandi admin WordPress & akun hosting, hapus admin tak dikenal, perbarui plugin/tema rentan (lihat Kerentanan CMS).', tautan: '/server/cms' })
     L.push({ judul: 'Scan ulang akun ini', teks: `Sesudah dibersihkan, jalankan scan akun ${d.user} (semua berkas) di tab Scan untuk memastikan bersih.`, scan: true })
   }
   if (!L.length) L.push({ judul: 'Tidak ada saran', teks: 'Penilaian belum lengkap (bukti gagal diambil / tanpa penilaian AI). Jalankan penilaian ulang.' })
   return L
 })
+const LANGKAH_CELAH = { judul: 'Tutup celah masuk (wajib)', teks: 'Ganti sandi semua admin WordPress dan akun hosting, lalu kirimkan sandi baru ke klien. Catatan "Sandi belum ditandai diganti" tampil di kolom Status sampai langkah ini ditandai selesai.', catatan: 'Plugin/tema yang rentan diperbarui lewat menu Kerentanan CMS, terpisah dari langkah ini.', tautan: '/server/cms', celah: true }
 const BERKAS_INTI_JUDI = /(^|\/)(index\.php|wp-config\.php|\.htaccess)$|\/wp-admin\/|\/wp-includes\//
+async function celahSelesai() {
+  if (perluNama()) return
+  const d = saran.d
+  const ya = await konfirmasi({ judul: `Celah masuk ${d.user} sudah ditutup?`, teks: 'Pastikan sandi admin WordPress & akun hosting sudah diganti dan sandi baru sudah dikirim ke klien.', tombol: 'Sudah dilakukan' })
+  if (!ya) return
+  proses.value = true
+  try {
+    const r = await kirim('/api/servers/judi/aksi', { server: terpilih.value.host, user: d.user, aksi: 'celah_ditutup', oleh: oleh.value.trim() })
+    Object.assign(pesan, r.ok ? { teks: `${d.user}: celah masuk ditandai sudah ditutup.`, galat: false } : { teks: pesanGalat(r.error), galat: true })
+  } catch (e) {
+    Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
+  } finally {
+    proses.value = false
+    muatJudi()
+  }
+}
 async function putihkanSaran() {
   const user = saran.d.user
+  if (perluNama()) return
+  const ya = await konfirmasi({
+    judul: `Masukkan ${user} ke daftar putih?`,
+    teks: `Akun ${user} (${(saran.d.domain || []).join(', ') || '-'}) tidak akan pernah dinilai AI lagi di ${terpilih.value.name}, termasuk bila nanti benar-benar diretas: temuan baru di akun ini tidak dinilai dan tidak ada suspend/karantina otomatis. Pakai hanya untuk akun yang selalu positif palsu (mis. portal berita). Bisa dikeluarkan lagi lewat kolom Daftar putih di atas.`,
+    tombol: 'Masukkan daftar putih', kelas: 'bahaya',
+  })
+  if (!ya) return
   judiPutih.value = [...new Set([...judi.value.setelan.daftar_putih, user])].join('\n')
   await simpanPutih()
   saran.buka = false
@@ -642,6 +688,8 @@ async function cekUlang(akun) {
     if (!r.ok) throw new Error(r.error)
     Object.assign(pesan, { teks: `Akun ${akun}: ${r.diperiksa} temuan diperiksa ulang.`, galat: false })
     muatDetail()
+    await muatKartu()
+    if (saran.buka) await muatSaran()
   } catch (e) {
     Object.assign(pesan, { teks: pesanGalat(e.message), galat: true })
   } finally {
@@ -734,36 +782,47 @@ const KINI = {
   bersih: ['KINI BERSIH', 'Diperiksa ulang dengan aturan VD.* terbaru: tidak terdeteksi lagi'],
   hilang: ['BERKAS HILANG', 'Berkas sudah tidak ada di server'],
   dikarantina: ['DIKARANTINA', 'Berkas sudah dipindah ke karantina sesudah scan ini'],
-  dibersihkan: ['SUDAH DIBERSIHKAN', 'Admin ini sudah dihapus / dijadikan subscriber lewat Bersihkan WP sesudah scan ini'],
+  dibersihkan: ['SUDAH DIBERSIHKAN', 'Sudah dibersihkan lewat Bersihkan WP sesudah scan ini'],
   admin_hilang: ['SUDAH DITANGANI', 'Diperiksa ulang: admin ini sudah tidak ada / bukan administrator lagi, atau WordPress-nya (wp-config.php) sudah hilang'],
 }
 const adminTemuan = (t) => t.db && t.tanda.some((x) => /^VD\.DB\.Admin/.test(x.id))
+// App password / sesi banjir: tombol Bersihkan WP (cabut lewat salt), tanpa mengubah admin pemiliknya
+// Payload wp-locale-perf: dibersihkan, tidak boleh ditandai aman (audit 28 Okt: 38 entri salah ditandai aman)
+const iocTemuan = (t) => t.db && t.tanda.some((x) => x.id === 'VD.DB.LocaleCache')
+// Istilah kasino di cache permalink = sisa kategori/tag spam (pos-nya sudah dihapus)
+const kategoriTemuan = (t) => t.db?.id === 'rewrite_rules' && t.tanda.some((x) => /^VD\.DB\.(Kasino|Judi)/.test(x.id))
+const aksesTemuan = (t) => adminTemuan(t) || iocTemuan(t) || kategoriTemuan(t) || (t.db && t.tanda.some((x) => /^VD\.DB\.(AppPassword|SesiBanjir)/.test(x.id)))
 // Per admin: hapus | subscriber | '' (biarkan). Bawaan: siluman (virus) dihapus, pola nama+angka (curiga) jadi subscriber
-const bersih = reactive({ buka: false, akar: '', admin: [], aksiUser: {}, plugin: true, salt: true, hasil: null })
+const bersih = reactive({ buka: false, akar: '', admin: [], aksiUser: {}, plugin: true, salt: true, ioc: false, iocJumlah: 0, kategori: false, adaKategori: false, hasil: null })
 const bersihId = (aksi) => Object.keys(bersih.aksiUser).filter((id) => bersih.aksiUser[id] === aksi)
-function bukaBersih(t) {
+// daftar = sumber temuan: tab Scan (detail terpilih) atau dialog Saran aksi (temuan akun dari Analisis AI)
+function bukaBersih(t, daftar = temuanDetail.value) {
   const akar = t.path.split('#')[0]
-  const admin = temuanDetail.value.filter((x) => adminTemuan(x) && !x.kini && x.path.split('#')[0] === akar)
+  const admin = daftar.filter((x) => adminTemuan(x) && !x.kini && x.path.split('#')[0] === akar)
   const aksiUser = Object.fromEntries(admin.map((x) => [x.db.id, x.tingkat === 'virus' ? 'hapus' : 'subscriber']))
-  Object.assign(bersih, { buka: true, akar, admin, aksiUser, plugin: true, salt: true, hasil: null })
+  const iocJumlah = daftar.filter((x) => iocTemuan(x) && !x.kini && x.path.split('#')[0] === akar).length
+  const adaKategori = daftar.some((x) => kategoriTemuan(x) && !x.kini && x.path.split('#')[0] === akar)
+  // Sisa kategori saja: pembersihan ringan, sesi login klien tidak perlu diputus
+  const ringan = adaKategori && !admin.length && !iocJumlah
+  Object.assign(bersih, { buka: true, akar, admin, aksiUser, plugin: !ringan, salt: !ringan, ioc: iocJumlah > 0, iocJumlah, kategori: adaKategori, adaKategori, hasil: null })
 }
 async function jalankanBersih() {
   if (perluNama()) return
   const ya = await konfirmasi({
     judul: 'Bersihkan WordPress ini?',
-    teks: `${relatif(bersih.akar)}: hapus ${bersihId('hapus').length} admin (postingannya dialihkan ke admin asli), jadikan subscriber ${bersihId('subscriber').length}${bersih.plugin ? ', karantina plugin samaran' : ''}${bersih.salt ? ', ganti salt & semua pengguna logout' : ''}. Tabel users/usermeta & wp-config.php dicadangkan dulu di /root/velocity-bersih.`,
+    teks: `${relatif(bersih.akar)}: hapus ${bersihId('hapus').length} admin (postingannya dialihkan ke admin asli), jadikan subscriber ${bersihId('subscriber').length}${bersih.ioc ? ', hapus payload wp-locale-perf dari database' : ''}${bersih.kategori ? ', hapus kategori/tag kasino yang kosong' : ''}${bersih.plugin ? ', karantina plugin samaran' : ''}${bersih.salt ? ', ganti salt, semua pengguna logout & cabut semua application password' : ''}. Tabel users/usermeta & wp-config.php dicadangkan dulu di /root/velocity-bersih.`,
     tombol: 'Bersihkan', kelas: 'bahaya',
   })
   if (!ya) return
   proses.value = true
   try {
     const r = await kirim('/api/servers/antivirus/aksi', { aksi: 'bersihkan_wp', server: terpilih.value.host, akar: bersih.akar, hapus_user: bersihId('hapus'), turunkan_user: bersihId('subscriber'),
-      plugin: bersih.plugin, salt: bersih.salt, oleh: oleh.value.trim() })
+      plugin: bersih.plugin, salt: bersih.salt, ioc: bersih.ioc, kategori: bersih.kategori, oleh: oleh.value.trim() })
     bersih.hasil = r
     if (r.error === 'user_tidak_ada') throw new Error(`Admin #${(r.id || []).join(', #')} sudah tidak ada di database (sudah dihapus sebelumnya). Tutup jendela ini; daftar temuan dimuat ulang.`)
     if (!r.ok) throw new Error(r.error)
     for (const k of r.karantina || []) if (k.ok) karantinaPath.value = new Set([...karantinaPath.value, k.path])
-    Object.assign(pesan, { teks: `${relatif(bersih.akar)} dibersihkan — ${r.hapus_user.length} admin dihapus, ${(r.turun_user || []).length} jadi subscriber, ${(r.karantina || []).filter((k) => k.ok).length} berkas dikarantina, salt ${r.salt}/8. Jalankan scan akun ini lagi untuk memastikan.`, galat: false })
+    Object.assign(pesan, { teks: `${relatif(bersih.akar)} dibersihkan — ${r.hapus_user.length} admin dihapus, ${(r.turun_user || []).length} jadi subscriber, ${(r.karantina || []).filter((k) => k.ok).length} berkas dikarantina, salt ${r.salt}/8${r.app_password?.length ? `, ${r.app_password.length} application password dicabut` : ''}. Jalankan scan akun ini lagi untuk memastikan.`, galat: false })
     segarkanSesudahAksi()
     riwayat.muatUlang()
   } catch (e) {
@@ -1040,11 +1099,15 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                       <option value="belum">Belum dinilai AI ({{ hitungAi.belum || 0 }})</option>
                     </select>
                   </div>
+                  <details v-for="g in (tampilSemua ? grupDomain : grupDomain.slice(0, 50))" :key="g.k" class="grup-domain" :open="grupDomain.length === 1">
+                  <summary><b>{{ g.domain || `akun ${g.user}` }}</b> <small class="redup">{{ g.user }}</small>
+                    <span v-if="g.virus" class="lencana merah">{{ g.virus }} VIRUS</span>
+                    <span v-if="g.temuan.length - g.virus" class="lencana kuning">{{ g.temuan.length - g.virus }} CURIGA</span></summary>
                   <div class="tabel-wadah">
                     <table class="tabel">
                       <thead><tr><th scope="col">Berkas</th><th scope="col">Masalah</th><th scope="col">Diubah</th><th scope="col"><span class="sr">Aksi</span></th></tr></thead>
                       <tbody>
-                        <tr v-for="t in (tampilSemua ? temuanTersaring : temuanTersaring.slice(0, 100))" :key="t.path">
+                        <tr v-for="t in g.temuan" :key="t.path">
                           <td class="ket berkas">
                             <span class="lencana" :class="t.tingkat === 'virus' ? 'merah' : 'kuning'">{{ t.tingkat === 'virus' ? 'VIRUS' : 'CURIGA' }}</span>
                             <span v-if="t.kini" class="lencana hijau" :title="KINI[t.kini]?.[1]">{{ KINI[t.kini]?.[0] }}</span>
@@ -1066,9 +1129,11 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                           </td>
                           <td class="nowrap">{{ tanggalWaktu(t.mtime) }}<small v-if="t.scan" class="redup blok">ditemukan scan {{ tanggalWaktu(t.scan) }}</small><small v-if="Math.abs(t.ctime - t.mtime) > 86400" class="redup blok" title="ctime = saat berkas terakhir ditulis/diubah izinnya; mtime bisa dipalsukan">ctime {{ tanggalWaktu(t.ctime) }}</small></td>
                           <td class="kanan">
-                            <small v-if="t.kini === 'dibersihkan'" class="redup">Sudah dihapus / dijadikan subscriber lewat Bersihkan WP</small>
+                            <small v-if="t.kini === 'dibersihkan'" class="redup">Sudah dibersihkan lewat Bersihkan WP</small>
                             <small v-else-if="t.kini === 'admin_hilang'" class="redup">Sudah ditangani manual / situs sudah hilang</small>
-                            <button v-else-if="adminTemuan(t)" type="button" class="tombol bahaya kecil" :disabled="proses" @click="bukaBersih(t)">Bersihkan WP</button>
+                            <template v-else-if="aksesTemuan(t) && !t.aman"><button type="button" class="tombol bahaya kecil" :disabled="proses" @click="bukaBersih(t)">Bersihkan WP</button>
+                              <!-- Admin asli klien (positif palsu): tutup temuan tanpa membersihkan -->
+                              <button v-if="!iocTemuan(t)" type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(t.path, 'aman', t.ai ? `AI: ${t.ai.alasan}`.slice(0, 200) : '', t.sha256)">Tandai aman</button></template>
                             <template v-else-if="t.db && !t.aman"><small class="redup blok">Bersihkan lewat wp-admin situs</small>
                               <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(t.path, 'aman', t.ai ? `AI: ${t.ai.alasan}`.slice(0, 200) : '', t.sha256)">Tandai aman</button></template>
                             <small v-else-if="t.web" class="redup">Cari sumbernya di temuan berkas/DB akun ini</small>
@@ -1083,7 +1148,8 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                       </tbody>
                     </table>
                   </div>
-                  <button v-if="!tampilSemua && temuanTersaring.length > 100" type="button" class="tombol garis kecil lagi" @click="tampilSemua = true">Tampilkan semua {{ temuanTersaring.length }}</button>
+                  </details>
+                  <button v-if="!tampilSemua && grupDomain.length > 50" type="button" class="tombol garis kecil lagi" @click="tampilSemua = true">Tampilkan semua {{ grupDomain.length }} domain</button>
                 </template>
                 <details v-if="detail.hasil.besar || detail.hasil.besar_gambar" class="besar">
                   <summary>Dilewati karena besar: {{ angka(detail.hasil.besar || 0) }} berkas<template v-if="detail.hasil.besar_gambar"> · {{ angka(detail.hasil.besar_gambar) }} gambar &gt; 256 KB (hanya dihitung)</template></summary>
@@ -1200,8 +1266,9 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
               </fieldset>
               <div class="kepala-riwayat">
                 <h3 class="sub-judul">Hasil penilaian per akun <span class="redup">({{ judiAkun.length }})</span>
-                  <Info label="Tentang hasil penilaian"><p>Satu baris per akun hosting = penilaian AI terbaru. Urut dari yang paling perlu ditangani: belum ditangani dulu, lalu situs judi, diretas, lainnya.</p><p><b>Status</b> dihitung dari gabungan semua scan: <b>Belum ditangani</b> = masih ada temuan yang belum dikarantina, belum ditandai aman, dan belum bersih di scan terbaru (positif palsu menurut AI tidak dihitung). <b>Ditangani</b> = sisa 0 atau akun tersuspend. Saran per berkas ada di tab Scan (label "AI: …").</p></Info></h3>
+                  <Info label="Tentang hasil penilaian"><p>Satu baris per akun hosting = penilaian AI terbaru. Urut dari yang paling perlu ditangani: belum ditangani dulu, lalu situs judi, diretas, lainnya.</p><p><b>Status</b> dihitung dari gabungan semua scan: <b>Belum ditangani</b> = masih ada temuan yang belum dikarantina, belum ditandai aman, dan belum bersih di scan terbaru (positif palsu menurut AI tidak dihitung). <b>Sudah ditangani</b> = sisa 0 atau akun tersuspend; catatan "Sandi belum ditandai diganti" berarti langkah Tutup celah masuk belum dicatat. Saran per berkas ada di tab Scan (label "AI: …").</p></Info></h3>
                 <div class="alat">
+                  <input v-model="cariAkun" type="search" placeholder="Cari akun / domain" aria-label="Cari akun atau domain">
                   <select v-model="filterJudi" aria-label="Saring hasil penilaian">
                     <option value="">Semua ({{ judiAkun.length }})</option>
                     <option v-for="(v, k) in JENIS_JUDI" :key="k" :value="k">{{ v[1] }} ({{ judiAkun.filter((d) => d.ai?.jenis === k).length }})</option>
@@ -1211,10 +1278,10 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                     <option value="belum">Belum ditangani ({{ jumlahTangani(false) }})</option>
                     <option value="sudah">Sudah ditangani ({{ jumlahTangani(true) }})</option>
                   </select>
-                  <button v-if="judi.keputusan.length" type="button" class="tombol garis kecil" :disabled="proses || judi.berjalan" @click="bersihkanRiwayatJudi">Bersihkan riwayat</button>
                 </div>
               </div>
               <p v-if="!judiAkun.length" class="redup">Belum ada penilaian di server ini. Tekan "Nilai semua yang belum ditangani" di atas.</p>
+              <p v-else-if="!judiAkunTersaring.length" class="redup">Tidak ada akun yang cocok dengan pencarian/saringan.</p>
               <div v-else class="tabel-wadah">
                 <table class="tabel">
                   <thead><tr><th scope="col">Akun</th><th scope="col">Status</th><th scope="col">Penilaian AI</th><th scope="col">Temuan</th><th scope="col">Tindakan</th></tr></thead>
@@ -1224,17 +1291,24 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                       <td class="ket">
                         <template v-if="statusTangani(d)">
                           <span class="lencana" :class="statusTangani(d).sudah ? 'hijau' : 'merah'">{{ statusTangani(d).label }}</span>
+                          <small v-if="statusTangani(d).celah" class="kuning-teks blok">Sandi belum ditandai diganti</small>
                           <small v-if="statusTangani(d).fp" class="redup blok">{{ statusTangani(d).fp }} positif palsu belum ditandai aman</small>
                         </template>
                         <span v-else class="redup">…</span>
                       </td>
                       <td class="ket">
-                        <span v-if="d.ai" class="lencana" :class="JENIS_JUDI[d.ai.jenis]?.[0]">{{ JENIS_JUDI[d.ai.jenis]?.[1] }} {{ d.ai.yakin }}%</span>
+                        <span v-if="d.ai" class="lencana" :class="statusTangani(d)?.sudah ? 'abu' : JENIS_JUDI[d.ai.jenis]?.[0]">{{ JENIS_JUDI[d.ai.jenis]?.[1] }} {{ d.ai.yakin }}%</span>
                         <span v-else class="lencana abu">Belum dinilai</span>
                         <small class="blok">{{ d.ai?.alasan || d.catatan }}</small>
                       </td>
-                      <td class="nowrap" :title="(d.tanda || []).join(', ')">{{ d.temuan }} temuan
-                        <small v-if="d.analisis" class="blok"><span v-if="d.analisis.berbahaya" class="merah-teks">{{ d.analisis.berbahaya }} berbahaya</span>
+                      <td class="nowrap" :title="(d.tanda || []).join(', ')">{{ statusTangani(d) && !statusTangani(d).sudah ? statusTangani(d).sisa + statusTangani(d).fp : d.temuan }} temuan
+                        <small v-if="statusTangani(d)?.sudah" class="hijau-teks blok">Sudah ditangani</small>
+                        <!-- Angka aktif dari gabungan scan; d.analisis hanya catatan saat AI menilai -->
+                        <small v-else-if="statusTangani(d)" class="blok"><span v-if="statusTangani(d).bahaya" class="merah-teks">{{ statusTangani(d).bahaya }} berbahaya</span>
+                          <span v-if="statusTangani(d).cek" class="kuning-teks">{{ statusTangani(d).cek }} cek manual</span>
+                          <span v-if="statusTangani(d).baru" class="merah-teks">{{ statusTangani(d).baru }} belum dinilai AI</span>
+                          <span v-if="statusTangani(d).fp" class="hijau-teks">{{ statusTangani(d).fp }} positif palsu</span></small>
+                        <small v-else-if="d.analisis" class="blok"><span v-if="d.analisis.berbahaya" class="merah-teks">{{ d.analisis.berbahaya }} berbahaya</span>
                           <span v-if="d.analisis.cek_manual" class="kuning-teks">{{ d.analisis.cek_manual }} cek manual</span>
                           <span v-if="d.analisis.positif_palsu" class="hijau-teks">{{ d.analisis.positif_palsu }} positif palsu</span></small>
                       </td>
@@ -1261,7 +1335,7 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
                     <span class="titik" :class="d.jenis_catat === 'galat' ? 'bahaya' : 'abu'" aria-hidden="true" />
                     <div>
                       <b>{{ CATAT_JUDI[d.jenis_catat] || d.jenis_catat }}</b>
-                      <template v-if="d.user"> {{ d.user }} · {{ d.dijalankan }}<span v-if="!d.ok" class="lencana merah">GAGAL · {{ pesanGalat(d.error) }}</span></template>
+                      <template v-if="d.user"> {{ d.user }} · {{ AKSI_JUDI[d.dijalankan] || d.dijalankan }}<span v-if="!d.ok" class="lencana merah">GAGAL · {{ pesanGalat(d.error) }}</span></template>
                       <small class="redup blok">{{ d.oleh || '' }}<template v-if="d.alasan"> · {{ d.alasan }}</template></small>
                     </div>
                     <time class="redup">{{ tanggalWaktu(d.t) }}</time>
@@ -1358,8 +1432,8 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
       </template>
     </Dialog>
     <Dialog :buka="bersih.buka" :judul="`Bersihkan WP · ${relatif(bersih.akar)}`" lebar="620px" @tutup="bersih.buka = false">
-      <p class="redup kecil-teks">Tanpa menjalankan PHP situs. Cadangan tabel users/usermeta, wp-config.php & daftar post yang dialihkan disimpan di /root/velocity-bersih.</p>
-      <fieldset class="pil-aksi">
+      <p class="redup kecil-teks">Tanpa menjalankan PHP situs. Cadangan tabel users/usermeta, opsi yang dihapus, wp-config.php & daftar post yang dialihkan disimpan di /root/velocity-bersih.</p>
+      <fieldset v-if="bersih.admin.length" class="pil-aksi">
         <legend>Admin mencurigakan</legend>
         <div v-for="a in bersih.admin" :key="a.db.id" class="admin-baris" :class="{ aktif: !!bersih.aksiUser[a.db.id] }">
           <span><b>#{{ a.db.id }} {{ a.db.judul }}</b>
@@ -1370,8 +1444,10 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
             <option value="">Biarkan</option>
           </select></div>
       </fieldset>
+      <label v-if="bersih.iocJumlah" class="isian"><span><input v-model="bersih.ioc" type="checkbox"> Hapus payload wp-locale-perf ({{ bersih.iocJumlah }} temuan): opsi berbahaya, cron, role internal_cache_sync, plugin palsu di daftar aktif, usermeta tanpa pemilik</span></label>
+      <label v-if="bersih.adaKategori" class="isian"><span><input v-model="bersih.kategori" type="checkbox"> Hapus kategori/tag kasino yang kosong (1xbet, mostbet, dll.) lalu buat ulang cache permalink — pos sah tidak tersentuh</span></label>
       <label class="isian"><span><input v-model="bersih.plugin" type="checkbox"> Karantina plugin samaran (wp-cachepress dkk.) di plugins & mu-plugins</span></label>
-      <label class="isian"><span><input v-model="bersih.salt" type="checkbox"> Ganti salt wp-config & hapus semua sesi login</span></label>
+      <label class="isian"><span><input v-model="bersih.salt" type="checkbox"> Ganti salt wp-config, hapus semua sesi login & application password</span></label>
       <template v-if="bersih.hasil">
         <p v-if="!bersih.hasil.ok" class="pesan-status bahaya">{{ pesanGalat(bersih.hasil.error) }} {{ bersih.hasil.pesan || '' }}</p>
         <ul class="kecil-teks">
@@ -1379,13 +1455,17 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
           <li v-if="bersih.hasil.ok && !(bersih.hasil.karantina || []).length && bersih.plugin">Tidak ada plugin samaran tersisa.</li>
           <li v-for="u in bersih.hasil.hapus_user || []" :key="u.id">Dihapus: #{{ u.id }} {{ u.login }} &lt;{{ u.email }}&gt;</li>
           <li v-for="u in bersih.hasil.turun_user || []" :key="`t${u.id}`">Jadi subscriber (sesi diputus): #{{ u.id }} {{ u.login }} &lt;{{ u.email }}&gt;</li>
+          <li v-if="bersih.hasil.ioc">Payload: {{ bersih.hasil.ioc.opsi }} opsi dihapus, {{ bersih.hasil.ioc.yatim }} usermeta tanpa pemilik{{ bersih.hasil.ioc.hapus?.includes('cron') ? ', cron' : '' }}{{ bersih.hasil.ioc.role ? ', role' : '' }}{{ bersih.hasil.ioc.plugin ? ', plugin palsu' : '' }}</li>
+          <li v-if="bersih.hasil.kategori">Kategori/tag kasino dihapus: {{ bersih.hasil.kategori.hapus.length ? bersih.hasil.kategori.hapus.join(', ') : 'tidak ada yang kosong' }}; cache permalink dibuat ulang</li>
+          <li v-if="bersih.hasil.ioc?.sisa?.length" class="merah-teks">Masih ada: {{ bersih.hasil.ioc.sisa.join(', ') }}</li>
+          <li v-if="bersih.hasil.ioc?.user_role?.length" class="kuning-teks">Periksa user berperan internal_cache_sync: {{ bersih.hasil.ioc.user_role.map((u) => `#${u.id} ${u.login}`).join(', ') }}</li>
           <li v-if="bersih.hasil.dialihkan_ke">{{ bersih.hasil.post_dialihkan }} post dialihkan ke admin #{{ bersih.hasil.dialihkan_ke }}</li>
           <li v-if="bersih.hasil.cadangan">Cadangan: <code>{{ bersih.hasil.cadangan }}</code></li>
         </ul>
       </template>
       <div class="aksi-pratinjau">
         <button type="button" class="tombol garis" @click="bersih.buka = false">Tutup</button>
-        <button type="button" class="tombol bahaya" :disabled="proses || (!bersihId('hapus').length && !bersihId('subscriber').length && !bersih.plugin && !bersih.salt) || bersih.hasil?.ok" @click="jalankanBersih">Bersihkan</button>
+        <button type="button" class="tombol bahaya" :disabled="proses || (!bersihId('hapus').length && !bersihId('subscriber').length && !bersih.plugin && !bersih.salt && !bersih.ioc && !bersih.kategori) || bersih.hasil?.ok" @click="jalankanBersih">Bersihkan</button>
       </div>
     </Dialog>
     <Dialog :buka="saran.buka" :judul="saran.d ? `Saran aksi · ${saran.d.user}` : 'Saran aksi'" lebar="760px" @tutup="saran.buka = false">
@@ -1393,6 +1473,8 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
         <p class="saran-kepala"><span class="redup">{{ (saran.d.domain || []).join(', ') }}</span>
           <span v-if="saran.d.ai" class="lencana" :class="JENIS_JUDI[saran.d.ai.jenis]?.[0]">{{ JENIS_JUDI[saran.d.ai.jenis]?.[1] }} {{ saran.d.ai.yakin }}%</span>
           <small v-if="saran.d.ai" class="blok">{{ saran.d.ai.alasan }}</small></p>
+        <p class="kepala-aksi"><button type="button" class="tombol garis kecil" :disabled="saran.memuat || cekUlangAkun === saran.d.user" @click="cekUlang(saran.d.user)">{{ cekUlangAkun === saran.d.user ? 'Mengecek…' : 'Cek ulang sekarang' }}</button>
+          <small class="redup">Sudah dibersihkan manual? Tekan ini. Temuan beranda baru hilang lewat scan ulang akun.</small></p>
         <p v-if="saran.memuat" class="redup">Memuat temuan scan…</p>
         <template v-else>
           <p v-if="saran.galat" class="pesan-status bahaya">{{ saran.galat }}</p>
@@ -1400,22 +1482,29 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
             <li v-for="(l, i) in langkahSaran" :key="i">
               <b>{{ l.judul }}</b>
               <small class="blok">{{ l.teks }}</small>
+              <small v-if="l.catatan" class="redup blok">Catatan: {{ l.catatan }}</small>
               <ul v-if="l.berkas" class="saran-berkas">
                 <li v-for="t in l.berkas" :key="t.path"><code>{{ t.db ? `${relatif(t.path.split('#')[0])} · ${t.db.tabel} #${t.db.id}` : relatif(t.path) }}</code>
                   <small v-if="t.db" class="redup blok">database · {{ t.db.jenis }} · "{{ t.db.judul }}"</small>
                   <span class="saran-aksi">
                     <a v-if="t.db && /_posts$/.test(t.db.tabel) && domainDari(t.path)" class="tombol garis kecil" :href="`https://${domainDari(t.path)}/wp-admin/post.php?post=${t.db.id}&action=edit`" target="_blank" rel="noopener noreferrer">Buka di wp-admin</a>
+                    <button v-if="aksesTemuan(t) && !t.kini" type="button" class="tombol bahaya kecil" :disabled="proses" @click="saran.buka = false; bukaBersih(t, saran.temuan)">Bersihkan WP</button>
                     <button v-if="!t.db" type="button" class="tombol garis kecil" @click="lihatBerkas(t.path, '', t.tanda.map((x) => x.bukti), t.tanda.map((x) => x.id).join(', '))">Lihat</button>
                     <span v-if="karantinaPath.has(t.path)" class="lencana ungu">DIKARANTINA</span>
+                    <small v-else-if="iocTemuan(t)" class="redup">Payload malware: bersihkan, jangan ditandai aman</small>
                     <template v-else-if="l.mode === 'aman'">
                       <button type="button" class="tombol garis kecil" :disabled="proses" @click="tandaiAman(t.path, 'aman', `AI: ${t.ai?.alasan || 'positif palsu'}`.slice(0, 200), t.db ? t.sha256 : '')">Tandai aman</button>
                       <button type="button" class="tombol garis kecil" :disabled="proses" @click="laporFpTemuan(t)">Laporkan positif palsu</button>
                     </template>
-                    <button v-else-if="!l.manual" type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(t.path, t.tanda.map((x) => x.id).join(', '))">Karantina</button>
+                    <button v-else-if="!l.manual && !t.db" type="button" class="tombol bahaya kecil" :disabled="proses" @click="karantina(t.path, t.tanda.map((x) => x.id).join(', '))">Karantina</button>
                   </span>
                   <small v-if="t.ai" class="redup blok">AI: {{ t.ai.alasan }}</small></li>
               </ul>
-              <span v-if="l.tautan || l.putih || l.scan" class="saran-aksi">
+              <span v-if="l.tautan || l.putih || l.scan || l.celah" class="saran-aksi">
+                <template v-if="l.celah">
+                  <span v-if="celahDitutup.get(saran.d.user)" class="lencana hijau" :title="`${celahDitutup.get(saran.d.user).oleh} · ${tanggalWaktu(celahDitutup.get(saran.d.user).t)}`">SUDAH DILAKUKAN · {{ celahDitutup.get(saran.d.user).oleh }}</span>
+                  <button v-else type="button" class="tombol kecil" :disabled="proses" @click="celahSelesai">Sudah dilakukan</button>
+                </template>
                 <a v-if="l.tautan" class="tombol garis kecil" :href="l.tautan" :target="l.tautan.startsWith('http') ? '_blank' : null" rel="noopener noreferrer">{{ l.tautan.startsWith('http') ? 'Buka' : 'Buka halaman' }}</a>
                 <button v-if="l.putih" type="button" class="tombol garis kecil" :disabled="proses || judi.setelan.daftar_putih.includes(saran.d.user)" @click="putihkanSaran">{{ judi.setelan.daftar_putih.includes(saran.d.user) ? 'Sudah di daftar putih' : 'Tambah ke daftar putih' }}</button>
                 <button v-if="l.scan" type="button" class="tombol garis kecil" @click="scanSaran">Siapkan scan akun</button>
@@ -1548,6 +1637,11 @@ const namaTanda = (id) => (terpilih.value?.tanda || []).find((t) => t.id === id)
 .kepala-riwayat { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 .kepala-riwayat .sub-judul { margin: 0; }
 .kepala-riwayat .alat { margin: 0; }
+.kepala-riwayat .alat select { flex-shrink: 0; }
+@media (min-width: 900px) {
+  .kepala-riwayat .alat { flex-wrap: nowrap; }
+  .kepala-riwayat .alat input[type="search"] { flex: 0 1 260px; }
+}
 .log-judi { margin-top: 16px; }
 .log-judi > summary { cursor: pointer; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
 .langkah { margin: 0 0 10px; font-size: 13px; color: var(--teks-2); }
@@ -1631,6 +1725,12 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 }
 .besar { margin-top: 16px; }
 .besar summary { cursor: pointer; font-weight: 600; }
+.grup-domain { border: 1px solid var(--garis); border-radius: 12px; margin-top: 8px; }
+.grup-domain > summary { cursor: pointer; padding: 10px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.grup-domain[open] > summary { border-bottom: 1px solid var(--garis); }
+.grup-domain > summary::before { content: '▸'; transition: transform .15s; }
+.grup-domain[open] > summary::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .grup-domain > summary::before { transition: none; } }
 .besar > p { margin: 8px 0; }
 .cek-ulang { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--teks-3); cursor: pointer; vertical-align: middle; }
 .cek-ulang:hover { background: var(--kartu-2); color: var(--teks-kuat); }

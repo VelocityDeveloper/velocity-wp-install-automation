@@ -148,6 +148,16 @@ _STAGING_RE = re.compile(
     r'|velocitydeveloper\.co/|velocitydatacenter\.biz/|\bstaging\s+(?:di\s+)?(?:velocity|vdco|vd)\b', re.I)
 
 
+# Deskripsi tiket "pembuatan pakai laravel" = aplikasi Laravel (installer Laravel), bukan WordPress
+# (ijasahyapika.com 29 Okt 2026 & siakadstikesyapika.com 25 Sep: jenis/paket CRM tetap Pembuatan + Paket G).
+_LARAVEL_RE = re.compile(r'\blaravel\b', re.I)
+
+
+def laravel_dari_deskripsi(teks):
+    """True kalau deskripsi tiket CRM menyebut Laravel -> jangan dipasang WordPress otomatis."""
+    return bool(_LARAVEL_RE.search(str(teks or '')))
+
+
 def staging_dari_deskripsi(teks):
     """True kalau deskripsi tiket CRM meminta situs dikerjakan di staging web Velocity."""
     return bool(_STAGING_RE.search(str(teks or '')))
@@ -898,6 +908,11 @@ def firewall_aksi(payload):
             return {'error': 'ip_tidak_sah'}, 400
         perintah['ip'] = ip
         perintah['ket'] = str(payload.get('ket') or '')[:120]
+        if aksi in ('blokir', 'izinkan') and str(payload.get('port') or '').strip():
+            port = re.sub(r'\s', '', str(payload.get('port')))
+            if not re.fullmatch(r'\d{1,5}(,\d{1,5}){0,9}', port):
+                return {'error': 'port_tidak_sah'}, 400
+            perintah['port'] = port
         if aksi == 'blokir':
             try:
                 ttl = int(payload.get('ttl') or 0)
@@ -911,7 +926,7 @@ def firewall_aksi(payload):
         return {'error': err}, 500
     now = int(time.time())
     baris = [json.dumps({'t': now, 'oleh': oleh, 'aksi': aksi, 'ip': perintah.get('ip'), 'ket': perintah.get('ket'),
-                         'ttl': perintah.get('ttl'), 'setelan': perintah.get('setelan'), 'server': h['name'],
+                         'ttl': perintah.get('ttl'), 'port': perintah.get('port'), 'setelan': perintah.get('setelan'), 'server': h['name'],
                          'host': h['host'], 'ok': bool(h.get('ok')), 'error': h.get('error')},
                         separators=(',', ':')) for h in hasil]
     with _firewall_tulis:
@@ -1100,7 +1115,8 @@ def _temuan_aman(job, aman):
     nilai_ai = server_judi.analisis_baca().get(job.get('host')) or {}
     out = []
     for t in job.get('temuan') or []:
-        w = _cocok_putih(t.get('path') or '', putih) if putih else None
+        # Whitelist path saja tidak menyembunyikan tingkat virus (agen sudah hanya melaporkan tanda virus di path whitelist)
+        w = _cocok_putih(t.get('path') or '', putih) if putih and t.get('tingkat') != 'virus' else None
         if w:
             t = dict(t, aman={'oleh': w.get('oleh'), 'waktu': w.get('t'), 'alasan': f"whitelist {w.get('jenis')}", 'putih': w['path']})
         elif t.get('path') in daftar and (_cocok_aman(t, daftar[t['path']]) or _aman_sesudah(job, t, daftar[t['path']])):
@@ -1202,7 +1218,8 @@ def _hitam_terapkan(srv, key, temuan, sumber):
         teks += ['', f"⚠️ Path sama terinfeksi lagi ({html.escape(', '.join(ulang))}) → celah belum ditutup, tercatat di Celah & Insiden."]
     teks += ['', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(srv['name'])}&tab=karantina"]
     try:
-        kirim_telegram_server('\n'.join(teks))
+        kirim_telegram_server('\n'.join(teks), 'ingat_karantina', srv['name'], ','.join(ulang) or sumber,
+                              {'berkas': len(ditindak), 'ulang': ulang})
     except Exception as e:
         print(f'telegram ingat karantina: {e}', file=sys.stderr)
     return {t['path'] for t, h in ditindak}
@@ -1244,7 +1261,7 @@ def _dibersihkan():
             if r.get('aksi') == 'bersihkan_wp' and r.get('ok'):
                 ids = r.get('hapus_user')
                 ids = None if ids is None else ids + (r.get('turun_user') or [])  # diturunkan = bukan admin lagi
-                data.setdefault((r.get('host'), r.get('path')), []).append((r.get('t') or 0, None if ids is None else {str(x) for x in ids}))
+                data.setdefault((r.get('host'), r.get('path')), []).append((r.get('t') or 0, None if ids is None else {str(x) for x in ids}, set(r.get('ioc_hapus') or [])))
         _bersih_cache[:] = [mtime, data]
     return _bersih_cache[1]
 
@@ -1283,26 +1300,58 @@ def _temuan_admin(t):
     return bool(t.get('db')) and any(x['id'].startswith('VD.DB.Admin') for x in t.get('tanda') or [])
 
 
+_SCAN_PENUH = {}  # sid → (host, akun, mulai, {path temuan}) | None; scan selesai tidak berubah lagi
+
+
+def _scan_penuh():
+    """Scan selesai yang memeriksa semua berkas+DB+situs akunnya (hari 0, tidak terpotong)."""
+    out = []
+    for b in (ANTIVIRUS_DIR / 'scan').glob('*.json'):
+        if b.stem not in _SCAN_PENUH:
+            try:
+                job = json.loads(b.read_text())
+            except (OSError, ValueError):
+                continue
+            if job.get('status') != 'selesai':
+                continue
+            penuh = job.get('hari') == 0 and job.get('akun') != 'realtime' and not (job.get('hasil') or {}).get('terpotong')
+            _SCAN_PENUH[b.stem] = (job.get('host'), job.get('akun'), job.get('mulai') or 0,
+                                   {t.get('path') for t in job.get('temuan') or []}) if penuh else None
+        if _SCAN_PENUH[b.stem]:
+            out.append(_SCAN_PENUH[b.stem])
+    return out
+
+
 def _temuan_kini(job, temuan, ulang):
     hasil = (ulang.get(job.get('host')) or {}).get('hasil') or {}
     waktu = job.get('selesai') or job.get('mulai') or 0
     bersih = _dibersihkan()
+    # Scan penuh akun yang sama sesudah scan ini tak menemukan path-nya lagi → sudah bersih (termasuk baris DB/situs).
+    # shortcut: temuan yang sempat ditandai aman saat scan baru itu ikut dianggap bersih walau aman-nya dibatalkan kemudian
+    baru = [c for c in _scan_penuh() if c[0] == job.get('host') and c[2] > waktu]
     out = []
     for t in temuan:
         r = hasil.get(t.get('path'))
         if _temuan_admin(t):
             # Admin siluman yang sudah dihapus lewat Bersihkan WP sesudah scan ini → ditangani
             if any(w > waktu and (ids is None or str(t['db'].get('id')) in ids)
-                   for w, ids in bersih.get((job.get('host'), t['path'].split('#')[0]), ())):
+                   for w, ids, _ in bersih.get((job.get('host'), t['path'].split('#')[0]), ())):
                 t = dict(t, kini='dibersihkan')
             # Ditangani manual: periksa ulang dapati wp-config.php hilang / user bukan admin lagi
             elif r and r.get('t', 0) > waktu and not r.get('ada'):
                 t = dict(t, kini='admin_hilang')
+        elif t.get('db') and any(w > waktu and t['db'].get('id') in ioc
+                                 for w, _, ioc in bersih.get((job.get('host'), t['path'].split('#')[0]), ())):
+            t = dict(t, kini='dibersihkan')  # payload LocaleCache yang terhapus; scan sesudahnya tetap dinilai sendiri
+        elif r and t.get('db') and not r.get('ada') and r.get('t', 0) > waktu:
+            t = dict(t, kini='bersih')  # baris hilang atau tak lagi terdeteksi: dibersihkan manual di luar dashboard
         elif r and not t.get('db') and not t.get('web') and r.get('t', 0) > waktu:
             if not r.get('ada'):
                 t = dict(t, kini='hilang')
             elif r.get('tanda') == []:
                 t = dict(t, kini='bersih')
+        if not t.get('kini') and any(c[1] in ('semua', t.get('user')) and t.get('path') not in c[3] for c in baru):
+            t = dict(t, kini='bersih')
         out.append(t)
     return out
 
@@ -1326,7 +1375,7 @@ def _sidik_agen():
 
 
 def _ulang_paths():
-    """{host: set(path)} temuan semua scan selesai yang bisa diperiksa ulang (berkas + admin siluman DB)."""
+    """{host: set(path)} temuan semua scan selesai yang bisa diperiksa ulang (berkas + baris DB)."""
     per_host = {}
     for j in antivirus_scan_daftar()['scan']:
         # Jangan saring pakai jumlah_temuan: angka itu sudah dikurangi hasil periksa ulang ("kini hilang/bersih"),
@@ -1339,7 +1388,7 @@ def _ulang_paths():
             continue
         per_host.setdefault(j['host'], set()).update(
             t['path'] for t in job.get('temuan') or []
-            if (not t.get('db') and not t.get('web') and '#' not in t['path']) or _temuan_admin(t))
+            if (not t.get('web') and '#' not in t['path']) or t.get('db'))
     return per_host
 
 
@@ -1383,8 +1432,10 @@ def _ulang_jalan():
                 if not paths or (u.get('sidik') == sidik and time.time() - (u.get('t') or 0) < ULANG_SELANG
                                  and all(x in lama for x in paths)):
                     continue
-                r = _antivirus_satu(srv, key, {'aksi': 'periksa_ulang', 'paths': paths[:3000], 'putih': _putih_server(srv['host'])}, 180)
+                # Latar, boleh lama: satu DB menggantung (120 dtk) tidak boleh menggagalkan hasil seluruh server
+                r = _antivirus_satu(srv, key, {'aksi': 'periksa_ulang', 'paths': paths[:3000], 'putih': _putih_server(srv['host'])}, 600)
                 if not r.get('ok'):
+                    print(f"antivirus periksa ulang {srv['name']}: {r.get('error')}", file=sys.stderr)
                     continue
                 sekarang = int(time.time())
                 ulang[srv['host']] = {'sidik': sidik, 't': sekarang,
@@ -1394,6 +1445,8 @@ def _ulang_jalan():
                     tmp.write_text(json.dumps(ulang, separators=(',', ':')))
                     tmp.replace(ANTIVIRUS_ULANG)
             _besar_ulang(key)
+            for srv in _daftar_server():  # siapkan rekap agar halaman tidak menunggu hitung ulang
+                antivirus_scan_gabung_rekap(srv['host'])
         except Exception as e:
             print(f'antivirus periksa ulang: {e}', file=sys.stderr)
         time.sleep(600)
@@ -1608,8 +1661,15 @@ def _antivirus_jadwal_jalan():
         time.sleep(60)
 
 
-def kirim_telegram_server(teks):
-    """Kirim ke tim server (bot & daftar chat pemantau server); dipakai antivirus & CMS terjadwal."""
+def kirim_telegram_server(teks, jenis='lain', server='', kunci='', fakta=None):
+    """Notif tim server lewat GERBANG (services/gerbang_notif.py): KIRIM langsung / masuk ringkasan harian ±07:57 / dedup 6 jam.
+    Saklar mati: touch /var/lib/velocity/gerbang-notif/MATI → semua dikirim seperti dulu."""
+    return gerbang_notif.kirim(teks, jenis, server, kunci, fakta)
+
+
+def _kirim_telegram_server_mentah(teks):
+    """Kirim langsung ke tim server (bot & daftar chat pemantau server), tanpa gerbang. True bila ≥1 chat terkirim."""
+    terkirim = False
     env = dict(b.split('=', 1) for b in ANTIVIRUS_TG.read_text().splitlines() if '=' in b and not b.startswith('#'))
     # Fungsi ini hanya dipakai VelocityGuard (antivirus, CMS, Judi AI, celah, positif palsu) → penerima khususnya ikut;
     # program lain yang memakai berkas env sama (kasus support, pengawas server/IP LAN) hanya TELEGRAM_CHAT_ID
@@ -1618,8 +1678,14 @@ def kirim_telegram_server(teks):
         data = urllib.parse.urlencode({'chat_id': chat, 'text': teks, 'parse_mode': 'HTML', 'disable_web_page_preview': 'true'}).encode()
         try:
             urllib.request.urlopen(f"https://api.telegram.org/bot{env['TELEGRAM_BOT_TOKEN']}/sendMessage", data, timeout=20).read()
+            terkirim = True
         except OSError as e:
             print(f'telegram server {chat}: {e}', file=sys.stderr)
+    return terkirim
+
+
+import gerbang_notif  # noqa: E402
+gerbang_notif.pasang(_kirim_telegram_server_mentah)
 
 
 def _antivirus_notif(job, lewati=()):
@@ -1627,16 +1693,22 @@ def _antivirus_notif(job, lewati=()):
     temuan = [t for t in _temuan_aman(job, _aman_baca()) if not t.get('aman') and t.get('path') not in lewati]
     virus = [t for t in temuan if t.get('tingkat') == 'virus']
     nama = f"scan {job['jadwal']}"
+    realtime = str(job.get('jadwal') or '').startswith('realtime')
+    if job.get('status') == 'selesai' and not realtime:
+        gerbang_notif.sukses('antivirus_gagal', job['server'])
     if job.get('status') != 'selesai':
+        jenis, kunci, fakta = 'antivirus_gagal', '', {'error': str(job.get('error'))[:100]}
         teks = f"⚠️ <b>VelocityGuard · Antivirus {html.escape(job['server'])}</b>: {nama} gagal ({html.escape(str(job.get('error')))})."
     elif virus:
         teks = '\n'.join([f"🦠 <b>VelocityGuard · Virus di {html.escape(job['server'])}</b> ({nama})",
                           f"{len(virus)} virus, {len(temuan) - len(virus)} curiga",
                           '', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(job['server'])}",
                           'Belum ada berkas yang diubah — karantina manual dari dashboard.'])
+        akun = sorted({(t.get('path') or '').split('/')[2] for t in virus if (t.get('path') or '').count('/') >= 2})
+        jenis, kunci, fakta = 'virus', ','.join(akun), {'virus': len(virus), 'curiga': len(temuan) - len(virus), 'realtime': realtime}
     else:
         return
-    kirim_telegram_server(teks)
+    kirim_telegram_server(teks, jenis, job['server'], kunci, fakta)
 
 
 # Realtime: watcher fanotify di server (scripts/velocity_av_realtime.py, dipasang velocity-av-realtime-pasang).
@@ -1800,12 +1872,56 @@ def antivirus_scan_henti(payload):
     return {'ok': True}, 200
 
 
-def antivirus_scan_daftar(batas=60):
+# Rekap tersimpan: daftar scan & gabungan per server tidak dihitung ulang tiap refresh.
+ANTIVIRUS_REKAP = ANTIVIRUS_DIR / 'rekap'
+_rekap_kunci = threading.RLock()  # RLock: rekap gabungan memanggil rekap daftar
+
+
+def _rekap_sidik():
+    """Sidik semua sumber status temuan. Memakai sidik, bukan pemicu per aksi, agar tak ada aksi yang lupa membatalkan rekap."""
+    sumber = [ANTIVIRUS_AMAN, ANTIVIRUS_RT_SETELAN, ANTIVIRUS_HITAM, ANTIVIRUS_ULANG, ANTIVIRUS_BESAR_ULANG,
+              ANTIVIRUS_RIWAYAT, server_judi.ANALISIS, *sorted((ANTIVIRUS_DIR / 'scan').glob('*.json'))]
+    h = hashlib.sha256()
+    for b in sumber:
+        try:
+            h.update(f'{b}:{b.stat().st_mtime_ns};'.encode())
+        except OSError:
+            h.update(f'{b}:-;'.encode())
+    return h.hexdigest()
+
+
+def _rekap(nama, hitung):
+    with _rekap_kunci:
+        sidik = _rekap_sidik()  # diambil sebelum hitung: sumber yang berubah saat dihitung memicu hitung ulang berikutnya
+        b = ANTIVIRUS_REKAP / f'{nama}.json'
+        try:
+            d = json.loads(b.read_text())
+            if d['sidik'] == sidik:
+                return d['data']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        data = hitung()
+        ANTIVIRUS_REKAP.mkdir(exist_ok=True)
+        tmp = b.with_suffix('.tmp')
+        tmp.write_text(json.dumps({'sidik': sidik, 'data': data}, separators=(',', ':')))
+        tmp.replace(b)
+        return data
+
+
+def antivirus_scan_daftar():
+    # Scan berjalan membawa kemajuan langsung dari memori, jadi tidak lewat rekap
+    return _scan_daftar_hitung() if _scan_jalan else _rekap('daftar', _scan_daftar_hitung)
+
+
+def _scan_daftar_hitung(batas=300):
+    # Batas per server: batas gabungan membuat server yang jarang scan kehilangan temuan lama dan terbaca "ditangani".
+    # shortcut: scan di luar 300 terbaru per server tidak dihitung, naikkan bila temuan lama sebelum batas masih perlu.
     out = []
     aman = _aman_baca()
     ulang = _ulang_baca()
+    per_host = {}
     try:
-        berkas = sorted((ANTIVIRUS_DIR / 'scan').glob('*.json'), reverse=True)[:batas]
+        berkas = sorted((ANTIVIRUS_DIR / 'scan').glob('*.json'), reverse=True)
     except OSError:
         berkas = []
     for b in berkas:
@@ -1813,6 +1929,9 @@ def antivirus_scan_daftar(batas=60):
         try:
             job = jalan or json.loads(b.read_text())
         except (OSError, ValueError):
+            continue
+        per_host[job.get('host')] = per_host.get(job.get('host'), 0) + 1
+        if per_host[job.get('host')] > batas:
             continue
         if job.get('status') == 'berjalan' and not jalan:
             job = {**job, 'status': 'gagal', 'error': 'terputus'}
@@ -1834,23 +1953,40 @@ def antivirus_scan_detail(sid):
     return {**job, 'status': 'gagal', 'error': 'terputus'} if job.get('status') == 'berjalan' else job
 
 
-def antivirus_scan_gabung(host):
-    """Temuan semua scan selesai satu server jadi satu job (path sama → scan terbaru), tanpa berkas yang
-    dikarantina sesudah scan penemunya. Dipakai Judi AI "nilai semua yang belum ditangani"."""
-    srv_av = next((s for s in (server_antivirus().get('servers') or []) if s.get('host') == host), {})
-    dikarantina = {k.get('path'): k.get('waktu') or 0 for k in srv_av.get('karantina') or []}
-    temuan, n = {}, 0
+def _gabung_hitung(host):
+    temuan, besar, n = {}, {}, 0
     for j in antivirus_scan_daftar()['scan']:  # terbaru dulu
         if j.get('host') != host or j.get('status') != 'selesai':
             continue
         d = antivirus_scan_detail(j['id'])
         n += 1
         for t in d.get('temuan') or []:
-            if t.get('path') not in temuan and not t.get('kini') and not dikarantina.get(t.get('path'), 0) > d.get('mulai', 0):
-                temuan[t['path']] = t
+            if t.get('path') not in temuan and not t.get('kini'):
+                temuan[t['path']] = dict(t, scan=d.get('mulai', 0))
+        for b in d.get('besar') or []:
+            besar.setdefault(b.get('path'), b)
     if not n:
         return {'error': 'scan_tidak_ada'}
-    return {'id': 'semua', 'host': host, 'status': 'selesai', 'gabung': n, 'temuan': list(temuan.values())}
+    return {'id': 'semua', 'host': host, 'status': 'selesai', 'gabung': n, 'temuan': list(temuan.values()),
+            'besar': list(besar.values()), 'hasil': {'besar': len(besar)}}
+
+
+def antivirus_scan_gabung_rekap(host):
+    """Temuan semua scan selesai satu server jadi satu job (path sama → scan terbaru), tersimpan di disk.
+    Karantina belum disaring di sini: daftarnya dari SSH, penyaring memakai data terbaru pemanggil."""
+    if not any(s['host'] == host for s in _daftar_server()):  # host dipakai sebagai nama berkas rekap
+        return {'error': 'server_tidak_dikenal'}
+    return _rekap(f'gabung-{host}', lambda: _gabung_hitung(host))
+
+
+def antivirus_scan_gabung(host):
+    """Gabungan tanpa berkas yang dikarantina sesudah scan penemunya. Dipakai Judi AI "nilai semua yang belum ditangani"."""
+    srv_av = next((s for s in (server_antivirus().get('servers') or []) if s.get('host') == host), {})
+    dikarantina = {k.get('path'): k.get('waktu') or 0 for k in srv_av.get('karantina') or []}
+    g = antivirus_scan_gabung_rekap(host)
+    if g.get('error'):
+        return g
+    return {**g, 'temuan': [t for t in g['temuan'] if not dikarantina.get(t.get('path'), 0) > t['scan']]}
 
 
 def antivirus_aksi(payload):
@@ -1894,7 +2030,8 @@ def antivirus_aksi(payload):
             return {'error': 'id_user_tidak_sah'}, 400
         perintah.update(akar=str(payload.get('akar') or ''), hapus_user=[int(x) for x in hapus_user],
                         turunkan_user=[int(x) for x in turunkan_user],
-                        plugin=bool(payload.get('plugin')), salt=bool(payload.get('salt')))
+                        plugin=bool(payload.get('plugin')), salt=bool(payload.get('salt')), ioc=bool(payload.get('ioc')),
+                        kategori=bool(payload.get('kategori')))
         perintah['path'] = perintah['akar']
     else:
         perintah['id'] = str(payload.get('id') or '')
@@ -1903,13 +2040,20 @@ def antivirus_aksi(payload):
         hasil = _antivirus_satu(srv, key, perintah, 360 if aksi == 'bersihkan_wp' else 60)
     if hasil.get('ok') and aksi == 'karantina':
         _hitam_ubah({hasil.get('sha256'): _hitam_info(srv, hasil.get('path') or perintah['path'], oleh, perintah['alasan'])})
+        # Agen mengisi ulang lokasi berkas inti dengan salinan asli
+        if hasil.get('pulih'):
+            p = hasil['pulih']
+            perintah['alasan'] = f"{perintah['alasan']} · inti: " + ('diganti salinan asli' if p.get('ok') else f"gagal pulih {p.get('error')}")
     elif hasil.get('ok') and aksi == 'kembalikan':
         _hitam_ubah(buang=[hasil.get('sha256')])
     elif aksi == 'bersihkan_wp':
         _hitam_ubah({k.get('sha256'): _hitam_info(srv, k['path'], oleh, 'Bersihkan WP: ' + ', '.join(k.get('tanda') or []))
                      for k in hasil.get('karantina') or [] if k.get('ok')})
+        ioc = hasil.get('ioc') or {}
+        _hitam_ubah({s: _hitam_info(srv, f"{hasil.get('path')}#db:{ioc.get('tabel')}:{n}", oleh, 'Bersihkan WP: VD.DB.LocaleCache')
+                     for n, s in (ioc.get('sha') or {}).items()})
     if aksi == 'bersihkan_wp':
-        perintah['alasan'] = (f"hapus {len(hasil.get('hapus_user') or [])} admin, jadi subscriber {len(hasil.get('turun_user') or [])}, karantina {len(hasil.get('karantina') or [])} berkas, "
+        perintah['alasan'] = (f"hapus {len(hasil.get('hapus_user') or [])} admin, jadi subscriber {len(hasil.get('turun_user') or [])}, karantina {len(hasil.get('karantina') or [])} berkas, payload {(hasil.get('ioc') or {}).get('opsi', 0)} opsi, kategori kasino {len((hasil.get('kategori') or {}).get('hapus') or [])}, "
                               f"salt {hasil.get('salt') or 0}/8 · cadangan {hasil.get('cadangan') or '-'}")
     with _antivirus_tulis:
         ANTIVIRUS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1917,7 +2061,9 @@ def antivirus_aksi(payload):
             f.write(json.dumps({'t': int(time.time()), 'oleh': oleh, 'aksi': aksi, 'server': srv['name'], 'host': srv['host'],
                                 'path': hasil.get('path') or perintah.get('path'), 'id': hasil.get('id') or perintah.get('id'),
                                 'alasan': perintah.get('alasan'), 'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
-                                **({'hapus_user': [u.get('id') for u in hasil.get('hapus_user') or []],
+                                **({'ioc_hapus': ((hasil.get('ioc') or {}).get('hapus') or [])
+                                    + (['rewrite_rules'] if (hasil.get('kategori') or {}).get('rewrite') else []),
+                                    'hapus_user': [u.get('id') for u in hasil.get('hapus_user') or []],
                                     'turun_user': [u.get('id') for u in hasil.get('turun_user') or []]} if aksi == 'bersihkan_wp' and hasil.get('ok') else {})},
                                separators=(',', ':')) + '\n')
     _cache_antivirus.hapus()
@@ -1960,6 +2106,10 @@ def _antivirus_putih_fp(srv, key, aksi, payload, oleh):
             st['putih'] = sisa
             _rt_setelan_tulis(data)
     else:  # laporan_fp
+        # Dicek sebelum berkas karantina dikembalikan: IOC pasti tidak boleh keluar lagi
+        pasti = _tanda_pasti(srv['host'], path, payload.get('tanda'))
+        if pasti:
+            return {'ok': False, 'error': _galat_pasti(pasti), 'path': path}, 200
         r = _antivirus_satu(srv, key, {'aksi': 'baca', 'id': kid}, 60) if kid else {}
         meta = {'path': r.get('path') or path, 'sha256': r.get('sha256') or payload.get('sha256'), 'alasan_deteksi': payload.get('tanda') or ''}
         if kid:
@@ -1968,14 +2118,15 @@ def _antivirus_putih_fp(srv, key, aksi, payload, oleh):
                 return hasil, 200
             path = hasil.get('path') or meta['path']
         _hitam_ubah(buang=[meta['sha256'], hasil.get('sha256')])
-        tandai = _antivirus_tandai(srv, key, 'aman', path, oleh, f'positif palsu: {alasan}'[:200], str(payload.get('sha256') or ''))
+        tandai = _antivirus_tandai(srv, key, 'aman', path, oleh, f'positif palsu: {alasan}'[:200], str(payload.get('sha256') or ''), False)
         with _antivirus_tulis, ANTIVIRUS_FP.open('a') as f:
             f.write(json.dumps({'t': int(time.time()), 'host': srv['host'], 'server': srv['name'], 'oleh': oleh,
                                 'catatan': alasan, **meta}, separators=(',', ':')) + '\n')
         try:
             kirim_telegram_server(f"🟡 <b>VelocityGuard · Laporan positif palsu {html.escape(srv['name'])}</b> oleh {html.escape(oleh)}\n"
                                   f"<code>{html.escape(path.replace('/home/', '', 1))}</code>\nAturan: {html.escape(str(meta['alasan_deteksi']))}\n"
-                                  f"Catatan: {html.escape(alasan or '-')}\nBerkas dikembalikan & ditandai aman — perbaiki aturan VD.*.")
+                                  f"Catatan: {html.escape(alasan or '-')}\nBerkas dikembalikan & ditandai aman — perbaiki aturan VD.*.",
+                                  'positif_palsu', srv['name'], path, {'oleh': oleh})
         except Exception as e:
             print(f'telegram fp: {e}', file=sys.stderr)
         hasil = {'ok': bool(tandai.get('ok')), 'path': path, 'error': tandai.get('error')}
@@ -1990,9 +2141,34 @@ def _antivirus_putih_fp(srv, key, aksi, payload, oleh):
     return hasil, 200
 
 
-def _antivirus_tandai(srv, key, aksi, path, oleh, alasan, sha_db=''):
+def _tanda_pasti(host, path, teks=''):
+    """Tanda IOC pasti (server_judi.TANDA_PASTI) milik path: dari teks tanda kiriman, atau scan terbaru yang memuatnya."""
+    ids = set(re.findall(r'VD\.[\w.]+', str(teks or '')))
+    if not ids:
+        for b in sorted((ANTIVIRUS_DIR / 'scan').glob('*.json'), reverse=True):
+            try:
+                job = json.loads(b.read_text())
+            except (OSError, ValueError):
+                continue
+            t = next((x for x in job.get('temuan') or [] if x.get('path') == path), None) if job.get('host') == host else None
+            if t:
+                ids = {x.get('id') for x in t.get('tanda') or []}
+                break
+    return sorted(ids & server_judi.TANDA_PASTI)
+
+
+def _galat_pasti(pasti):
+    return (f"{', '.join(pasti)} = IOC malware pasti, tidak bisa ditandai aman / positif palsu. "
+            "Karantina atau bersihkan; bila yakin salah deteksi, laporkan ke tim server.")
+
+
+def _antivirus_tandai(srv, key, aksi, path, oleh, alasan, sha_db='', cek_pasti=True):
     """Tandai/batalkan aman. sha256 diambil langsung dari server saat ditandai (isi yang dicek user).
     Temuan database (`<akar>#db:<tabel>:<id>`) tak bisa dibaca agen → sha256 dari temuan scan (sha isi entri)."""
+    if aksi == 'aman' and cek_pasti:  # laporan_fp mengecek sendiri sebelum berkas dikembalikan
+        pasti = _tanda_pasti(srv['host'], path)
+        if pasti:
+            return {'ok': False, 'error': _galat_pasti(pasti), 'path': path}
     if aksi == 'aman' and '#db:' in path:
         if not re.fullmatch(r'[0-9a-f]{64}', sha_db or ''):
             return {'ok': False, 'error': 'sha_tidak_sah', 'path': path}
@@ -2185,7 +2361,6 @@ BFM_ATURAN = {  # kunci → (label, ambang bawaan, durasi bawaan detik [1 = perm
     'bot': ('Scanner / bot jahat', 10, 86400, True),
     'crawler': ('Crawler SEO', 30, 21600, False),  # kunci lama dipertahankan agar setelan.json tetap berlaku
     'ai': ('Crawler AI', 30, 21600, False),
-    'pencarian': ('Bot AI pencarian', 30, 21600, False),
     'login': ('Brute force wp-login / xmlrpc', 20, 3600, True),
 }
 BFM_DURASI = (1800, 3600, 6 * 3600, 86400, 3 * 86400, 7 * 86400, 1)  # 1 = permanen (format regex.custom.pm CSF)
@@ -2442,10 +2617,11 @@ import velocityguard  # noqa: E402
 velocityguard.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
 
 
-# Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h).
+# Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h|90h|180h).
 # Data dicatat scripts/server-usage-catat (timer 5 mnt); dirata-rata per ember agar ±300 titik per server.
 USAGE_RIWAYAT = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
-RENTANG_USAGE = {'1j': (3600, 300), '24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200)}
+RENTANG_USAGE = {'1j': (3600, 300), '24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200),
+                 '90h': (90 * 86400, 21600), '180h': (180 * 86400, 43200)}
 USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out', 'suhu')
 
 
@@ -2522,6 +2698,8 @@ def _riwayat_urai(rentang):
 USAGE_CMD = RESOURCE_CMD + r'''
 for h in /sys/class/hwmon/hwmon*; do case "$(cat $h/name 2>/dev/null)" in coretemp|k10temp|zenpower) cat $h/temp*_input 2>/dev/null;; esac; done | sort -n | tail -1 | sed 's/^/T /'
 rt=/tmp/lshttpd/.rtreport; [ -r $rt ] && { echo "W $(grep -m1 '^REQ_RATE \[\]' $rt)"; echo "K $(grep -m1 '^MAXCONN' $rt)"; }
+# nginx (DA nginx_apache, mis. sanke): penghitung request kumulatif stub_status /nginx_status (hanya 127.0.0.1)
+[ -r $rt ] || curl -s -m 3 -H "Host: $(hostname)" http://127.0.0.1/nginx_status 2>/dev/null | awk 'NR==3 && $3 ~ /^[0-9]+$/ {print "R "$3}'
 echo "E $(ss -Htn state established '( sport = :80 or sport = :443 )' 2>/dev/null | wc -l)"
 dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p'); [ -n "$dev" ] && echo "N $(grep -E "^ *$dev:" /proc/net/dev | tr ':' ' ')"
 '''
@@ -2549,6 +2727,8 @@ def usage_sampel(srv, key):
                     out['conn'] = int(plain.group(1)) + int(ssl.group(1))
             elif kode == 'E':
                 out['established'] = int(isi.strip() or 0)
+            elif kode == 'R':
+                out['req_total'] = int(isi)
             elif kode == 'T':
                 out['suhu'] = round(int(isi) / 1000, 1)  # inti CPU terpanas, °C
             elif kode == 'N':
@@ -2556,6 +2736,9 @@ def usage_sampel(srv, key):
                 out['net'] = {'rx': int(p[1]), 'tx': int(p[9])}
         except (ValueError, IndexError):
             continue
+    # Penghitung nginx ikut dict net agar selisihnya dihitung bersama counter jaringan (state yang sama)
+    if out.get('net') and 'req_total' in out:
+        out['net']['rq'] = out.pop('req_total')
     out['ok'] = True
     return out
 
@@ -2571,7 +2754,10 @@ def usage_net(net, lama, now, maks_dt):
     """Mbps masuk/keluar dari selisih counter /proc/net/dev; {} bila catatan lama tak cocok (reboot/terlalu lama)."""
     if lama and 0 < now - lama['t'] <= maks_dt and net['rx'] >= lama['rx'] and net['tx'] >= lama['tx']:
         dt = now - lama['t']
-        return {'net_in': round((net['rx'] - lama['rx']) * 8 / dt / 1e6, 2), 'net_out': round((net['tx'] - lama['tx']) * 8 / dt / 1e6, 2)}
+        hasil = {'net_in': round((net['rx'] - lama['rx']) * 8 / dt / 1e6, 2), 'net_out': round((net['tx'] - lama['tx']) * 8 / dt / 1e6, 2)}
+        if 'rq' in net and net['rq'] >= lama.get('rq', net['rq'] + 1):  # nginx restart → counter mulai 0, lewati
+            hasil['req'] = round((net['rq'] - lama['rq']) / dt, 1)
+        return hasil
     return {}
 
 
@@ -2687,6 +2873,29 @@ def _site_title_from_form(folders, fallback):
                 if 2 < len(value) <= 80:
                     return value
     return fallback
+
+
+def server_pemilik_domain(domain):
+    """Server DA yang /etc/virtual/domainowners-nya memuat domain (akun dibuat PM).
+    Dulu manifest selalu ke server pertama (Farnaz) padahal akun bisa dibuat di
+    sanke dll. -> autopilot menunggu akun yang sebenarnya sudah ada (ruangglobal.com
+    6 Nov). Tidak ketemu / SSH gagal -> None, pemanggil memakai default_target()."""
+    key = ssh_key_file()
+    if not key or not DOMAIN_RE.match(domain):
+        return None
+    for item in load_servers():
+        srv, err = clean_server(item)
+        if err:
+            continue
+        # domain sudah lolos DOMAIN_RE, aman disisipkan ke perintah shell
+        cmd = perintah_server(srv, key, f"grep -q '^{re.escape(domain)}:' /etc/virtual/domainowners && echo ADA")
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if 'ADA' in out:
+            return {k: srv[k] for k in ('host', 'name', 'port', 'user')}
+    return None
 
 
 def default_target():
@@ -2864,7 +3073,9 @@ def _fetch_crm_projects_now():
                 # ambil yang paling dekat karena itu yang paling mendesak.
                 cur = found.setdefault(name, {'paket': '', 'deadline': '', 'jenis': [],
                                               'crm_status': '', 'webmaster': '', 'subfolder': '',
-                                              'staging': False})
+                                              'staging': False, 'laravel': False})
+                if laravel_dari_deskripsi(item.get('deskripsi')):
+                    cur['laravel'] = True
                 if 'apk' not in jenis.lower() and staging_dari_deskripsi(item.get('deskripsi')):
                     cur['staging'] = True
                 # Deskripsi tiket "sub folder <nama>" = bahan klien ada di subfolder itu
@@ -3031,6 +3242,7 @@ def _queue_row(name, source, antrean, claims, connected_hosts):
     row['paket'] = crm.get('paket') or None
     row['deadline'] = crm.get('deadline') or None
     row['jenis'] = crm.get('jenis') or []
+    row['laravel'] = bool(crm.get('laravel'))
     row['crm_status'] = crm.get('crm_status') or None
     row['webmaster'] = crm.get('webmaster') or None
     row['claim'] = claims.get(key)
@@ -3410,6 +3622,28 @@ def _sync_hosting_notes(domain: str, manifest: Path, allow_regenerate: bool = Tr
     return changes
 
 
+def _sync_server(domain: str, manifest: Path):
+    """PM bisa membuat akun DA sesudah manifest dibuat (manifest jatuh ke server
+    default). Selama situs belum terpasang, target manifest diarahkan ke server yang
+    domainowners-nya memuat domain. Staging (docroot=) tidak disentuh."""
+    if domain in installed_domains():
+        return []
+    try:
+        lines = manifest.read_text().splitlines()
+    except OSError:
+        return []
+    cfg = {l.split('=', 1)[0].strip(): l.split('=', 1)[1].strip() for l in lines if '=' in l}
+    if cfg.get('docroot'):
+        return []
+    srv = server_pemilik_domain(domain)
+    if not srv or (srv['host'], srv['port']) == (cfg.get('target_host'), cfg.get('ssh_port')):
+        return []
+    baru = {'target_host': srv['host'], 'ssh_port': srv['port'], 'ssh_user': srv['user']}
+    _write_manifest_lines(manifest, [f"{l.split('=', 1)[0].strip()}={baru[l.split('=', 1)[0].strip()]}"
+                                     if '=' in l and l.split('=', 1)[0].strip() in baru else l for l in lines])
+    return [f"target_dipindah:{cfg.get('target_host')}->{srv['host']}({srv['name']})"]
+
+
 def _sync_staging(domain: str, manifest: Path):
     """Deskripsi CRM bisa ditulis sesudah manifest dibuat (cybersumatra.com: manifest
     mengarah ke akun DA klien yang belum ada). Selama situs belum terpasang, manifest
@@ -3490,7 +3724,7 @@ def generate_manifest(domain: str):
     staging = diminta_staging(domain)
     if staging:
         da_user = STAGING_DA_USER
-    srv = staging_target() if staging else default_target()
+    srv = staging_target() if staging else (server_pemilik_domain(domain) or default_target())
     target = srv['host']
     port = srv['port']
     if not re.match(r'^[0-9]+$', port) or not (1 <= int(port) <= 65535):
@@ -3626,6 +3860,8 @@ def start_run(domain: str, mode: str):
     if mode in ('dry-run', 'apply'):
         for change in _sync_staging(domain, manifest):
             print(json.dumps({'event': 'staging_sync', 'domain': domain, 'change': change}), flush=True)
+        for change in _sync_server(domain, manifest):
+            print(json.dumps({'event': 'server_sync', 'domain': domain, 'change': change}), flush=True)
     for change in _sync_hosting_notes(domain, manifest):
         print(json.dumps({'event': 'hosting_notes_sync', 'domain': domain, 'change': change}), flush=True)
     ok, detail = validate_manifest(manifest)
@@ -4353,7 +4589,10 @@ class Handler(BaseHTTPRequestHandler):
                                  'jam_jadwal': '%02d:%02d' % ANTIVIRUS_JAM_JADWAL})
             elif path == '/api/servers/antivirus/scan':
                 sid = (q.get('id') or [''])[0]
-                self._send_json(antivirus_scan_detail(sid) if sid else antivirus_scan_daftar())
+                if 'gabung' in q:
+                    self._send_json(antivirus_scan_gabung_rekap(q['gabung'][0]))
+                else:
+                    self._send_json(antivirus_scan_detail(sid) if sid else antivirus_scan_daftar())
             elif path == '/api/servers/antivirus/baca':
                 self._send_json(antivirus_baca(*((q.get(k) or [''])[0] for k in ('server', 'path', 'id'))))
             else:
@@ -4386,12 +4625,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(server_judi.ringkasan((parse_qs(parsed.query).get('server') or [''])[0]))
             return
-        if path in ('/api/servers/cms', '/api/servers/cms/riwayat'):
+        if path in ('/api/servers/cms', '/api/servers/cms/riwayat', '/api/servers/cms/suspend'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             q = parse_qs(parsed.query)
-            if path == '/api/servers/cms/riwayat':
+            if path == '/api/servers/cms/suspend':
+                self._send_json(server_cms.suspend((q.get('server') or [''])[0]))
+            elif path == '/api/servers/cms/riwayat':
                 self._send_json(server_cms.riwayat())
             elif q.get('server'):
                 self._send_json(server_cms.detail(q['server'][0]))
@@ -4457,7 +4698,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Content-Type', jenis + ('; charset=utf-8' if jenis == 'text/html' else ''))
                 self.send_header('Content-Security-Policy',
                                  "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                                 "font-src https://fonts.gstatic.com data:; script-src 'unsafe-inline' https://cdn.jsdelivr.net")
+                                 "font-src https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net")
                 self.send_header('X-Content-Type-Options', 'nosniff')
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('Content-Length', str(len(data)))
@@ -4624,8 +4865,8 @@ class Handler(BaseHTTPRequestHandler):
                           '/api/servers/bfm/aksi', '/api/servers/bfm/setelan',
                           '/api/servers/limit/aksi',
                           '/api/servers/pantau/aksi', '/api/servers/pantau/lepas',
-                          '/api/servers/cms/scan',
-                          '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek',
+                          '/api/servers/cms/scan', '/api/servers/cms/scan/akun',
+                          '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek', '/api/servers/cms/suspend/cek',
                           '/api/servers/guard/celah/scan', '/api/servers/guard/insiden',
                           '/api/ai/models', '/api/ai/models/test', '/api/ai/models/set-default',
                           '/api/ai/content/run')
@@ -4745,24 +4986,18 @@ class Handler(BaseHTTPRequestHandler):
                 obj, kode = (velocityguard.celah_mulai if path == '/api/servers/guard/celah/scan' else velocityguard.insiden_simpan)(payload)
                 self._send_json(obj, kode)
                 return
-            if path in ('/api/servers/cms/scan', '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek'):
+            if path in ('/api/servers/cms/scan', '/api/servers/cms/scan/akun', '/api/servers/cms/jadwal', '/api/servers/cms/perbaiki', '/api/servers/cms/perbaiki/cek',
+                        '/api/servers/cms/suspend/cek'):
                 # Scan hanya membaca server; perbaiki MENGUBAH situs klien (update plugin/tema/inti). Origin wajib = Host
                 origin = urlparse(self.headers.get('Origin') or '').netloc
                 if origin and origin != (self.headers.get('Host') or ''):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
-                obj, kode = {'/api/servers/cms/scan': server_cms.scan_mulai, '/api/servers/cms/jadwal': server_cms.jadwal_atur,
+                obj, kode = {'/api/servers/cms/scan': server_cms.scan_mulai, '/api/servers/cms/scan/akun': server_cms.scan_akun_mulai,
+                             '/api/servers/cms/jadwal': server_cms.jadwal_atur,
                              '/api/servers/cms/perbaiki': server_cms.perbaiki_mulai,
-                             '/api/servers/cms/perbaiki/cek': server_cms.perbaiki_cek}[path](payload)
-                self._send_json(obj, kode)
-                return
-            if path.startswith('/api/servers/bfm/'):
-                # Pasang/copot mengubah csf.conf + regex.custom.pm dan me-restart lfd server produksi
-                origin = urlparse(self.headers.get('Origin') or '').netloc
-                if origin and origin != (self.headers.get('Host') or ''):
-                    self._send_json({'error': 'forbidden'}, 403)
-                    return
-                obj, kode = (bfm_aksi if path == '/api/servers/bfm/aksi' else bfm_setelan)(payload)
+                             '/api/servers/cms/perbaiki/cek': server_cms.perbaiki_cek,
+                             '/api/servers/cms/suspend/cek': server_cms.suspend_cek}[path](payload)
                 self._send_json(obj, kode)
                 return
             if path in ('/api/servers/pantau/aksi', '/api/servers/pantau/lepas'):
@@ -4781,6 +5016,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({'error': 'forbidden'}, 403)
                     return
                 obj, kode = limit_aksi(payload)
+                self._send_json(obj, kode)
+                return
+            if path.startswith('/api/servers/bfm/'):
+                # Pasang/copot mengubah csf.conf + regex.custom.pm dan me-restart lfd server produksi
+                origin = urlparse(self.headers.get('Origin') or '').netloc
+                if origin and origin != (self.headers.get('Host') or ''):
+                    self._send_json({'error': 'forbidden'}, 403)
+                    return
+                obj, kode = (bfm_aksi if path == '/api/servers/bfm/aksi' else bfm_setelan)(payload)
                 self._send_json(obj, kode)
                 return
             if path.startswith('/api/servers/waf/'):
@@ -4979,4 +5223,5 @@ if __name__ == '__main__':
     threading.Thread(target=velocityguard.jadwal_jalan, daemon=True).start()
     threading.Thread(target=server_lonjakan.jalan, daemon=True).start()
     threading.Thread(target=server_pantau.jalan, daemon=True).start()
+    threading.Thread(target=gerbang_notif.jalan, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', 9121), Handler).serve_forever()

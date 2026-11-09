@@ -44,11 +44,6 @@ RAHASIA = [
 ]
 
 
-DOMAIN_RE = re.compile(r"\b((?:[a-z0-9-]+\.)+(?:com|net|org|id|co|io|asia|studio|biz|info|my\.id|co\.id|or\.id|ac\.id|sch\.id|web\.id))\b")
-# Domain infrastruktur/alat, bukan proyek klien
-BUKAN_PROYEK = ("velocitydeveloper.co", "velocitydeveloper.com", "velocitydeveloper.net", "velocitygrafis.com",
-                "pckantor.my.id", "github.com", "google.com", "claude.ai", "anthropic.com", "pexels.com",
-                "metabox.io", "wordpress.org", "wordpress.com", "cloudflare.com", "jsdelivr.net")
 
 
 def sensor(teks):
@@ -123,9 +118,25 @@ def baris_indeks(idx):
     return baris
 
 
+def folder_memory():
+    """Folder memory unik: banyak folder proyek bot (-srv-velocity-bot-*) hanya symlink ke memory yang sama,
+    tanpa disaring tiap memory terhitung belasan kali dan graf /brain membeku di peramban."""
+    sudah, hasil = set(), []
+    for d in sorted(CLAUDE.glob("projects/*/memory")):
+        asli = d.resolve()
+        if asli not in sudah:
+            sudah.add(asli)
+            hasil.append(d)
+    return hasil
+
+
+def indeks_memory():
+    return [d / "MEMORY.md" for d in folder_memory() if (d / "MEMORY.md").is_file()]
+
+
 def kumpul_memory():
     hasil = []
-    for d in sorted(CLAUDE.glob("projects/*/memory")):
+    for d in folder_memory():
         proyek = d.parent.name
         lewati = {"MEMORY.md", *(x.name for x in sub_indeks(d / "MEMORY.md"))}
         for f in sorted(d.glob("*.md")):
@@ -262,7 +273,7 @@ def bangun():
                 if gid not in hantu:
                     hantu[gid] = {"id": gid, "kind": "ghost", "label": t.strip(), "group": "hantu",
                                   "desc": "Disebut dengan [[...]] tapi memory-nya belum ditulis."}
-                tid = gid
+                continue  # hantu hanya untuk cek kesehatan, tidak jadi simpul (graf diringankan)
             sambung(m["id"], tid, "tautan")
         for berkas in re.findall(r"\b((?:project|feedback|user|reference)_[\w-]+\.md)\b", raw):
             if berkas in berkas_ke_id:
@@ -273,46 +284,10 @@ def bangun():
 
     for s in skill:
         links.append({"source": f"hub:s:{s['group']}", "target": s["id"], "kind": "struktur"})
-        for r in s["refs"]:
-            rid = f"r:{s['id']}/{r['name']}"
-            nodes.append({"id": rid, "kind": "ref", "label": r["name"], "group": "ref",
-                          "desc": f"Berkas pendukung skill {s['label']}", "updated": r["updated"], "size": r["size"]})
-            links.append({"source": s["id"], "target": rid, "kind": "bagian"})
-
-    # Proyek/domain klien: domain di judul indeks MEMORY.md = proyek memory itu;
-    # memory lain yang menyebut domain yang sama ikut disambungkan.
-    proyek = {}
-    for idx in CLAUDE.glob("projects/*/memory/MEMORY.md"):
-        for b in baris_indeks(idx):
-            m = re.match(r"\s*-\s*\[([^\]]+)\]\(([^)]+\.md)\)", b)
-            if not m:
-                continue
-            mid = f"m:{idx.parent.parent.name}/{Path(m.group(2)).stem}"
-            for dm in DOMAIN_RE.findall(m.group(1).lower()):
-                if any(dm == x or dm.endswith("." + x) for x in BUKAN_PROYEK):
-                    continue
-                pr = proyek.setdefault(dm, {"id": f"p:{dm}", "kind": "proyek", "group": "proyek", "label": dm, "memory": []})
-                if mid in {x["id"] for x in memori}:
-                    pr["memory"].append(mid)
-    if proyek:
-        nodes.append({"id": "hub:proyek", "kind": "hub", "label": "Proyek", "group": "proyek"})
-        links.append({"source": "core", "target": "hub:proyek", "kind": "struktur"})
-    pola_dom = {dm: re.compile(r"(?<![\w.-])" + re.escape(dm) + r"(?![\w-])", re.I) for dm in proyek}
-    teks_mem = {m["id"]: (m["desc"] + "\n" + m["body"]) for m in memori}
-    kecil_mem = {k: v.lower() for k, v in teks_mem.items()}  # saringan substring murah sebelum regex (dulu ±14 dtk)
-    for dm, pr in proyek.items():
-        links.append({"source": "hub:proyek", "target": pr["id"], "kind": "struktur"})
-        utama = set(pr["memory"])
-        for mid in sorted(utama):  # urutan tetap (set teracak per proses) → data.json bisa dilewati bila sama
-            sambung(pr["id"], mid, "tentang")
-        for mid, teks in teks_mem.items():
-            if mid not in utama and dm.lower() in kecil_mem[mid] and pola_dom[dm].search(teks):
-                sambung(pr["id"], mid, "sebutan")
-        pr["desc"] = f"Proyek/domain klien. {len(utama)} memory utama."
-        del pr["memory"]
+        # berkas pendukung (refs) cukup di detail skill, tidak jadi simpul (graf diringankan)
 
     kesehatan = periksa(memori, hantu)
-    nodes += memori + skill + list(hantu.values()) + list(proyek.values())
+    nodes += memori + skill
     return {
         "kesehatan": kesehatan,
         "generated": int(time.time()),
@@ -321,7 +296,6 @@ def bangun():
             "skill": len(skill),
             "ref": sum(len(s["refs"]) for s in skill),
             "ghost": len(hantu),
-            "proyek": len(proyek),
             "links": len([l for l in links if l["kind"] != "struktur"]),
         },
         "nodes": nodes,
@@ -334,7 +308,7 @@ def periksa(memori, hantu):
     bermasalah juga diberi daftar "masalah" supaya graf bisa menandainya."""
     kini = time.time()
     indeks = {}
-    for idx in CLAUDE.glob("projects/*/memory/MEMORY.md"):
+    for idx in indeks_memory():
         proyek = idx.parent.parent.name
         try:
             teks = idx.read_text(errors="replace")

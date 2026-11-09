@@ -1,5 +1,5 @@
 [Unit]
-Description=Velocity: notif Telegram pemakaian Wulan >25% & lonjakan serangan WAF (Afif)
+Description=Velocity: notif Telegram pemakaian Sanke >25%, lonjakan serangan WAF & RAID + SELinux Sanke (Afif)
 After=network-online.target installer-status.service
 
 [Service]

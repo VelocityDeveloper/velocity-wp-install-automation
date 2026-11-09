@@ -25,7 +25,7 @@ const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 
 // Grafik usage: riwayat dicatat scripts/server-usage-catat tiap 5 mnt (GET /api/servers/riwayat)
-const RENTANG = [{ k: '1j', label: '1 jam' }, { k: '24j', label: '24 jam' }, { k: '7h', label: '7 hari' }, { k: '30h', label: '30 hari' }]
+const RENTANG = [{ k: '1j', label: '1 jam' }, { k: '24j', label: '24 jam' }, { k: '7h', label: '7 hari' }, { k: '30h', label: '30 hari' }, { k: '90h', label: '3 bulan' }, { k: '180h', label: '6 bulan' }]
 const rentang = tabUrl('r', '24j', { boleh: RENTANG.map((r) => r.k) })
 // Hanya riwayat server yang dibuka; server= kosong → server pertama (sama dengan tab bawaan)
 const riwayat = pakaiPolling(() => `/api/servers/riwayat?rentang=${rentang.value}&server=${encodeURIComponent(terpilih.value?.name || pilih.value)}`, 300000)
@@ -111,7 +111,7 @@ function formatWaktu(t, lengkap) {
   const tgl = `${d.getDate()} ${BULAN[d.getMonth()]}`
   if (live.value) return `${jam}.${dua(d.getSeconds())}`
   if (lengkap) return `${tgl}, ${jam}`
-  if (rentang.value === '7h' || rentang.value === '30h') return tgl
+  if (rentang.value.endsWith('h')) return tgl
   return d.toDateString() === new Date().toDateString() ? jam : `${tgl} ${jam}`
 }
 const puncak = (titik, kunci) => titik.reduce((a, q) => (q[kunci] != null && q[kunci] > a ? q[kunci] : a), 0)
@@ -121,15 +121,16 @@ const rata = (titik, kunci) => {
 }
 
 // Kelompok layanan: satu kelompok dianggap jalan bila salah satu unitnya aktif (litespeed/lsws, mariadb/mysqld…)
+// pentingPc = jadi penting khusus jenis itu; bukanPentingPc = tidak dialertkan untuk jenis itu (FTP/SSH di PC Backup, 5 Nov)
 const KELOMPOK = [
   { label: 'Panel DirectAdmin', unit: ['directadmin'], penting: true },
   { label: 'Web server', unit: ['litespeed', 'lsws', 'httpd', 'nginx'], penting: true },
   { label: 'Database', unit: ['mariadb', 'mysqld'], penting: true },
   { label: 'Email keluar (Exim)', unit: ['exim'], penting: true },
   { label: 'Email masuk (Dovecot)', unit: ['dovecot'], penting: true },
-  { label: 'FTP', unit: ['pure-ftpd', 'proftpd', 'vsftpd'], penting: true },
+  { label: 'FTP', unit: ['pure-ftpd', 'proftpd', 'vsftpd'], penting: true, bukanPentingPc: ['backup'] },
   { label: 'DNS (named)', unit: ['named'], penting: true },
-  { label: 'SSH', unit: ['sshd', 'ssh'], penting: true },
+  { label: 'SSH', unit: ['sshd', 'ssh'], penting: true, bukanPentingPc: ['backup'] },
   { label: 'Cron', unit: ['crond', 'cron'], penting: true },
   { label: 'Tailscale', unit: ['tailscaled'], pentingPc: ['lokal', 'backup'] },
   { label: 'ZFS (zed)', unit: ['zfs-zed'], pentingPc: ['backup'] },
@@ -149,7 +150,7 @@ function kelompokLayanan(s) {
   return KELOMPOK.filter((k) => k.unit.some((u) => u in st)).map((k) => {
     const unit = k.unit.filter((u) => u in st)
     const aktif = unit.filter((u) => st[u] === 'active')
-    return { ...k, penting: k.penting || !!k.pentingPc?.includes(s.jenis), unit, aktif: aktif.length > 0, nama_aktif: aktif[0] || unit[0], status: aktif.length ? 'active' : st[unit[0]] }
+    return { ...k, penting: !k.bukanPentingPc?.includes(s.jenis) && (k.penting || !!k.pentingPc?.includes(s.jenis)), unit, aktif: aktif.length > 0, nama_aktif: aktif[0] || unit[0], status: aktif.length ? 'active' : st[unit[0]] }
   })
 }
 
@@ -212,8 +213,12 @@ function periksa(s) {
   const h = s.hosting || {}
   const antreanAkun = (h.antrean_email ?? 0) - (h.antrean_sistem ?? 0)
   const teratas = (h.antrean_teratas || []).map(([a, n]) => `${a} (${angka(n)})`).join(', ') || 'periksa pengirim terbanyak'
-  if (antreanAkun >= 1000) tambah('bahaya', `Antrean email akun ${angka(antreanAkun)}`, `kemungkinan ada akun mengirim spam: ${teratas}`)
-  else if (antreanAkun >= 300) tambah('waspada', `Antrean email akun ${angka(antreanAkun)}`, teratas)
+  // Kirim email per akun dibatasi 200/hari (/etc/virtual/limit_<user>), jadi tanda spam = satu pengirim menumpuk, bukan total
+  // antrean (total besar tapi tersebar = surat ditunda penerima, mis. IP server ditolak Gmail).
+  const satuTerbanyak = h.antrean_teratas?.[0]?.[1] ?? 0
+  if (satuTerbanyak >= 200) tambah('bahaya', `Antrean email ${angka(satuTerbanyak)} dari satu pengirim`, `kemungkinan ada akun mengirim spam: ${teratas}`)
+  else if (satuTerbanyak >= 100) tambah('waspada', `Antrean email ${angka(satuTerbanyak)} dari satu pengirim`, teratas)
+  else if (antreanAkun >= 300) tambah('info', `Antrean email akun ${angka(antreanAkun)}`, `tersebar (terbanyak ${teratas}), kemungkinan ditunda server penerima`)
   if (h.antrean_sistem >= 300) tambah('info', `Antrean surat sistem ${angka(h.antrean_sistem)}`, 'alert/bounce ke root macet, cek alias root di /etc/aliases')
   if (s.cpguard && Object.values(s.cpguard.proses || {}).some((v) => !v)) tambah('waspada', 'Proses cPGuard berhenti', Object.entries(s.cpguard.proses).filter(([, v]) => !v).map(([n]) => n).join(', '))
   if (s.cpguard?.malware) tambah('bahaya', `cPGuard: ${s.cpguard.malware} malware 24 jam`, 'cek Malware Scanner cPGuard')

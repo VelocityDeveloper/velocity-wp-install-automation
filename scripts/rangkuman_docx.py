@@ -20,7 +20,7 @@ TINGGI_MAKS_EMU = 7315200         # 8 inci supaya gambar potret tetap muat satu 
 GAMBAR_MAKS = 6
 BAGIAN = (('peran', 'Peran User'), ('fungsi', 'Fungsi Website'), ('menu', 'Menu web dan isinya'),
           ('tambahan_fitur', 'Tambahan Fitur'), ('desain', 'Desain Website'), ('warna', 'Warna Website'),
-          ('batasan', 'Batasan Sistem'))
+          ('batasan', 'Batasan Sistem'), ('biaya', 'Biaya dan Lama Pengerjaan'))
 
 
 def _p(teks='', tebal=False, miring=False, tengah=False):
@@ -104,6 +104,8 @@ def bangun(data, gambar=(), keluar=None):
         isi.append(_p(str(data['pembuka']).strip()))
     media = {}
     for no, (kunci, label) in enumerate(BAGIAN, 1):
+        if kunci == 'biaya' and not data.get('biaya'):
+            continue
         isi += [_p(), _p(f'{no}. {label}')]
         if kunci == 'desain':
             d = data.get('desain') or {}

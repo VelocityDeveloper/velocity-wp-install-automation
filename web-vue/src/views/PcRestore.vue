@@ -9,7 +9,8 @@ import { pakaiPolling, kirim, minta, ukuranBerkas, tanggalWaktu, waktuLalu } fro
 import { konfirmasi } from '../konfirmasi.js'
 
 const server = ref('')
-const versi = ref('terbaru')
+// Kosong = tanpa filter: semua server / versi terbaru. Tiap akun membawa server-nya sendiri.
+const versi = ref('')
 const st = pakaiPolling(() => `/api/fm/restore?server=${encodeURIComponent(server.value)}&versi=${encodeURIComponent(versi.value)}`, 15000)
 const d = computed(() => st.data.value)
 
@@ -34,9 +35,9 @@ const sr = computed(() => {
 })
 const durasi = (s) => (s < 60 ? `${s} dtk` : s < 3600 ? `${Math.round(s / 60)} mnt` : `${Math.floor(s / 3600)} jam ${Math.round((s % 3600) / 60)} mnt`)
 const jam = (t) => new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-watch(d, (x) => { if (x?.server_aktif && !server.value) server.value = x.server_aktif })
+// Snapshot yang dipilih tak ada di server baru -> kembali ke terbaru
+watch(d, (x) => { if (x && versi.value && !x.versi.some((v) => v.id === versi.value)) versi.value = '' })
 watch([server, versi], () => st.muatUlang())
-watch(server, () => { versi.value = 'terbaru' })
 
 const cari = ref('')
 const akun = computed(() => (d.value?.akun || []).filter((a) => a.user.includes(cari.value.trim().toLowerCase())))
@@ -70,11 +71,11 @@ function bukaRestore(a, jenis = 'berkas', db = '') {
 const ringkasan = computed(() => {
   const a = form.akun
   if (!a) return ''
-  const dari = `backup ${versi.value === 'terbaru' ? 'terbaru' : labelVersi(d.value.versi.find((v) => v.id === versi.value) || { id: versi.value })}`
-  if (form.jenis === 'db') return `Database ${form.db} di ${server.value} akan diganti isinya dengan ${dari}. Isi sekarang didump dulu ke /root/velocity-cadangan/restore/ di server.`
+  const dari = `backup ${!versi.value ? 'terbaru' : labelVersi(d.value.versi.find((v) => v.id === versi.value) || { id: versi.value })}`
+  if (form.jenis === 'db') return `Database ${form.db} di ${a.server} akan diganti isinya dengan ${dari}. Isi sekarang didump dulu ke /root/velocity-cadangan/restore/ di server.`
   const p = `/home/${a.user}${form.path ? '/' + form.path.replace(/^\/+/, '') : ''}`
-  if (form.tujuan === 'terpisah') return `${p} dari ${dari} disalin ke folder baru /home/${a.user}/restore-<waktu>/ di ${server.value}. Berkas yang ada tidak diubah.`
-  return `${p} di ${server.value} ditimpa dengan ${dari}.${form.hapus ? ' Berkas yang tidak ada di backup DIHAPUS.' : ''} Berkas yang tertimpa${form.hapus ? '/terhapus' : ''} dipindah ke /root/velocity-cadangan/restore/ di server.`
+  if (form.tujuan === 'terpisah') return `${p} dari ${dari} disalin ke folder baru /home/${a.user}/restore-<waktu>/ di ${a.server}. Berkas yang ada tidak diubah.`
+  return `${p} di ${a.server} ditimpa dengan ${dari}.${form.hapus ? ' Berkas yang tidak ada di backup DIHAPUS.' : ''} Berkas yang tertimpa${form.hapus ? '/terhapus' : ''} dipindah ke /root/velocity-cadangan/restore/ di server.`
 })
 async function jalankan() {
   const timpa = form.jenis === 'db' || form.tujuan === 'asli'
@@ -82,7 +83,7 @@ async function jalankan() {
   form.kirim = true
   form.galat = ''
   try {
-    const r = await kirim('/api/fm/restore', { server: server.value, versi: versi.value, user: form.akun.user, jenis: form.jenis,
+    const r = await kirim('/api/fm/restore', { server: form.akun.server, versi: versi.value || 'terbaru', user: form.akun.user, jenis: form.jenis,
       path: form.path.trim(), tujuan: form.tujuan, hapus: form.hapus, db: form.db })
     form.buka = false
     pantau(r.id)
@@ -189,10 +190,10 @@ const target = (t) => (t.jenis === 'db' ? `DB ${t.db}` : `/home/${t.user}${t.pat
       <section v-if="d.server.length" class="kartu">
         <div class="saring">
           <label class="isian"><span>Server</span>
-            <select v-model="server"><option v-for="s in d.server" :key="s" :value="s">{{ s }}</option></select>
+            <select v-model="server"><option value="">Semua server</option><option v-for="s in d.server" :key="s" :value="s">{{ s }}</option></select>
           </label>
           <label class="isian"><span>Versi</span>
-            <select v-model="versi"><option v-for="v in d.versi" :key="v.id" :value="v.id">{{ labelVersi(v) }}</option></select>
+            <select v-model="versi"><option value="">{{ labelVersi(d.versi[0] || { id: 'terbaru' }) }}</option><option v-for="v in d.versi.slice(1)" :key="v.id" :value="v.id">{{ labelVersi(v) }}</option></select>
           </label>
           <label class="isian"><span>Cari akun</span><input v-model="cari" type="search" placeholder="nama user DA" spellcheck="false"></label>
         </div>
@@ -200,10 +201,11 @@ const target = (t) => (t.jenis === 'db' ? `DB ${t.db}` : `/home/${t.user}${t.pat
 
         <div class="tabel-wadah">
           <table class="tabel">
-            <thead><tr><th>Akun</th><th>Database</th><th class="sembunyi-hp">Backup</th><th><span class="sr">Aksi</span></th></tr></thead>
+            <thead><tr><th>Akun</th><th>Server</th><th>Database</th><th class="sembunyi-hp">Backup</th><th><span class="sr">Aksi</span></th></tr></thead>
             <tbody>
-              <tr v-for="a in akunHalaman" :key="a.user">
+              <tr v-for="a in akunHalaman" :key="`${a.server}/${a.user}`">
                 <td><strong>{{ a.user }}</strong><span class="kecil">/home/{{ a.user }}</span></td>
+                <td class="kapital">{{ a.server }}</td>
                 <td>
                   <ul class="db">
                     <li v-for="x in a.db" :key="x.nama">

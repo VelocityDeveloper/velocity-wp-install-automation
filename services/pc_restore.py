@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pc_backup
 
@@ -91,12 +92,8 @@ def backup_sekarang(b):
     return {'ok': True}
 
 
-def daftar(server=None, versi=None):
-    servers = sorted(s for s in (os.listdir(AKAR) if os.path.isdir(AKAR) else []) if s in pc_backup.SERVER_DA)
-    if not servers:
-        return {'akar': AKAR, 'server': [], 'versi': [], 'akun': [], 'tersambung': pc_backup.tersambung()}
-    server = _server(server or servers[0])
-    akar = _akar_versi(server, versi)
+def _akun_server(server, akar):
+    """Akun + DB satu server/versi; tiap akun membawa server-nya (daftar gabungan semua server)."""
     db = {}
     try:
         for e in os.scandir(os.path.join(akar, 'db')):
@@ -107,12 +104,17 @@ def daftar(server=None, versi=None):
     except FileNotFoundError:
         pass
     akun = []
-    home = os.path.join(akar, 'home')
-    for u in sorted(os.listdir(home)) if os.path.isdir(home) else []:
-        p = os.path.join(home, u)
-        if os.path.isdir(p):
-            d = sorted(db.get(u, []), key=lambda x: x['nama'])
-            akun.append({'user': u, 'path': p, 'db': d, 'waktu': max([x['waktu'] for x in d], default=None)})
+    try:
+        home = sorted((e for e in os.scandir(os.path.join(akar, 'home')) if e.is_dir()), key=lambda e: e.name)
+    except FileNotFoundError:
+        home = []
+    for e in home:
+        d = sorted(db.get(e.name, []), key=lambda x: x['nama'])
+        akun.append({'server': server, 'user': e.name, 'path': e.path, 'db': d, 'waktu': max([x['waktu'] for x in d], default=None)})
+    return akun
+
+
+def _versi_server(server, akun):
     snap = os.path.join(AKAR, server, '.zfs', 'snapshot')
     versi_ada = [{'id': 'terbaru', 'waktu': max((a['waktu'] for a in akun if a['waktu']), default=None),
                   'durasi': _durasi_run(os.path.join(AKAR, server))}]
@@ -121,8 +123,32 @@ def daftar(server=None, versi=None):
             versi_ada.append({'id': n, 'waktu': _waktu_snapshot(n, os.path.join(snap, n)), 'durasi': _durasi_run(os.path.join(snap, n))})
     except OSError:
         pass
-    return {'akar': AKAR, 'server': servers, 'server_aktif': server, 'versi': versi_ada, 'versi_aktif': versi or 'terbaru',
-            'akun': akun, 'tersambung': pc_backup.tersambung(), 'status': status_rsync(server)}
+    return versi_ada
+
+
+def daftar(server=None, versi=None):
+    """server/versi kosong = tanpa filter: semua server, versi terbaru. Versi snapshot tanpa server = semua server yang punya snapshot itu."""
+    servers = sorted(s for s in (os.listdir(AKAR) if os.path.isdir(AKAR) else []) if s in pc_backup.SERVER_DA)
+    hasil = {'akar': AKAR, 'server': servers, 'server_aktif': server or '', 'versi_aktif': versi or '', 'tersambung': pc_backup.tersambung()}
+    if not servers:
+        return {**hasil, 'versi': [], 'akun': []}
+    if server:
+        server = _server(server)
+        akun = _akun_server(server, _akar_versi(server, versi))
+        return {**hasil, 'versi': _versi_server(server, akun), 'akun': akun, 'status': status_rsync(server)}
+    # Semua server: baca paralel (SSHFS lambat per stat), snapshot dicocokkan per nama (jadwal 23:00 sama di semua server)
+    snap = {s: (sorted(os.listdir(os.path.join(AKAR, s, '.zfs', 'snapshot'))) if os.path.isdir(os.path.join(AKAR, s, '.zfs', 'snapshot')) else [])
+            for s in servers}
+    if versi and versi != 'terbaru' and not any(versi in v for v in snap.values()):
+        raise Galat('versi_tidak_ada', 404)
+    pilih = [s for s in servers if not versi or versi == 'terbaru' or versi in snap[s]]
+    with ThreadPoolExecutor(len(pilih) or 1) as ex:
+        per = list(ex.map(lambda s: _akun_server(s, _akar_versi(s, versi)), pilih))
+    akun = sorted((a for x in per for a in x), key=lambda a: (a['user'], a['server']))
+    nama = sorted({n for v in snap.values() for n in v}, reverse=True)
+    versi_ada = [{'id': 'terbaru', 'waktu': max((a['waktu'] for a in akun if a['waktu']), default=None), 'durasi': None}]
+    versi_ada += [{'id': n, 'waktu': _waktu_snapshot(n, AKAR), 'durasi': None} for n in nama]
+    return {**hasil, 'versi': versi_ada, 'akun': akun, 'status': None}
 
 
 def _jalankan(t, args, **kw):

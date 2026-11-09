@@ -151,7 +151,7 @@ if (!empty($d["couriers"])) {
   // dan checkout mengirim label ke API ongkir (yukpergimancing.com 2026-09-17). Kurir yang sudah aktif dipertahankan.
   $kl=function_exists("wp_store_courier_labels")?wp_store_courier_labels():["jne"=>"JNE","tiki"=>"TIKI","sicepat"=>"SiCepat","jnt"=>"J&T","pos"=>"POS Indonesia"];
   $nk=function($v){return preg_replace("/[^a-z0-9]/","",str_replace(["&","express","parcel","indonesia","cargo"],["n","","","",""],strtolower(trim((string)$v))));};
-  $kode=function($n)use($kl,$nk){$x=$nk($n); if($x==="")return null; $alias=["jt"=>"jnt","jnt"=>"jnt","idexpress"=>"ide","id"=>"ide","posindo"=>"pos","ninjaxpress"=>"ninja","ninjax"=>"ninja"]; if(isset($alias[$x]))return $alias[$x]; foreach($kl as $k=>$l){ if($nk($k)===$x||$nk($l)===$x)return $k; } return null;};
+  $kode=function($n)use($kl,$nk){$x=$nk($n); if($x==="")return null; $alias=["jt"=>"jnt","jnt"=>"jnt","idexpress"=>"ide","id"=>"ide","posindo"=>"pos","kantorpos"=>"pos","pos"=>"pos","ninjaxpress"=>"ninja","ninjax"=>"ninja"]; if(isset($alias[$x]))return $alias[$x]; foreach($kl as $k=>$l){ if($nk($k)===$x||$nk($l)===$x)return $k; } return null;};
   $c=[]; $lama=(array)($s["shipping_couriers"]??[]);
   foreach($lama as $k=>$v){ $kk=is_string($k)&&isset($kl[$k])?$k:$kode($v); if($kk)$c[]=$kk; }
   foreach($d["couriers"] as $n){ $kk=$kode($n); if($kk)$c[]=$kk; else echo "kurir_tidak_dikenal:".$n."\n"; }
@@ -208,7 +208,7 @@ echo wp_json_encode(["address"=>$s["store_address"]??"","email"=>$s["store_email
 ' --path="$DOCROOT" --allow-root
 '''
     header = '\n'.join([
-        f'DOCROOT={shlex.quote(f"/home/{da_user}/domains/{domain}/public_html")}',
+        f'DOCROOT={shlex.quote(os.environ.get("VELOCITY_LOKAL_DOCROOT") or f"/home/{da_user}/domains/{domain}/public_html")}',
         f'DATA={shlex.quote(encoded)}',
     ])
     # DATA substituted locally only after JSON was base64 encoded.

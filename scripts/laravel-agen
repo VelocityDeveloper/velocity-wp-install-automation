@@ -746,7 +746,8 @@ def main():
             pesan = f"feat({fid.lower()}): {f['judul']}" + (' (revisi)' if adalah_revisi else '') + \
                 f"\n\n{laporan['ringkasan']}\n\nDikerjakan agen Claude Code (installer Velocity)."
             kode, keluar = sh(['git', '-c', f'user.name={L.GIT_NAMA}', '-c', f'user.email={L.GIT_EMAIL}',
-                               'commit', '-q', '-m', pesan], app_dir)
+                               'commit', '-q', '-m', pesan], app_dir, env={**os.environ, 'LC_ALL': 'C'})
+            # LC_ALL=C: git berbahasa Indonesia tidak menulis "nothing to commit" (revisi tanpa perubahan = sukses)
             if kode != 0 and 'nothing to commit' not in keluar:
                 galat = f'git commit gagal: {ekor(keluar, 10)}'
             else:

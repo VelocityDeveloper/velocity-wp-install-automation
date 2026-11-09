@@ -5,7 +5,7 @@ Satu baris JSON per server ke /var/lib/velocity/server-usage/riwayat.jsonl:
 {"t", "host", "name", "cpu", "ram", "swap", "disk" (persen), "load", "core", "req" (request/dtk LiteSpeed),
 "conn" (koneksi live LiteSpeed, cadangan: TCP established :80/:443), "net_in"/"net_out" (Mbps kartu jaringan utama)}.
 Sampel = installer_status.usage_sampel (RESOURCE_CMD + baris tambahan, hanya baca: /proc, df, .rtreport LiteSpeed, ss).
-Traffic dihitung dari selisih counter /proc/net/dev dengan catatan sebelumnya (net-state.json). Riwayat disimpan 31 hari;
+Traffic dihitung dari selisih counter /proc/net/dev dengan catatan sebelumnya (net-state.json). Riwayat disimpan 183 hari (±6 bulan);
 dibaca GET /api/servers/riwayat untuk grafik di /server/monitoring.
 """
 import json
@@ -20,7 +20,7 @@ import installer_status as ist  # noqa: E402
 BERKAS = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
 STATE_NET = BERKAS.parent / 'net-state.json'
 
-SIMPAN_HARI = 31
+SIMPAN_HARI = 183
 
 
 def catat():

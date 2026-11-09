@@ -82,6 +82,17 @@ def jendela(v):
     return {"persen": v.get("utilization"), "reset": detik(v.get("resets_at"))} if v else None
 
 
+def riwayat_grafik(riwayat, sekarang):
+    hasil, jam_lalu = [], None
+    for r in riwayat:
+        if r["t"] >= sekarang - 8 * 86400:
+            hasil.append(r)
+        elif int(r["t"] // 3600) != jam_lalu:
+            jam_lalu = int(r["t"] // 3600)
+            hasil.append(r)
+    return hasil
+
+
 def rekap_bulan(riwayat, sekarang):
     """Rekap bulan kalender WIB berjalan dari catatan riwayat."""
     bulan = datetime.fromtimestamp(sekarang, WIB).strftime("%Y-%m")
@@ -193,8 +204,9 @@ def proses(kredensial, out, riwayat_p):
             "mata_uang": ex.get("currency"),
         },
         "bulanan": rekap_bulan(riwayat, sekarang),
-        # 8 hari terakhir, satu titik per putaran, untuk grafik
-        "riwayat": [r for r in riwayat if r["t"] >= sekarang - 8 * 86400],
+        # untuk grafik (ikut saringan rentang di /token): 8 hari terakhir satu titik per putaran,
+        # lebih lama dirapatkan satu titik per jam supaya berkas tetap kecil
+        "riwayat": riwayat_grafik(riwayat, sekarang),
     })
     return 0
 

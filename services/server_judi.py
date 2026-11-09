@@ -36,6 +36,11 @@ KEPUTUSAN_ARSIP = DIR / 'keputusan-arsip.jsonl'  # riwayat yang dibersihkan dari
 ANALISIS = DIR / 'analisis.json'  # {host: {path: {sha256, putusan, yakin, saran, alasan, user, model, t}}}
 PUTUSAN = ('berbahaya', 'positif_palsu', 'cek_manual')
 SARAN = ('karantina', 'bersihkan_wp', 'bersihkan_db', 'tandai_aman', 'cek_manual')
+# Tanda IOC pasti (= PASTI_MALWARE agen + IOC database): AI tidak boleh menyebutnya positif palsu dan dashboard
+# menolak tandai aman. 26–27 Okt 38 opsi wp-locale-perf ditandai aman tim karena AI menilainya "laporan audit".
+TANDA_PASTI = {'VD.PHP.EvalUnduhTag', 'VD.PHP.IncludeUnduh', 'VD.Webshell.Nama', 'VD.Webshell.FileManager',
+               'VD.WP.PluginPalsu', 'VD.PHP.EvalInput', 'VD.WP.LoginPaksa', 'VD.DB.LocaleCache', 'VD.DB.TriggerAdmin',
+               'VD.DB.AppPasswordPeretas'}
 MAKS_TEMUAN_AI = 15  # per akun per panggilan (batas teks bukti)
 MODELS = Path('/var/lib/velocity/ai/models.json')
 AI_USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
@@ -122,6 +127,7 @@ def setelan_atur(payload):
     with _kunci:
         data = setelan_baca()
         s = data.setdefault('server', {}).setdefault(srv['host'], {})
+        putih_lama = set(s.get('daftar_putih') or [])
         if 'aktif' in payload:
             s['aktif'] = bool(payload['aktif'])
         if payload.get('mode') in ('laporan', 'otomatis'):
@@ -135,7 +141,10 @@ def setelan_atur(payload):
     akhir = setelan_server(srv['host'])
     _catat({'jenis_catat': 'setelan', 'host': srv['host'], 'server': srv['name'], 'oleh': oleh,
             'alasan': f"{'aktif' if akhir['aktif'] else 'mati'}, mode {akhir['mode']}, daftar putih {len(akhir['daftar_putih'])}, "
-                      f"maks suspend {akhir['maks_suspend']}"})
+                      f"maks suspend {akhir['maks_suspend']}"
+                      # Nama ikut dicatat: dulu hanya jumlah, sehingga penambah entri tak bisa dilacak
+                      + ''.join(f"; {k} {', '.join(sorted(v))}" for k, v in (('tambah putih', set(akhir['daftar_putih']) - putih_lama),
+                                                                          ('hapus putih', putih_lama - set(akhir['daftar_putih']))) if v)})
     return {'ok': True, 'setelan': akhir}, 200
 
 
@@ -183,6 +192,10 @@ def _per_temuan(ai, temuan, user, model):
         out[t['path']] = {'sha256': t.get('sha256'), 'putusan': x['putusan'], 'yakin': x['yakin'],
                           'saran': x.get('saran') if x.get('saran') in SARAN else 'cek_manual',
                           'alasan': x['alasan'], 'user': user, 'model': model, 't': int(time.time())}
+        pasti = sorted({y.get('id') for y in t.get('tanda') or []} & TANDA_PASTI)
+        if pasti and x['putusan'] != 'berbahaya':
+            out[t['path']].update(putusan='berbahaya', saran='bersihkan_db' if t.get('db') else 'karantina',
+                                  alasan=f"IOC pasti {', '.join(pasti)} (AI menilai {x['putusan']}: {x['alasan']})"[:300])
     return out
 
 
@@ -520,11 +533,16 @@ def _notif(srv, st, hasil):
     if not penting and not jumlah['berbahaya']:
         return
     otomatis = st['mode'] == 'otomatis'
+    # gerbang notif: KIRIM hanya bila situs_judi/diretas yakin tinggi DAN suspend/karantina benar-benar dijalankan
+    import gerbang_notif
+    eskalasi = [d.get('user') or '' for d in penting if (d.get('ai') or {}).get('jenis') in ('situs_judi', 'diretas')
+                and int((d.get('ai') or {}).get('yakin') or 0) >= gerbang_notif.YAKIN_JUDI and d.get('dijalankan') in ('suspend', 'karantina')]
     baris = [f"🤖 <b>VelocityGuard · Analisis AI {html.escape(srv['name'])}</b> — judi mode {'OTOMATIS' if otomatis else 'laporan (tanpa aksi)'}",
              f"{sum(jumlah.values())} temuan dinilai: {jumlah['berbahaya']} berbahaya, {jumlah['positif_palsu']} positif palsu, "
              f"{jumlah['cek_manual']} cek manual — saran ada di daftar scan."]
     baris += ['', f"https://dash.velocity.ai.id/server/antivirus?s={urllib.parse.quote(srv['name'])}&tab=analisis-ai"]
-    _kirim_tg('\n'.join(baris))
+    _kirim_tg('\n'.join(baris), 'judi_ai', srv['name'], ','.join(sorted(eskalasi)),
+              {'eskalasi': len(eskalasi), 'penting': len(penting), 'berbahaya': jumlah['berbahaya']})
 
 
 # ---------- API dashboard ----------
@@ -594,11 +612,12 @@ def henti(payload):
 
 
 def aksi(payload):
-    """Suspend/unsuspend akun manual dari tab Judi AI (mis. membatalkan suspend otomatis)."""
+    """Suspend/unsuspend akun manual dari tab Judi AI (mis. membatalkan suspend otomatis),
+    atau celah_ditutup = catatan langkah wajib "Tutup celah masuk" sudah dikerjakan manual (tanpa aksi di server)."""
     oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip()
     if not oleh:
         return {'error': 'invalid_oleh'}, 400
-    if payload.get('aksi') not in ('suspend', 'unsuspend'):
+    if payload.get('aksi') not in ('suspend', 'unsuspend', 'celah_ditutup'):
         return {'error': 'aksi_tidak_dikenal'}, 400
     srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
     if not srv:
@@ -606,7 +625,7 @@ def aksi(payload):
     user = str(payload.get('user') or '')
     if not re.fullmatch(r'[a-z0-9_][a-z0-9_.-]{0,31}', user):
         return {'error': 'akun_tidak_dikenal'}, 400
-    r = _agen(srv, _ssh_key_file(), {'aksi': payload['aksi'], 'user': user}, 90)
+    r = {'ok': True} if payload['aksi'] == 'celah_ditutup' else _agen(srv, _ssh_key_file(), {'aksi': payload['aksi'], 'user': user}, 90)
     _catat({'jenis_catat': 'manual', 'host': srv['host'], 'server': srv['name'], 'user': user, 'oleh': oleh,
             'dijalankan': payload['aksi'], 'ok': bool(r.get('ok')), 'error': r.get('error'),
             'alasan': str(payload.get('alasan') or '')[:200]})

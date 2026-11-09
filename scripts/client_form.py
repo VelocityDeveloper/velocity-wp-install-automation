@@ -290,7 +290,8 @@ FORM_CLAUDE = Path('/var/lib/velocity/form-claude')
 # dokumen lain di folder klien dipakai sebagai form bila isinya berbentuk form data website.
 FORM_EXTS = {'.doc', '.docx', '.odt', '.pdf'}
 _CIRI_FORM = (
-    r'\b(nama\s+domain|domain\s+name|domain)\s*:',
+    # Form .docx bisa menaruh ":" di paragraf sendiri; _clean membuangnya sehingga labelnya sebaris sendiri.
+    r'\b(nama\s+domain|domain\s+name|domain)\s*:|(?m:^\s*(nama\s+domain|domain\s+name)\s*$)',
     r'\bmenu\b',
     r'\b(warna|colou?r)\b',
     r'\b(desain|design|template|tema|theme)\b',

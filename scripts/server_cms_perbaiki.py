@@ -532,9 +532,15 @@ def satu_situs(user, s, wpcli, tanda, oleh):
         baris = (err.strip() or out.strip()).splitlines()
         fatal = [b for b in baris if re.search(r'Fatal error|Uncaught|^Error:', b)]
         item = {'langkah': nama, 'ok': kode == 0, 'pesan': (fatal or baris or [''])[0 if fatal else -1].strip()[:300]}
+        if not item['ok'] or fatal:
+            item['catatan'] = [b.strip()[:300] for b in baris if re.search(r'Warning|Error|Fatal|Uncaught', b)][:15]
         if json_out:
             item['komponen'] = [{'slug': x.get('name'), 'dari': x.get('old_version'), 'ke': x.get('new_version'), 'status': x.get('status')}
                                 for x in ringkas_json(out)]
+            for k in item['komponen']:
+                if k['status'] not in ('Updated', 'Up to date'):
+                    # Penyebab gagal per komponen = baris peringatan wp-cli yang menyebut slug-nya
+                    k['alasan'] = next((b.strip()[:300] for b in baris if k['slug'] and k['slug'] in b), '')
         hasil['langkah'].append(item)
         return item
 
@@ -593,13 +599,17 @@ def perbaiki(p):
         return {'ok': False, 'error': 'wp_cli_tidak_tersedia'}
     tanda = time.strftime('%Y%m%d-%H%M%S')
     semua = []
-    for i, s in enumerate((p.get('situs') or [])[:30]):
-        try:
-            h = satu_situs(user, s, wpcli, tanda, str(p.get('oleh') or '')[:40])
-        except Exception as e:  # noqa: BLE001 — satu situs gagal tidak menghentikan yang lain
-            h = {'path': s.get('path'), 'domain': s.get('domain'), 'ok': False, 'error': ('%s: %s' % (type(e).__name__, e))[:200]}
-        semua.append(h)
-        lapor({'situs': h, 'ke': i + 1})
+    try:
+        for i, s in enumerate((p.get('situs') or [])[:30]):
+            try:
+                h = satu_situs(user, s, wpcli, tanda, str(p.get('oleh') or '')[:40])
+            except Exception as e:  # noqa: BLE001 — satu situs gagal tidak menghentikan yang lain
+                h = {'path': s.get('path'), 'domain': s.get('domain'), 'ok': False, 'error': ('%s: %s' % (type(e).__name__, e))[:200]}
+            semua.append(h)
+            lapor({'situs': h, 'ke': i + 1})
+    finally:
+        # Cache WP-CLI milik user ikut terhitung kuota akun (yamahaba 24 Okt mati karena 27 MB ini); symlink tidak diikuti
+        shutil.rmtree('/tmp/vd-wpcli-' + user, ignore_errors=True)
     return {'ok': True, 'situs': len(semua), 'gagal': sum(1 for h in semua if not h['ok'])}
 
 

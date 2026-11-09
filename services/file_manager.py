@@ -24,6 +24,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 import pc_backup
 import pc_restore
 import pc_nextcloud
+import pc_storage
+import staging_aksi
+import staging_lokal
 
 PORT = 9123
 LAN_NETWORKS = tuple(map(ip_network, ('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')))
@@ -396,6 +399,14 @@ def chmod(b):
 
 
 AKSI = {
+    '/api/fm/staging/masuk': staging_aksi.masuk,
+    '/api/fm/staging/buat': staging_aksi.buat_situs,
+    '/api/fm/staging/hapus': staging_aksi.hapus_situs,
+    '/api/fm/staging/cron': staging_aksi.simpan_cron,
+    '/api/fm/staging/cadangan': staging_aksi.buat_cadangan,
+    '/api/fm/staging/cadangan/hapus': staging_aksi.hapus_cadangan,
+    '/api/fm/staging/pulihkan': staging_aksi.pulihkan,
+    '/api/fm/staging/db/sandi': staging_aksi.ganti_sandi_db,
     '/api/fm/tulis': tulis_teks,
     '/api/fm/buat': buat,
     '/api/fm/ganti-nama': ganti_nama,
@@ -436,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
     def jalankan(self, fungsi):
         try:
             self.json_response(200, fungsi())
-        except (Galat, pc_restore.Galat) as e:
+        except (Galat, pc_restore.Galat, staging_aksi.Galat) as e:
             self.json_response(e.status, {'error': e.kode})
         except FileNotFoundError:
             self.json_response(404, {'error': 'tidak_ditemukan'})
@@ -464,10 +475,22 @@ class Handler(BaseHTTPRequestHandler):
             self.jalankan(lambda: cari(q.get('path', '/'), q.get('q', ''), q.get('jenis', 'semua'), q.get('tersembunyi') != '0'))
         elif path == '/api/fm/info':
             self.jalankan(lambda: info(jalur(q.get('path', ''))))
+        elif path == '/api/fm/staging':
+            self.jalankan(lambda: staging_lokal.status(q.get('segar') == '1'))
+        elif path == '/api/fm/staging/log':
+            self.jalankan(lambda: staging_aksi.baca_log(q.get('nama', ''), q.get('sumber', '')))
+        elif path == '/api/fm/staging/cadangan':
+            self.jalankan(lambda: staging_aksi.daftar_cadangan(q.get('nama', '')))
+        elif path == '/api/fm/staging/db/ekspor':
+            self.staging_ekspor(q.get('nama', ''))
+        elif path == '/api/fm/staging/http':
+            self.jalankan(lambda: staging_lokal.cek_http(q.get('nama', '')))
         elif path == '/api/fm/pc-backup':
             self.jalankan(lambda: pc_backup.status(q.get('segar') == '1'))
         elif path == '/api/fm/pc-backup/nextcloud':
             self.jalankan(lambda: pc_nextcloud.status(q.get('segar') == '1'))
+        elif path == '/api/fm/pc-backup/storage':
+            self.jalankan(lambda: pc_storage.status(q.get('segar') == '1'))
         elif path == '/api/fm/restore':
             self.jalankan(lambda: pc_restore.daftar(q.get('server'), q.get('versi')))
         elif path == '/api/fm/restore/tugas':
@@ -476,6 +499,26 @@ class Handler(BaseHTTPRequestHandler):
             self.unduh(q.get('path', ''), q.get('lihat') == '1')
         else:
             self.json_response(404, {'error': 'tidak_ada'})
+
+    def staging_ekspor(self, nama):
+        print(f'{self.headers.get("X-Real-IP", self.client_address[0])} ekspor DB staging {nama}', flush=True)
+        try:
+            path, nama_berkas = staging_aksi.ekspor(nama)
+        except staging_aksi.Galat as e:
+            self.json_response(e.status, {'error': e.kode})
+            return
+        try:
+            with open(path, 'rb') as f:
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/gzip')
+                self.send_header('Content-Length', str(os.fstat(f.fileno()).st_size))
+                self.send_header('Content-Disposition', f'attachment; filename="{nama_berkas}"')
+                self.end_headers()
+                shutil.copyfileobj(f, self.wfile)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        finally:
+            os.unlink(path)
 
     def unduh(self, p, lihat):
         try:
@@ -528,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         # Unggah: badan permintaan = isi berkas mentah. ?path=<folder>&nama=<relatif, boleh a/b/c.txt>&timpa=1
         path, _, query = self.path.partition('?')
-        if path != '/api/fm/unggah':
+        if path not in ('/api/fm/unggah', '/api/fm/staging/db/impor'):
             self.json_response(404, {'error': 'tidak_ada'})
             return
         if not self.dari_dashboard():
@@ -536,6 +579,11 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         q = {k: v[0] for k, v in parse_qs(query).items()}
+        if path == '/api/fm/staging/db/impor':
+            self.close_connection = True  # badan bisa tak terbaca habis bila ditolak di awal
+            print(f'{self.headers.get("X-Real-IP", self.client_address[0])} impor DB staging {q.get("nama")}', flush=True)
+            self.jalankan(lambda: staging_aksi.terima_impor(self.rfile, int(self.headers.get('Content-Length') or 0), q))
+            return
         self.jalankan(lambda: self.terima_unggahan(q))
 
     def terima_unggahan(self, q):

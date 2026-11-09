@@ -124,7 +124,8 @@ async function hapus(x) {
         <p class="redup kecil-teks">Dibuat {{ tanggalWaktu(lap.dibuat) }} oleh {{ lap.oleh }}. Agen hanya membaca log akses 24 jam; usulan dikerjakan manual lalu dicatat di Insiden.</p>
         <div v-for="s in lap.server" :key="s.host" class="server-blok">
           <h3 class="sub-judul">{{ s.server }}
-            <span class="redup">{{ s.ok ? `${angka(s.request)} request · ${s.temuan.length} temuan · ${s.detik} dtk` : `gagal: ${s.error}` }}</span>
+            <span class="redup">{{ s.ok ? `${s.dicek_ulang ? `cek ulang ${tanggalWaktu(s.dicek_ulang)}, ${String(+(+s.jam).toFixed(1)).replace('.', ',')} jam terakhir · ` : ''}${angka(s.request)} request · ${s.temuan.length} temuan · ${s.detik} dtk` : `gagal: ${s.error}` }}</span>
+            <span v-if="s.ok && !s.temuan.some((x) => x.tingkat !== 'info')" class="lencana hijau">aman</span>
             <span v-if="s.cpguard_waf_off" class="lencana teal">tanpa cPGuard</span>
           </h3>
           <p v-if="s.ok && !s.temuan.length" class="bersih"><Ikon nama="centang" :ukuran="16" /> Tidak ada celah yang lolos.</p>

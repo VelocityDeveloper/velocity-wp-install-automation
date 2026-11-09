@@ -11,7 +11,6 @@ const toolHariIni = computed(() => Object.values(akt.value?.tools || {}).reduce(
 const stat = computed(() => [
   ['Memory', brain.value?.counts?.memory],
   ['Skill', brain.value?.counts?.skill],
-  ['Proyek klien', brain.value?.counts?.proyek],
   ['Tools hari ini', akt.value ? toolHariIni.value : null],
 ])
 
@@ -19,7 +18,7 @@ const stat = computed(() => [
 const AKSI = {
   baca: ['baca', 'biru'], tulis: ['tulis', 'kuning'], skill: ['skill', 'hijau'], proyek: ['proyek', 'ungu'], tool: ['tool', 'abu'],
 }
-const SARING = [['', 'Semua'], ['memori', 'Memory & skill'], ['proyek', 'Proyek'], ['tool', 'Tools']]
+const SARING = [['', 'Semua'], ['memori', 'Memory & skill'], ['tool', 'Tools']]
 const saring = ref('')
 const sesiDipilih = ref('')
 const jeda = ref(false)

@@ -123,6 +123,8 @@ watch(berjalan, (now, dulu) => {
       const n = j.situs?.length || 0
       const gagal = (j.situs || []).filter((h) => !h.ok).length
       Object.assign(pesan, { teks: `Perbaikan akun ${j.user} ${j.status === 'gagal' ? `bermasalah: ${pesanGalat(j.error)}` : 'selesai'} — ${n - gagal}/${n} situs berhasil${j.akun ? `; sesudah scan ulang ${j.akun.rentan} dari ${j.akun.situs} situs akun ini masih rentan` : ''}.`, galat: j.status === 'gagal' || !!gagal })
+    } else if (j?.jenis === 'akun') {
+      Object.assign(pesan, { teks: j.status === 'gagal' ? `Scan ulang akun ${j.user} gagal: ${pesanGalat(j.error)}` : `Scan ulang akun ${j.user} selesai — ${j.akun.rentan} dari ${j.akun.situs} situs masih rentan.`, galat: j.status === 'gagal' })
     } else if (j?.status === 'gagal') Object.assign(pesan, { teks: `Scan gagal: ${j.error}`, galat: true })
     else if (j) Object.assign(pesan, { teks: `Scan selesai${j.galat_api ? ` (${j.galat_api} komponen gagal dicek ke basis data kerentanan — dicoba lagi di scan berikutnya)` : ''}.`, galat: !!j.galat_api })
   }
@@ -131,7 +133,7 @@ const labelKemajuan = computed(() => {
   const k = job.value?.kemajuan
   if (!k) return 'Menyiapkan…'
   if (k.tahap === 'perbaiki') return `Memperbaiki ${k.domain} (${k.ke}/${k.dari} situs selesai) — cadangan, update, cek beranda…`
-  if (job.value?.jenis === 'perbaiki' && k.tahap === 'inventaris') return `Scan ulang akun ${job.value.user}…`
+  if (['perbaiki', 'akun'].includes(job.value?.jenis) && k.tahap === 'inventaris') return `Scan ulang akun ${job.value.user}…`
   return k.tahap === 'inventaris'
     ? `Membaca instalasi WordPress di server (${k.ke}/${k.dari} server selesai)…`
     : `Mencocokkan ${angka(k.dari)} komponen dengan basis data kerentanan (${angka(k.ke)}/${angka(k.dari)})…`
@@ -139,6 +141,7 @@ const labelKemajuan = computed(() => {
 const persenKemajuan = computed(() => {
   const k = job.value?.kemajuan
   if (!k || !k.dari) return 3
+  if (job.value?.jenis === 'akun') return k.tahap === 'inventaris' ? 30 : 40 + (k.ke / k.dari) * 60
   if (job.value?.jenis === 'perbaiki') return k.tahap === 'perbaiki' ? 3 + (k.ke / k.dari) * 80 : k.tahap === 'inventaris' ? 85 : 88 + (k.ke / k.dari) * 12
   return k.tahap === 'inventaris' ? (k.ke / k.dari) * 40 + 3 : 43 + (k.ke / k.dari) * 57
 })
@@ -150,7 +153,7 @@ const memuatDetail = ref(false)
 // Sesudah server terpilih tampil, hasil server lain diambil diam-diam satu per satu.
 async function ambilHasil(s) {
   const c = cacheHasil.get(s.host)
-  if (c && c.diambil === s.diambil) return c
+  if (c && c.diambil === s.diambil && c.diperbarui === s.diperbarui) return c
   const d = await minta(`/api/servers/cms?server=${encodeURIComponent(s.host)}`)
   if (d.diambil) cacheHasil.set(s.host, d)
   return d
@@ -172,7 +175,37 @@ async function muatDetail() {
     if (lain.diambil && lain.host !== s.host) { try { await ambilHasil(lain) } catch { /* dicoba lagi saat dipilih */ } }
   }
 }
-watch(() => [terpilih.value?.host, terpilih.value?.diambil], () => {
+// Status suspend tersimpan di dashboard (host → {akun: {user: {s, t}}}); SSH hanya saat belum pernah dicek / tombol cek ulang
+const suspendData = ref({})
+const mengecekSuspend = ref(new Set())
+watch(() => terpilih.value?.host, async (host) => {
+  if (!host || suspendData.value[host]) return
+  try {
+    const r = await minta(`/api/servers/cms/suspend?server=${encodeURIComponent(host)}`)
+    if (r.akun) suspendData.value = { ...suspendData.value, [host]: r.akun }
+  } catch { /* tetap pakai tanda dari scan */ }
+}, { immediate: true })
+async function cekSuspend(user) {
+  const host = terpilih.value?.host
+  if (!host || mengecekSuspend.value.has(user)) return
+  mengecekSuspend.value = new Set(mengecekSuspend.value).add(user)
+  try {
+    const r = await kirim('/api/servers/cms/suspend/cek', { server: host, user })
+    if (r.akun) suspendData.value = { ...suspendData.value, [host]: r.akun }
+  } catch (e) {
+    Object.assign(pesan, { teks: `Cek suspend akun ${user} gagal: ${pesanGalat(e.message)}`, galat: true })
+  }
+  // Sekalian scan ulang plugin/tema akun ini (mungkin sudah dikerjakan manual di luar dashboard)
+  try {
+    await kirim('/api/servers/cms/scan/akun', { server: host, user, oleh: oleh.value.trim() })
+    await cms.muatUlang()
+  } catch (e) {
+    Object.assign(pesan, { teks: `Scan ulang akun ${user} gagal: ${pesanGalat(e.message)}`, galat: true })
+  } finally {
+    const sisa = new Set(mengecekSuspend.value); sisa.delete(user); mengecekSuspend.value = sisa
+  }
+}
+watch(() => [terpilih.value?.host, terpilih.value?.diambil, terpilih.value?.diperbarui], () => {
   if (detail.value?.host !== terpilih.value?.host) detail.value = null
   muatDetail()
 }, { immediate: true })
@@ -191,6 +224,45 @@ const lebihLama = (a, b) => {
 const intiUsang = (s) => terbaru.value && lebihLama(s.versi, terbaru.value)
 const alamat = (s) => `${s.domain}${s.sub || ''}`
 
+// Keamanan nyata situs: tingkat CVSS tiap temuan disesuaikan konteks (komponen aktif?, butuh login peran apa?, pendaftaran
+// dibuka?, sudah dieksploitasi?), lalu label dari temuan terburuk. Status aktif dibaca agen dari DB; tanpa data = dianggap aktif.
+const LEVEL = { kritis: 4, tinggi: 3, sedang: 2, rendah: 1, tidak_diketahui: 2 }
+const NAMA_LEVEL = ['Diabaikan', 'Rendah', 'Sedang', 'Tinggi', 'Kritis']
+const KEAMANAN = [
+  { label: 'Sangat aman', kelas: 'hijau' }, { label: 'Aman', kelas: 'hijau' }, { label: 'Kurang aman', kelas: 'kuning' },
+  { label: 'Tidak aman', kelas: 'oranye' }, { label: 'Sangat tidak aman', kelas: 'merah' },
+]
+function keamanan(s) {
+  const a = s.aktif
+  const aktif = (t) => !a || t.jenis === 'core' || (t.jenis === 'plugin' ? a.plugin : a.tema).some((x) => x.toLowerCase() === t.slug)
+  let buruk = null
+  for (const t of s.temuan) {
+    const on = aktif(t)
+    for (const i of t.id) {
+      const v = kamus.value[i] || {}
+      const alasan = []
+      let n = LEVEL[v.tingkat] ?? 2
+      if (!on) { n -= 2; alasan.push(`${JENIS[t.jenis].toLowerCase()} tidak aktif`) }
+      const j = v.judul || ''
+      if (/\((Super[ -]?)?Admin(istrator)?\+?\)|Admin\+/i.test(j)) { n -= 2; alasan.push('butuh login Admin') }
+      else if (/(Contributor|Author|Editor|Shop Manager)\+/i.test(j)) { n -= 1; alasan.push('butuh login Contributor/Author/Editor') }
+      else if (/(Subscriber|Customer)\+|Authenticated(?! \()/i.test(j) && !/Unauthenticated/i.test(j) && a && !a.daftar) { n -= 1; alasan.push('butuh akun Subscriber, pendaftaran ditutup') }
+      if (v.dieksploitasi && on) { n += 1; alasan.push('sudah dieksploitasi') }
+      n = Math.max(0, Math.min(4, n))
+      if (!buruk || n > buruk.n || (n === buruk.n && (v.skor || 0) > (buruk.v.skor || 0))) buruk = { n, t, v, alasan }
+    }
+  }
+  const tutupAktif = s.temuan.filter((t) => t.ditutup && aktif(t))
+  let lv = buruk ? Math.max(1, buruk.n) : 0
+  const why = []
+  if (buruk) why.push(`Terburuk: ${buruk.t.slug} — ${(buruk.v.judul || '?').slice(0, 120)} (${tk(buruk.v.tingkat).label}${buruk.v.skor ? ` ${buruk.v.skor}` : ''} → ${NAMA_LEVEL[buruk.n]}${buruk.alasan.length ? `: ${buruk.alasan.join(', ')}` : ''})`)
+  if (tutupAktif.length && lv < 2) { lv = 2; why.push(`Plugin aktif ditutup di wordpress.org: ${tutupAktif.map((t) => t.slug).join(', ')}`) }
+  if (!lv && intiUsang(s)) { lv = 1; why.push(`WordPress ${s.versi} usang (terbaru ${terbaru.value})`) }
+  if (!why.length) why.push('Tidak ada kerentanan tercatat, WordPress terbaru')
+  if (!a) why.push('Status aktif plugin/tema belum diketahui (scan ulang) — semua dianggap aktif')
+  return { ...KEAMANAN[lv], lv, alasan: why.join('\n') }
+}
+
 // Situs + ringkas keparahan
 const situs = computed(() => (detail.value?.situs || []).map((s) => {
   const ids = s.temuan.flatMap((t) => t.id)
@@ -198,10 +270,12 @@ const situs = computed(() => (detail.value?.situs || []).map((s) => {
   for (const i of ids) hitung[kamus.value[i]?.tingkat || 'tidak_diketahui']++
   const terburuk = Object.keys(hitung).find((k) => hitung[k]) || null
   const skor = Math.max(0, ...ids.map((i) => kamus.value[i]?.skor || 0))
-  return { ...s, ids, hitung, terburuk, skor, eksploit: ids.some((i) => kamus.value[i]?.dieksploitasi), ditutup: s.temuan.filter((t) => t.ditutup) }
+  const st = suspendData.value[detail.value?.host]?.[s.user]
+  return { ...s, ids, hitung, terburuk, skor, aman: keamanan(s), suspend: st ? st.s : s.suspend, suspendDicek: st?.t, eksploit: ids.some((i) => kamus.value[i]?.dieksploitasi), ditutup: s.temuan.filter((t) => t.ditutup) }
 }))
 const cari = ref('')
 const filter = ref('rentan')
+const saringSuspend = ref('semua')
 const FILTER = computed(() => [
   { k: 'rentan', label: 'Rentan', n: situs.value.filter((s) => s.ids.length).length },
   { k: 'kritis', label: 'Kritis', n: situs.value.filter((s) => s.hitung.kritis).length },
@@ -215,13 +289,14 @@ const situsTersaring = computed(() => {
   const f = filter.value
   return situs.value
     .filter((s) => (f === 'semua' || (f === 'rentan' && s.ids.length) || (f === 'kritis' && s.hitung.kritis) || (f === 'tinggi' && s.hitung.tinggi)
-      || (f === 'usang' && intiUsang(s)) || (f === 'ditutup' && s.ditutup.length)))
+      || (f === 'usang' && intiUsang(s)) || (f === 'ditutup' && s.ditutup.length) || f === `aman-${s.aman.lv}`))
+    .filter((s) => saringSuspend.value === 'semua' || !s.suspend)
     .filter((s) => !q || alamat(s).toLowerCase().includes(q) || s.user.includes(q)
       || s.temuan.some((t) => t.slug.includes(q) || (t.nama || '').toLowerCase().includes(q)))
-    .sort((a, b) => (TINGKAT[a.terburuk]?.urut ?? 9) - (TINGKAT[b.terburuk]?.urut ?? 9) || b.skor - a.skor || b.ids.length - a.ids.length || alamat(a).localeCompare(alamat(b)))
+    .sort((a, b) => b.aman.lv - a.aman.lv || (TINGKAT[a.terburuk]?.urut ?? 9) - (TINGKAT[b.terburuk]?.urut ?? 9) || b.skor - a.skor || b.ids.length - a.ids.length || alamat(a).localeCompare(alamat(b)))
 })
 const tampil = ref(60)
-watch([cari, filter], () => { tampil.value = 60 })
+watch([cari, filter, saringSuspend], () => { tampil.value = 60 })
 const buka = ref(new Set())
 const semuaVuln = ref(new Set())
 const urutVuln = (ids) => [...ids].sort((a, b) => tk(kamus.value[a]?.tingkat).urut - tk(kamus.value[b]?.tingkat).urut || (kamus.value[b]?.skor || 0) - (kamus.value[a]?.skor || 0))
@@ -356,6 +431,36 @@ async function jalankanPerbaiki() {
 // Hasil job perbaikan terakhir (berjalan atau selesai) untuk server terpilih
 const hasilPerbaiki = computed(() => (job.value?.jenis === 'perbaiki' && job.value.target === terpilih.value?.host ? job.value : null))
 const statusKomp = { Updated: 'diperbarui', 'Up to date': 'sudah terbaru', Error: 'gagal' }
+// Perbaikan terakhir per path: dari riwayat (detail.perbaikan) + job perbaikan yang baru selesai di server ini
+const perbaikanTerakhir = computed(() => {
+  const out = { ...(detail.value?.perbaikan || {}) }
+  const j = job.value
+  if (j?.jenis === 'perbaiki' && j.target === detail.value?.host && j.selesai) {
+    for (const h of j.situs || []) out[h.path] = { ...h, job: { id: j.id, mulai: j.mulai, selesai: j.selesai, oleh: j.oleh, user: j.user, status: j.status, error: j.error } }
+  }
+  return out
+})
+const JENIS_LANGKAH = { plugin: 'Plugin', 'plugin-ulang': 'Plugin', tema: 'Tema' }
+// Kelompokkan hasil satu situs: diperbarui / gagal (+ penyebab) / sudah terbaru / dilewati pengaman
+function ringkasPerb(h) {
+  const komp = new Map()  // plugin-ulang sesudah inti baru menimpa hasil plugin pertama
+  for (const l of h.langkah || []) for (const k of l.komponen || []) komp.set(`${JENIS_LANGKAH[l.langkah]}|${k.slug}`, { ...k, jenis: JENIS_LANGKAH[l.langkah] })
+  const semua = [...komp.values()]
+  const diperbarui = semua.filter((k) => k.status === 'Updated')
+  const gagal = semua.filter((k) => k.status !== 'Updated' && k.status !== 'Up to date')
+  const inti = (h.langkah || []).find((l) => l.langkah === 'inti')
+  const keInti = h.cek?.keputusan?.find((k) => k.jenis === 'core')?.ke
+  if (inti?.ok && !/already|sudah/i.test(inti.pesan || '')) diperbarui.push({ jenis: 'Inti', slug: 'WordPress', dari: h.cek?.wp, ke: keInti || '', status: 'Updated' })
+  return {
+    diperbarui, gagal, terbaru: semua.filter((k) => k.status === 'Up to date'),
+    langkahGagal: (h.langkah || []).filter((l) => !l.ok),
+    dilewati: (h.cek?.keputusan || []).filter((k) => !k.ok),
+  }
+}
+const ringkasTeks = (r) => [r.diperbarui.length && `${r.diperbarui.length} diperbarui`, (r.gagal.length + r.langkahGagal.length) && `${r.gagal.length + r.langkahGagal.length} gagal`,
+  r.dilewati.length && `${r.dilewati.length} dilewati`].filter(Boolean).join(' · ') || 'tidak ada perubahan'
+const rincian = reactive({ buka: false, h: null, job: null, r: null })
+const bukaRincian = (h, j) => Object.assign(rincian, { buka: true, h, job: j || h.job, r: ringkasPerb(h) })
 
 // ---- cPGuard pembanding ----
 const cpg = computed(() => detail.value?.cpguard)
@@ -400,7 +505,8 @@ const cacheHasil = new Map()
       <div v-if="berjalan" class="kemajuan kartu" role="status">
         <span class="putar besar" aria-hidden="true" />
         <div>
-          <b v-if="job.jenis === 'perbaiki'">Perbaiki akun {{ job.user }} · {{ job.server.join(', ') }}</b>
+          <b v-if="job.jenis === 'akun'">Scan ulang akun {{ job.user }} · {{ job.server.join(', ') }}</b>
+          <b v-else-if="job.jenis === 'perbaiki'">Perbaiki akun {{ job.user }} · {{ job.server.join(', ') }}</b>
           <b v-else>Scan CMS {{ job.target === 'semua' ? 'semua server' : job.server.join(', ') }}</b>
           <span class="redup"> · {{ job.oleh }} · {{ durasi(job) }}</span>
           <div class="redup kecil-teks">{{ labelKemajuan }}</div>
@@ -413,29 +519,12 @@ const cacheHasil = new Map()
       <section v-if="hasilPerbaiki?.situs?.length" class="kartu hasil-perb" aria-label="Hasil perbaikan">
         <div class="kartu-judul"><h2><Ikon nama="perisai" :ukuran="16" /> Hasil perbaikan akun {{ hasilPerbaiki.user }}
           <small class="redup">{{ hasilPerbaiki.oleh }} · {{ tanggalWaktu(hasilPerbaiki.mulai) }}</small></h2></div>
-        <div v-for="h in hasilPerbaiki.situs" :key="h.path" class="perb-situs">
-          <div class="rinci-kepala">
-            <span class="titik" :class="h.ok ? 'baik' : 'bahaya'" aria-hidden="true" />
-            <b>{{ relatif(h.path) || h.domain }}</b>
-            <span v-if="h.error" class="lencana merah">{{ pesanGalat(h.error) }}</span>
-            <span v-if="h.dikembalikan" class="lencana merah">BERANDA ERROR → PLUGIN/TEMA DIKEMBALIKAN</span>
-            <small class="redup">beranda {{ h.http_sebelum ?? '-' }} → {{ h.http_sesudah ?? '-' }}<template v-if="h.http_akhir"> → {{ h.http_akhir }}</template></small>
-          </div>
-          <ul class="daftar-vuln">
-            <li v-for="(l, i) in h.langkah || []" :key="i">
-              <span class="lencana" :class="l.ok ? 'hijau' : 'merah'">{{ l.langkah }}</span>
-              <template v-if="l.komponen?.length"><span v-for="k in l.komponen" :key="k.slug" class="komp">{{ k.slug }} <span class="redup">{{ k.dari }} → {{ k.ke }} · {{ statusKomp[k.status] || k.status }}</span></span></template>
-              <small v-else class="redup">{{ l.pesan }}</small>
-            </li>
-          </ul>
-          <ul v-if="h.cek?.keputusan?.some((k) => !k.ok)" class="daftar-vuln">
-            <li v-for="k in h.cek.keputusan.filter((x) => !x.ok)" :key="k.jenis + k.slug" class="redup"><span class="lencana kuning">dilewati</span> {{ k.slug }} — {{ k.alasan }}</li>
-          </ul>
-          <small v-if="h.kosong" class="redup blok">Semua komponen dilewati pengaman — situs tidak diubah.</small>
-          <small v-if="h.inti_dikembalikan" class="merah-teks blok">Inti WordPress dikembalikan ke versi sebelumnya (berkas); database tetap versi baru.</small>
-          <small v-if="h.css_dipulihkan" class="hijau-teks blok">CSS Kirki ({{ h.css_dipulihkan.join(', ') }}) hilang sesudah update tema → dipulihkan ke CSS Tambahan.</small>
-          <small v-if="h.cadangan" class="redup">Cadangan: <code>{{ h.cadangan }}</code></small>
-          <small v-if="h.pesan" class="merah-teks blok">{{ h.pesan }}</small>
+        <div v-for="h in hasilPerbaiki.situs" :key="h.path" class="perb-situs rinci-kepala">
+          <span class="titik" :class="h.ok ? 'baik' : 'bahaya'" aria-hidden="true" />
+          <b>{{ relatif(h.path) || h.domain }}</b>
+          <span v-if="h.error" class="lencana merah">{{ pesanGalat(h.error) }}</span>
+          <small class="redup">{{ ringkasTeks(ringkasPerb(h)) }}</small>
+          <button type="button" class="tombol garis kecil" @click="bukaRincian(h, hasilPerbaiki)">Rincian</button>
         </div>
       </section>
 
@@ -496,21 +585,36 @@ const cacheHasil = new Map()
           <template v-if="tab === 'situs'">
             <div class="alat">
               <input v-model="cari" type="search" placeholder="Cari domain / akun / plugin" aria-label="Cari situs">
-              <div class="chip-filter" role="group" aria-label="Saring situs">
-                <button v-for="f in FILTER" :key="f.k" type="button" :class="{ aktif: filter === f.k }" @click="filter = f.k">{{ f.label }} {{ f.n }}</button>
-              </div>
+              <select v-model="filter" class="saring" aria-label="Saring situs">
+                <option v-for="f in FILTER" :key="f.k" :value="f.k">{{ f.label }} ({{ f.n }})</option>
+                <optgroup label="Keamanan">
+                  <option v-for="(k, lv) in KEAMANAN" :key="lv" :value="`aman-${lv}`">{{ k.label }} ({{ situs.filter((s) => s.aman.lv === lv).length }})</option>
+                </optgroup>
+              </select>
+              <select v-model="saringSuspend" class="saring" aria-label="Saring status suspend">
+                <option value="semua">Semua akun</option>
+                <option value="aktif">Tidak disuspend</option>
+              </select>
             </div>
             <p v-if="!situsTersaring.length" class="bersih"><Ikon nama="centang" :ukuran="18" /> {{ filter === 'semua' ? 'Tidak ada situs WordPress.' : 'Tidak ada situs di saringan ini.' }}</p>
             <div v-else class="tabel-wadah">
               <table class="tabel">
-                <thead><tr><th scope="col">Situs</th><th scope="col">WordPress</th><th scope="col">Kerentanan</th><th scope="col">Komponen rentan</th><th scope="col"><span class="sr">Rincian</span></th></tr></thead>
+                <thead><tr><th scope="col">Situs</th><th scope="col">Keamanan</th><th scope="col">WordPress</th><th scope="col">Kerentanan</th><th scope="col">Komponen rentan</th><th scope="col"><span class="sr">Rincian</span></th></tr></thead>
                 <tbody>
                   <template v-for="s in situsTersaring.slice(0, tampil)" :key="s.path">
                     <tr :class="{ dibuka: buka.has(s.path) }">
                       <td class="situs-sel">
                         <a :href="`https://${alamat(s)}`" target="_blank" rel="noopener noreferrer">{{ alamat(s) }}</a>
-                        <small class="redup blok">{{ s.user }} · {{ s.plugin.length }} plugin · {{ s.tema.length }} tema</small>
+                        <span v-if="s.suspend" class="lencana merah" title="Akun hosting disuspend di DirectAdmin">SUSPEND</span>
+                        <button type="button" class="cek-suspend" :disabled="mengecekSuspend.has(s.user)" :aria-busy="mengecekSuspend.has(s.user)"
+                          :title="`Cek ulang suspend & scan ulang akun ${s.user}`" :aria-label="`Cek ulang suspend & scan ulang akun ${s.user}`" @click="cekSuspend(s.user)">
+                          <span v-if="mengecekSuspend.has(s.user)" class="putar" aria-hidden="true" /><Ikon v-else nama="ulang" :ukuran="13" />
+                        </button>
+                        <small class="redup blok">{{ s.user }} · {{ s.plugin.length }} plugin · {{ s.tema.length }} tema<template v-if="s.suspendDicek"> · suspend dicek {{ tanggalWaktu(s.suspendDicek) }}</template></small>
+                        <button v-if="perbaikanTerakhir[s.path]" type="button" class="tautan-perb" :class="perbaikanTerakhir[s.path].ok ? 'hijau-teks' : 'merah-teks'"
+                          @click="bukaRincian(perbaikanTerakhir[s.path])">Terakhir diperbaiki {{ tanggalWaktu(perbaikanTerakhir[s.path].job?.selesai || perbaikanTerakhir[s.path].job?.mulai) }} · {{ perbaikanTerakhir[s.path].ok ? 'berhasil' : 'gagal' }} ▾</button>
                       </td>
+                      <td class="nowrap"><span class="lencana" :class="s.aman.kelas" :title="s.aman.alasan">{{ s.aman.label }}</span></td>
                       <td class="nowrap">
                         {{ s.versi }}
                         <span v-if="intiUsang(s)" class="lencana kuning" :title="`Versi terbaru ${terbaru}`">USANG</span>
@@ -533,7 +637,7 @@ const cacheHasil = new Map()
                       </td>
                     </tr>
                     <tr v-if="buka.has(s.path)" class="baris-rinci">
-                      <td colspan="5">
+                      <td colspan="6">
                         <div class="rinci-isi">
                         <p class="redup kecil-teks"><code>{{ s.path }}</code><template v-if="s.mu_plugin.length"> · mu-plugins: {{ s.mu_plugin.join(', ') }}</template></p>
                         <button v-if="jobPerbaiki?.user === s.user" type="button" class="tombol garis kecil" disabled aria-busy="true"><span class="putar" aria-hidden="true" /> {{ labelLoading }} akun {{ s.user }}</button>
@@ -629,7 +733,7 @@ const cacheHasil = new Map()
               <li v-for="r in riwayatServer" :key="r.id">
                 <span class="titik" :class="r.status === 'selesai' ? 'baik' : 'bahaya'" aria-hidden="true" />
                 <div>
-                  <b>{{ r.jenis === 'perbaiki' ? `Perbaiki akun ${r.user} · ` : '' }}{{ r.target === 'semua' ? 'Semua server' : (r.hasil?.[0]?.server || r.target) }}</b>
+                  <b>{{ r.jenis === 'perbaiki' ? `Perbaiki akun ${r.user} · ` : r.jenis === 'akun' ? `Scan ulang akun ${r.user} · ` : '' }}{{ r.target === 'semua' ? 'Semua server' : (r.hasil?.[0]?.server || r.target) }}</b>
                   <span v-if="r.jenis === 'perbaiki' && r.situs" class="redup kecil-teks"> {{ r.situs.filter((h) => h.ok).length }}/{{ r.situs.length }} situs berhasil<template v-if="r.akun"> · sisa rentan {{ r.akun.rentan }}/{{ r.akun.situs }}</template></span>
                   <span v-if="r.status !== 'selesai'" class="lencana merah">GAGAL · {{ r.error }}</span>
                   <small class="redup blok">{{ r.oleh }} · {{ durasi(r) }}<template v-for="h in r.hasil || []" :key="h.host"> · {{ h.server }}: {{ h.ok ? `${h.rentan}/${h.situs} rentan` : `gagal (${pesanGalat(h.error)})` }}</template></small>
@@ -688,6 +792,49 @@ const cacheHasil = new Map()
         <button type="button" class="tombol bahaya" :disabled="proses || berjalan || perb.memeriksa || !jumlahKomp" @click="jalankanPerbaiki">Jalankan perbaikan</button>
       </div>
     </Dialog>
+    <Dialog :buka="rincian.buka" :judul="`Perbaikan ${rincian.h ? (relatif(rincian.h.path) || rincian.h.domain) : ''}`" lebar="680px" @tutup="rincian.buka = false">
+      <template v-if="rincian.h">
+        <div class="rinci-kepala">
+          <span class="titik" :class="rincian.h.ok ? 'baik' : 'bahaya'" aria-hidden="true" />
+          <b>{{ rincian.h.ok ? 'Berhasil' : 'Gagal' }}</b>
+          <span v-if="rincian.h.error" class="lencana merah">{{ pesanGalat(rincian.h.error) }}</span>
+          <span v-if="rincian.h.dikembalikan" class="lencana merah">BERANDA ERROR → PLUGIN/TEMA DIKEMBALIKAN</span>
+          <small class="redup">beranda {{ rincian.h.http_sebelum ?? '-' }} → {{ rincian.h.http_sesudah ?? '-' }}<template v-if="rincian.h.http_akhir"> → {{ rincian.h.http_akhir }}</template></small>
+        </div>
+        <p v-if="rincian.job" class="redup kecil-teks">Oleh {{ rincian.job.oleh }} · {{ tanggalWaktu(rincian.job.selesai || rincian.job.mulai) }} · akun {{ rincian.job.user }}</p>
+        <div class="perb-rinci">
+          <details v-if="rincian.r.gagal.length || rincian.r.langkahGagal.length" open>
+            <summary class="merah-teks">Gagal ({{ rincian.r.gagal.length + rincian.r.langkahGagal.length }})</summary>
+            <ul class="daftar-vuln">
+              <li v-for="k in rincian.r.gagal" :key="'g' + k.jenis + k.slug"><span class="lencana abu">{{ k.jenis }}</span> <b>{{ k.slug }}</b> <span class="redup">{{ k.dari }} → {{ k.ke || '?' }} · {{ statusKomp[k.status] || k.status }}</span>
+                <small class="merah-teks blok">Penyebab: {{ k.alasan || 'tidak tercatat (perbaikan sebelum 22 Okt atau wp-cli tidak memberi pesan)' }}</small></li>
+              <li v-for="l in rincian.r.langkahGagal" :key="'l' + l.langkah"><span class="lencana merah">{{ l.langkah }}</span> <span class="merah-teks">{{ l.pesan || 'gagal tanpa pesan' }}</span>
+                <ul v-if="l.catatan?.length" class="catatan-perb"><li v-for="(c, i) in l.catatan" :key="i"><code>{{ c }}</code></li></ul></li>
+            </ul>
+          </details>
+          <details :open="!rincian.r.gagal.length && !rincian.r.langkahGagal.length">
+            <summary class="hijau-teks">Diperbarui ({{ rincian.r.diperbarui.length }})</summary>
+            <ul class="daftar-vuln">
+              <li v-for="k in rincian.r.diperbarui" :key="'d' + k.jenis + k.slug"><span class="lencana abu">{{ k.jenis }}</span> <b>{{ k.slug }}</b> <span class="redup">{{ k.dari || '?' }} → {{ k.ke || 'terbaru' }}</span></li>
+              <li v-if="!rincian.r.diperbarui.length" class="redup">Tidak ada komponen yang berubah versi.</li>
+            </ul>
+          </details>
+          <details v-if="rincian.r.terbaru.length">
+            <summary>Sudah terbaru ({{ rincian.r.terbaru.length }})</summary>
+            <ul class="daftar-vuln"><li v-for="k in rincian.r.terbaru" :key="'t' + k.jenis + k.slug"><span class="lencana abu">{{ k.jenis }}</span> {{ k.slug }} <span class="redup">{{ k.dari }}</span></li></ul>
+          </details>
+          <details v-if="rincian.r.dilewati.length" open>
+            <summary class="kuning-teks">Dilewati pengaman ({{ rincian.r.dilewati.length }})</summary>
+            <ul class="daftar-vuln"><li v-for="k in rincian.r.dilewati" :key="'s' + k.jenis + k.slug"><span class="lencana kuning">{{ k.jenis }}</span> {{ k.slug }} — {{ k.alasan }}</li></ul>
+          </details>
+        </div>
+        <small v-if="rincian.h.kosong" class="redup blok">Semua komponen dilewati pengaman — situs tidak diubah.</small>
+        <small v-if="rincian.h.inti_dikembalikan" class="merah-teks blok">Inti WordPress dikembalikan ke versi sebelumnya (berkas); database tetap versi baru.</small>
+        <small v-if="rincian.h.css_dipulihkan" class="hijau-teks blok">CSS Kirki ({{ rincian.h.css_dipulihkan.join(', ') }}) hilang sesudah update tema → dipulihkan ke CSS Tambahan.</small>
+        <small v-if="rincian.h.pesan" class="merah-teks blok">{{ rincian.h.pesan }}</small>
+        <small v-if="rincian.h.cadangan" class="redup blok">Cadangan: <code>{{ rincian.h.cadangan }}</code></small>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -743,6 +890,12 @@ const cacheHasil = new Map()
 .situs-sel { min-width: 220px; overflow-wrap: anywhere; }
 .situs-sel a { color: var(--teks-kuat); font-weight: 600; text-decoration: none; }
 .situs-sel a:hover { text-decoration: underline; }
+.alat .saring { width: auto; min-width: 200px; max-width: 100%; }
+.cek-suspend { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 0; margin-left: 2px; vertical-align: middle;
+  border: 0; border-radius: 6px; background: none; color: var(--teks-3); cursor: pointer; }
+.cek-suspend:hover:not(:disabled) { color: var(--teks-kuat); background: color-mix(in srgb, currentColor 12%, transparent); }
+.cek-suspend:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
+.cek-suspend:disabled { cursor: progress; }
 .ket { font-size: 13px; color: var(--teks-2); overflow-wrap: anywhere; min-width: 180px; }
 .komp { display: inline-block; margin: 0 8px 3px 0; font-size: 12.5px; }
 .blok { display: block; }
@@ -777,6 +930,12 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .daftar-perb { max-height: 46vh; overflow-y: auto; border: 1px solid var(--garis); border-radius: 10px; padding: 4px 12px; }
 .perb-situs { padding: 8px 0; border-top: 1px solid var(--garis); font-size: 13.5px; overflow-wrap: anywhere; }
 .perb-situs:first-child { border-top: 0; }
+.tautan-perb { display: block; margin-top: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.tautan-perb:hover { text-decoration: underline; }
+.tautan-perb:focus-visible { outline: 2px solid var(--aksen-terang); outline-offset: 1px; }
+.perb-rinci { display: grid; gap: 10px; margin: 10px 0; font-size: 13px; }
+.perb-rinci summary { cursor: pointer; font-weight: 600; }
+.catatan-perb { margin: 4px 0 0 4px; padding: 0; list-style: none; display: grid; gap: 2px; font-size: 12px; }
 .perb-situs ul { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 3px; }
 .perb-situs li.lewat > .lencana, .perb-situs li.lewat > .redup { opacity: .55; }
 .perb-situs li .kuning-teks { margin-left: 4px; }

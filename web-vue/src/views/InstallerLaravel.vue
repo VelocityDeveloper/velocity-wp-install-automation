@@ -10,6 +10,7 @@ import PilihOnProgress from '../components/laravel/PilihOnProgress.vue'
 import PilihNama from '../components/laravel/PilihNama.vue'
 import UbahStatus from '../components/laravel/UbahStatus.vue'
 import HapusProyek from '../components/laravel/HapusProyek.vue'
+import CatatanTim from '../components/laravel/CatatanTim.vue'
 import ServerDev from '../components/laravel/ServerDev.vue'
 import { pakaiPolling, kirim, waktuLalu } from '../api.js'
 import { namaSaya, KONDISI_SERVER, STATUS_PROYEK, TAHAP, indeksTahap, pesanGalat, hariJam, tabUrl, reviewMendesak, angkaToken } from '../laravel.js'
@@ -89,6 +90,7 @@ const jumlah = (n) => proyek.value.filter((p) => cocok(p, n) && cocokCari(p)).le
 // Ubah status langsung dari kartu daftar (tombol di kartu tidak membuka halaman project)
 const ubahStatus = ref(null)
 const hapusProyek = ref(null)
+const catatanTim = ref(null)
 const selesaiFitur = (p) => (p.fitur_status?.ok || 0)
 // Peringatan review lintas project: fitur yang sudah dikerjakan agen tapi belum dicek webmaster (terlama dulu)
 const antreReview = computed(() => proyek.value.filter((p) => aktif(p) && p.review?.menunggu).sort((a, b) => (a.review.tertua || 0) - (b.review.tertua || 0)))
@@ -197,6 +199,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
 
     <UbahStatus :p="ubahStatus" @tutup="ubahStatus = null" @ubah="muatUlang" />
     <HapusProyek :p="hapusProyek" @tutup="hapusProyek = null" @hapus="muatUlang" />
+    <CatatanTim :p="catatanTim" @tutup="catatanTim = null" @ubah="muatUlang" />
 
     <section class="kartu" aria-labelledby="judul-daftar">
       <div class="kartu-judul">
@@ -225,6 +228,7 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
             </div>
             <div class="p-kanan">
               <span class="redup">{{ p.pm ? `PM ${p.pm} · ` : '' }}{{ waktuLalu(p.dibuat) }}</span>
+              <button v-if="!p.catatan_tim" type="button" class="tombol-catatan" :title="`Tambah catatan ${p.slug}`" @click.prevent.stop="catatanTim = p">+ Catatan</button>
               <button v-if="!aktif(p)" type="button" class="tombol-status" :class="p.status_proyek" :title="`Ubah status ${p.slug}`" @click.prevent.stop="ubahStatus = p">
                 <i aria-hidden="true" />{{ STATUS_PROYEK[p.status_proyek]?.label }}<span aria-hidden="true" class="panah">▾</span>
               </button>
@@ -244,6 +248,9 @@ const JOB = { susun: 'Claude menyusun brief', diagram: 'Claude menyusun ERD & fl
           <p v-if="!aktif(p) && p.status_info" class="redup meta alasan">
             {{ STATUS_PROYEK[p.status_proyek]?.label }} oleh {{ p.status_info.oleh }} {{ waktuLalu(p.status_info.waktu) }}<template v-if="p.status_info.alasan"> — {{ p.status_info.alasan }}</template>
           </p>
+          <button v-if="p.catatan_tim" type="button" class="catatan-tim" :title="`Ubah catatan · ${p.catatan_tim.oleh} ${waktuLalu(p.catatan_tim.waktu)}`" @click.prevent.stop="catatanTim = p">
+            <b>Catatan</b> {{ p.catatan_tim.teks }} <span class="redup">— {{ p.catatan_tim.oleh }}, {{ waktuLalu(p.catatan_tim.waktu) }}</span>
+          </button>
           <ol class="stepper" :aria-label="`Tahap ${p.slug}`">
             <li v-for="(t, i) in TAHAP" :key="t.kunci" :class="{ lewat: i < indeksTahap(p.tahap), kini: i === indeksTahap(p.tahap) }">
               <i aria-hidden="true" />{{ t.label }}
@@ -322,6 +329,11 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; color: va
 .tombol-status.batal i { background: var(--bahaya); }
 .tombol-hapus { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 999px; border: 1px solid transparent; background: none; color: var(--teks-2); cursor: pointer; }
 .tombol-hapus:hover, .tombol-hapus:focus-visible { color: var(--bahaya); border-color: rgba(255, 107, 107, .5); background: rgba(255, 107, 107, .1); }
+.tombol-catatan { padding: 3px 8px; border-radius: 999px; border: 1px dashed var(--garis); background: none; color: var(--teks-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.tombol-catatan:hover, .tombol-catatan:focus-visible { color: var(--teks); border-color: var(--aksen-terang); }
+.catatan-tim { text-align: left; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--garis); border-left: 3px solid var(--waspada); background: var(--kartu); color: var(--teks); font: inherit; font-size: 13px; white-space: pre-line; cursor: pointer; }
+.catatan-tim:hover, .catatan-tim:focus-visible { border-color: var(--aksen-terang); }
+.catatan-tim b { color: var(--waspada); margin-right: 4px; }
 .tombol-status .panah { font-size: 10px; opacity: .6; }
 .nama { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
 .id { padding: 2px 7px; border-radius: 6px; background: var(--kartu); color: var(--teks-2); font-size: 12px; }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import Ikon from '../components/Ikon.vue'
 import GrafikGaris from '../components/GrafikGaris.vue'
 import { pakaiPolling, ambil, ukuranBerkas, waktuLalu } from '../api.js'
@@ -106,9 +106,6 @@ const hitungPrio = computed(() => {
 const kurangTinggi = computed(() => (lap.value?.kurang || []).filter((k) => k.prioritas === 'tinggi').slice(0, 3))
 const picTeks = (k) => (k.pic && k.pic !== '-' ? k.pic : '')
 
-// Kotak Claude Brain hanya bila /brain/ bisa diakses (khusus jaringan kantor)
-const brainAda = ref(false)
-onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' }).then((r) => { brainAda.value = r.ok }).catch(() => {}) })
 </script>
 
 <template>
@@ -236,14 +233,6 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
         <p v-if="cron.total > cron.daftar.length" class="redup">{{ cron.daftar.length }} dari {{ cron.total }} cronjob ditampilkan.</p>
       </section>
     </div>
-
-    <section v-if="brainAda" class="kartu brain" aria-labelledby="judul-brain">
-      <div class="kartu-judul">
-        <h2 id="judul-brain">Claude Brain</h2>
-        <RouterLink to="/brain" class="redup">Buka lengkap</RouterLink>
-      </div>
-      <iframe src="/brain/?mini=1" title="Graf memory dan skill Claude" loading="lazy" allow="fullscreen" />
-    </section>
   </div>
 </template>
 
@@ -318,7 +307,6 @@ onMounted(() => { fetch('/brain/data.json', { method: 'HEAD', cache: 'no-store' 
 .cron { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .cron code { display: block; padding: 8px 10px; border-radius: 8px; background: var(--kartu-2); color: var(--teks-2); font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 
-.brain iframe { display: block; width: 100%; height: clamp(380px, 68vh, 760px); border: 0; border-radius: 12px; background: #0d1210; }
 
 @media (max-width: 1200px) {
   .stat { grid-template-columns: repeat(2, minmax(0, 1fr)); }

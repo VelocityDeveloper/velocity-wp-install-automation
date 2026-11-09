@@ -54,6 +54,11 @@ menjawab pertanyaan, jadi putuskan sendiri dan catat alasannya di ringkasan akhi
   {{HALAMAN}}. Halaman anak `layanan/<x>` ditulis `layanan__<x>.html`. Halaman yang tidak kamu tulis
   tetap memakai hasil generator.
 - `bagian-header.html`, `bagian-footer.html` — template part (mulai dari `kerja/awal/tema-parts/`).
+- `bagian-arsip.html` — daftar tulisan (halaman berita/blog, kategori, tag, cari), titik awal
+  `kerja/awal/tema-parts/arsip.html`. Tulis bila arsip referensi (potret artikel) beda dari situs,
+  mis. kartu tanpa sidebar: isinya `core/query` `inherit:true` + `core/post-template` + `core/post-*`,
+  judul dari `velocity/judul-arsip`, tanpa judul/isi artikel statis. Header & footer dipasang
+  otomatis di sekitarnya; jangan dimasukkan ke berkas ini.
 - `gaya.css` — CSS tambahan situs. Beri awalan kelas `vc-` untuk kelas buatanmu, pakai token
   `var(--wp--preset--...)`, sertakan media query HP. Tanpa `@import`.
 - Catatan bebas di `kerja/`.

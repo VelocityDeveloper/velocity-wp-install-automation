@@ -439,7 +439,7 @@ def ringkas(slug):
     inst = install_state(slug)
     hitung = {s: sum(1 for f in fitur if f.get('status') == s) for s in STATUS_FITUR}
     return {
-        **{k: p.get(k) for k in ('slug', 'judul', 'klien', 'domain', 'onprogress', 'app', 'pm', 'dibuat', 'estimasi_kunci')},
+        **{k: p.get(k) for k in ('slug', 'judul', 'klien', 'domain', 'onprogress', 'app', 'pm', 'dibuat', 'estimasi_kunci', 'catatan_tim')},
         'tahap': tahap(p, fitur, inst), 'job': pekerjaan(slug),
         'status_proyek': status_proyek(p), 'status_info': p.get('status'),
         'fitur_total': len(fitur), 'fitur_status': hitung,
@@ -722,7 +722,7 @@ def _bersihkan_halaman(daftar):
     for h in (daftar if isinstance(daftar, list) else [])[:40]:
         if not isinstance(h, dict):
             continue
-        nama = str(h.get('halaman') or '').strip()[:120]
+        nama = str(h.get('halaman') or '').strip()[:200]
         peran = [str(x).strip()[:60] for x in (h.get('peran') or []) if str(x).strip()][:12]
         if nama and peran:
             hasil.append({'halaman': nama, 'peran': peran})
@@ -933,6 +933,19 @@ def ubah_status(slug, payload):
         ubah_proyek(slug, lambda p: p.update(status={'nilai': nilai, 'alasan': alasan, 'oleh': oleh, 'waktu': sekarang()}))
     catat(slug, oleh, f'mengubah status project jadi {STATUS_PROYEK[nilai]}' + (f' — {alasan}' if alasan and nilai != 'aktif' else ''))
     return {'status_proyek': nilai, 'galat_preview': atur_preview_status(slug, nilai, oleh)}
+
+
+# Catatan tim per project di daftar /installer/laravel (permintaan user 5 Nov 2026). Terpisah dari catatan brief
+# (catatan.md) supaya TIDAK ikut dibaca agen Claude & tidak menaikkan versi brief. Boleh diubah walau project Ditunda/Batal.
+def ubah_catatan_tim(slug, payload):
+    oleh = _teks(payload, 'oleh', True)
+    teks = str(payload.get('teks') or '').strip()[:2000]
+    if teks:
+        ubah_proyek(slug, lambda p: p.update(catatan_tim={'teks': teks, 'oleh': oleh, 'waktu': sekarang()}))
+    else:
+        ubah_proyek(slug, lambda p: p.pop('catatan_tim', None))
+    catat(slug, oleh, 'mengubah catatan tim' if teks else 'menghapus catatan tim')
+    return {'catatan_tim': teks}
 
 
 # Preview contoh tampilan (19 Okt, permintaan user): Ditunda/Batal → folder publik dicabut (kantor tetap lihat pratinjau
@@ -1637,7 +1650,9 @@ def setuju_klien(kode, payload, ip=''):
 
 def path_contoh(slug, nama):
     """Berkas mockup untuk pratinjau di dashboard (index.html, dashboard.html, aset/gambar-N.ext) atau None."""
-    if nama not in CONTOH_HALAMAN and not re.fullmatch(r'aset/(gambar|foto)-\d{1,2}\.(png|jpe?g|webp|gif)', nama or ''):
+    # demo buatan sesi Claude memakai app.css/app.js/konsep.html terpisah di akar contoh/
+    if nama not in CONTOH_HALAMAN and not re.fullmatch(r'aset/(gambar|foto)-\d{1,2}\.(png|jpe?g|webp|gif)', nama or '') \
+            and not re.fullmatch(r'[A-Za-z0-9_-]{1,60}\.(css|js|html|png|jpe?g|webp)', nama or ''):
         return None
     p = folder_contoh(slug) / nama
     return p if p.is_file() else None
@@ -1810,7 +1825,7 @@ AKSI_POST = {
     'pilih_platform': pilih_platform, 'hapus_dokumen': hapus_dok, 'tanya': tandai_pertanyaan,
     'rangkuman': lambda s, b: mulai_brief(s, b, 'rangkuman'),
     'contoh': lambda s, b: mulai_brief(s, b, 'contoh'), 'terbitkan_contoh': aksi_terbitkan_contoh,
-    'acc_desain': acc_desain,
+    'acc_desain': acc_desain, 'catatan_tim': ubah_catatan_tim,
 }
 KODE_GALAT = {'server_tidak_dikenal': 404, 'server_selalu_nyala': 409, 'systemctl_gagal': 500, 'sedang_berjalan': 409, 'slug_dipakai': 409, 'folder_exists': 409, 'sudah_diinstall': 409,
               'sudah_dikunci': 409, 'proyek_nonaktif': 409, 'alasan_wajib': 400, 'konfirmasi_salah': 400, 'url_tidak_sah': 400, 'preview_belum_diatur': 503, 'payload_too_large': 413, 'db_root_missing': 503, 'no_port': 503, 'tidak_ada': 404}
@@ -1845,7 +1860,7 @@ def handle(metode, path, query, payload):
         if len(bagian) == 3 and bagian[0] == 'p' and ID_RE.match(bagian[1]) and bagian[2] in AKSI_POST:
             if not (folder(bagian[1]) / 'proyek.json').is_file():
                 return 404, {'error': 'tidak_ada'}
-            if bagian[2] not in ('status', 'hapus') and status_proyek(baca_json(folder(bagian[1]) / 'proyek.json', {})) != 'aktif':
+            if bagian[2] not in ('status', 'hapus', 'catatan_tim') and status_proyek(baca_json(folder(bagian[1]) / 'proyek.json', {})) != 'aktif':
                 raise ValueError('proyek_nonaktif')
             return 200, AKSI_POST[bagian[2]](bagian[1], payload)
         return 404, {'error': 'tidak_ada'}

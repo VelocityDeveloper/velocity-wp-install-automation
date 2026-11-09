@@ -27,13 +27,16 @@ const AiModel = () => import('./views/AiModel.vue')
 const Token = () => import('./views/Token.vue')
 const TokenProyek = () => import('./views/TokenProyek.vue')
 const Projects = () => import('./views/Projects.vue')
+const Staging = () => import('./views/Staging.vue')
 const Tutorial = () => import('./views/Tutorial.vue')
 const NotifEmail = () => import('./views/NotifEmail.vue')
 const Report = () => import('./views/Report.vue')
+const Migrasi = () => import('./views/Migrasi.vue')
 const Berkas = () => import('./views/Berkas.vue')
 const PcBackup = () => import('./views/PcBackup.vue')
 const PcRestore = () => import('./views/PcRestore.vue')
 const PcNextcloud = () => import('./views/PcNextcloud.vue')
+const ObjectStorage = () => import('./views/ObjectStorage.vue')
 const VelocityUpdate = () => import('./views/VelocityUpdate.vue')
 const Profil = () => import('./views/Profil.vue')
 const Security = () => import('./views/Security.vue')
@@ -65,13 +68,16 @@ const routes = [
   { path: '/token/proyek', component: TokenProyek, meta: { judul: 'Token per Project' } },
   { path: '/paket', component: Paket, meta: { judul: 'Paket' } },
   { path: '/projects', component: Projects, meta: { judul: 'Project Lokal' } },
+  { path: '/staging', component: Staging, meta: { judul: 'Staging' } },
   { path: '/tutorial', component: Tutorial, meta: { judul: 'Statistik Tutorial' } },
+  { path: '/migrasi', component: Migrasi, meta: { judul: 'Migrasi Farnaz' } },
   { path: '/berkas', component: Berkas, meta: { judul: 'File Manager' } },
   { path: '/pc-backup', redirect: '/pc-backup/status' },
   { path: '/pc-backup/status', component: PcBackup, meta: { judul: 'Status Backup' } },
   { path: '/pc-backup/berkas', component: Berkas, meta: { judul: 'File Manager PC Backup' } },
   { path: '/pc-backup/backup', component: PcRestore, meta: { judul: 'Backup' } },
   { path: '/pc-backup/nextcloud', component: PcNextcloud, meta: { judul: 'Nextcloud' } },
+  { path: '/object-storage', component: ObjectStorage, meta: { judul: 'Object Storage' } },
   { path: '/pc-backup/restore', redirect: '/pc-backup/backup' },
   { path: '/report', component: Report, meta: { judul: 'Report Harian' } },
   { path: '/notif-email', component: NotifEmail, meta: { judul: 'Notif Email' } },

@@ -14,7 +14,7 @@
 .vb-tip { font-size: 12px; color: #757575; margin: 0; }
 .vb-ikon--tambah { width: 54px; height: 54px; border: 1.5px dashed #c9a24a; border-radius: 12px; background: #fffaf0; color: #a8801f; font-size: 24px; cursor: pointer; }
 .vb-iconbox__icon, .vb-stat__icon, .vb-btn__icon, .vb-step__num { cursor: pointer; }
-.vb-ssr a, .vb-ssr button, .vb-ssr input, .vb-ssr select, .vb-ssr textarea { pointer-events: none; }
+.vb-ssr a, .vb-ssr iframe, .vb-ssr button, .vb-ssr input, .vb-ssr select, .vb-ssr textarea { pointer-events: none; }
 .vb-btn-wrap .vb-btn:hover { transform: none; }
 .vb-section .block-list-appender, .vb-grid > .block-list-appender, .vb-row > .block-list-appender { align-self: center; }
 .vb-grid > .block-list-appender { grid-column: auto; }

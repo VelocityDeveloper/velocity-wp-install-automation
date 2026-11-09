@@ -1,0 +1,823 @@
+#!/usr/bin/env python3
+"""Isi contoh situs Paket G dari data klien: hero, layanan, produk, keunggulan,
+alur kerja, galeri, kata kunci foto, dan warna.
+
+Pemakaian: paket-g-konten <manifest> [--segar] [--pasang]
+
+Keputusan user 2026-09-13: data situs SELALU dibuatkan contoh dulu — tidak
+boleh terbit dengan isian netral seperti "Layanan Utama" — tetapi tetap sesuai
+FORM ISIAN klien dan dokumen tambahan (company profile, dsb.). Yang tidak ada
+datanya diisi contoh yang wajar untuk bidang usahanya.
+
+Batas kejujuran tetap berlaku: contoh boleh menjelaskan jenis layanan, TIDAK
+boleh mengarang angka, harga, tahun berdiri, penghargaan, sertifikat, nama
+klien, atau testimoni.
+
+Hasilnya /var/lib/velocity/ai/generated/<domain>-tema.json, dibaca
+scripts/velocity-child-theme saat merender inc/theme-data.php dan oleh
+scripts/paket-g-foto untuk kata kunci foto. --segar membuat ulang; --pasang
+mengirim theme-data.php hasil render ke situs yang SUDAH terpasang, hanya kalau
+berkas di situs masih berisi isian netral template (belum disunting orang).
+"""
+import importlib.util
+import json
+import os
+import random
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+from folder_klien import folder_klien
+
+HERE = Path(__file__).resolve().parent
+GENERATED_DIR = Path('/var/lib/velocity/ai/generated')
+IKON = ('area', 'satu', 'rab', 'chat')
+HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+# Penanda isian netral template: kalau masih ada di situs, berkas itu belum
+# disunting siapa pun dan boleh diganti isi contoh yang sesuai klien.
+PENANDA_NETRAL = ('Layanan Utama', 'Produk Pertama', 'Dokumentasi 1')
+
+ATURAN = """Aturan isi (wajib):
+- Utamakan fakta dari data klien: nama usaha, bidang, produk/layanan, keunggulan, area, cara kerja.
+- Kalau suatu bagian tidak ada datanya, tulis CONTOH yang wajar untuk bidang usaha klien — tetap spesifik ke bidang itu, bukan kalimat umum yang cocok untuk usaha apa saja.
+- JANGAN mengarang angka, harga, persentase, tahun berdiri, jumlah proyek/klien, penghargaan, sertifikat, nama klien, atau testimoni.
+- Abaikan teks panduan template form ("Silahkan ...", "Misal ...", "Contoh ...") dan contoh isian yang bukan milik klien.
+- Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, email, atau nomor pribadi pemilik.
+- Kalau ada company profile, 'layanan' hanya berisi layanan/produk yang TERTULIS di dokumen dengan nama yang sama. Jumlahnya mengikuti dokumen, jangan digenapkan dengan layanan karangan.
+- Begitu juga 'produk': kalau dokumen memuat DAFTAR produk/jenis (mis. halaman "TYPE OF INSURANCE"), salin SEMUA itemnya — jangan dipotong jadi empat dan jangan ditambah item karangan.
+- DATA PERUSAHAAN (slogan, profil, visi, misi, moto, struktur, customer, legalitas, target) DISALIN dari dokumen klien apa adanya — boleh merapikan ejaan dan huruf kapital, TIDAK boleh ditambah atau dicontohkan. Kalau tidak ada di dokumen, biarkan kosong. Semua yang dikirim klien memang untuk ditampilkan di situs.
+- "judul_seksi": judul & subjudul pendek tiap bagian beranda yang sesuai bidang usaha klien (mis. pabrik kemasan: "Produk & Layanan Kemasan", bukan kalimat untuk usaha lain). Maksimal 7 kata untuk judul, 16 kata untuk subjudul.
+- Tulis isi contoh sebagai kalimat biasa. JANGAN memberi label "CONTOH:", "(contoh)", atau penanda sejenis — teks ini tampil langsung ke pengunjung.
+- Bahasa Indonesia yang profesional dan ringkas."""
+
+
+def muat_generator(manifest):
+    """Pakai ulang pembaca data klien & pemanggil AI dari ai-content-generator."""
+    sys.argv = [sys.argv[0], str(manifest)]
+    spec = importlib.util.spec_from_file_location('acg', HERE / 'ai-content-generator.py')
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+def read_manifest(path):
+    cfg = {}
+    for line in Path(path).read_text(errors='replace').splitlines():
+        key, sep, value = line.partition('=')
+        if sep and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key.strip()):
+            cfg[key.strip()] = value.strip()
+    return cfg
+
+
+def slug_dari(teks):
+    s = re.sub(r'[^a-z0-9]+', '-', str(teks).lower()).strip('-')
+    return s[:30].strip('-') or 'layanan'
+
+
+# "CONTOH: …", "Contoh - …", "(contoh) …", "[contoh] …" — tapi bukan kalimat biasa
+# yang kebetulan diawali kata "Contoh" ("Contoh produk unggulan kami").
+LABEL_CONTOH = re.compile(
+    r'^\s*(?:[\(\[]\s*(?:contoh|sample|example)\s*[\)\]]\s*[:\-–]?|(?:contoh|sample|example)\s*[:\-–])\s*', re.I)
+
+
+def teks(nilai, batas):
+    """Teks satu baris, tanpa label "CONTOH:" yang kadang ditulis AI.
+
+    Isinya memang contoh, tapi label itu akan terbaca pengunjung apa adanya."""
+    bersih = re.sub(r'\s+', ' ', str(nilai or '')).strip()
+    return LABEL_CONTOH.sub('', bersih)[:batas]
+
+
+def rapikan(data):
+    """Paksa bentuk & jumlah sesuai kebutuhan template; isi kosong ditolak."""
+    hasil = {
+        'hero_judul': teks(data.get('hero_judul'), 90),
+        'hero_teks': teks(data.get('hero_teks'), 260),
+        'hero_poin': [teks(p, 60) for p in (data.get('hero_poin') or []) if teks(p, 60)][:3],
+        'hero_foto': teks(data.get('hero_foto'), 60),
+        'tentang_foto': teks(data.get('tentang_foto'), 60),
+        # Frasa visual umum sektor usaha: kolam cadangan untuk slot yang kata
+        # kuncinya terlalu spesifik ("custom jumbo bags" nihil hasil di bank foto).
+        'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
+        'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
+        'warna': {'utama': '', 'aksen': ''},
+    }
+    slug_terpakai = set()
+    # Jumlah layanan mengikuti materi klien (maks 9): batas lama 4 membuat layanan ke-5/6 di materi
+    # tidak pernah tampil, padahal beranda Paket E menyusun 4 sebaris, 5 = 3+2 di tengah, 6 = 3+3
+    # (permintaan user 2026-09-30, trimurtiekapaksi.com).
+    for l in (data.get('layanan') or [])[:9]:
+        judul = teks(l.get('judul'), 60)
+        if not judul:
+            continue
+        slug = slug_dari(judul)
+        while slug in slug_terpakai:
+            slug += '-2'
+        slug_terpakai.add(slug)
+        hasil['layanan'].append({
+            'slug': slug, 'judul': judul, 'teks': teks(l.get('teks'), 240),
+            # Rincian = poin materi klien per layanan; dulu dipotong 3 butir, sisa materi hilang.
+            'rincian': [teks(r, 120) for r in (l.get('rincian') or []) if teks(r, 120)][:12],
+            'foto': teks(l.get('foto'), 60),
+        })
+    # Batas lama 4 memotong daftar produk/jenis yang ditulis lengkap di company profile
+    # (SCC INSURANCE COMPRO: 9 jenis asuransi, hanya 4 yang masuk — 2026-09-18).
+    for i, p in enumerate((data.get('produk') or [])[:12], 1):
+        if teks(p.get('judul'), 60):
+            hasil['produk'].append({'slug': f'produk-{i}', 'judul': teks(p.get('judul'), 60),
+                                    'teks': teks(p.get('teks'), 160), 'foto': teks(p.get('foto'), 60)})
+    for k in (data.get('keunggulan') or [])[:4]:
+        if teks(k.get('judul'), 60):
+            ikon = k.get('ikon') if k.get('ikon') in IKON else IKON[len(hasil['keunggulan']) % len(IKON)]
+            hasil['keunggulan'].append({'ikon': ikon, 'judul': teks(k.get('judul'), 60),
+                                        'teks': teks(k.get('teks'), 180)})
+    for a in (data.get('alur') or [])[:5]:
+        if teks(a.get('judul'), 40):
+            hasil['alur'].append({'judul': teks(a.get('judul'), 40), 'teks': teks(a.get('teks'), 140)})
+    for i, g in enumerate((data.get('galeri') or [])[:6], 1):
+        if teks(g.get('judul'), 40):
+            hasil['galeri'].append({'slug': f'galeri-{i}', 'judul': teks(g.get('judul'), 40),
+                                    'foto': teks(g.get('foto'), 60)})
+    judul = data.get('judul_seksi') if isinstance(data.get('judul_seksi'), dict) else {}
+    hasil.update({
+        'judul_seksi': {k: teks(judul.get(k), 120 if k.endswith('_sub') else 60)
+                        for k in ('layanan', 'layanan_sub', 'keunggulan', 'tentang', 'galeri', 'galeri_sub',
+                                  'produk', 'alur', 'pemesanan', 'pemesanan_sub') if teks(judul.get(k), 120)},
+        'slogan': teks(data.get('slogan'), 70),
+        'profil': teks(data.get('profil'), 900),
+        'visi': teks(data.get('visi'), 320),
+        'misi': [teks(m, 240) for m in (data.get('misi') or []) if teks(m, 240)][:6],
+        'moto': teks(data.get('moto'), 140),
+        'struktur': [{'jabatan': teks(x.get('jabatan'), 50), 'nama': teks(x.get('nama'), 60)}
+                     for x in (data.get('struktur') or []) if isinstance(x, dict)
+                     and teks(x.get('jabatan'), 50) and teks(x.get('nama'), 60)][:24],
+        'customer': [teks(c, 80) for c in (data.get('customer') or []) if teks(c, 80)][:48],
+        'legalitas': [{'label': teks(x.get('label'), 70), 'nilai': teks(x.get('nilai'), 140)}
+                      for x in (data.get('legalitas') or []) if isinstance(x, dict)
+                      and teks(x.get('label'), 70) and teks(x.get('nilai'), 140)][:12],
+        'target': [teks(t, 90) for t in (data.get('target') or []) if teks(t, 90)][:8],
+    })
+    warna = data.get('warna') or {}
+    for kunci in ('utama', 'aksen'):
+        if HEX_RE.match(str(warna.get(kunci) or '')):
+            hasil['warna'][kunci] = warna[kunci]
+    kurang = [k for k, n in (('layanan', 1), ('produk', 4), ('keunggulan', 4), ('alur', 5), ('galeri', 6))
+              if len(hasil[k]) < n]
+    if not hasil['hero_judul'] or kurang:
+        raise ValueError(f'isi AI tidak lengkap: {kurang or "hero_judul"}')
+    return hasil
+
+
+sys.path.insert(0, str(HERE))
+from warna_form import TEKS_TEMPLATE_WARNA, pick_colors, warna_utama  # noqa: E402
+
+
+def isian_warna(domain):
+    """Isian "WARNA TEMA WEB" form klien; kosong kalau tidak diisi atau masih kalimat contoh.
+
+    Form template memuat contoh "Misal: warna dasar tema web yang saya inginkan
+    biru dan hijau." — klien yang tidak mengisi membiarkan kalimat itu, dan AI
+    terbukti membacanya sebagai pilihan biru + hijau meski dilarang di prompt.
+    Karena itu penjagaannya di kode, bukan di prompt."""
+    sys.path.insert(0, str(HERE))
+    from client_form import read_client_form
+    try:
+        fields = read_client_form(folder_klien(domain)).get('fields') or {}
+    except Exception:
+        return ''
+    nilai = next((str(v) for k, v in fields.items() if re.search(r'warna tema', k, re.I)), '')
+    nilai = re.sub(r'[.\s]+$', '', nilai).strip()
+    return '' if TEKS_TEMPLATE_WARNA.search(nilai) else nilai
+
+
+def warna_dipilih_klien(domain):
+    """True kalau isian "WARNA TEMA WEB" berisi pilihan klien sungguhan."""
+    return bool(isian_warna(domain))
+
+
+def normal(teks):
+    return re.sub(r'[^a-z0-9]', '', str(teks or '').lower())
+
+
+def kata(teks):
+    return {k for k in re.findall(r'[a-z0-9]+', str(teks or '').lower()) if len(k) > 3}
+
+
+def saring_data_perusahaan(isi, sumber):
+    """Buang data perusahaan yang tidak tertulis di dokumen klien.
+
+    Isi pemasaran boleh berupa contoh, tetapi customer, nama staf, legalitas,
+    visi-misi, dan slogan adalah klaim faktual. Pelajaran dari proyek ini: aturan
+    di prompt dilanggar AI, jadi keberadaannya di dokumen dicek kode."""
+    polos, semua_kata = normal(sumber), kata(sumber)
+
+    def tertulis(nilai):
+        n = normal(re.sub(r'^\s*(pt|cv|ud)\.?\s+', '', str(nilai), flags=re.I))
+        return len(n) >= 3 and n in polos
+
+    def mirip(nilai, ambang):
+        k = kata(nilai)
+        return bool(k) and len(k & semua_kata) / len(k) >= ambang
+
+    dibuang = []
+    for bidang, uji in (('customer', tertulis), ('target', lambda v: mirip(v, 0.6)),
+                        ('misi', lambda v: mirip(v, 0.6))):
+        lama = isi.get(bidang) or []
+        isi[bidang] = [v for v in lama if uji(v)]
+        dibuang += [f'{bidang}:{v}' for v in lama if v not in isi[bidang]]
+    lama = isi.get('struktur') or []
+    isi['struktur'] = [x for x in lama if tertulis(x['nama'])]
+    dibuang += [f"struktur:{x['nama']}" for x in lama if x not in isi['struktur']]
+    lama = isi.get('legalitas') or []
+    isi['legalitas'] = [x for x in lama if tertulis(x['nilai']) or mirip(x['nilai'], 0.7)]
+    dibuang += [f"legalitas:{x['label']}" for x in lama if x not in isi['legalitas']]
+    for bidang, ambang in (('visi', 0.6), ('moto', 0.6), ('slogan', 0.8), ('profil', 0.5)):
+        if isi.get(bidang) and not mirip(isi[bidang], ambang):
+            dibuang.append(f'{bidang}:{isi[bidang][:40]}')
+            isi[bidang] = ''
+    return dibuang
+
+
+def data_compro(domain):
+    """Hasil scripts/compro-klien (slogan & warna dari PDF), kalau ada."""
+    berkas = Path('/var/lib/velocity/compro') / domain / 'compro.json'
+    try:
+        return json.loads(berkas.read_text()) if berkas.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+STOP_FRASA = r'\b(dan|serta|and)\b|[&\-]'
+
+
+def frasa_tertulis(judul, sumber):
+    """True kalau judul tertulis berurutan di dokumen (kata sambung diabaikan).
+
+    Pemeriksaan per kata tidak cukup: "Packaging Industri" lolos karena kedua
+    katanya ada terpisah di teks prakata, padahal compro tidak pernah menyebut
+    layanan bernama itu. "Alih Daya dan Perdagangan Umum" tetap lolos dari
+    "ALIH DAYA - PERDAGANGAN UMUM"."""
+    bersih = lambda t: normal(re.sub(STOP_FRASA, ' ', str(t or ''), flags=re.I))
+    target = bersih(judul)
+    return len(target) >= 4 and target in bersih(sumber)
+
+
+def teks_pdf(pdf):
+    if not pdf or not Path(pdf).is_file():
+        return ''
+    try:
+        return subprocess.run(['pdftotext', '-layout', str(pdf), '-'], capture_output=True, text=True,
+                              timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def teks_klien(domain):
+    """FORM ISIAN + dokumen lampiran klien sebagai teks — sejajar company profile."""
+    folder = folder_klien(domain)
+    bagian = []
+    try:
+        from client_form import read_client_form
+        bagian.append(read_client_form(folder).get('text', ''))
+    except Exception:
+        pass
+    try:
+        # Layanan klien sering ditulis di dokumen lampiran (Data Isian Website.docx),
+        # bukan di FORM ISIAN — keduanya sama-sama tulisan klien.
+        from client_docs import collect_client_docs
+        bagian += [v if isinstance(v, str) else str(v) for v in collect_client_docs(folder).values()]
+    except Exception:
+        pass
+    return '\n'.join(bagian)
+
+
+def sesuaikan_compro(isi, domain, log=print, sumber_klien=''):
+    """Isi yang wajib mengikuti company profile; dijalankan tiap kali (idempoten).
+
+    - slogan & prakata dibaca kode dari PDF, lebih pasti daripada tulisan AI;
+    - layanan hanya yang benar-benar tertulis di data klien — AI menggenapkan jadi
+      empat dengan "Packaging Industri" yang tidak ada di dokumen. Yang dihitung
+      bukan cuma compro: FORM ISIAN juga tulisan klien, dan bumiairchemitech.com
+      (2026-09-16) kehilangan Groundwater Engineering & EPC — layanan yang ditulis
+      sendiri oleh klien di form — karena deck-nya memakai penamaan lain;
+    - moto tidak lagi dibuang meski sama dengan slogan: di compro MAS keduanya
+      memang kalimat yang sama ("MOTO Innovating for a Better Tomorrow")."""
+    compro = data_compro(domain)
+    if not compro:
+        return False
+    lama = json.dumps(isi, sort_keys=True, ensure_ascii=False)
+    if compro.get('slogan'):
+        isi['slogan'] = compro['slogan']
+    if (compro.get('prakata') or {}).get('paragraf'):
+        isi['prakata'] = compro['prakata']
+    sumber = teks_pdf(compro.get('pdf', ''))
+    moto = re.search(r'^\s*MOTT?O\b\s*[:\-]?\s+(\S.*?)\s*(?:\s{3,}|$)', sumber, re.M)
+    if moto and not isi.get('moto'):
+        # Label "MOTO" + kalimatnya di satu baris; versi lama sempat mengosongkan
+        # moto karena sama dengan slogan, padahal compro memang menulisnya begitu.
+        isi['moto'] = moto.group(1).strip()
+    if sumber and isi.get('layanan'):
+        tertulis = [l for l in isi['layanan']
+                    if frasa_tertulis(l['judul'], sumber)
+                    or (sumber_klien and frasa_tertulis(l['judul'], sumber_klien))]
+        dibuang = [l['judul'] for l in isi['layanan'] if l not in tertulis]
+        if tertulis and dibuang:
+            log(f'Layanan yang tidak tertulis di company profile dibuang: {dibuang}')
+            isi['layanan'] = tertulis
+    return json.dumps(isi, sort_keys=True, ensure_ascii=False) != lama
+
+
+def buat_isi(gen, cfg, domain):
+    client_data = {}
+    for folder in (Path(cfg['_manifest']).parent, folder_klien(domain)):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    docs = gen.collect_client_docs(folder_klien(domain))
+    info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
+    model = gen.get_model('isi_contoh')
+    if not model:
+        raise RuntimeError('model AI belum diatur')
+    sistem = ("You are a senior Indonesian copywriter for company websites. Output ONLY one valid JSON object, "
+              "no markdown fences, no extra text. All visible text in Indonesian.")
+    permintaan = f"""Isi contoh situs perusahaan dari data klien berikut.
+- Nama situs: {cfg.get('site_title') or domain}
+- Domain: {domain}
+- Data klien:
+{info}
+
+{ATURAN}
+
+Kata kunci foto ("foto", "hero_foto", "tentang_foto"): 2-4 kata BAHASA INGGRIS berupa benda/tempat yang terlihat di foto dan cocok dengan bidang usaha klien (mis. "kitchen cabinet interior", "rice field harvest"). Hindari orang, logo, teks, dan nama merek.
+
+"foto_umum": 3-4 frasa BAHASA INGGRIS (masing-masing 2-3 kata) tentang suasana UMUM sektor usaha klien yang banyak tersedia di bank foto gratis — mis. untuk pabrik kemasan: "factory production line", "warehouse storage boxes", "industrial machinery". Jangan memakai kata yang maknanya bisa melenceng bila berdiri sendiri (mis. "jumbo", "sack", "bag").
+
+Warna ("warna"): isi kode hex HANYA kalau klien benar-benar menyebut warna pilihannya di form. Kalau isian warna berupa teks contoh template ("Misal: ...") atau hanya "dibedakan dari web contoh", biarkan "".
+
+Kembalikan JSON dengan bentuk persis:
+{{"hero_judul":"","hero_teks":"","hero_poin":["","",""],"hero_foto":"","tentang_foto":"","foto_umum":["","",""],
+"layanan":[{{"judul":"","teks":"","rincian":["","",""],"foto":""}}],
+"produk":[{{"judul":"","teks":"","foto":""}}],
+"keunggulan":[{{"ikon":"area|satu|rab|chat","judul":"","teks":""}}],
+"alur":[{{"judul":"","teks":""}}],
+"galeri":[{{"judul":"","foto":""}}],
+"warna":{{"utama":"","aksen":""}},
+"judul_seksi":{{"layanan":"","layanan_sub":"","keunggulan":"","tentang":"","galeri":"","galeri_sub":"","produk":"","alur":"","pemesanan":"","pemesanan_sub":""}},
+"slogan":"","profil":"","visi":"","misi":[""],"moto":"",
+"struktur":[{{"jabatan":"","nama":""}}],"customer":[""],"legalitas":[{{"label":"","nilai":""}}],"target":[""]}}
+Jumlah wajib: layanan = SETIAP layanan/program/bidang yang dijabarkan tersendiri di form atau dokumen klien (bagian bernomor, bonus/fasilitas utama seperti "Free ..." termasuk; paket yang terdiri dari beberapa bidang dipecah per bidang) — semua, minimal 3, maksimal 9; kalau klien tidak merinci: 4, "rincian" tiap layanan = SEMUA poin materi layanan itu dari dokumen klien (maksimal 12; tanpa materi: 3) — satu poin per butir, maksimal 80 karakter, jangan menggabungkan banyak poin jadi satu butir panjang, produk 4 (kecuali dokumen memuat daftar produk/jenis: semua item, maksimal 12), keunggulan 4, alur 5, galeri 6. Data perusahaan mengikuti dokumen (boleh kosong)."""
+    for percobaan in range(2):
+        # Prompt isi contoh panjang: beri waktu lebih dari bawaan 120 detik.
+        jawab = gen.ai_call(sistem, permintaan, model,
+                            timeout=int(os.environ.get('VELOCITY_AI_TIMEOUT_ISI', '420')),
+                            max_tokens=int(os.environ.get('VELOCITY_AI_MAXTOK_ISI', '12000')))
+        if not jawab:
+            # Jangan diam: model yang menjawab kosong (atau panggilan gagal) dulu hanya
+            # muncul sebagai "AI tidak menghasilkan isi tema yang lengkap" tanpa sebab,
+            # padahal artinya beda — lihat baris ERROR di log AI domain ini.
+            gen.log(f'Isi tema percobaan {percobaan + 1}: jawaban AI kosong')
+            continue
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            isi = rapikan(json.loads(jawab[awal:akhir + 1]))
+            dibuang = saring_data_perusahaan(isi, info)
+            if dibuang:
+                gen.log(f'Data perusahaan yang tidak tertulis di dokumen dibuang: {dibuang[:8]}')
+            sesuaikan_compro(isi, domain, gen.log, info)
+            if not warna_dipilih_klien(domain) and any(isi['warna'].values()):
+                gen.log(f"Warna dari AI dibuang (bukan pilihan klien): {isi['warna']}")
+                isi['warna'] = {'utama': '', 'aksen': ''}
+            return isi
+        except (ValueError, json.JSONDecodeError) as e:
+            gen.log(f'Isi tema percobaan {percobaan + 1} ditolak: {e}')
+    raise RuntimeError('AI tidak menghasilkan isi tema yang lengkap')
+
+
+def jenis_paket(cfg):
+    """'berita' untuk Paket Portal Berita Custom, selain itu 'perusahaan'."""
+    return 'berita' if 'berita' in re.sub(r'[^a-z]', '', str(cfg.get('paket', '')).lower()) else 'perusahaan'
+
+
+def warna_sampel(domain):
+    """(utama, aksen) dari gambar contoh warna kiriman klien.
+
+    anaksegalabangsa.com melampirkan folder "Warna" berisi kartu "Maroon #550000"
+    dan "McLaren Orange #FF8000". Kode hex yang terbaca OCR didahulukan; kalau
+    tidak terbaca (kartu orange: tulisan kecil di bawah), warna dominan gambarnya
+    yang dipakai. Server installer tidak punya pengurai JPEG (tanpa PIL/ImageMagick),
+    jadi gambar dipotret Chromium headless ke PNG dan dibaca pembaca PNG compro-klien.
+    Warna yang lebih gelap jadi utama (latar bertulisan putih)."""
+    import colorsys
+    import glob
+    import html as html_mod
+    import importlib.machinery
+    import importlib.util
+    import shutil
+    from collections import Counter
+    folder = folder_klien(domain)
+    if not folder.is_dir():
+        return '', ''
+    gambar = [g for g in sorted(folder.rglob('*')) if g.suffix.lower() in ('.jpg', '.jpeg', '.png')
+              and re.search(r'warna|color|colour', str(g.relative_to(folder)), re.I)][:6]
+    if not gambar:
+        return '', ''
+    chrome = next((c for c in sorted(glob.glob('/root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome'), reverse=True)
+                   + [shutil.which('chromium') or '', shutil.which('google-chrome') or ''] if c), '')
+    loader = importlib.machinery.SourceFileLoader('compro_klien', str(HERE / 'compro-klien'))
+    spec = importlib.util.spec_from_loader('compro_klien', loader)
+    png = importlib.util.module_from_spec(spec)
+    loader.exec_module(png)
+    kode = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, g in enumerate(gambar):
+            dari_teks = []
+            for psm in ('11', '6'):
+                try:
+                    keluar = subprocess.run(['tesseract', str(g), '-', '--psm', psm, '--dpi', '300'],
+                                            capture_output=True, text=True, timeout=60).stdout
+                except (OSError, subprocess.SubprocessError):
+                    keluar = ''
+                dari_teks = ['#' + h.lower() for h in re.findall(r'#\s?([0-9A-Fa-f]{6})\b', keluar)]
+                if dari_teks:
+                    break
+            if dari_teks:
+                kode += dari_teks
+                continue
+            if not chrome:
+                continue
+            halaman = Path(tmp) / f'w{i}.html'
+            halaman.write_text('<html><body style="margin:0;background:#fff"><img src="file://'
+                               + html_mod.escape(str(g)) + '" style="width:400px;height:400px;object-fit:contain;display:block">'
+                               '</body></html>')
+            potret = Path(tmp) / f'w{i}.png'
+            subprocess.run([chrome, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
+                            '--allow-file-access-from-files', '--window-size=400,400',
+                            f'--screenshot={potret}', f'file://{halaman}'], capture_output=True, timeout=120)
+            try:
+                lebar, tinggi, kanal, baris = png.baca_png(potret)
+            except (OSError, ValueError):
+                continue
+            hitung = Counter()
+            for y in range(0, tinggi, 2):
+                for x in range(0, lebar, 2):
+                    r, gg, b = baris[y][x * kanal:x * kanal + 3]
+                    h, l, sat = colorsys.rgb_to_hls(r / 255, gg / 255, b / 255)
+                    if sat >= 0.3 and 0.08 <= l <= 0.9:
+                        hitung[(r, gg, b)] += 1
+            if hitung and sum(hitung.values()) > (lebar * tinggi / 4) * 0.2:
+                kode.append('#%02x%02x%02x' % hitung.most_common(1)[0][0])
+    kode = list(dict.fromkeys(kode))
+    if len(kode) < 2:
+        return (kode[0], '') if kode else ('', '')
+    terang = lambda h: colorsys.rgb_to_hls(*(int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)))[1]
+    kode.sort(key=terang)
+    return kode[0], kode[-1]
+
+
+def rubrik_form(domain):
+    """Rubrik dari susunan menu FORM ISIAN: isian yang bernilai "berisi berita-berita …"."""
+    sys.path.insert(0, str(HERE))
+    from client_form import read_client_form
+    try:
+        fields = read_client_form(folder_klien(domain)).get('fields') or {}
+    except Exception:
+        fields = {}
+    hasil, terpakai = [], set()
+    for kunci, nilai in fields.items():
+        if not re.search(r'berisi\s+(berita|artikel|info)', str(nilai), re.I):
+            continue
+        judul = teks(kunci, 40).title()
+        slug = slug_dari(judul)
+        if not judul or slug in terpakai:
+            continue
+        terpakai.add(slug)
+        keterangan = re.sub(r'^\s*berisi\s+', '', str(nilai), flags=re.I).strip().rstrip('.')
+        hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan[:1].upper() + keterangan[1:] + '.', 160)})
+    return hasil
+
+
+# Berkas daftar rubrik terpisah di folder klien (liputara.com Rubrik.docx, user 2026-10-11): kolom
+# "kategori berita" di form kosong, rubrik ditulis di berkas sendiri dan dulu hanya jadi bahan AI
+# (yang mengabaikannya: isi contoh tanpa rubrik, semua artikel "Blog"). Isi berkas klien beragam
+# (daftar bernomor, sub-rubrik daerah, rubrik + deskripsi), jadi AI yang mengurai daftarnya dan
+# kode hanya menerima nama yang memang tertulis di berkas.
+BERKAS_RUBRIK = re.compile(r'rubrik|kategori|kanal', re.I)
+BERKAS_LEWATI = re.compile(r'^revisi|sebelum|\blama\b|\bold\b', re.I)
+
+
+def rubrik_berkas(gen, domain, model):
+    sys.path.insert(0, str(HERE))
+    from client_docs import DOC_EXTS, _doc_lines
+    from client_form import adalah_form
+    folder = folder_klien(domain)
+    if not folder.is_dir():
+        return []
+    berkas = sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in DOC_EXTS
+                    and BERKAS_RUBRIK.search(p.stem) and not adalah_form(p)
+                    and not any(BERKAS_LEWATI.search(b) for b in p.relative_to(folder).parts))
+    isi = '\n'.join(f'== {p.name}\n' + '\n'.join(' '.join(str(l).split()) for l in _doc_lines(p)) for p in berkas)
+    if len(isi.strip()) < 10:
+        return []
+    permintaan = f"""Berkas berikut dikirim klien portal berita {domain}: daftar rubrik/kategori berita.
+
+{isi[:8000]}
+
+Ambil daftar rubrik UTAMA sesuai urutan di berkas.
+- "judul": nama rubrik PERSIS seperti tertulis (boleh merapikan huruf besar-kecil), tanpa nomor/poin/deskripsi.
+- Butir di bawah satu rubrik (mis. nama kota di bawah "Daerah", "Opini Publik" di bawah "Opini") masuk "sub", bukan rubrik sendiri.
+- Bila rubrik ditulis dengan penjelasan ("Ekonomi: seputar pasar..."), penjelasannya masuk "teks".
+- Lewati judul daftar ("Rubrik Berita", "Kategori"), karakter rusak, dan teks yang bukan nama rubrik.
+
+Kembalikan JSON persis: {{"rubrik":[{{"judul":"","teks":"","sub":[""]}}]}}"""
+    data = {}
+    for _ in range(2):
+        jawab = gen.ai_call('You extract structured lists from Indonesian documents. Output ONLY one valid JSON object.',
+                            permintaan, model)
+        try:
+            data = json.loads(jawab[jawab.find('{'):jawab.rfind('}') + 1])
+            break
+        except (AttributeError, ValueError):
+            continue
+    datar = lambda t: re.sub(r'[^a-z0-9]', '', str(t).lower())
+    sumber = datar(isi)
+    hasil, terpakai, dibuang = [], set(), []
+    for r in data.get('rubrik') or []:
+        judul = teks(r.get('judul'), 40) if isinstance(r, dict) else ''
+        slug = slug_dari(judul)
+        if not judul or slug in terpakai:
+            continue
+        if datar(judul) not in sumber:
+            dibuang.append(judul)
+            continue
+        terpakai.add(slug)
+        sub = [teks(x, 40) for x in r.get('sub') or [] if datar(x) and datar(x) in sumber]
+        keterangan = teks(r.get('teks'), 120) or f'Berita seputar {judul.lower()}'
+        if sub:
+            keterangan = keterangan.rstrip('.') + ', meliputi ' + ', '.join(sub[:8])
+        hasil.append({'slug': slug, 'judul': judul, 'teks': teks(keterangan.rstrip('.') + '.', 160)})
+    print(f"rubrik_berkas: {', '.join(p.name for p in berkas)} -> {len(hasil)} rubrik"
+          + (f" (dibuang, tak tertulis di berkas: {', '.join(dibuang)})" if dibuang else ''))
+    # Daftar rubrik klien diikuti utuh, tidak dipotong (user 2026-10-30); menu diatur theme-paket-biasa.
+    return hasil
+
+
+# Kategori form cuma satu (user 2026-10-30, fokus-berita-indonesia.id "UMUM"): beranda & menu berita kosong.
+# "Umum"/sejenisnya -> 6 rubrik saran, satu rubrik nyata -> rubrik itu + 5 saran. Saran dipilih AI secara acak
+# dari kandidat (diacak tiap situs) yang sesuai materi klien/domain; kandidat ini juga cadangan bila AI gagal.
+RUBRIK_KANDIDAT = ['Nasional', 'Daerah', 'Politik', 'Hukum', 'Kriminal', 'Ekonomi', 'Bisnis', 'Pendidikan',
+                   'Kesehatan', 'Olahraga', 'Teknologi', 'Hiburan', 'Gaya Hidup', 'Wisata', 'Budaya',
+                   'Pemerintahan', 'Peristiwa', 'Opini', 'Internasional', 'Otomotif', 'Lingkungan',
+                   'Religi', 'Pertanian', 'Sosial']
+RUBRIK_UMUM = re.compile(r'^(berita\s*)?(umum|semua|bebas|campuran|lainnya|lain-lain|all)?$', re.I)
+RUBRIK_JUMLAH = 6
+# Blok kategori Customizer beranda tema aktif, cara deteksi sama dengan theme-paket-biasa langkah 2b. "Umum" tidak
+# dibatasi 6: tema berbanyak blok (berita4 8 blok) diberi rubrik sebanyak bloknya (user 2026-10-30).
+BLOK_KATEGORI_PHP = r"""<?php
+require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+$wpc = new WP_Customize_Manager(); $GLOBALS['wp_customize'] = $wpc; do_action('customize_register', $wpc);
+$id_kat = array_map('strval', wp_list_pluck(get_categories(['hide_empty' => false]), 'term_id'));
+$n = 0;
+foreach ($wpc->controls() as $c) {
+    $pilih = array_diff(array_map('strval', array_keys((array) $c->choices)), ['', 'disable']);
+    if (in_array($c->type, ['select', 'kirki-select', 'kirki-react-select'], true) && is_object($c->setting)
+        && ($pilih ? !array_diff($pilih, $id_kat) : strpos($c->setting->id, 'cat_') === 0)) { $n++; }
+}
+echo "blok=$n";
+"""
+
+
+def blok_kategori_beranda(gen, cfg, domain):
+    """Jumlah blok kategori beranda tema aktif (0 bila tak terbaca); ARTIKEL_BLOK_BERITA jadi batas bawah."""
+    import os
+    args = (cfg.get('da_user', ''), domain, cfg.get('ssh_port') or 22, cfg.get('ssh_user') or 'root', cfg.get('target_host', ''))
+    ssh_cmd, docroot = gen.ssh_wp(*args, os.environ.get('WP_INSTALL_SSH_KEY_FILE', ''))
+    try:
+        keluar = subprocess.run(ssh_cmd + [f'/usr/local/bin/wp eval-file - --path={shlex.quote(docroot)} --allow-root 2>/dev/null'],
+                                input=BLOK_KATEGORI_PHP, capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        keluar = ''
+    cocok = re.search(r'blok=(\d+)', keluar)
+    return max(int(cocok.group(1)) if cocok else 0, len(gen.ARTIKEL_BLOK_BERITA.get(gen.tema_aktif(*args), [])))
+
+
+def lengkapi_rubrik(rubrik, saran, blok=0, acak=random):
+    """Rubrik klien (form atau dokumen lain; "Umum" dibuang) dilengkapi saran AI (urutan diacak) lalu kandidat
+    acak sampai sebanyak blok kategori beranda, min. RUBRIK_JUMLAH; rubrik klien tidak dipotong (user 2026-10-30)."""
+    rubrik = [r for r in rubrik if not RUBRIK_UMUM.match(r['judul'].strip())]
+    jumlah = max(RUBRIK_JUMLAH, blok)
+    hasil, ada = list(rubrik), {r['slug'] for r in rubrik}
+    saran = list(saran)
+    acak.shuffle(saran)
+    cadangan = [{'judul': j, 'teks': f'Berita seputar {j.lower()}.'} for j in acak.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT))]
+    for r in saran + cadangan:
+        judul = teks(r.get('judul'), 40)
+        slug = slug_dari(judul)
+        if len(hasil) >= jumlah:
+            break
+        if judul and slug not in ada and not RUBRIK_UMUM.match(judul):
+            ada.add(slug)
+            hasil.append({'slug': slug, 'judul': judul, 'teks': teks(r.get('teks'), 160) or f'Berita seputar {judul.lower()}.'})
+    return hasil
+
+
+def buat_isi_berita(gen, cfg, domain):
+    """Isi awal portal berita: identitas media, rubrik, pedoman redaksi, warna.
+
+    Rubrik & warna dibaca kode dari form dan gambar contoh; AI hanya menulis
+    kalimat identitas (slogan, tentang, pedoman redaksi) — tanpa nama awak
+    redaksi, badan hukum, nomor verifikasi Dewan Pers, atau angka pembaca."""
+    client_data = {}
+    for folder in (Path(cfg['_manifest']).parent, folder_klien(domain)):
+        if folder.is_dir():
+            for k, v in gen.read_client_data(folder).items():
+                client_data.setdefault(k, v)
+    docs = gen.collect_client_docs(folder_klien(domain))
+    info = gen.format_for_prompt(client_data, docs).strip() or '(tidak ada data klien)'
+    model = gen.get_model('isi_contoh')
+    if not model:
+        raise RuntimeError('model AI belum diatur')
+    rubrik = rubrik_form(domain) or rubrik_berkas(gen, domain, model)
+    nama_form = cfg.get('site_title') or domain.split('.')[0]
+    blok = blok_kategori_beranda(gen, cfg, domain)
+    gen.log(f'Blok kategori beranda tema: {blok}')
+    gen.log(f'Blok kategori beranda tema: {blok}')
+    permintaan = f"""Isi awal portal berita dari data klien berikut.
+- Nama media (dari form): {nama_form}
+- Domain: {domain}
+- Rubrik: {', '.join(r['judul'] for r in rubrik) or '(ambil dari susunan menu di data klien)'}
+- Data klien:
+{info}
+
+Aturan (wajib):
+- JANGAN mengarang nama awak redaksi, badan hukum, nomor izin atau verifikasi Dewan Pers, alamat kantor, jumlah pembaca, atau penghargaan.
+- Bagian DATA ADMINISTRASI PEMILIK hanya referensi internal: jangan tampilkan nama, nomor, atau alamat pribadi pemilik.
+- Tanpa label "CONTOH:". Bahasa Indonesia yang lugas.
+- "nama_tampil": nama media yang ditulis rapi dengan spasi dan huruf kapital bila di form ditulis menyambung (mis. "kabarkotaku" -> "Kabar Kotaku"). Huruf dan urutannya TIDAK boleh berubah.
+- "slogan": maksimal 8 kata. "hero_teks": 1 kalimat. "tentang": 2-3 kalimat tentang arah pemberitaan media.
+- "redaksi": 3 paragraf pedoman redaksi umum (independensi & akurasi, verifikasi sebelum terbit, hak jawab & koreksi).
+- "rubrik": hanya diisi kalau daftar rubrik di atas kosong: rubrik yang DITULIS klien di data (jangan menambah sendiri).
+- "rubrik_saran": {max(8, blok + 2)} rubrik yang paling sesuai materi klien, nama domain, dan daerah media; pilih acak dari kandidat berikut (boleh nama lain bila materi klien jelas menuntut), tanpa "Umum" dan tanpa rubrik klien: {', '.join(random.sample(RUBRIK_KANDIDAT, len(RUBRIK_KANDIDAT)))}. "teks" = 1 kalimat cakupan rubrik.
+- "foto_umum": 3 frasa BAHASA INGGRIS (2-3 kata) suasana umum dunia berita, tanpa orang (mis. "newspaper printing press").
+
+Kembalikan JSON persis:
+{{"nama_tampil":"","slogan":"","hero_teks":"","tentang":"","redaksi":["","",""],"rubrik":[{{"judul":"","teks":""}}],"rubrik_saran":[{{"judul":"","teks":""}}],"foto_umum":["","",""]}}"""
+    sistem = ("You are a senior Indonesian newsroom editor. Output ONLY one valid JSON object, "
+              "no markdown fences, no extra text.")
+    data = {}
+    for percobaan in range(2):
+        jawab = gen.ai_call(sistem, permintaan, model)
+        try:
+            awal, akhir = jawab.find('{'), jawab.rfind('}')
+            data = json.loads(jawab[awal:akhir + 1])
+            break
+        except (AttributeError, ValueError):
+            gen.log(f'Isi portal berita percobaan {percobaan + 1} ditolak')
+    if not data:
+        raise RuntimeError('AI tidak menghasilkan isi portal berita')
+    tampil = teks(data.get('nama_tampil'), 80)
+    if re.sub(r'[^a-z0-9]', '', tampil.lower()) != re.sub(r'[^a-z0-9]', '', nama_form.lower()):
+        tampil = ''
+    if not rubrik:
+        for r in data.get('rubrik') or []:
+            if isinstance(r, dict) and teks(r.get('judul'), 40):
+                rubrik.append({'slug': slug_dari(r['judul']), 'judul': teks(r['judul'], 40),
+                               'teks': teks(r.get('teks'), 160)})
+    utama, aksen = warna_sampel(domain)
+    if not utama:
+        # Nama warna di form ("hitam, emas, biru") -> hex, sama dengan site-finish
+        # (suarapurwakarta.com 2026-10-07: dulu langsung warna bawaan).
+        nama_warna = pick_colors(isian_warna(domain), batas=3)
+        if nama_warna:
+            utama = warna_utama(nama_warna)
+            aksen = next((w for w in nama_warna if w != utama), '')
+            gen.log(f'Warna klien dari nama di form: utama {utama} aksen {aksen or "-"}')
+        elif warna_dipilih_klien(domain):
+            gen.log('Warna klien tertulis tanpa kode hex/nama warna yang terbaca; memakai warna bawaan')
+    rubrik = lengkapi_rubrik(rubrik, [r for r in data.get('rubrik_saran') or [] if isinstance(r, dict)], blok)
+    nama = tampil or nama_form
+    return {
+        'jenis': 'berita', 'nama_tampil': tampil, 'slogan': teks(data.get('slogan'), 70),
+        'hero_judul': nama, 'hero_teks': teks(data.get('hero_teks'), 220), 'hero_poin': [],
+        'tentang': teks(data.get('tentang'), 600),
+        'redaksi': [teks(x, 600) for x in (data.get('redaksi') or []) if teks(x, 600)][:4],
+        'rubrik': rubrik,
+        'foto_umum': [teks(f, 50) for f in (data.get('foto_umum') or []) if len(teks(f, 50).split()) >= 2][:4],
+        'layanan': [], 'produk': [], 'keunggulan': [], 'alur': [], 'galeri': [],
+        'judul_seksi': {'terbaru': 'Berita Terbaru', 'pemesanan': 'Kirim Pesan ke Redaksi'},
+        'warna': {'utama': utama if HEX_RE.match(utama or '') else '', 'aksen': aksen if HEX_RE.match(aksen or '') else ''},
+        'slogan_sumber': 'ai', 'profil': '', 'visi': '', 'misi': [], 'moto': '',
+        'struktur': [], 'customer': [], 'legalitas': [], 'target': [],
+    }
+
+
+def prefix_situs(cfg, domain):
+    docroot = f"/home/{cfg['da_user']}/domains/{domain}/public_html"
+    tanya = ("php -d memory_limit=512M /usr/local/bin/wp eval "
+             "'global $shortcode_tags; foreach (array_keys($shortcode_tags) as $t) "
+             "{ if (preg_match(\"/^([a-z0-9]+)_pemesanan$/\", $t, $m)) { echo $m[1]; break; } }' "
+             f"--path={shlex.quote(docroot)} --allow-root 2>/dev/null")
+    return subprocess.run(ssh(cfg) + [tanya], capture_output=True, text=True, timeout=120).stdout.strip()
+
+
+def ssh(cfg):
+    import os
+    key = os.environ.get('WP_INSTALL_SSH_KEY_FILE', '')
+    return ['ssh', '-i', key, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ConnectTimeout=15', '-p', str(cfg.get('ssh_port') or 22),
+            f"{cfg.get('ssh_user') or 'root'}@{cfg['target_host']}"]
+
+
+def pasang(cfg, domain):
+    """Kirim theme-data.php berisi isi contoh ke situs terpasang — hanya kalau
+    berkas di situs masih berisi isian netral template."""
+    prefix = prefix_situs(cfg, domain)
+    if not re.match(r'^[a-z][a-z0-9]{1,11}$', prefix):
+        print('konten: child theme Paket G tidak terbaca di situs, pemasangan dilewati')
+        return 0
+    slug = f"velocity-{re.sub(r'-{2,}', '-', re.sub(r'[^a-z0-9-]+', '-', domain.split('.')[0])).strip('-')}"
+    berkas = f"/home/{cfg['da_user']}/domains/{domain}/public_html/wp-content/themes/{slug}/inc/theme-data.php"
+    isi_lama = subprocess.run(ssh(cfg) + [f'cat {shlex.quote(berkas)} 2>/dev/null'],
+                              capture_output=True, text=True, timeout=60).stdout
+    if not isi_lama:
+        print(f'konten: {berkas} tidak ada, pemasangan dilewati')
+        return 0
+    if not any(p in isi_lama for p in PENANDA_NETRAL):
+        print('konten: theme-data.php di situs sudah disunting, tidak ditimpa')
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        tujuan = Path(tmp) / 'zip'
+        run = subprocess.run([sys.executable, str(HERE / 'velocity-child-theme'), domain,
+                              '--paket', 'Paket G', '--nama', cfg.get('site_title', ''),
+                              '--prefix', prefix, '--cache', str(tujuan)],
+                             capture_output=True, text=True, timeout=180)
+        nilai = dict(l.split('=', 1) for l in run.stdout.splitlines() if '=' in l)
+        if not nilai.get('zip'):
+            print(f"konten: render gagal ({nilai.get('error') or run.stderr.strip()[:120]})")
+            return 1
+        with zipfile.ZipFile(nilai['zip']) as z:
+            php = z.read(f'{slug}/inc/theme-data.php')
+        lokal = Path(tmp) / 'theme-data.php'
+        lokal.write_bytes(php)
+        dalam_tema = subprocess.run(ssh(cfg) + [f'php -l /dev/stdin >/dev/null'], input=php.decode(),
+                                    capture_output=True, text=True, timeout=60)
+        if dalam_tema.returncode != 0:
+            print('konten: theme-data.php hasil render tidak lolos php -l, tidak dipasang')
+            return 1
+        kirim = subprocess.run(ssh(cfg) + [f'cat > {shlex.quote(berkas)} && chown $(stat -c %U:%G '
+                                           f'{shlex.quote(str(Path(berkas).parent))}) {shlex.quote(berkas)}'],
+                               input=php.decode(), capture_output=True, text=True, timeout=60)
+        if kirim.returncode != 0:
+            print(f'konten: gagal mengirim ({kirim.stderr.strip()[:120]})')
+            return 1
+    print('konten: theme-data.php berisi isi contoh dipasang ke situs')
+    return 0
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    segar, mau_pasang = '--segar' in sys.argv, '--pasang' in sys.argv
+    if len(args) != 1:
+        print('usage: paket-g-konten <manifest> [--segar] [--pasang]', file=sys.stderr)
+        return 2
+    manifest = Path(args[0])
+    cfg = read_manifest(manifest)
+    cfg['_manifest'] = str(manifest)
+    domain = cfg.get('domain', '').lower()
+    if not re.match(r'^[a-z0-9.-]+\.[a-z]{2,}$', domain):
+        print('konten: manifest tidak valid')
+        return 2
+    simpanan = GENERATED_DIR / f'{domain}-tema.json'
+    if segar or not simpanan.is_file():
+        gen = muat_generator(manifest)
+        try:
+            # Portal berita custom: isi berbentuk media (rubrik, redaksi), bukan company profile.
+            isi = buat_isi_berita(gen, cfg, domain) if jenis_paket(cfg) == 'berita' else buat_isi(gen, cfg, domain)
+        except Exception as e:
+            print(f'konten: gagal membuat isi contoh ({e})')
+            return 1
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
+        print(f"konten: isi contoh dibuat ({', '.join(x['judul'] for x in (isi.get('rubrik') or isi['layanan']))})")
+    else:
+        isi = json.loads(simpanan.read_text())
+        if sesuaikan_compro(isi, domain, sumber_klien=teks_klien(domain)):
+            simpanan.write_text(json.dumps(isi, indent=2, ensure_ascii=False))
+            print(f"konten: isi tersimpan disesuaikan dengan company profile "
+                  f"({', '.join(l['judul'] for l in isi['layanan'])})")
+        else:
+            print('konten: memakai isi contoh tersimpan')
+    print(f'tema_json={simpanan}')
+    return pasang(cfg, domain) if mau_pasang else 0
+
+
+if __name__ == '__main__':
+    try:
+        kode = main()
+    finally:
+        # WP-CLI di langkah ini berjalan sebagai root: kembalikan pemilik wp-content (scripts/pemilik_wp.py).
+        import pemilik_wp
+        pemilik_wp.rapikan()
+    sys.exit(kode)

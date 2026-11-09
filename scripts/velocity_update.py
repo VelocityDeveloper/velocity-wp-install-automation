@@ -27,6 +27,10 @@ Sumber metrik otomatis (kunci `sumber` per update):
                   urut dari lama selesai terlama; pantau harian menulisnya juga sebagai kondisi
   wa3_jalur       lead wa3 dua jalur (u-011): utama (robot oper ke CS di wa1) vs bidang (AI penuh di wa3) vs 30 hari sebelumnya:
                   lead, membalas, transfer, konversi, nominal, lama chat→bayar (perekam WA wa3 + wa1)
+  am_followup     Data AM: follow up yang dimulai AM di wa-am per jenis (perekam WA) vs deal Lead AM CRM, harian/mingguan/bulanan
+  konsep_hosting  chat konsep yang diberi harga sejak @tanggal: ditawari hosting lebih besar (>250 MB) atau tidak (u-025)
+  wa3_aicoid      lead iklan AI.co.id (jasa AI automation, dilayani AI penuh di wa3): lead, balasan AI pertama, membalas,
+                  rekening, transfer, AI bertanya ke tim, per lead dengan kebutuhan klien (pakai @tanggal mulai iklan)
   ai_orang:<Nama> pemakaian Claude satu orang per hari, dibanding median divisinya
   installer_paket hasil installer per kelompok paket (E, F, biasa lain, custom) + perbaikan installer di repo
   bahasa:<akun>   bahasa tim ke klien di kanal WA itu (perekam rekam.velocitygrafis.com) + penilaian Claude mingguan
@@ -37,6 +41,7 @@ bukan tanggal mulai update.
 """
 import argparse
 import fcntl
+import collections
 import hashlib
 import hmac
 import secrets
@@ -69,9 +74,9 @@ SESI_DETIK = 30 * 86400
 
 STATUS = ('berjalan', 'bagus', 'perlu_perhatian', 'selesai', 'dihentikan')
 SUMBER_TETAP = ('kasus_support', 'installer_wp', 'laravel', 'crm_konsep', 'konsep_wm', 'omzet', 'webmaster', 'kasus_tim', 'kasus_ai',
-                'kasus_harian', 'wa3_jalur', 'kasus_meeting', 'efisiensi_langganan', 'konsep_halaman')
-SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|kasus_ai|kasus_harian|kasus_meeting|efisiensi_langganan|konsep_halaman|wa3_jalur|ai:[A-Za-z ]{1,30}'
-                       r'|ai_orang:[A-Za-z .]{1,40}|bahasa:[a-z0-9-]{2,40}|harga_domain:[a-z.]{2,12}:\d{4,8}:\d{4,8})(@\d{4}-\d{2}-\d{2})?$')
+                'kasus_harian', 'wa3_jalur', 'wa3_aicoid', 'konsep_hosting', 'am_followup', 'kasus_meeting', 'efisiensi_langganan', 'konsep_halaman', 'order_legalitas')
+SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|kasus_ai|kasus_harian|kasus_meeting|efisiensi_langganan|konsep_halaman|order_legalitas|wa3_jalur|wa3_aicoid|konsep_hosting|am_followup|ai:[A-Za-z ]{1,30}'
+                       r'|manual:[a-z0-9-]{1,40}|ai_orang:[A-Za-z .]{1,40}|bahasa:[a-z0-9-]{2,40}|harga_domain:[a-z.]{2,12}:\d{4,8}:\d{4,8})(@\d{4}-\d{2}-\d{2})?$')
 REKAM_ENV = Path('/etc/velocity/secrets/pengawas-wa.env')     # REKAM_URL & REKAM_KUNCI (dipinjam dari pengawas-wa)
 REPO = Path('/opt/velocity-wp-install-automation')
 UA_BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -220,6 +225,10 @@ def hapus_kondisi(uid, kid):
 
 def status_api():
     d = muat()
+    for u in d['update']:   # sesi Senin–Minggu dihitung ulang tiap halaman dibuka (lihat isi_minggu)
+        for k, m in (u.get('metrik') or {}).items():
+            if k.startswith('manual:') and isinstance(m, dict) and m.get('blok_minggu'):
+                isi_minggu(m)
     try:
         nilai = json.loads((DIR / 'nilai.json').read_text())
     except (OSError, ValueError):
@@ -236,6 +245,9 @@ def sumber_tersedia():
          ('webmaster', 'Webmaster sedang mengerjakan apa'),
          ('kasus_tim', 'Penanganan kasus Support (CRM)'), ('kasus_ai', 'Kasus Support per orang + dikerjakan pakai Claude'),
          ('wa3_jalur', 'wa3 dua jalur: utama (CS) vs bidang (AI)'),
+         ('wa3_aicoid', 'Iklan AI.co.id (jasa AI automation, AI penuh di wa3)'),
+         ('konsep_hosting', 'Web konsep: ditawari hosting lebih besar atau tidak'),
+         ('am_followup', 'Data AM: follow up per jenis vs deal (wa-am + Lead AM CRM)'),
          ('ai:semua', 'Pemakaian AI semua tim')]
     try:
         for dv in json.loads(TOKEN_JSON.read_text()).get('divisi') or []:
@@ -1403,6 +1415,291 @@ HASIL_KONSEP = {'deal': 'Deal', 'nego': 'Nego', 'menunggu_klien': 'Menunggu klie
 KONSEP_MAKS = 2_500_000   # batas harga konsep untuk pengerjaan <30 hari kerja (u-003)
 
 
+# Janji tim ("kami cek dulu", "ditunggu ya") = klien masih menunggu tim walau sudah dibalas
+JANJI_TIM_RE = re.compile(r'\b(kami|saya) (coba |lanjut(kan)? )?(cek|hitung|buat(kan)?|rangkum(kan)?|diskusikan|pelajari|tanyakan|'
+                          r'konfirmasi(kan)?|infokan|kabari|siapkan|susun|proses)( \w+)?( \w+)? (dulu|dlu|dahulu|terlebih|lebih lanjut)|'
+                          r'(lanjut(kan)?|coba) cek (dulu|dlu|dahulu|terlebih|lebih lanjut)|masih (kami )?(cek|hitung|proses|buatkan)|'
+                          r'kami cek (dulu|dlu|dahulu|ya)|mohon (di)?tunggu|tunggu sebentar|sebentar ya|'
+                          r'(segera )?kami (kirim|infokan|kabari|sampaikan)(kan)? (rangkuman|konsep|harga|estimasi|penawaran|demo)', re.I)
+BUKAN_JANJI_RE = re.compile(r'ditunggu (info|kabar|konfirmasi|jawaban|keputusan)|sudah kami (cek|hitung|buat)|apakah|bagaimana|gimana|\?', re.I)   # tim menunggu klien
+# Balasan penutup klien ("ok", "baik kak", "🙏", balasan otomatis) tidak membuat klien menunggu tim
+TUTUP_KLIEN_RE = re.compile(r'^\W*((o+k+e*y*|o+ke+y*|baik+|siap+|sip+|iya+|ya+|y|mantap+|makasih+|terima ?kasih+|thanks?|thx|noted|'
+                            r'nggih|injih|enggeh|good)\W*(kak+|ka+|mas+|mbak+|min|pak+|bu+|sis|gan|ya+|nggih)?\W*)*$|'
+                            r'sedang tidak ada saat ini|akan merespons|pesan otomatis', re.I)
+
+
+def _jam(j):
+    """Jam → '45 mnt' / '5 jam' / '2 hr 3 jam'."""
+    if j is None:
+        return '–'
+    if j < 1:
+        return f'{round(j * 60)} mnt'
+    return f'{round(j)} jam' if j < 24 else f'{int(j // 24)} hr {round(j % 24)} jam'
+
+
+def _detik_jam_kerja(a, b):
+    """Detik antara a dan b yang jatuh di jam kerja tim 07.00-22.00 (tiap hari, arahan user 6 Nov)."""
+    n, hari = 0, a.date()
+    while hari <= b.date():
+        buka, tutup = datetime.combine(hari, datetime.min.time()).replace(hour=7), datetime.combine(hari, datetime.min.time()).replace(hour=22)
+        n += max(0, (min(b, tutup) - max(a, buka)).total_seconds())
+        hari += timedelta(days=1)
+    return n
+
+assert _detik_jam_kerja(datetime(2026, 1, 1, 21), datetime(2026, 1, 2, 8)) == 7200  # 21-22 + 07-08
+
+
+def _lama_konsep(d):
+    """{nomor: {...}} lama diskusi chat konsep dari pesan klien pertama sampai pesan harga (perekam WA), dipisah
+    klien menunggu tim vs tim menunggu klien (arahan user 3 Nov: yang boleh lama hanya jawaban klien).
+    - Pesan harga = pesan tim pertama sejak H-1 tgl_penawaran yang memuat angka harga_ditawarkan
+      (2.500.000 / 2,5 jt / 2500rb ...); cadangan: pesan tim di tgl_penawaran yang menyebut Rp/harga/biaya.
+    - Awal diskusi = pesan klien pertama sesudah jeda >=7 hari terakhir sebelum pesan harga (klien lama tidak
+      dihitung dari chat pertamanya berbulan-bulan lalu).
+    - Klien menunggu tim: dari pesan klien yang belum dibalas sampai pesan tim berikutnya, dan sesudah pesan tim
+      berisi janji (JANJI_TIM_RE) sampai pesan tim berikutnya. Selebihnya tim menunggu klien.
+    - Klien menunggu tim (dan tunggu terlama) hanya jam kerja 07.00-22.00; tim menunggu klien & total jam kalender."""
+    tw = [x for x in d if x.get('tgl_penawaran') and x.get('harga_ditawarkan')]
+    lokal = lambda s: datetime.fromisoformat(s.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)  # noqa: E731
+    pesan = {}
+    for akun in {x['akun'] for x in tw if x.get('akun')}:
+        xs = [x for x in tw if x.get('akun') == akun]
+        try:
+            ps = _pesan_rekam(akun, min(lokal(x['chat_pertama']).date() for x in xs), max(date.fromisoformat(x['tgl_penawaran']) for x in xs))
+        except Exception:  # noqa: BLE001 — perekam tak terjangkau: kanal ini tanpa data lama
+            continue
+        for m in ps:
+            pesan.setdefault((akun, m['n']), []).append((datetime.fromisoformat(m['w'][:19]), m['kami'], m['t']))
+    hasil = {}
+    for x in tw:
+        ms = sorted(pesan.get((x.get('akun'), x['nomor'])) or [], key=lambda m: m[0])
+        h, tgl = x['harga_ditawarkan'], date.fromisoformat(x['tgl_penawaran'])
+        jt = f'{h / 1e6:g}'
+        pola = {f'{h:,}'.replace(',', '.'), f'{h:,}', str(h), f'{h // 1000}rb', f'{h // 1000} rb', f'{h // 1000}k'} | \
+               {f'{a}{b}' for a in (jt, jt.replace('.', ',')) for b in (' j', 'j')}
+        harga = next((w for w, kami, t in ms if kami and w.date() >= tgl - timedelta(days=1) and any(p in t.lower() for p in pola)), None) \
+            or next((w for w, kami, t in ms if kami and w.date() == tgl and re.search(r'rp|harga|biaya|juta|jt', t, re.I)), None)
+        if not harga:
+            continue
+        ss = [m for m in ms if m[0] <= harga]
+        i = len(ss) - 1
+        while i > 0 and not ((ss[i][0] - ss[i - 1][0]).days >= 7 and not ss[i][1]):
+            i -= 1
+        ss = ss[i:]
+        tim = klien = 0
+        terlama, contoh = 0, None
+        t0, nunggu, sejak = ss[0][0], not ss[0][1], (ss[0][0], 'klien', ss[0][2])
+        for w, kami, t in ss[1:]:
+            if nunggu:
+                tim += _detik_jam_kerja(t0, w)
+            else:
+                klien += (w - t0).total_seconds()
+            if kami:
+                if nunggu and _detik_jam_kerja(sejak[0], w) > terlama:
+                    terlama, contoh = _detik_jam_kerja(sejak[0], w), (sejak[0], w, sejak[1], sejak[2])
+                nunggu = bool(JANJI_TIM_RE.search(t)) and not BUKAN_JANJI_RE.search(t)
+                if nunggu:
+                    j = JANJI_TIM_RE.search(t)
+                    sejak = (w, 'tim', ('…' if j.start() > 60 else '') + t[max(0, j.start() - 60):j.end() + 25].strip())
+            elif not nunggu and not TUTUP_KLIEN_RE.search(t.strip()):
+                nunggu, sejak = True, (w, 'klien', t)
+            t0 = w
+        hasil[x['nomor']] = {'awal': ss[0][0], 'harga': harga, 'total': (harga - ss[0][0]).total_seconds() / 3600,
+                             'tim': tim / 3600, 'klien': klien / 3600, 'terlama': terlama / 3600, 'contoh': contoh}
+    return hasil
+
+HOSTING_BESAR_RE = re.compile(r'hosting\s*(?:lebih besar|unlimited|\d+(?:[.,]\d+)?\s*(?:gb|tb)\b|(?:[3-9]\d\d|\d{4,})\s*mb\b)', re.I)
+HARGA_KONSEP_RE = re.compile(r'biaya|harga|total', re.I)
+
+
+# jenis follow up AM, urutan = prioritas tampil; pesan AM satu nomor sehari boleh masuk >1 jenis
+JENIS_FU_AM = (('Tambah hosting', re.compile(r'hosting|kapasitas|overused|\bspace\b|\d+\s*(?:mb|gb)\b', re.I)),
+               ('Perpanjangan', re.compile(r'perpanjang|masa aktif|nonaktif|aktifkan kembali', re.I)),
+               ('Domain', re.compile(r'(?:nama|pembelian|beli|ganti|penggantian(?: nama)?) domain|domain\W+\S+ (?:ini )?(?:sudah digunakan|tersedia)', re.I)),
+               ('Email domain', re.compile(r'e-?mail', re.I)),
+               ('Google Maps', re.compile(r'google ?maps|google bisnis|rating|ulasan', re.I)),
+               ('Google AdSense', re.compile(r'adsense', re.I)),
+               ('Sosmed', re.compile(r'sosmed|media sosial|media social|instagram|facebook|tiktok', re.I)),
+               ('Iklan', re.compile(r'iklan|deposit|\bads\b', re.I)),
+               ('Legalitas usaha', re.compile(r'pendirian|legalitas|\bNIB\b', re.I)),
+               ('Verifikasi kode (Google)', re.compile(r'kode verifikasi|kode (?:yang )?masuk|kode berawalan', re.I)),
+               ('Desain grafis', re.compile(r'kemasan|logo|canva|banner|brosur|kartu nama|company profile', re.I)),
+               ('Pembuatan / redesign', re.compile(r'pembuatan|redesain|redesign|desain|paket [efg]\b|upgrade|apk|aplikasi|form pemesanan|pemesanan web', re.I)),
+               ('Update web', re.compile(r'update|perbarui|ubah isi|upload produk', re.I)),
+               ('Cek kendala / bantuan', re.compile(r'kendala|terhubung dengan (?:tim|ti+m)|dapat kami bantu|panduan|revisi|screenshot|normal|'
+                                                    r'kami cek|login|refresh|tidak bisa diakses|eror|error', re.I)),
+               ('Tagihan pembayaran', re.compile(r'pembayaran|invoice|rekening|transfer', re.I)))
+BALASAN_AM_RE = re.compile(r'^\W*(?:baik|terima ?kasih|sama-sama|siap|oke?|benar)\b', re.I)   # AM menjawab chat kemarin, bukan follow up
+JENIS_DEAL_AM = {'Tambah Space': 'Tambah hosting', 'Perpanjangan': 'Perpanjangan', 'Jasa Buat Email': 'Email domain',
+                 'Jasa buat google maps': 'Google Maps', 'Jasa rating google maps': 'Google Maps', 'Jasa Buat Akun Sosmed': 'Sosmed',
+                 'Pembuatan': 'Pembuatan / redesign', 'Redesign': 'Pembuatan / redesign', 'Jasa Update Web': 'Update web'}
+
+
+def _nomor62(t):
+    d = re.sub(r'\D', '', t or '')
+    return '62' + d[1:] if d.startswith('0') else d
+
+
+def metrik_am_followup(mulai):
+    """Data AM (Dini, wa-am). Follow up = nomor yang hari itu disapa AM lebih dulu (pesan pertama hari itu dari AM, bukan
+    pengingat otomatis); jenis dari isi pesan AM hari itu. Deal = transaksi halaman Lead AM CRM (staff Dini) per tgl_masuk."""
+    try:
+        r = subprocess.run([API_SH, f'/api/api/laporan/lead_am?am=Dini&per_page=10000&dari={mulai.isoformat()}&sampai={date.today().isoformat()}'],
+                           capture_output=True, text=True, timeout=120)
+        deal = json.loads(r.stdout.splitlines()[0])['data']['data']
+    except Exception as e:  # noqa: BLE001
+        return {'galat': f'CRM lead_am: {str(e)[:200]}'}
+    try:
+        ms = _pesan_rekam('wa-am', mulai, date.today())
+    except Exception as e:  # noqa: BLE001
+        return {'galat': f'perekam wa-am: {str(e)[:200]}'}
+    hari = {}
+    for m in ms:
+        if m['n'] in NOMOR_KANTOR_REKAM:
+            continue
+        hari.setdefault((m['w'][:10], m['n']), []).append(m)
+    fu = {}   # (tgl, nomor) → set jenis
+    for (tgl, n), xs in hari.items():
+        kami = [x for x in xs if x['kami'] and x['t'] and not PENGINGAT_RE.search(x['t'])]
+        if not kami or not xs[0]['kami'] or PENGINGAT_RE.search(xs[0]['t'] or '') or BALASAN_AM_RE.search(xs[0]['t'] or ''):
+            continue                                     # klien yang memulai / AM menjawab chat kemarin = layanan, bukan follow up
+        teks = ' '.join(x['t'] for x in kami)
+        js = {j for j, rx in JENIS_FU_AM if rx.search(teks)}
+        if js - {'Cek kendala / bantuan', 'Tagihan pembayaran'}:   # keduanya jenis cadangan: hanya bila tanpa penawaran lain
+            js -= {'Cek kendala / bantuan', 'Tagihan pembayaran'}
+        if js:                                           # tanpa jenis = obrolan tanpa penawaran/tagihan, bukan follow up
+            fu[(tgl, n)] = js
+    fu_nomor = {}
+    for tgl, n in fu:
+        fu_nomor.setdefault(n, []).append(tgl)
+    biaya_am = {}   # nomor → [(tgl, teks)] pesan AM yang menyebut biaya, untuk merinci deal CRM "Lain-lain"
+    for m in ms:
+        if m['kami'] and m['t'] and re.search(r'biaya|rp\.?\s?\d', m['t'], re.I):
+            biaya_am.setdefault(m['n'], []).append((m['w'][:10], m['t']))
+    for x in deal:
+        nos = {_nomor62(p) for p in re.split(r'[,/;]', f"{x.get('wa') or ''},{x.get('hp') or ''}") if len(re.sub(r'\D', '', p)) >= 9}
+        x['_jenis'] = JENIS_DEAL_AM.get(x['jenis'])
+        if not x['_jenis']:
+            t = x['tgl_masuk'][:10]
+            teks = [tk for n in nos for w, tk in biaya_am.get(n, []) if 0 <= (date.fromisoformat(t) - date.fromisoformat(w)).days <= 7]
+            x['_jenis'] = next((j for tk in reversed(teks) for j, rx in JENIS_FU_AM
+                                if j not in ('Tagihan pembayaran', 'Cek kendala / bantuan') and rx.search(tk)), f"{x['jenis']} (CRM)")
+        t = x['tgl_masuk'][:10]   # deal dari FU = nomornya di-follow up AM dalam 30 hari sebelum tgl masuk
+        x['_dari_fu'] = any(any(0 <= (date.fromisoformat(t) - date.fromisoformat(f)).days <= 30 for f in fu_nomor.get(n, [])) for n in nos)
+    urut = [j for j, _ in JENIS_FU_AM]
+    kunci_minggu = lambda t: (date.fromisoformat(t) - timedelta(days=date.fromisoformat(t).weekday())).isoformat()   # noqa: E731
+    rp = lambda v: f"Rp{v / 1e6:.2f} jt".replace('.', ',') if v else '–'   # noqa: E731
+    tgl_id = lambda d: f'{d.day} {BULAN_ID[d.month - 1]}'   # noqa: E731
+
+    def rekap(kunci, sejak):
+        """{periode: {jenis: [follow up, deal, deal dari FU, nominal]}} + total follow up unik per periode."""
+        g, tot = {}, {}
+        for (tgl, _), js in fu.items():
+            if tgl >= sejak:
+                tot[kunci(tgl)] = tot.get(kunci(tgl), 0) + 1
+                for jn in js:
+                    g.setdefault(kunci(tgl), {}).setdefault(jn, [0, 0, 0, 0])[0] += 1
+        for x in deal:
+            if x['tgl_masuk'][:10] >= sejak:
+                a = g.setdefault(kunci(x['tgl_masuk'][:10]), {}).setdefault(x['_jenis'], [0, 0, 0, 0])
+                a[1] += 1
+                a[2] += x['_dari_fu']
+                a[3] += float(x.get('biaya') or 0)
+        return g, tot
+
+    def baris(kunci, sejak, label):
+        g, tot = rekap(kunci, sejak)
+        out = []
+        for k in sorted(g, reverse=True):
+            jj = sorted(g[k], key=lambda jn: urut.index(jn) if jn in urut else 99)
+            for i, jn in enumerate(jj):
+                a = g[k][jn]
+                out.append([label(k) if i == 0 else '', jn, a[0], a[1], a[2], rp(a[3])])
+            out.append(['', 'Total (follow up unik)', tot.get(k, 0), sum(a[1] for a in g[k].values()),
+                        sum(a[2] for a in g[k].values()), rp(sum(a[3] for a in g[k].values()))])
+        return out
+
+    hari_ini = date.today()
+    kolom = ['Periode', 'Jenis', 'Follow up', 'Deal', 'Deal dari FU', 'Nominal deal']
+    harian = baris(lambda t: t, (hari_ini - timedelta(days=6)).isoformat(),
+                   lambda k: f"{HARI_ID[date.fromisoformat(k).weekday()][:3]} {date.fromisoformat(k).day:02d} {BULAN_ID[date.fromisoformat(k).month - 1]}")
+    mingguan = baris(kunci_minggu, (hari_ini - timedelta(days=hari_ini.weekday(), weeks=7)).isoformat(),
+                     lambda k: f'{tgl_id(date.fromisoformat(k))}–{tgl_id(date.fromisoformat(k) + timedelta(days=6))}')
+    bulanan = baris(lambda t: t[:7], mulai.isoformat(), lambda k: f"{BULAN_ID[int(k[5:]) - 1]} {k[:4]}")
+    awal30 = (hari_ini - timedelta(days=29)).isoformat()
+    fu30 = sum(1 for (t, _) in fu if t >= awal30)
+    d30 = [x for x in deal if x['tgl_masuk'][:10] >= awal30]
+    hari_fu = {t for (t, _) in fu if t >= awal30 and date.fromisoformat(t).weekday() < 6}
+    rata = fu30 / len(hari_fu) if hari_fu else 0
+    nom30 = sum(float(x.get('biaya') or 0) for x in d30)
+    return {'judul': 'Data AM: follow up dan deal per jenis (Dini, wa-am)',
+            'ringkas': (f'30 hari terakhir: {fu30} follow up dimulai AM (rata-rata {rata:.0f} per hari kerja), {len(d30)} deal '
+                        f'{rp(nom30)}, {sum(x["_dari_fu"] for x in d30)} deal dari nomor yang di-follow up AM.'),
+            'sorot': [{'label': 'Follow up / hari kerja (30 hr)', 'nilai': round(rata)}, {'label': 'Deal 30 hari', 'nilai': len(d30)},
+                      {'label': 'Deal dari FU', 'nilai': sum(x['_dari_fu'] for x in d30)}, {'label': 'Nominal 30 hari', 'nilai': rp(nom30)}],
+            'tabel': [{'judul': 'Harian, 7 hari terakhir (per jenis)', 'kolom': kolom, 'kanan': [2, 3, 4, 5], 'baris': harian},
+                      {'judul': 'Mingguan, Senin–Minggu (per jenis)', 'kolom': kolom, 'kanan': [2, 3, 4, 5], 'baris': mingguan},
+                      {'judul': 'Bulanan (per jenis)', 'kolom': kolom, 'kanan': [2, 3, 4, 5], 'baris': bulanan}],
+            'ket': 'Follow up = nomor yang hari itu disapa AM lebih dulu di wa-am (pesan pertama hari itu dari AM; bukan pengingat '
+                   'masa aktif otomatis dan bukan jawaban atas chat kemarin seperti "Baik/Terima kasih"); 1 nomor 1 hari = 1 follow up. '
+                   'Jenis dibaca dari isi pesan AM hari itu, 1 follow up bisa >1 jenis, jadi baris Total memakai follow up unik; Cek kendala/bantuan '
+                   'dan Tagihan pembayaran hanya dipakai bila pesan tidak berisi penawaran jenis lain. '
+                   'Sapaan tanpa penawaran/tagihan/bantuan (±0,7%) tidak dihitung. Deal = transaksi halaman Lead AM CRM (staff Dini) '
+                   'menurut tanggal masuk; transaksi CRM berjenis "Lain-lain" dirinci dari pesan biaya AM 7 hari sebelumnya. '
+                   'Deal dari FU = nomor WA/HP transaksi itu di-follow up AM dalam 30 hari sebelumnya.'}
+
+
+def metrik_konsep_hosting(mulai):
+    """Arahan Muh 5 Nov: web konsep ditawari pilihan hosting lebih besar. Chat konsep (halaman Konsep CRM) yang menerima
+    pesan harga dari tim sejak `mulai`; hosting besar = pesan tim sejak `mulai` menyebut hosting >250 MB/GB/unlimited/"lebih besar"."""
+    try:
+        r = subprocess.run([API_SH, '/api/api/konsep-chat?per_page=200'], capture_output=True, text=True, timeout=120)
+        d = json.loads(r.stdout.splitlines()[0])['data']
+    except Exception as e:  # noqa: BLE001
+        return {'galat': f'CRM konsep-chat: {str(e)[:200]}'}
+    pesan = {}
+    for akun in {x['akun'] for x in d if x.get('akun')}:
+        try:
+            for m in _pesan_rekam(akun, mulai, date.today()):
+                if m['kami'] and m['t']:
+                    pesan.setdefault((akun, m['n']), []).append(m)
+        except Exception:  # noqa: BLE001 — perekam tak terjangkau: kanal ini dilewati
+            continue
+    baris, ya = [], 0
+    for x in d:
+        ms = sorted(pesan.get((x.get('akun'), x['nomor'])) or [], key=lambda m: m['w'])
+        harga = next((m for m in ms if HARGA_KONSEP_RE.search(m['t']) and any(v >= 1_000_000 for v in _rupiah_semua(m['t']))), None)
+        if not harga:
+            continue
+        besar = next((m for m in ms if HOSTING_BESAR_RE.search(m['t'])), None)
+        ya += bool(besar)
+        if besar:
+            t = ' '.join(besar['t'].split())
+            j = HOSTING_BESAR_RE.search(t).start()
+            kutip = ('…' if j > 50 else '') + t[max(0, j - 50):j + 90]
+        judul = re.sub(r'^Rangkuman (Website |Aplikasi Android |Aplikasi )?Konsep ', '', x.get('rangkuman_judul') or '') or '-'
+        baris.append([x['nomor'], judul if len(judul) <= 40 else judul[:38] + '…', x.get('akun') or '–', harga['w'][5:16].replace('T', ' '),
+                      f"Rp{x['harga_ditawarkan']:,}".replace(',', '.') if x.get('harga_ditawarkan') else '–',
+                      'Ya' if besar else 'Tidak', kutip if besar else '–', HASIL_KONSEP.get(x.get('hasil'), x.get('hasil') or '-')])
+    baris.sort(key=lambda b: b[3], reverse=True)
+    n = len(baris)
+    tgl = f'{mulai.day} {BULAN_ID[mulai.month - 1]}'
+    pct = lambda a: round(100 * a / n) if n else 0   # noqa: E731
+    return {'judul': 'Web konsep: ditawari hosting lebih besar',
+            'ringkas': (f'Sejak {tgl}: {n} chat konsep diberi harga, {ya} ditawari hosting lebih besar ({pct(ya)}%), '
+                        f'{n - ya} tidak ({pct(n - ya)}%).') if n else f'Sejak {tgl} belum ada chat konsep yang diberi harga.',
+            'angka': [_angka('Ditawari hosting lebih besar', None, pct(ya), '%', 'naik', f'{ya} dari {n} chat konsep yang diberi harga')],
+            'sorot': [{'label': 'Diberi harga', 'nilai': n}, {'label': 'Ditawari hosting besar', 'nilai': ya},
+                      {'label': 'Tidak ditawari', 'nilai': n - ya, 'buruk': n - ya > 0}],
+            'tabel': [{'judul': f'Chat konsep diberi harga sejak {tgl} (terbaru dulu)',
+                       'kolom': ['Nomor WA', 'Konsep', 'Kanal', 'Pesan harga', 'Harga', 'Hosting besar', 'Kutipan tawaran hosting', 'Hasil'],
+                       'kanan': [4], 'baris': baris}],
+            'ket': 'Chat = halaman Konsep new-vd (wa1/wa-meta). Diberi harga = sejak tanggal mulai ada pesan tim yang memuat '
+                   'biaya/harga/total dan angka minimal Rp1 jt. Hosting besar = sejak tanggal mulai ada pesan tim yang menyebut '
+                   'hosting lebih dari 250 MB (mis. 1 GB, 500 MB, unlimited) atau "hosting lebih besar". Harga = harga terakhir '
+                   'yang dicatat di halaman Konsep.'}
+
+
 def metrik_konsep_halaman(mulai):
     """Halaman Konsep CRM (chat konsep wa1/wa-meta): penawaran, telepon/meeting, hasil, order, tautan ke installer."""
     try:
@@ -1420,6 +1717,21 @@ def metrik_konsep_halaman(mulai):
     tanpa_proyek = [x for x in d if not x.get('proyek_slug')]
     konversi = round(100 * len(deal) / len(tawar)) if tawar else 0
     urut = ('deal', 'nego', 'menunggu_rapat', 'menunggu_klien', 'dana_belum_ada', 'belum_ditawari', 'tidak_lanjut')
+    lama = _lama_konsep(d)
+    tgl_jam = lambda w: f"{w.day} {BULAN_ID[w.month - 1]} {w.strftime('%H.%M')}"  # noqa: E731
+    lb, ld = [], []
+    for x in sorted((x for x in d if x['nomor'] in lama), key=lambda x: lama[x['nomor']]['awal'], reverse=True):
+        L = lama[x['nomor']]
+        judul = re.sub(r'^Rangkuman (Website |Aplikasi Android |Aplikasi )?Konsep ', '', x.get('rangkuman_judul') or '') or '-'
+        lb.append([x['nomor'], judul if len(judul) <= 40 else judul[:38] + '…', _jam(L['tim']), _jam(L['klien']), _jam(L['total']),
+                   _jam(L['terlama']), HASIL_KONSEP.get(x.get('hasil'), x.get('hasil') or '-'), tgl_jam(L['awal']), tgl_jam(L['harga'])])
+        c = L['contoh']
+        ld.append((f"Tunggu tim terlama: pesan klien {tgl_jam(c[0])} \"{c[3][:140]}\" baru dibalas {tgl_jam(c[1])}." if c[2] == 'klien' else
+                   f"Tunggu tim terlama: tim menjanjikan {tgl_jam(c[0])} \"{c[3][:140]}\", kabar berikutnya baru {tgl_jam(c[1])}.")
+                  if c and L['terlama'] >= 1 else '')
+    jam_tim = [L['tim'] for L in lama.values()]
+    med = lambda xs: statistics.median(xs) if xs else None  # noqa: E731
+    lewat24 = sum(j > 24 for j in jam_tim)
     baris, detail = [], []
     for x in sorted(d, key=lambda x: (urut.index(x['hasil']) if x.get('hasil') in urut else 9, -(x.get('harga_ditawarkan') or 0))):
         o = x.get('order') or {}
@@ -1434,20 +1746,33 @@ def metrik_konsep_halaman(mulai):
                         f"konversi {konversi}%). Nego {len(n['nego'])}, menunggu klien {len(n['menunggu_klien'])}, menunggu rapat "
                         f"{len(n['menunggu_rapat'])}, dana belum ada {len(n['dana_belum_ada'])}, tidak lanjut {len(n['tidak_lanjut'])}, "
                         f"belum ditawari {len(n['belum_ditawari'])}. {len(meet)} sudah telepon/meeting ({sum(x['hasil'] == 'deal' for x in meet)} deal). "
-                        f"{len(lewat)} penawaran di atas Rp2,5 jt; {len(tanpa_proyek)} chat belum punya project installer."),
+                        f"{len(lewat)} penawaran di atas Rp2,5 jt; {len(tanpa_proyek)} chat belum punya project installer. "
+                        f"Chat awal sampai diberi harga (median {len(lama)} chat): {_jam(med([L['total'] for L in lama.values()]))}, "
+                        f"klien menunggu tim {_jam(med(jam_tim))}, tim menunggu klien {_jam(med([L['klien'] for L in lama.values()]))}; "
+                        f"{lewat24} chat klien menunggu tim lebih dari 24 jam."),
             'angka': [_angka('Konversi penawaran jadi deal', None, konversi, '%', 'naik', f'{len(deal)} dari {len(tawar)} yang sudah diberi harga'),
                       _angka('Penawaran di atas Rp2,5 jt', None, len(lewat), '', 'turun',
                              ', '.join(f"{rp(x['harga_ditawarkan'])} ({x.get('lama_ditawarkan') or '?'})" for x in lewat) or 'tidak ada'),
+                      _angka('Median klien menunggu tim sampai diberi harga (jam)', None, round(med(jam_tim) or 0, 1), '', 'turun',
+                             f"{lewat24} dari {len(lama)} chat klien menunggu tim lebih dari 24 jam"),
                       _angka('Chat tanpa project installer', None, len(tanpa_proyek), '', 'turun',
                              'tanpa estimasi lama pengerjaan dari installer Aplikasi Custom')],
             'sorot': [{'label': 'Deal', 'nilai': len(deal)},
                       {'label': 'Menunggu klien + nego', 'nilai': len(n['menunggu_klien']) + len(n['nego'])},
-                      {'label': 'Belum ditawari', 'nilai': len(n['belum_ditawari']), 'buruk': bool(n['belum_ditawari'])}],
-            'tabel': [{'judul': 'Semua chat konsep (urut dari yang paling dekat deal)',
+                      {'label': 'Belum ditawari', 'nilai': len(n['belum_ditawari']), 'buruk': bool(n['belum_ditawari'])},
+                      {'label': 'Median klien menunggu tim', 'nilai': _jam(med(jam_tim)), 'buruk': (med(jam_tim) or 0) > 4}],
+            'tabel': [{'judul': 'Lama diskusi sampai diberi harga: klien menunggu tim vs tim menunggu klien (awal diskusi terbaru dulu)',
+                       'kolom': ['Nomor WA', 'Konsep', 'Klien menunggu tim', 'Tim menunggu klien', 'Total', 'Tunggu tim terlama',
+                                 'Hasil', 'Awal diskusi', 'Diberi harga'], 'kanan': [2, 3, 4, 5], 'baris': lb, 'detail': ld,
+                       'sortir': {k: [round(lama[r[0]][f], 2) for r in lb] for k, f in ((2, 'tim'), (3, 'klien'), (4, 'total'))}},  # nilai jam untuk sortir kolom di halaman
+                      {'judul': 'Semua chat konsep (urut dari yang paling dekat deal)',
                        'kolom': ['Hasil', 'Nomor WA', 'Konsep', 'Harga', 'Lama', 'Telepon/meeting', 'Project installer', 'Order CRM'],
                        'kanan': [3, 5], 'baris': baris, 'detail': detail}],
             'ket': 'Sumber: halaman Konsep new-vd (chat wa1/wa-meta berlabel "konsep" atau ber-link preview installer, disetor tiap 10 menit). '
-                   'Harga, lama, telepon/meeting dan hasil dibaca Claude dari chat; order = order CRM yang tersambung ke nomor itu.'}
+                   'Harga, lama, telepon/meeting dan hasil dibaca Claude dari chat; order = order CRM yang tersambung ke nomor itu. '
+                   'Lama diskusi dari perekam WA. Klien menunggu tim & tunggu tim terlama hanya dihitung di jam kerja 07.00-22.00; tim menunggu klien & total jam kalender. Awal = pesan klien pertama sesudah jeda >=7 hari, '
+                   'akhir = pesan tim yang memuat harga. Klien menunggu tim = pesan klien belum dibalas, atau tim sudah bilang '
+                   '"kami cek dulu/ditunggu" dan belum kembali. Selebihnya tim menunggu jawaban klien.'}
 
 
 LANGGANAN = DIR / 'langganan.json'   # daftar langganan perusahaan + status pengganti (u-017), diisi manual
@@ -1469,24 +1794,66 @@ def metrik_efisiensi_langganan(mulai):
     tanpa = lambda xs: f' + {n} pos belum ada nominal' if (n := sum(x['nilai'] is None for x in xs)) else ''  # noqa: E731
     juta = lambda v: f'Rp{v / 1e6:.2f} jt'.replace('.', ',') if v else 'Rp0'  # noqa: E731
     pct = lambda xs: f'{round(100 * jml(xs) / total)}%' if total else '–'  # noqa: E731
-    return {'judul': 'Efisiensi langganan: sudah berhenti, dikerjakan, belum',
+    # rencana = langkah efisiensi yang sudah dihitung tapi belum dijalankan (mis. konsolidasi server 22 Okt);
+    # sisanya (tanpa hemat_rencana) = belum bisa diefisiensi
+    rencana = [x for x in belum if x.get('hemat_rencana')]
+    tetap = [x for x in belum if not x.get('hemat_rencana')]
+    hemat_rencana = sum(x['hemat_rencana'] for x in rencana)
+    # pos yang sedang dikerjakan bisa cuma downgrade (hemat_rencana = selisih); tanpa itu dianggap hemat penuh
+    hemat_kerja = sum(x.get('hemat_rencana', x['nilai'] or 0) for x in kerja)
+    hemat_akhir = jml(putus) + hemat_kerja + hemat_rencana
+    return {'judul': 'Efisiensi langganan: sudah berhenti, dikerjakan, rencana, belum bisa',
             'ringkas': (f"Sudah berhenti langganan {len(putus)} pos, hemat {juta(jml(putus))}/bln ({pct(putus)}). "
                         f"Sedang dikerjakan {len(kerja)} pos senilai {juta(jml(kerja))}/bln ({pct(kerja)}). "
-                        f"Belum dikerjakan {len(belum)} pos senilai {juta(jml(belum))}/bln ({pct(belum)})."),
+                        f"Rencana {len(rencana)} pos, perkiraan hemat {juta(hemat_rencana)}/bln. "
+                        f"Belum bisa diefisiensi {len(tetap)} pos senilai {juta(jml(tetap))}/bln ({pct(tetap)}). "
+                        f"Total hemat akhir (sudah + sedang dikerjakan + rencana) {juta(hemat_akhir)}/bln dari {juta(total)}/bln "
+                        f"({round(100 * hemat_akhir / total) if total else 0}%)."),
             'sorot': [{'label': 'Sudah berhenti langganan (Rp/bln)', 'nilai': rp(jml(putus)), 'baik': True},
                       {'label': 'Sedang dikerjakan (Rp/bln)', 'nilai': rp(jml(kerja))},
-                      {'label': 'Belum dikerjakan (Rp/bln)', 'nilai': rp(jml(belum)), 'buruk': True}],
+                      {'label': 'Rencana hemat (Rp/bln)', 'nilai': rp(hemat_rencana)},
+                      {'label': 'Belum bisa diefisiensi (Rp/bln)', 'nilai': rp(jml(tetap)), 'buruk': True},
+                      {'label': 'Total hemat akhir (Rp/bln)', 'nilai': rp(hemat_akhir), 'baik': True}],
             'tabel': [{'judul': f'Sudah tidak langganan: {len(putus)} pos, hemat {rp(jml(putus))}/bulan' + tanpa(putus),
                        'kolom': ['Langganan', 'Rp/bulan', 'Pengganti', 'Berhenti'], 'kanan': [1],
                        'baris': [[x['nama'], rp(x['nilai']), x.get('pengganti', ''), f"{int(x['diputus'][8:])} {BULAN_ID[int(x['diputus'][5:7]) - 1]}"] for x in putus]},
                       {'judul': f'Sedang dikerjakan: {len(kerja)} pos, {rp(jml(kerja))}/bulan' + tanpa(kerja),
                        'kolom': ['Langganan', 'Rp/bulan', 'Pengganti', 'Progres'], 'kanan': [1],
                        'baris': [[x['nama'], rp(x['nilai']), x.get('pengganti', ''), x.get('progres', '')] for x in kerja]},
-                      {'judul': f'Belum dikerjakan: {len(belum)} pos, {rp(jml(belum))}/bulan' + tanpa(belum),
-                       'kolom': ['Langganan', 'Rp/bulan'], 'kanan': [1],
-                       'baris': [[x['nama'], rp(x['nilai'])] for x in belum]}],
+                      {'judul': f'Rencana efisiensi: {len(rencana)} pos, perkiraan hemat {rp(hemat_rencana)}/bulan',
+                       'kolom': ['Langganan', 'Rp/bulan', 'Rencana', 'Hemat/bulan'], 'kanan': [1, 3],
+                       'baris': [[x['nama'], rp(x['nilai']), x.get('rencana', ''), rp(x['hemat_rencana'])] for x in rencana]},
+                      {'judul': f'Belum bisa diefisiensi: {len(tetap)} pos, {rp(jml(tetap))}/bulan' + tanpa(tetap),
+                       'kolom': ['Langganan', 'Rp/bulan', 'Keterangan'], 'kanan': [1],
+                       'baris': [[x['nama'], rp(x['nilai']), x.get('rencana', '')] for x in tetap]}],
             'ket': f'Total {rp(total)}/bulan. Nilai dari sheet Pengeluaran Jenius + menu Langganan Velocity CRM (nominal dari user; '
                    f'langganan tahunan dibagi 12, USD kurs Rp18.000). "–" = nominal belum ada. Data diisi manual di {LANGGANAN}.'}
+
+
+LEGALITAS = DIR / 'legalitas.json'   # order jasa pendirian CV/PT (u-010), diisi manual
+
+
+def metrik_order_legalitas(mulai):
+    """Jumlah dan nilai order legalitas + daftar order (tanggal, jenis, klien, nomor WA)."""
+    try:
+        daftar = sorted(json.loads(LEGALITAS.read_text())['order'], key=lambda x: x['tanggal'])
+    except (OSError, ValueError, KeyError) as e:
+        return {'galat': f'{LEGALITAS.name}: {e}'}
+    rp = lambda v: f"Rp{v:,}".replace(',', '.')  # noqa: E731
+    tgl = lambda s: f"{int(s[8:10])} {BULAN_ID[int(s[5:7]) - 1]} {s[:4]}"  # noqa: E731
+    juta = lambda v: f'Rp{v / 1e6:g} jt'.replace('.', ',')  # noqa: E731
+    total = sum(x['nilai'] for x in daftar)
+    modal = sum(x['modal'] for x in daftar)
+    return {'judul': 'Order legalitas',
+            'ringkas': f'{len(daftar)} order senilai {juta(total)} sejak {tgl(str(mulai))}, '
+                       f'modal ke vendor {juta(modal)}, laba bersih {juta(total - modal)}.',
+            'sorot': [{'label': 'Order', 'nilai': str(len(daftar))}, {'label': 'Nilai order', 'nilai': rp(total)},
+                      {'label': 'Modal vendor', 'nilai': rp(modal)}, {'label': 'Laba bersih', 'nilai': rp(total - modal), 'baik': True}],
+            'tabel': [{'judul': 'Daftar order', 'kolom': ['Tanggal', 'Order', 'Klien', 'Nomor WA', 'Nilai', 'Modal', 'Laba'],
+                       'kanan': [4, 5, 6],
+                       'baris': [[tgl(x['tanggal']), x['jenis'], x['klien'], x['nomor'], rp(x['nilai']), rp(x['modal']),
+                                  rp(x['nilai'] - x['modal'])] for x in daftar]}],
+            'ket': f'Tanggal = tanggal bayar. Modal = bayar ke vendor (Legalink). Data diisi manual di {LEGALITAS}.'}
 
 
 def _pakai_harian(p):
@@ -1714,12 +2081,78 @@ def _nilai_bahasa_claude(akun, sb, ss, mulai):
     return data
 
 
+SKEMA_PUAS = {'type': 'object', 'required': ['chat'], 'properties': {'chat': {'type': 'array', 'items': {
+    'type': 'object', 'required': ['kunci', 'nilai', 'alasan'],
+    'properties': {'kunci': {'type': 'string'}, 'nilai': {'type': 'string', 'enum': ['puas', 'netral', 'tidak_puas']},
+                   'alasan': {'type': 'string', 'description': 'maks 15 kata'},
+                   'kutipan': {'type': 'string', 'description': 'pesan klien yang paling menunjukkan nilai itu, persis, maks 120 huruf'}}}}}}
+PROMPT_PUAS = ('Potongan chat WhatsApp tim Revisi Velocity Developer (jasa pembuatan website) dengan klien. K = klien, T = tim. '
+               'Nilai sikap KLIEN di tiap chat: puas (memuji hasil, terima kasih tulus atas pekerjaan, setuju tanpa keluhan), '
+               'tidak_puas = KOMPLAIN: klien jelas kesal/marah/kecewa kepada tim atau layanan, mis. menyalahkan tim ("anda tidak '
+               'selesaikan!!!"), nada keras (tanda seru berulang, huruf kapital, sindiran "sampai kiamat"), menyebut kecewa/lambat/'
+               'tidak profesional, mengancam batal/minta uang kembali. BUKAN komplain (= netral): bertanya, melapor kendala/error '
+               'web dengan nada biasa, menagih atau menanyakan kabar dengan sopan ("kok belum masuk?", "panduannya belum kami '
+               'terima"), mengirim revisi walau kalimatnya tegas atau membandingkan, minta dibantu, serta keluhan yang bukan '
+               'urusan tim Revisi (hosting lambat, web down, email, iklan sesudah serah terima = urusan Support). Ragu = netral. '
+               'netral = selain itu. Terima kasih basa-basi ("ok makasih") = netral. '
+               'Kembalikan satu baris per kunci.\n\n')
+
+
+def _puas_klien(akun, pesan, mulai, sb_a):
+    """Sikap klien per chat per periode (sebelum/sesudah mulai) dinilai Claude haiku; chat yang pesannya tidak berubah tidak dinilai ulang."""
+    berkas = DIR / f'puas-{akun}.json'
+    try:
+        cache = json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    batas = mulai.isoformat()
+    chat = {}
+    for m in pesan:
+        if m['w'][:10] < sb_a.isoformat():
+            continue
+        chat.setdefault((m['n'], 'sb' if m['w'][:10] < batas else 'ss'), []).append(m)
+    antre, hasil = [], {}
+    for (n, per), xs in chat.items():
+        if not any(not m['kami'] and m['t'] for m in xs):
+            continue
+        kunci = f'{n}|{per}|{batas}'
+        if (cache.get(kunci) or {}).get('tanda') == len(xs):
+            hasil[kunci] = cache[kunci]
+            continue
+        teks = '\n'.join(('T ' if m['kami'] else 'K ') + m['w'][5:16] + ': ' + ' '.join(m['t'].split())[:160]
+                         for m in xs[-25:] if m['t'] and not TEMPLAT_RE.search(m['t']))
+        antre.append((kunci, len(xs), teks))
+    for i in range(0, len(antre), 15):
+        kelompok = antre[i:i + 15]
+        prompt = PROMPT_PUAS + '\n\n'.join(f'=== kunci: {k}\n{t}' for k, _, t in kelompok)
+        run = subprocess.run([CLAUDE, '-p', '--model', 'haiku', '--output-format', 'json', '--no-session-persistence',
+                              '--tools', '', '--json-schema', json.dumps(SKEMA_PUAS)],
+                             input=prompt, capture_output=True, text=True, timeout=300, cwd='/tmp')
+        j = json.loads(run.stdout)
+        _catat_pemakaian(j, mode='puas_klien')
+        tanda = {k: n for k, n, _ in kelompok}
+        for x in (j.get('structured_output') or {}).get('chat') or []:
+            if x.get('kunci') in tanda:
+                hasil[x['kunci']] = cache[x['kunci']] = {**x, 'tanda': tanda[x['kunci']],
+                                                         'w': chat[tuple(x['kunci'].split('|')[:2])][-1]['w']}
+        berkas.write_text(json.dumps(cache, ensure_ascii=False))
+    try:   # koreksi Muh per nomor menang atas penilaian Claude: {"nomor": "netral", ...}
+        koreksi = json.loads((DIR / f'puas-{akun}-koreksi.json').read_text())
+    except (OSError, ValueError):
+        koreksi = {}
+    for k, x in hasil.items():
+        if k.split('|')[0] in koreksi:
+            hasil[k] = {**x, 'nilai': koreksi[k.split('|')[0]], 'alasan': 'dikoreksi Muh'}
+    return hasil
+
+
 def metrik_bahasa(akun, mulai):
     sb_a, sb_b = mulai - timedelta(days=JENDELA), mulai - timedelta(days=1)
     try:
-        pesan = _pesan_tim(akun, sb_a, date.today())
+        semua = [m for m in _pesan_rekam(akun, sb_a, date.today()) if m['n'] not in NOMOR_KANTOR_REKAM]  # chat antar kanal kantor = obrolan internal tim, bukan ke klien
     except Exception as e:  # noqa: BLE001 — perekam tidak terjangkau
         return {'galat': f'perekam WA: {str(e)[:200]}'}
+    pesan = [{'w': m['w'], 'n': m['n'], 't': m['t']} for m in semua if m['kami'] and m['t']]
     sb = [m for m in pesan if _tgl(m['w']) <= sb_b]
     ss = [m for m in pesan if _tgl(m['w']) >= mulai]
     a, b = _ciri_bahasa(sb), _ciri_bahasa(ss)
@@ -1736,14 +2169,33 @@ def metrik_bahasa(akun, mulai):
     if 'galat' not in cl:
         angka.insert(0, _angka('Keramahan menurut Claude (1–5)', cl['skor_sebelum'], cl['skor_sesudah'], '', 'naik',
                                f"Sampel {cl['n_sebelum']} vs {cl['n_sesudah']} pesan, dinilai {cl['waktu'][:10]}"))
+    tabel = []
+    try:
+        pk = _puas_klien(akun, semua, mulai, sb_a)
+        hit = {per: collections.Counter(x['nilai'] for k, x in pk.items() if k.split('|')[1] == per) for per in ('sb', 'ss')}
+        tot = {per: sum(c.values()) for per, c in hit.items()}
+        pct = lambda per, nv: round(100 * hit[per][nv] / tot[per]) if tot[per] else None  # noqa: E731
+        angka += [_angka('Chat klien puas', pct('sb', 'puas'), pct('ss', 'puas'), '%', 'naik',
+                         f"{hit['sb']['puas']} dari {tot['sb']} chat sebelum vs {hit['ss']['puas']} dari {tot['ss']} sesudah"),
+                  _angka('Chat klien komplain', pct('sb', 'tidak_puas'), pct('ss', 'tidak_puas'), '%', 'turun',
+                         f"{hit['sb']['tidak_puas']} dari {tot['sb']} chat sebelum vs {hit['ss']['tidak_puas']} dari {tot['ss']} sesudah")]
+        tp = sorted(((k.split('|')[0], x) for k, x in pk.items() if k.split('|')[1] == 'ss' and x['nilai'] == 'tidak_puas'),
+                    key=lambda kx: kx[1]['w'], reverse=True)
+        tabel = [{'judul': f'Klien komplain sejak {mulai.day} {BULAN_ID[mulai.month - 1]}: 10 terbaru dari {len(tp)} chat',
+                  'kolom': ['Nomor WA', 'Pesan terakhir', 'Alasan', 'Kutipan klien'],
+                  'baris': [[n, x['w'][5:16], x['alasan'], x.get('kutipan') or ''] for n, x in tp[:10]]}]
+    except Exception as e:  # noqa: BLE001
+        angka.append(_angka('Chat klien puas', None, None, '', None, f'gagal dinilai: {type(e).__name__}: {str(e)[:120]}'))
     ringkasan = (cl.get('kesimpulan') or f"Pesan tim bersapaan {b.get('sapaan')}% (sebelumnya {a.get('sapaan')}%), "
                  f"pesan pendek tanpa sapaan {b.get('pendek')}% (sebelumnya {a.get('pendek')}%).")
     return {'judul': f'Bahasa tim ke klien ({akun})', 'angka': angka, 'ringkas': ringkasan,
-            'contoh': cl.get('contoh_kurang') or [], 'contoh_baik': cl.get('contoh_baik') or [],
+            'contoh': cl.get('contoh_kurang') or [], 'contoh_baik': cl.get('contoh_baik') or [], 'tabel': tabel,
             'catatan': cl.get('galat'),
             'periode': {'sebelum': [sb_a.isoformat(), sb_b.isoformat()], 'sesudah': [mulai.isoformat(), date.today().isoformat()]},
             'ket': f"{a.get('n', 0)} pesan sebelum vs {b.get('n', 0)} sesudah (templat laporan revisi tidak dihitung). "
-                   'Persentase dihitung kode; skor keramahan dari Claude, diperbarui paling sering tiap 3 hari.'}
+                   'Persentase dihitung kode; skor keramahan dari Claude, diperbarui paling sering tiap 3 hari. '
+                   'Puas/tidak puas: tiap chat klien per periode dinilai Claude haiku dari isi percakapannya (puas = memuji/berterima kasih '
+                   'atas hasil, komplain = jelas kesal/marah/kecewa ke tim, bukan sekadar bertanya, melapor kendala, atau menagih dengan sopan); chat antar kanal kantor tidak dihitung.'}
 
 
 # ---------- kenaikan harga domain: apakah CS & AM sudah menginfo klien ----------
@@ -1896,6 +2348,7 @@ REKENING_RE = re.compile(r'0301545796|no\.? ?rek', re.I)
 KE_TIM_RE = re.compile(r'cek(?:kan)? ke tim|sudah saya cekkan', re.I)
 KODE_IKLAN_RE = re.compile(r'\(([a-z0-9\-]+)\)')   # kode halaman iklan di pesan formulir, mis. (hukum2)
 LEAD_UJI = ('6285725249041',)   # nomor uji internal robot wa3
+AICOID_RE = re.compile(r'ai automation|\(ai\d+\)', re.I)   # formulir iklan AI.co.id: "konsultasi jasa AI automation ... (ai3)"
 
 
 def _rupiah_semua(teks):
@@ -1933,6 +2386,7 @@ def _lead_wa3(dari):
         grup1.setdefault(m['n'], []).append(m)
     hasil = []
     for n, ms in grup3.items():
+        ai_co = any(AICOID_RE.search(m['t']) for m in ms)   # sebelum dipotong t0: sapaan AI bisa mendahului pesan klien
         klien = [m for m in ms if not m['kami']]
         if not klien or n in LEAD_UJI or 'Coba mas' in klien[0]['t']:
             continue
@@ -1954,12 +2408,47 @@ def _lead_wa3(dari):
         x = {'n': n, 't': t0, 'jalur': jalur, 'kode': next((k.group(1) for k in map(KODE_IKLAN_RE.search, [m['t'] for m in klien]) if k), '–'),
              'balas': len(klien) > 1 or any(not m['kami'] for m in lanjut),
              'rekening': any(m['kami'] and REKENING_RE.search(m['t']) for m in semua),
-             'ke_tim': any(KE_TIM_RE.search(m['t']) for m in kami), 'lunas': lunas and lunas['w']}
+             'ke_tim': any(KE_TIM_RE.search(m['t']) for m in kami), 'lunas': lunas and lunas['w'],
+             'ai_co': ai_co, 'butuh': ' '.join(klien[0]['t'].split()), 'pesan_klien': len(klien),
+             'balas_mnt': next(((datetime.fromisoformat(m['w'][:19]) - datetime.fromisoformat(t0[:19])).total_seconds() / 60
+                                for m in kami if m['w'] >= t0), None)}
         if lunas:
             x['nominal'] = _nominal_bayar([m['t'] for m in semua if m['kami'] and m['w'] < lunas['w']])
             x['jam'] = (datetime.fromisoformat(lunas['w'][:19]) - datetime.fromisoformat(t0[:19])).total_seconds() / 3600
         hasil.append(x)
     return sorted(hasil, key=lambda x: x['t'])
+
+
+def metrik_wa3_aicoid(mulai):
+    """Iklan AI.co.id (jasa AI automation): lead wa3 yang dilayani penuh oleh AI, sejak `mulai` (tanggal iklan mulai)."""
+    lead = [x for x in _lead_wa3(mulai) if x['ai_co']]
+    if not lead:
+        return {'judul': 'Iklan AI.co.id (jasa AI automation)', 'ringkas': f'Belum ada lead sejak {mulai.isoformat()}.'}
+    koma = lambda v: f'{v:.1f}'.replace('.', ',')   # noqa: E731
+    mnt = lambda v: '–' if v is None else f'{v:.0f} mnt' if v < 90 else f'{v / 60:.1f} jam'.replace('.', ',')   # noqa: E731
+    balas = [x for x in lead if x['balas']]
+    rek = [x for x in lead if x['rekening']]
+    bayar = [x for x in lead if x['lunas']]
+    ke_tim = [x for x in lead if x['ke_tim']]
+    med_balas = statistics.median([x['balas_mnt'] for x in lead if x['balas_mnt'] is not None] or [0])
+    status = lambda x: ('Transfer' if x['lunas'] else 'Dikirimi rekening' if x['rekening'] else 'Klien membalas' if x['balas']   # noqa: E731
+                        else 'Belum membalas')
+    butuh = lambda t: re.sub(r'^.*?kebutuhan saya:?\**\s*', '', t, flags=re.I)[:110]   # noqa: E731
+    ringkasan = (f"{len(lead)} lead AI.co.id sejak {mulai.day} {BULAN_ID[mulai.month - 1]}, semua dilayani AI di wa3: "
+                 f"{len(balas)} klien membalas lagi, {len(rek)} dikirimi rekening, {len(bayar)} transfer. "
+                 f"Median balasan AI pertama {mnt(med_balas)}; {len(ke_tim)} chat AI bertanya ke tim.")
+    return {'judul': 'Iklan AI.co.id: jasa AI automation, dilayani AI penuh (wa3)', 'ringkas': ringkasan,
+            'sorot': [{'label': 'Lead', 'nilai': len(lead)}, {'label': 'Klien membalas', 'nilai': len(balas)},
+                      {'label': 'Transfer', 'nilai': len(bayar), 'buruk': not bayar},
+                      {'label': 'Balasan AI pertama (median)', 'nilai': mnt(med_balas)}],
+            'tabel': [{'judul': f'Lead AI.co.id ({len(lead)}, terbaru dulu)',
+                       'kolom': ['Nomor WA', 'Kode', 'Masuk', 'Kebutuhan klien', 'Pesan klien', 'Balasan AI pertama', 'Status'],
+                       'kanan': [4, 5],
+                       'baris': [[x['n'], x['kode'], x['t'][5:16], butuh(x['butuh']), x['pesan_klien'], mnt(x['balas_mnt']), status(x)]
+                                 for x in sorted(lead, key=lambda x: x['t'], reverse=True)]}],
+            'ket': 'Perekam WA wa3 (+ lanjutan wa1). Lead AI.co.id = chat wa3 yang memuat formulir "konsultasi jasa AI automation" '
+                   'atau kode iklan (aiN). Klien membalas = klien mengirim pesan lagi sesudah pesan formulir. Transfer = pesan tim '
+                   '"pembayaran ... sudah kami terima". Lead ini juga ikut terhitung di jalur Bidang (AI) pada metrik wa3 dua jalur.'}
 
 
 def metrik_wa3_jalur(mulai):
@@ -2038,7 +2527,88 @@ def hitung_sumber(sumber, mulai):
     return m
 
 
+MANUAL_DIR = DIR / 'manual'   # metrik yang disusun Sekretaris (bot) sendiri: manual/<nama>.json berbentuk metrik biasa
+
+
+def metrik_manual(nama):
+    """Sumber manual:<nama>: isi berkas apa adanya (judul, ringkas, sorot, tabel, kartu, daftar_teks, ket)."""
+    f = MANUAL_DIR / f'{nama}.json'
+    try:
+        m = json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        return {'galat': f'manual/{f.name}: {e}'}
+    if not isinstance(m, dict):
+        return {'galat': f'manual/{f.name}: isi harus objek JSON'}
+    m.setdefault('periode', {})
+    m['waktu'] = datetime.fromtimestamp(f.stat().st_mtime).astimezone().isoformat(timespec='seconds')
+    return isi_minggu(m)
+
+
+HARI_ID = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']
+
+
+def _judul_sesi(j):
+    """Judul sesi token.json → kalimat pendek: buang awalan [Tugas dari ..]/[Grup ..]/lampiran/markdown."""
+    potong = len(j or '') >= 88   # token.json memotong judul ±90 huruf
+    j = re.sub(r'\[Lampiran:[^\]]*\]?', '', j or '').replace('**', '').strip()
+    g = re.match(r'\[Grup "([^"]+)"\]', j)
+    if g:
+        return f'Dipanggil di grup {g[1]}'
+    if j.startswith('[Sesi sebelumnya direset'):
+        return 'Lanjutan sesi sebelumnya (direset, konteks penuh)'
+    j = re.sub(r'^(\[[^\]]{1,60}\]\s*)+', '', j)
+    j = re.sub(r'^Tugas dari [^:]{1,30}:\s*', '', j)
+    return ((j[:1].upper() + j[1:]) or '(tanpa judul)') + ('…' if potong else '')
+
+
+def isi_minggu(m):
+    """Metrik manual dengan "blok_minggu": true → blok tiap kartu diganti sesi Claude Senin–Minggu pekan ini
+    dari token.json (nama kartu = nama token.json atau nama di config/webmaster.json). Dipanggil juga oleh
+    status_api, jadi halaman selalu menampilkan data terbaru tanpa menunggu pantau."""
+    if not m.get('blok_minggu') or not m.get('kartu'):
+        return m
+    try:
+        t = json.loads(TOKEN_JSON.read_text())
+    except (OSError, ValueError):
+        return m
+    try:
+        alias = {w['nama']: w['token'] for w in json.loads(WEBMASTER_JSON.read_text())['webmaster']}
+    except (OSError, ValueError, KeyError, TypeError):
+        alias = {}
+    orang = {p['nama']: p for p in t.get('pengguna') or []}
+    hari_ini = date.today()
+    senin = hari_ini - timedelta(days=hari_ini.weekday())
+    tgl = [senin + timedelta(days=i) for i in range(7)]
+    try:
+        rangkum = json.loads(RANGKUM_SESI.read_text())
+    except (OSError, ValueError):
+        rangkum = {}
+    for o in m['kartu']:
+        p = orang.get(o.get('nama')) or orang.get(alias.get(o.get('nama')))
+        if not p:
+            continue
+        per_hari = {d.isoformat(): [] for d in tgl}
+        for s in p.get('sesi') or []:
+            mulai_s = datetime.fromtimestamp(s['mulai'])
+            for h in s.get('hari') or {}:
+                if h in per_hari:
+                    lanjut = mulai_s.date().isoformat() != h
+                    r = (rangkum.get(f"{s['sid']}|{h}") or {}).get('ringkas')
+                    per_hari[h].append({'jam': 'lanjut' if lanjut else mulai_s.strftime('%H.%M'),
+                                        'judul': r or _judul_sesi(s.get('judul')), 'urut': (lanjut, s['mulai'])})   # sesi baru dulu, lanjutan di bawah
+        o['minggu'] = [{'hari': HARI_ID[i], 'tgl': f'{d.day} {BULAN_ID[d.month - 1]}',
+                        'hari_ini': d == hari_ini, 'nanti': d > hari_ini,
+                        'sesi': [{k: x[k] for k in ('jam', 'judul')} for x in sorted(per_hari[d.isoformat()], key=lambda x: x['urut'])]}
+                       for i, d in enumerate(tgl)]
+        o.pop('blok', None)
+    m['minggu_rangkum'] = bool(rangkum)
+    m['minggu_label'] = f'Senin {senin.day} {BULAN_ID[senin.month - 1]} – Minggu {tgl[6].day} {BULAN_ID[tgl[6].month - 1]}'
+    return m
+
+
 def _hitung_sumber(sumber, mulai):
+    if sumber.startswith('manual:'):
+        return metrik_manual(sumber[7:])
     if sumber == 'kasus_support':
         return metrik_kasus_support(mulai)
     if sumber == 'installer_wp':
@@ -2061,12 +2631,20 @@ def _hitung_sumber(sumber, mulai):
         return metrik_kasus_harian(mulai)
     if sumber == 'wa3_jalur':
         return metrik_wa3_jalur(mulai)
+    if sumber == 'am_followup':
+        return metrik_am_followup(mulai)
+    if sumber == 'konsep_hosting':
+        return metrik_konsep_hosting(mulai)
+    if sumber == 'wa3_aicoid':
+        return metrik_wa3_aicoid(mulai)
     if sumber == 'kasus_meeting':
         return metrik_kasus_meeting(mulai)
     if sumber == 'efisiensi_langganan':
         return metrik_efisiensi_langganan(mulai)
     if sumber == 'konsep_halaman':
         return metrik_konsep_halaman(mulai)
+    if sumber == 'order_legalitas':
+        return metrik_order_legalitas(mulai)
     if sumber.startswith('ai:'):
         return metrik_ai(sumber[3:])
     if sumber.startswith('ai_orang:'):
@@ -2254,6 +2832,125 @@ def mulai_nilai_latar():
     return None
 
 
+# ---------- rangkuman sesi Claude per hari (kartu blok_minggu) ----------
+RANGKUM_SESI = DIR / 'rangkum-sesi.json'   # {"<sid>|<YYYY-MM-DD>": {"ringkas", "tanda", "waktu"}}
+PROYEK_CLAUDE = Path('/root/.claude/projects')
+SKEMA_RANGKUM = {'type': 'object', 'required': ['sesi'], 'properties': {'sesi': {'type': 'array', 'items': {
+    'type': 'object', 'required': ['kunci', 'ringkas'],
+    'properties': {'kunci': {'type': 'string'}, 'ringkas': {'type': 'string'}}}}}}
+PROMPT_RANGKUM = (
+    'Berikut potongan percakapan sesi Claude Code tim webmaster Velocity Developer, satu potongan per sesi per hari '
+    '(pesan USER = permintaan orangnya, CLAUDE = jawaban). Untuk tiap potongan tulis SATU kalimat bahasa Indonesia, '
+    'maks 110 huruf, tentang apa yang sedang dikerjakan dan hasilnya bila jelas (mis. "Pindah ppphindonesia.com ke '
+    'velocitydatacenter.biz, selesai"). Mulai dengan kata kerja, sebut domain/sistem/server yang disentuh, tanpa nama '
+    'orang, tanpa kata "user" atau "sesi". Abaikan teks pengingat/aturan bot seperti "[Pengingat ketua ...]". '
+    'Bila isinya hanya sapaan/tes, tulis "Tes/sapaan singkat". Kembalikan kunci persis seperti yang diberikan.\n\n')
+
+
+def _teks_pesan(r):
+    """Teks yang ditulis manusia/Claude di satu baris transkrip (tanpa tool, thinking, system-reminder)."""
+    c = (r.get('message') or {}).get('content')
+    if isinstance(c, list):
+        c = '\n'.join(b.get('text', '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
+    if not isinstance(c, str) or r.get('isMeta'):
+        return ''
+    c = re.sub(r'<(system-reminder|command-[a-z]+|local-command-[a-z]+)>.*?</\1>', '', c, flags=re.S)
+    c = re.sub(r'</?channel[^>]*>', '', c)
+    return re.sub(r'\s+', ' ', c).strip()
+
+
+def _potongan_sesi(f, hari):
+    """{tgl: (jumlah pesan, potongan teks)} untuk tanggal di `hari` dari satu transkrip."""
+    pesan = {}
+    try:
+        with open(f) as fh:
+            for ln in fh:
+                if '"type":"user"' not in ln and '"type":"assistant"' not in ln:
+                    continue
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get('type') not in ('user', 'assistant') or not r.get('timestamp'):
+                    continue
+                tgl = datetime.fromisoformat(r['timestamp'].replace('Z', '+00:00')).astimezone().date().isoformat()
+                if tgl not in hari:
+                    continue
+                t = _teks_pesan(r)
+                if t:
+                    pesan.setdefault(tgl, []).append(('USER' if r['type'] == 'user' else 'CLAUDE', t))
+    except OSError:
+        return {}
+    keluar = {}
+    for tgl, xs in pesan.items():
+        user = [t for s, t in xs if s == 'USER']
+        claude = [t for s, t in xs if s == 'CLAUDE']
+        bagian = [f'USER: {user[0][:1500]}'] if user else []
+        bagian += [f'USER: {t[:300]}' for t in user[1:][-8:]]
+        bagian += [f'CLAUDE (akhir): {claude[-1][:700]}'] if claude else []
+        keluar[tgl] = (len(xs), '\n'.join(bagian)[:4000])
+    return keluar
+
+
+def rangkum_sesi(batas=None):
+    """Rangkum sesi Claude Senin–Minggu pekan ini milik orang di kartu blok_minggu; hanya sesi-hari yang
+    pesannya bertambah sejak dirangkum terakhir. Claude haiku, 12 potongan per panggilan."""
+    try:
+        cache = json.loads(RANGKUM_SESI.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    nama = set()
+    for u in muat()['update']:
+        for k, m in (u.get('metrik') or {}).items():
+            if k.startswith('manual:') and isinstance(m, dict) and m.get('blok_minggu'):
+                nama |= {o.get('nama') for o in m.get('kartu') or []}
+    try:
+        nama |= {w['token'] for w in json.loads(WEBMASTER_JSON.read_text())['webmaster'] if w['nama'] in nama}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    t = json.loads(TOKEN_JSON.read_text())
+    hari_ini = date.today()
+    senin = hari_ini - timedelta(days=hari_ini.weekday())
+    hari = {(senin + timedelta(days=i)).isoformat() for i in range(hari_ini.weekday() + 1)}
+    berkas = {f.stem: f for f in PROYEK_CLAUDE.glob('*/*.jsonl')}
+    antre = []
+    for p in t.get('pengguna') or []:
+        if p.get('nama') not in nama:
+            continue
+        for s in p.get('sesi') or []:
+            hs = hari & set(s.get('hari') or {})
+            if not hs or s['sid'] not in berkas:
+                continue
+            for tgl, (n, teks) in _potongan_sesi(berkas[s['sid']], hs).items():
+                kunci = f"{s['sid']}|{tgl}"
+                if (cache.get(kunci) or {}).get('tanda') != n:
+                    antre.append((kunci, n, teks))
+    antre = antre[:batas] if batas else antre
+    galat = 0
+    for i in range(0, len(antre), 12):
+        kelompok = antre[i:i + 12]
+        prompt = PROMPT_RANGKUM + '\n\n'.join(f'=== kunci: {k}\n{teks}' for k, _, teks in kelompok)
+        try:
+            run = subprocess.run([CLAUDE, '-p', '--model', 'haiku', '--output-format', 'json', '--no-session-persistence',
+                                  '--tools', '', '--json-schema', json.dumps(SKEMA_RANGKUM)],
+                                 input=prompt, capture_output=True, text=True, timeout=300, cwd='/tmp')
+            hasil = json.loads(run.stdout)
+            _catat_pemakaian(hasil, mode='rangkum_sesi')
+            data = {x['kunci']: str(x['ringkas']).strip()[:140] for x in (hasil.get('structured_output') or {}).get('sesi') or []
+                    if x.get('kunci') and x.get('ringkas')}
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            print(f'galat kelompok {i // 12 + 1}: {e}', file=sys.stderr)
+            galat += 1
+            continue
+        for k, n, _ in kelompok:
+            if k in data:
+                cache[k] = {'ringkas': data[k], 'tanda': n, 'waktu': sekarang()}
+        RANGKUM_SESI.write_text(json.dumps(cache, ensure_ascii=False))
+    batas_lama = (senin - timedelta(days=21)).isoformat()   # simpan 3 pekan terakhir saja
+    cache = {k: v for k, v in cache.items() if k.split('|')[1] >= batas_lama}
+    RANGKUM_SESI.write_text(json.dumps(cache, ensure_ascii=False))
+    return len(antre), galat
+
 # ---------- CLI ----------
 
 def main():
@@ -2279,6 +2976,8 @@ def main():
     km.add_argument('catatan')
     km.add_argument('--kasus', type=int, help='id kasus CRM; bawaan = kasus terbaru nomor itu')
     km.add_argument('--temuan', default='')
+    rs = sub.add_parser('rangkum-sesi', help='rangkum sesi Claude pekan ini untuk kartu blok_minggu (Claude haiku)')
+    rs.add_argument('--batas', type=int, help='maks sesi-hari yang dirangkum (uji coba)')
     sub.add_parser('sandi')
     n = sub.add_parser('nilai')
     n.add_argument('--pantau-dulu', action='store_true')
@@ -2314,6 +3013,10 @@ def main():
         for uid, m in pantau(sumber_saja='kasus_meeting').items():
             print(f"{uid}: {m['kasus_meeting'].get('galat') or m['kasus_meeting'].get('ringkas')}")
         return 0
+    if a.perintah == 'rangkum-sesi':
+        n, galat = rangkum_sesi(a.batas)
+        print(f'{n} sesi-hari dirangkum, {galat} kelompok gagal')
+        return 1 if galat else 0
     if a.perintah == 'pantau':
         h = pantau(a.id, a.sumber)
         for uid, m in h.items():

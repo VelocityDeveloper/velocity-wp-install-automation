@@ -57,3 +57,9 @@ ps = J._per_sha(data)
 assert ps['s1'][1]['putusan'] == 'positif_palsu' and ps['s2'][0] == '/home/d/y.php' and 's3' not in ps, ps
 c = J._salin(ps['s1'], {'user': 'f', 'path': '/home/f/x.php'})
 assert c['user'] == 'f' and c['salin_dari'] == '/home/b/x.php' and c['putusan'] == 'positif_palsu', c
+
+# IOC pasti: AI menyebut positif_palsu → dipaksa berbahaya (kasus wp-locale-perf 26 Okt)
+db = '/home/m/domains/m.com/public_html#db:wpo6_options:ah_purge_hack_admins_report'
+per = J._per_temuan({'temuan': [{'path': db, 'putusan': 'positif_palsu', 'saran': 'tandai_aman', 'yakin': 80, 'alasan': 'laporan audit'}]},
+                    [{'path': db, 'sha256': 'x', 'db': {'id': 1}, 'tanda': [{'id': 'VD.DB.LocaleCache'}]}], 'm', 'model')
+assert per[db]['putusan'] == 'berbahaya' and per[db]['saran'] == 'bersihkan_db' and 'IOC pasti' in per[db]['alasan'], per

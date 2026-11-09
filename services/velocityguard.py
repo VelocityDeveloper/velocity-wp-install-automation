@@ -28,7 +28,7 @@ SETELAN = GUARD_DIR / 'setelan.json'  # {celah_server: [host], terakhir: 'YYYY-M
 INSIDEN = GUARD_DIR / 'insiden.jsonl'
 CMS_HASIL = Path('/var/lib/velocity/server-cms/hasil')
 JAM_LAPORAN = (7, 0)  # WIB, sesudah scan antivirus 01:30 & CMS 02:00
-SERVER_BAWAAN = ['157.66.55.81', '103.103.175.182']  # Wulan & Farnaz: server uji tanpa cPGuard
+SERVER_BAWAAN = ['157.66.55.81', '103.103.175.182']  # Sanke & Farnaz: server uji tanpa cPGuard
 BATAS_SSH = 900
 # Jenis kerentanan tanpa login yang polanya bisa ditahan di WAF (virtual patch) sampai plugin diperbarui
 POLA_PATCH = re.compile(r'(?i)(remote code|code execution|code injection|sql injection|file upload|file inclusion|'
@@ -191,6 +191,43 @@ def laporan_jalan(oleh='Jadwal harian', hosts=None):
     return data
 
 
+def _aman(temuan):
+    """Aman = tak ada temuan tinggi/sedang (info = probe dijawab kosong/soft-404, tidak ada yang bocor)."""
+    return not any(x['tingkat'] in ('tinggi', 'sedang') for x in temuan)
+
+
+def cek_ulang(host, jam, oleh):
+    """Scan ulang satu server dengan jendela `jam` (mis. sejak perbaikan), ganti entrinya di laporan hari ini, lalu
+    kabari Telegram: ✅ aman atau daftar temuan yang masih lolos."""
+    srv = next((x for x in _daftar_server() if x['host'] == host or x['name'] == host), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}
+    h = _celah_satu(srv, _ssh_key_file(), jam)
+    entri = {'host': srv['host'], 'server': srv['name'], 'ok': bool(h.get('ok')), 'error': h.get('error') or h.get('pesan'),
+             'request': h.get('request'), 'detik': h.get('detik'), 'cpguard_waf_off': h.get('cpguard_waf_off'),
+             'temuan': _usulan(h) if h.get('ok') else [], 'jam': jam, 'dicek_ulang': int(time.time()), 'oleh': oleh}
+    tanggal = time.strftime('%Y-%m-%d')
+    with _kunci:
+        data = _json(CELAH_DIR / f'{tanggal}.json', None) or {'tanggal': tanggal, 'dibuat': int(time.time()), 'oleh': oleh, 'server': [], 'cve': []}
+        data['server'] = [x for x in data['server'] if x['host'] != srv['host']] + [entri]
+        _tulis(CELAH_DIR / f'{tanggal}.json', data)
+    if _kirim_tg:
+        sejak = time.strftime('%H:%M', time.localtime(time.time() - jam * 3600))
+        kepala = f"🛡️ <b>VelocityGuard — cek ulang {html.escape(srv['name'])}</b> (sejak {sejak} WIB, {entri['request'] or 0:,} request)".replace(',', '.')
+        if not entri['ok']:
+            isi = [f"⚠️ Gagal: {html.escape(str(entri['error']))}"]
+        elif _aman(entri['temuan']):
+            info = f" ({len(entri['temuan'])} catatan info)" if entri['temuan'] else ''
+            isi = [f"✅ <b>{html.escape(srv['name'])} aman</b> — tidak ada serangan yang lolos VelocityGuard{info}."]
+        else:
+            isi = [f"• {'🔴' if x['tingkat'] == 'tinggi' else '🟡' if x['tingkat'] == 'sedang' else '⚪'} {html.escape(x['judul'][:140])}"
+                   for x in entri['temuan'] if x['tingkat'] != 'info'][:8]
+        lolos = bool(entri['ok'] and not _aman(entri['temuan']))  # gerbang: KIRIM hanya bila temuan masih lolos
+        _kirim_tg('\n'.join([kepala, *isi, '', 'https://dash.velocity.ai.id/server/velocityguard'])[:4000],
+                  'cek_ulang', srv['name'], '', {'lolos': lolos, 'ok': entri['ok'], 'oleh': oleh})
+    return entri
+
+
 def _notif(data):
     if not _kirim_tg:
         return
@@ -202,6 +239,9 @@ def _notif(data):
         t = s['temuan']
         tinggi = [x for x in t if x['tingkat'] == 'tinggi']
         baris.append(f"\n<b>{html.escape(s['server'])}</b> · {s['request'] or 0:,} request · {len(t)} temuan ({len(tinggi)} tinggi)".replace(',', '.'))
+        if _aman(t):
+            baris.append(f"✅ Aman — tidak ada celah yang lolos{f' ({len(t)} catatan info)' if t else ''}")
+            continue
         for x in (tinggi + [x for x in t if x['tingkat'] != 'tinggi'])[:6]:
             baris.append(f"• {'🔴' if x['tingkat'] == 'tinggi' else '🟡' if x['tingkat'] == 'sedang' else '⚪'} {html.escape(x['judul'][:140])}")
     baru = [c for c in data['cve'] if c['baru']]
@@ -210,7 +250,10 @@ def _notif(data):
         for c in (baru or data['cve'])[:5]:
             baris.append(f"• {'🆕 ' if c['baru'] else ''}{html.escape(c['slug'])} — {c['situs']} situs: {html.escape(str(c['judul'])[:100])}")
     baris += ['', 'https://dash.velocity.ai.id/server/velocityguard']
-    _kirim_tg('\n'.join(baris)[:4000])
+    # gerbang: KIRIM hanya bila ada temuan tinggi/sedang atau kandidat virtual patch baru
+    tinggi_sedang = [s['server'] for s in data['server'] if s['ok'] and not _aman(s['temuan'])]
+    _kirim_tg('\n'.join(baris)[:4000], 'celah_harian', '', data['tanggal'],
+              {'tinggi_sedang': tinggi_sedang, 'cve_baru': len(baru), 'gagal': sum(1 for s in data['server'] if not s['ok'])})
 
 
 def celah(tanggal=None):
@@ -236,7 +279,10 @@ def celah_mulai(payload):
 
     def kerja():
         try:
-            laporan_jalan(oleh)
+            if payload.get('host'):
+                cek_ulang(str(payload['host']), min(max(float(payload.get('jam') or 24), 0.1), 24), oleh)
+            else:
+                laporan_jalan(oleh)
             job.update(status='selesai', selesai=int(time.time()))
         except Exception as e:  # noqa: BLE001
             job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])

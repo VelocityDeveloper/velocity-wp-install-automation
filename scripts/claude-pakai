@@ -12,7 +12,7 @@ Siapa orangnya:
     dengan SSH_CONNECTION prosesnya → baris "Accepted … from IP port P" di /var/log/secure →
     fingerprint → komentar kunci di authorized_keys. Hasilnya disimpan di sesi.jsonl. Sesi yang
     sudah selesai sebelum pencatat ini dipasang jatuh ke "belum teridentifikasi".
-  - selain itu: otomasi (entrypoint sdk-cli / proyek di luar /root, mis. agen desain installer)
+  - selain itu: otomasi (entrypoint sdk-cli / proyek di luar /root tanpa kunci SSH, mis. agen desain installer)
 Nama orang digabung lewat pengguna.json (di DATA):
   {"Muh": {"telegram": ["1016858432"], "ssh": ["Muh"], "ip": ["192.168.88.50"], "divisi": "Manajer"}}
 "divisi" (dari /etc/velocity/secrets/id-telegram-tim.xlsx) ikut ke token.json sebagai saringan.
@@ -30,6 +30,7 @@ Pemakaian: claude-pakai [--out /usr/share/nginx/html/brain/token.json] [--ulang]
                         [--setor URL --kunci /etc/velocity/secrets/project_list_api_key]
 """
 import hashlib
+import itertools
 import sys
 import urllib.error
 import urllib.request
@@ -59,7 +60,7 @@ PENGGUNA_BAWAAN = {
     "Muh": {"telegram": ["1016858432"], "ssh": ["Muh"]},
     "Yuda": {"ssh": ["Yuda"]},
     "Reza": {"ssh": ["Reza"]},
-    "Aditya K": {"telegram": ["785329499"], "ssh": ["Aditya K"], "ip": ["192.168.72.150"]},  # @adityak_vd = kunci Aditya K (user, 24 Sep); IP = login password desktop app (user, 25 Sep)
+    "Aditya K": {"telegram": ["785329499"], "ssh": ["Aditya K"], "ip": ["192.168.72.150"], "bot": ["velocity"]},  # bot = token bot.velocity.ai.id (user, 22 Okt)  # @adityak_vd = kunci Aditya K (user, 24 Sep); IP = login password desktop app (user, 25 Sep)
     "Imam WS": {"telegram": ["5017545247"]},
     "Adityathok": {"telegram": ["787473227"], "ssh": ["Adityathok"], "ip": ["100.78.200.37"]},  # IP = Tailscale SSH desktop-foivqik, tanpa fingerprint (user, 15 Okt); kunci SSH "Adityathok" (dulu aditya0thok@gmail.com, user 25 Sep)
     "Afif": {"telegram": ["8563985331"]},
@@ -154,7 +155,9 @@ JENIS = (
     ("tanya", "Tanya & cek"),
     ("lainnya", "Lainnya"),
 )
+AI_MONITORING_USAGE = Path("/home/newvdnet/domains/new.velocitydeveloper.net/laravel/storage/app/private/ai-monitoring/token-usage.jsonl")  # CRM: AI Monitoring Client
 AI_USAGE = Path("/var/lib/velocity/ai/usage.jsonl")  # agen desain installer (claude -p tanpa transkrip)
+SESI_BOT = Path("/var/lib/velocity/bot/sesi-bot.json")  # sid → bot bot.velocity.ai.id (ditulis /opt/velocity-bot/server.ts)
 POLA_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|id|co|net|org|studio|asia|biz|info|web\.id)\b")
 BUKAN_WEB_KLIEN = re.compile(r"^(?:(?:[a-z0-9-]+\.)?velocitydeveloper\.(?:co|net|com)|github\.com|velocitygrafis\.com|metabox\.io|pexels\.com|google\.com)$")
 # Domain milik aplikasi internal/custom (Laravel dsb.), bukan situs WordPress klien
@@ -273,13 +276,47 @@ def sesi_installer():
             if len(sid) > 64:  # batas kolom sid di new-vdnet (422 bila lebih)
                 sid = sid[:51] + "~" + hashlib.sha1(sid.encode()).hexdigest()[:12]
             s = hasil.setdefault(sid, {"sid": sid, "jalur": "otomasi", "asal": f"{r.get('script', 'installer')} · run {r.get('run', '-')}",
-                                       "judul": f"Agen desain installer — {r.get('domain', '-')}", "mulai": w.timestamp(),
-                                       "akhir": w.timestamp(), "jenis": "installer", "akun": akun, "hari": {}})
+                                       "judul": (f"Agen desain installer — {r.get('domain', '-')}" if r.get("script") == "desain-claude"
+                                                else f"{r.get('script', 'installer')} — {r.get('domain', '-')}" if r.get("domain") not in (r.get("script"), "-", None)
+                                                else r.get("script", "installer")) if not (r.get("script") == "velocity-agent" and r.get("peran"))
+                                                else r["peran"], "mulai": w.timestamp(),
+                                       "akhir": w.timestamp(), "jenis": "chat_cs" if r.get("script") == "saran-jawaban" else "installer",
+                                       "akun": akun, "hari": {}})
             s["mulai"], s["akhir"] = min(s["mulai"], w.timestamp()), max(s["akhir"], w.timestamp())
             rek = s["hari"].setdefault(w.strftime("%Y-%m-%d"), {}).setdefault(r.get("model") or "?", [0, 0, 0, 0, 0])
             for i, k in enumerate(("input_tokens", "cache_creation_tokens", "cache_read_tokens", "completion_tokens", "permintaan")):
                 rek[i] += int(r.get(k) or 0)
     return list(hasil.values())
+
+
+# Nama wajib berawalan "Otomasi": laporan-efisiensi, setor-jam-kerja, brain-aktivitas & Token.vue menyaring lewat awalan itu.
+OTOMASI_ALAT = "Otomasi (alat)"
+OTOMASI_WORDPRESS = ("desain-claude", "permintaan-claude", "baca-form-claude")
+
+
+PEMILIK_OTOMASI = {"Otomasi · agent.velocity.ai.id (Yaya)": "Yaya", "Otomasi · office.velocity.ai.id (Afif)": "Afif"}
+OTOMASI_LAPORAN = ("laporan-harian", "kasus-support", "rekap-chat-ai", "konsep-chat", "velocity_update.py", "claude-vision")
+# Panggilan agent & office sudah tercatat di usage.jsonl; transkrip folder kerjanya panggilan yang sama.
+TRANSKRIP_GANDA = ("-var-lib-velocity-agent-kerja", "-var-lib-velocity-office-kerja")
+
+
+def nama_otomasi(k):
+    """k = nama skrip (usage.jsonl) atau nama folder project (transkrip)."""
+    if k.startswith("laravel"):
+        return "Otomasi · Installer Laravel"
+    if k in OTOMASI_WORDPRESS:
+        return "Otomasi · Installer WordPress"
+    if k.startswith(("velocity-agent", "var-lib-velocity-agent", "cari-web", "cari-sosmed", "sosmed-alat")):
+        return "Otomasi · agent.velocity.ai.id (Yaya)"
+    if k.startswith(("velocity-office", "var-lib-velocity-office")):
+        return "Otomasi · office.velocity.ai.id (Afif)"
+    if k == "saran-jawaban":  # layanan /opt/saran-jawaban, saran balasan Live Chat WA CRM
+        return "Otomasi · Saran Jawaban Live Chat"
+    if k in OTOMASI_LAPORAN:
+        return "Otomasi · Laporan & rekap internal"
+    if "chatbot" in k or re.search(r"(^|-)uji(-|$)", k):
+        return "Otomasi · Chatbot demo & uji coba"
+    return OTOMASI_ALAT
 
 
 # Bagian installer untuk rincian "Installer per bagian" di tab Jenis penggunaan (peran di usage.jsonl)
@@ -296,6 +333,15 @@ BAGIAN_INSTALLER = {
     "fse": ("FSE apply", "wp"),
     "artikel": ("Terjemah artikel", "wp"),
     "velocity_update": ("Velocity Update (jurnal)", "lain"),
+    "kasus_support": ("Kasus Support (penggolong WA)", "lain"),
+    "rekap_chat_ai": ("Rekap Chat AI", "lain"),
+    "konsep_chat": ("Konsep Chat", "lain"),
+    "saran_jawaban": ("Saran Jawaban Live Chat", "lain"),
+    "pengawas_wa": ("Pengawas WA", "lain"),
+    "claude_vision": ("Baca gambar (vision)", "lain"),
+    "redaksi_klien": ("Redaksi klien", "lain"),
+    "laravel_kemiripan": ("Laravel · Kemiripan", "lain"),
+    "ai_monitoring": ("AI Monitoring Client (CRM)", "lain"),
 }
 
 
@@ -308,8 +354,12 @@ def rekap_installer():
         fh = open(AI_USAGE)
     except OSError:
         return {}
+    try:  # AI Monitoring tercatat di CRM (hanya rincian bagian; bukan sesi akun langganan, tanpa biaya akun)
+        tambahan = AI_MONITORING_USAGE.read_text().splitlines()
+    except OSError:
+        tambahan = []
     with fh:
-        for ln in fh:
+        for ln in itertools.chain(fh, tambahan):
             try:
                 r = json.loads(ln)
                 w = datetime.fromisoformat(r["ts"]).astimezone(WIB)
@@ -701,6 +751,8 @@ def main():
             peta["ssh:" + s] = nama
         for ip in idt.get("ip", []):
             peta["ip:" + ip] = nama
+        for b in idt.get("bot", []):
+            peta["bot:" + b] = nama
 
     # Gabung per sesi (subagent ikut induk), lalu per orang
     sesi = {}
@@ -728,17 +780,29 @@ def main():
     koreksi = muat_json(DATA / "jenis.json", {})
     akun_per = akun_sesi()
     aktif = sesi_aktif()
+    sesi_bot = muat_json(SESI_BOT, {})
     orang = {}
     for s in sesi.values():
         if not s["hari"]:
             continue
         h = ssh.get(s["sid"])
-        if s["tg"]:
+        if s["sid"] in sesi_bot:
+            jalur = "bot"
+            # pemilik = username akun bot.velocity.ai.id; dipetakan lewat "bot": [<username>] di pengguna.json.
+            # Sesi lama tanpa pemilik & akun "admin" tetap ke "bot": ["velocity"].
+            pm = sesi_bot[s["sid"]].get("pemilik")
+            nama = peta.get("bot:" + pm) if pm else None
+            nama = nama or (peta.get("bot:velocity", "Bot Velocity") if pm in (None, "admin") else "Bot · " + pm)
+            asal = "bot.velocity.ai.id · " + (pm + " · " if pm else "") + sesi_bot[s["sid"]].get("nama", "?")
+        elif s["tg"]:
             jalur = "telegram"
             nama = peta.get("tg:" + s["tg"]) or ("@" + s["tg_user"] if s["tg_user"] and not s["tg_user"].isdigit() else "Telegram " + s["tg"])
             asal = "Telegram " + (("@" + s["tg_user"]) if s["tg_user"] and not s["tg_user"].isdigit() else s["tg"])
-        elif s["ep"] == "sdk-cli" or s["proyek"] != "-root":
-            jalur, nama, asal = "otomasi", "Otomasi (installer & alat)", s["proyek"].lstrip("-")
+        elif (s["ep"] == "sdk-cli" or s["proyek"] != "-root") and not (h and h.get("kunci")):  # punya kunci SSH = dijalankan orang
+            jalur, asal = "otomasi", s["proyek"].lstrip("-")
+            nama = nama_otomasi(asal)
+            if s["proyek"].startswith(TRANSKRIP_GANDA):
+                s["hari"] = {}  # tetap terdaftar: setor-jam-kerja & brain-aktivitas memetakan sid lewat daftar ini
         else:
             jalur = "desktop" if s["ep"] == "claude-desktop" else "terminal"
             if h and h.get("kunci"):
@@ -757,10 +821,21 @@ def main():
             "aktif": s["sid"] in aktif, "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
         })
 
+    # Run agent = sid transkrip folder kerjanya; pinjam judulnya (awal tugas) supaya isi sesi terbaca
+    judul_kerja = {x["sid"]: x["judul"] for n in orang.values() for x in n["sesi"]
+                   if x["asal"] == "var-lib-velocity-agent-kerja" and x["judul"]}
     for s in sesi_installer():
         s["jenis"] = koreksi.get(s["sid"]) or s["jenis"]
-        orang.setdefault("Otomasi (installer & alat)",
-                         {"nama": "Otomasi (installer & alat)", "divisi": "", "sesi": []})["sesi"].append(s)
+        tugas = s["asal"].startswith("velocity-agent · run ") and judul_kerja.get(s["asal"].rsplit(" · run ", 1)[-1])
+        if tugas:
+            s["judul"] = f"{s['judul']} — {tugas}"
+        nama = nama_otomasi(s["asal"].split(" · ")[0])
+        orang.setdefault(nama, {"nama": nama, "divisi": "", "sesi": []})["sesi"].append(s)
+
+    # Baris tetap berawalan "Otomasi" supaya jam kerja & metrik orang tidak terhitung; hanya Token.vue yang menggabung ke pemilik.
+    for nama, pemilik in PEMILIK_OTOMASI.items():
+        if nama in orang:
+            orang[nama]["pemilik"] = pemilik
 
     hasil = {
         "dibuat": time.time(),

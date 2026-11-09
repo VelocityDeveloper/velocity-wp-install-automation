@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Kesiapan & progres migrasi Farnaz LiteSpeed -> nginx_apache untuk menu Pemantauan › Migrasi Farnaz.
+
+HANYA MEMBACA (tanpa mengubah apa pun di server): satu SSH, skrip Python dikirim lewat stdin,
+hasil JSON ditulis ke --out (default /usr/share/nginx/html/brain/migrasi.json, LAN-only lewat /brain/).
+Timer migrasi-farnaz.timer tiap 1 menit. Skrip migrasi sendiri ada di Farnaz /root/migrasi-nginx/.
+"""
+import argparse, json, os, subprocess, sys, tempfile, time
+
+HOST, PORT = 'root@103.103.175.182', '53864'
+
+REMOTE = r'''
+import json, os, re, subprocess, time
+D = '/root/migrasi-nginx'; B = '/root/velocity-cadangan/migrasi-nginx-apache-20261021'
+CB = '/usr/local/directadmin/custombuild'
+def sh(c, t=20):
+    try:
+        r = subprocess.run(c, shell=True, capture_output=True, text=True, timeout=t)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return 124, 'timeout'
+def baca(p):
+    try:
+        return open(p, errors='replace').read()
+    except OSError:
+        return None
+def mtime(p):
+    try:
+        return int(os.path.getmtime(p))
+    except OSError:
+        return None
+def opsi(k):
+    m = re.search(r'^%s=(.*)$' % k, baca(CB + '/options.conf') or '', re.M)
+    return m.group(1).strip() if m else None
+def tsv(nama):
+    p = '%s/hasil-%s.tsv' % (D, nama); t = baca(p)
+    if t is None:
+        return None
+    kode, bocor = {}, 0
+    for b in t.splitlines():
+        f = b.split('\t')
+        if len(f) >= 3:
+            kode[f[2]] = kode.get(f[2], 0) + 1
+        if len(f) >= 6 and f[5] == 'BOCOR':
+            bocor += 1
+    return {'waktu': mtime(p), 'total': sum(kode.values()), 'kode': kode, 'bocor': bocor}
+
+o = {'waktu': int(time.time())}
+o['webserver'] = opsi('webserver'); o['php1_mode'] = opsi('php1_mode')
+o['layanan'] = {u: sh('systemctl is-active ' + u)[1] for u in ('litespeed', 'httpd', 'nginx')}
+o['litespeed_enabled'] = sh('systemctl is-enabled litespeed')[1]
+m = re.search(r'users:\(\("([^"]+)"', sh("ss -ltnp | grep -E ':443 ' | head -1")[1])
+o['port443'] = m.group(1) if m else None
+rc, out = sh('/usr/sbin/httpd -t'); o['httpd_t'] = {'ok': rc == 0, 'pesan': out.splitlines()[-1] if out else ''}
+rc, _ = sh("dnf -q -C list --available 'liblsapi-devel-1.1-94*' || dnf -q -C list --installed 'liblsapi-devel-1.1-94*'", 30)
+o['liblsapi'] = rc == 0
+o['waf_mask32'] = int(sh(r"cat /etc/velocity-waf/*.txt 2>/dev/null | grep -cE '^[0-9.]+/32$'")[1] or 0)
+o['cpguard_waf_aktif'] = os.path.exists('/etc/modsecurity.d/cpguard_waf.conf')
+o['velocity_waf'] = os.path.exists('/etc/modsecurity.d/velocity-waf.conf')
+o['pin_lsapi'] = bool(re.search(r'^mod_lsapi:', baca(CB + '/custom_versions.txt') or '', re.M))
+o['mod_lsapi_so'] = os.path.exists('/usr/lib/apache/mod_lsapi.so')
+o['cadangan'] = {n: mtime('%s/%s' % (B, n)) for n in ('konfig-web.tar.gz', 'user-httpd-conf.tar.gz', 'options.conf', 'crontab-root.txt')}
+o['skrip'] = {}
+for n in ('cutover.sh', 'rollback-cepat.sh', 'cek.sh', 'banding.sh', 'pantau.sh', 'cache/pasang-cache.sh'):
+    p = '%s/%s' % (D, n)
+    o['skrip'][n] = {'ada': os.access(p, os.X_OK), 'sintaks': sh('bash -n ' + p)[0] == 0 if os.path.exists(p) else False, 'waktu': mtime(p)}
+h = baca(D + '/handler-htaccess.txt')
+o['handler_htaccess'] = None if h is None else {'waktu': mtime(D + '/handler-htaccess.txt'),
+    'lain': [b.split(':')[0] for b in h.splitlines() if b and not b.startswith('/home/bloranews/.htaccess:')]}
+o['baseline'] = tsv('sebelum'); o['sesudah'] = tsv('sesudah'); o['rollback_cek'] = tsv('rollback')
+o['cron_lsws'] = sh("crontab -l | grep -E 'lsws-traffic-alert' | head -1")[1]
+o['cache_domain'] = len(re.findall(r'^\.\S+', baca(D + '/cache/velocity-cache-domains.conf') or '', re.M))
+o['cache_terpasang'] = os.path.exists('/etc/nginx/velocity-cache-http.conf')
+o['berjalan'] = sh("pgrep -f '[m]igrasi-nginx/(cutover|rollback-cepat)\.sh'")[0] == 0
+o['screen'] = sh('screen -ls 2>/dev/null | grep -i migrasi')[1]
+log = baca(D + '/cutover.log')
+if log is not None:
+    i = log.rfind('== 1. praperiksa'); log = log[max(0, log.rfind('\n', 0, i) + 1 if i >= 0 else 0):]
+    o['log'] = log.splitlines()[-60:]
+else:
+    o['log'] = None
+o['modul'] = sh("/usr/sbin/httpd -M 2>/dev/null | grep -oE 'lsapi_module|security2_module|hostinglimits_module'")[1].split() if o['layanan']['httpd'] == 'active' else []
+o['load'] = open('/proc/loadavg').read().split()[:3]
+o['cpu'] = os.cpu_count()
+mem = dict(re.findall(r'^(\w+):\s+(\d+)', baca('/proc/meminfo'), re.M))
+o['ram_persen'] = round(100 - int(mem['MemAvailable']) * 100 / int(mem['MemTotal']))
+st = os.statvfs('/'); o['disk_persen'] = round(100 - st.f_bavail * 100 / st.f_blocks)
+print(json.dumps(o))
+'''
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', default='/usr/share/nginx/html/brain/migrasi.json')
+    a = ap.parse_args()
+    lama = {}
+    try:
+        lama = json.load(open(a.out))
+    except (OSError, ValueError):
+        pass
+    try:
+        r = subprocess.run(['ssh', '-p', PORT, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', HOST, 'python3', '-'],
+                           input=REMOTE, capture_output=True, text=True, timeout=110)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr.strip().splitlines() or ['ssh gagal'])[-1])
+        data = json.loads(r.stdout)
+        data['galat'] = None
+    except Exception as e:  # data lama tetap tampil, ditandai galat
+        data = {**lama, 'galat': str(e)[:300], 'galat_waktu': int(time.time())}
+    data['diambil'] = int(time.time())
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(a.out))
+    with os.fdopen(fd, 'w') as f:
+        json.dump(data, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, a.out)
+    return 0 if not data['galat'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

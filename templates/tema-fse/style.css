@@ -1892,6 +1892,13 @@ body.vf-gaya-dealer .vf-dealer-info > .wp-block-buttons { justify-content: cente
 .floating-footer .whatsapp-floating a:hover { background: #1da851; }
 .floating-footer .whatsapp-floating svg { width: 22px; height: 22px; display: block; }
 .floating-footer .whatsapp-floating span { display: inline-flex; align-items: center; }
+/* Aturan span di atas menimpa `.wa-toggle-close { display: none }` velocity-addons → ikon X tampil sebelum WA multi dibuka. */
+.floating-footer .wa-multi-toggle:not(.is-open) .wa-toggle-close { display: none; }
+/* Daftar WA multi-kontak: aturan `a` di atas menimpa `.wa-multi-link { display: flex }` → kontak berjajar
+   satu baris dan terpotong di kiri layar. Ditumpuk ke atas, sejajar tepi tombol. */
+.floating-footer .wa-multi-list.is-open { display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; right: 1rem; bottom: calc(1rem + 50px + .6rem); padding: 0; }
+.floating-footer .wa-multi-list.is-left { right: auto; left: 1rem; align-items: flex-start; }
+.floating-footer .whatsapp-floating a.wa-multi-link { display: flex; margin: 0; max-width: calc(100vw - 2rem); padding: .6rem 1rem; font-size: .9rem; }
 .floating-footer .scroll-to-top {
   display: inline-flex;
   align-items: center;

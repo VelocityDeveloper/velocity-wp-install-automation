@@ -18,8 +18,9 @@ Isi folder fse-rencana/<domain>/claude/ (ditulis agen):
   bagian-header.html    template part header (wp_template_part situs, bukan berkas tema)
   bagian-footer.html    template part footer
   bagian-sidebar.html   template part kolom samping (arsip/indeks berita; portal berita)
-  bagian-arsip.html     template part `arsip` (portal berita): SATU tata letak untuk semua daftar
-                        tulisan (rubrik, tag, penulis, tanggal, cari) — core/query inherit:true
+  bagian-arsip.html     template part `arsip`: SATU tata letak untuk semua daftar tulisan (rubrik,
+                        tag, penulis, tanggal, cari) — core/query inherit:true. Situs non-berita:
+                        template situs home & archive dibuat memanggil part ini (tanpa sidebar tema)
   bagian-artikel.html   template part `artikel` (portal berita): isi artikel tunggal (core/post-*)
   gaya.css              CSS tambahan situs (Site Editor → Gaya → CSS tambahan)
 
@@ -150,6 +151,44 @@ foreach ((array) $d['bagian'] as $slug => $baru) {
     $simpan = (string) get_post_field('post_content', $id, 'raw');
     update_post_meta($id, '_velocity_claude_md5', md5($simpan));
     $hasil[] = ($simpan === $baru ? 'bagian_ditulis:' : 'bagian_diubah_wp:') . $slug . ':' . $id;
+}
+
+// Situs non-berita: home.html/archive.html tema berisi grid + sidebar tetap, jadi part `arsip` agen
+// baru terpakai lewat template situs home & archive yang memanggilnya (setyaenergy.com 2026-11-05).
+// Portal berita sudah memakainya lewat archive-berita (velocity_fse_arsip_global di tema).
+if (!(function_exists('velocity_fse_arsip_global') && velocity_fse_arsip_global())) {
+    $arsip = trim((string) ($d['bagian']['arsip'] ?? ''));
+    $isi_templat = $arsip === '' ? '' : "<!-- wp:template-part {\"slug\":\"header\",\"tagName\":\"header\"} /-->\n\n"
+        . "<!-- wp:template-part {\"slug\":\"arsip\",\"tagName\":\"main\"} /-->\n\n"
+        . "<!-- wp:template-part {\"slug\":\"footer\",\"tagName\":\"footer\"} /-->";
+    foreach (array('home' => 'Blog', 'archive' => 'Arsip') as $slug => $judul) {
+        $ada = get_posts(array('post_type' => 'wp_template', 'name' => $slug, 'post_status' => 'any', 'numberposts' => 1,
+            'tax_query' => array(array('taxonomy' => 'wp_theme', 'field' => 'name', 'terms' => $tema))));
+        $post = $ada ? $ada[0] : null;
+        if ($post) {
+            $kini = (string) $post->post_content;
+            if ($kini === $isi_templat) { $hasil[] = 'templat_sama:' . $slug; continue; }
+            if ((string) get_post_meta($post->ID, '_velocity_claude_md5', true) !== md5($kini)) {
+                $hasil[] = 'templat_disunting_orang_dipertahankan:' . $slug;
+                continue;
+            }
+            if ($isi_templat === '') {
+                wp_delete_post($post->ID, true);
+                $hasil[] = 'templat_dicabut:' . $slug;
+                continue;
+            }
+            wp_update_post(array('ID' => $post->ID, 'post_content' => wp_slash($isi_templat)));
+            $id = $post->ID;
+        } else {
+            if ($isi_templat === '') { continue; }
+            $id = wp_insert_post(array('post_type' => 'wp_template', 'post_status' => 'publish', 'post_name' => $slug,
+                'post_title' => $judul, 'post_content' => wp_slash($isi_templat)), true);
+            if (is_wp_error($id) || !$id) { $hasil[] = 'templat_gagal:' . $slug; continue; }
+            wp_set_post_terms($id, array($tema), 'wp_theme');
+        }
+        update_post_meta($id, '_velocity_claude_md5', md5((string) get_post_field('post_content', $id, 'raw')));
+        $hasil[] = 'templat_ditulis:' . $slug . ':' . $id;
+    }
 }
 vfse_keluar(array('hasil' => $hasil));
 '''

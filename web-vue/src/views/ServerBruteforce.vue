@@ -41,6 +41,7 @@ const PESAN = {
   server_tidak_dikenal: 'Server tidak dikenal; muat ulang halaman.',
   aksi_sedang_jalan: 'Masih ada perubahan berjalan di server ini. Tunggu selesai dulu.',
   csf_tidak_ada: 'CSF tidak ditemukan di server ini.',
+  csf_belum_aktif: 'CSF terpasang tetapi belum dinyalakan (firewall cPGuard masih dipakai). Nyalakan CSF dulu: systemctl enable --now csf lfd.',
   regex_custom_tidak_dikenal: '/etc/csf/regex.custom.pm bentuknya tidak dikenal — tidak diubah.',
   slot_custom_log_penuh: 'Semua CUSTOM1–9_LOG di csf.conf sudah terpakai.',
   dikembalikan: 'lfd gagal jalan dengan aturan baru — csf.conf & regex.custom.pm dikembalikan.',
@@ -102,7 +103,6 @@ const ATURAN_KET = {
   bot: 'sqlmap, nikto, masscan, zgrab, dan scanner lain (bot-jahat.txt)',
   crawler: 'Ahrefs, Semrush, PetalBot, Baiduspider… (bot-seo.txt) — sudah ditolak 429 oleh WAF; blokir firewall hanya menghemat beban',
   ai: 'Bot pengumpul data untuk melatih model AI (GPTBot, ClaudeBot, CCBot, Bytespider… — bot-ai.txt). Tidak mendatangkan pengunjung ke situs klien; sudah ditolak 429 oleh WAF, blokir firewall hanya menghemat beban',
-  pencarian: 'Bot AI yang mengambil halaman saat pengguna bertanya ke ChatGPT/Perplexity (ChatGPT-User, OAI-SearchBot, PerplexityBot dari IP resmi). Bisa membuat situs klien dikutip & mendatangkan pengunjung; WAF hanya mencatatnya, jadi aturan ini tidak memblokir apa pun selama itu. UA serupa dari IP palsu masuk Eksploit',
   login: 'IP yang terus mencoba sesudah kena rate limit wp-login.php / xmlrpc.php',
 }
 

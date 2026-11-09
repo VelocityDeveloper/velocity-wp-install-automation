@@ -142,6 +142,9 @@ def skip_reason(row, journal, today):
     jenis = set(row.get('jenis') or [])
     if 'Redesign' in jenis or not jenis & AUTO_JENIS:
         return 'jenis_redesign_atau_lain'
+    if row.get('laravel'):
+        # Deskripsi CRM menyebut Laravel: dikerjakan lewat installer Laravel, bukan WordPress.
+        return 'bukan_wordpress_laravel'
     try:
         telat = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(str(row.get('deadline')))
     except ValueError:
@@ -195,6 +198,13 @@ def main():
             if send:
                 notify(domain, 'MANUAL', reason)
 
+    code, data = api('GET', '/api/installer')
+    if code != 200:
+        print(json.dumps({'event': 'autopilot_api_gagal', 'code': code, 'error': data.get('error')}), flush=True)
+        return 1
+    rows = data.get('domains') or []
+    laravel = {r['domain'] for r in rows if r.get('laravel')}
+
     # 1) Lanjutkan domain yang sedang dipegang autopilot.
     for domain, entry in list(journal.items()):
         phase = entry.get('phase')
@@ -205,6 +215,10 @@ def main():
                 entry.update(phase=phase, since=entry.get('at') or utcnow().isoformat(),
                              next_check=utcnow().isoformat(), da_notified=True)
                 write_json(JOURNAL, journal)
+        if domain in laravel and phase in ('waiting_da', 'dry-run'):
+            # Klaim lama sebelum pengaman Laravel ada: hentikan sebelum apply memasang WordPress.
+            stop(domain, 'bukan_wordpress_laravel', send=False)
+            continue
         if phase == 'waiting_da':
             try:
                 next_check = datetime.datetime.fromisoformat(entry.get('next_check') or '')
@@ -221,6 +235,18 @@ def main():
                     if code == 200:
                         entry.update(phase='dry-run', started_at=started)
                         write_json(JOURNAL, journal)
+            continue
+        if phase == 'claimed':
+            # Autopilot mati di tengah generate (mis. installer-status direstart):
+            # tanpa ini entri tertahan 'claimed' selamanya & domain tak diambil lagi.
+            try:
+                claimed = datetime.datetime.fromisoformat(entry['claimed_at'])
+            except (KeyError, ValueError):
+                claimed = utcnow()
+            if active and utcnow() - claimed > datetime.timedelta(minutes=30):
+                del journal[domain]
+                write_json(JOURNAL, journal)
+                actions.append({'domain': domain, 'aksi': 'klaim_terputus_ulang'})
             continue
         if phase not in ACTIVE_PHASES:
             continue
@@ -270,11 +296,6 @@ def main():
             stop(domain, f'apply_gagal:{stage}', send=False)
 
     # 2) Ambil satu project baru kalau tidak ada yang sedang berjalan.
-    code, data = api('GET', '/api/installer')
-    if code != 200:
-        print(json.dumps({'event': 'autopilot_api_gagal', 'code': code, 'error': data.get('error')}), flush=True)
-        return 1
-    rows = data.get('domains') or []
     busy = (any(e.get('phase') in ACTIVE_PHASES for e in journal.values())
             or any(r.get('status') == 'RUNNING' for r in rows))
     reasons = Counter()

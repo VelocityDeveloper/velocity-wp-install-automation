@@ -17,7 +17,7 @@ MOUNT = [AKAR, AKAR + '/directadmin']
 HOST = 'pc-backup'
 CACHE_DETIK = 60
 # Server DirectAdmin -> alias ~/.ssh/config (dipakai pc_restore.py untuk restore)
-SERVER_DA = {'wulan': 'wulan', 'farnaz': 'farnaz', 'kiya': 'kiya', 'cahyadi': 'cahyadi', 'fahmi': 'fahmi'}
+SERVER_DA = {'farnaz': 'farnaz', 'kiya': 'kiya', 'cahyadi': 'cahyadi', 'fahmi': 'fahmi', 'sanke': 'sanke'}
 
 # Dijalankan di PC Backup (python3 Ubuntu); keluaran satu objek JSON. Hanya membaca.
 SKRIP_PC = r'''

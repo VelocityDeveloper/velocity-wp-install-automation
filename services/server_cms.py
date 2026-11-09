@@ -39,6 +39,7 @@ API = 'https://www.wpvulnerability.net'
 UA = 'Mozilla/5.0 (X11; Linux x86_64) VelocityDashboard/1.0 (+https://velocitydeveloper.com)'
 BATAS_SSH = 900
 PEKERJA_API = 6
+SUSPEND_DIR = CMS_DIR / 'suspend'  # <host>.json: {akun: {user: {s: bool, t: epoch}}}
 JADWAL = CMS_DIR / 'jadwal.json'  # {host: {harian, terakhir}}
 JAM_JADWAL = (2, 0)  # WIB, sesudah scan antivirus 01:30
 TINGKAT_HURUF = {'c': 'kritis', 'h': 'tinggi', 'm': 'sedang', 'l': 'rendah', 'n': 'rendah'}
@@ -89,6 +90,21 @@ def terkena(versi, op):
     elif str(op.get('unfixed')) != '1':
         return False  # tanpa batas atas dan bukan "belum diperbaiki" → data tak lengkap, jangan ditebak
     return True
+
+
+_BERBAYAR = re.compile(r'\b(pro|premium)\b|\bversion\)', re.I)
+_DUA_EDISI = re.compile(r'\b(free|lite)\b|\b(and|&)\b.*\bpro\b|/\s*pro\b', re.I)
+
+
+def edisi_lain(v, nama, versi):
+    """Entri khusus edisi Pro/Premium (wpvulnerability memakai slug yang sama dengan edisi gratis wp.org,
+    mis. 'Download Manager Pro <= 7.5.5' pada download-manager 3.3.x) → bukan untuk situs ini bila
+    nama terpasang tak menyebut edisi berbayar dan batas versinya di jalur mayor lain."""
+    if not _BERBAYAR.search(v.get('judul') or '') or _DUA_EDISI.search(v.get('judul') or '') \
+            or _BERBAYAR.search(nama or ''):
+        return False
+    a, b = urai_versi(versi), urai_versi((v.get('op') or {}).get('max_version'))
+    return bool(a and b) and b[0] > a[0]
 
 
 # ---------- Basis data kerentanan ----------
@@ -195,7 +211,10 @@ def _ssh(srv, key):
 
 
 def _inventaris(srv, key, user=None):
-    perintah = {'aksi': 'inventaris', 'user': user} if user else {'aksi': 'inventaris'}
+    return _agen(srv, key, {'aksi': 'inventaris', 'user': user} if user else {'aksi': 'inventaris'})
+
+
+def _agen(srv, key, perintah):
     sandi = base64.b64encode(json.dumps(perintah).encode()).decode()
     cmd = _ssh(srv, key)
     try:
@@ -240,7 +259,8 @@ def _cocokkan(job, inv):
         for jenis, slug, nama, versi in komponen:
             daftar, info = hasil.get((jenis, slug), ([], {}))
             # Inti: endpoint per versi → semua entri berlaku; plugin/tema: cek rentang versi
-            kena = daftar if jenis == 'core' else [v for v in daftar if terkena(versi, v['op'])]
+            kena = daftar if jenis == 'core' else [v for v in daftar
+                                                   if terkena(versi, v['op']) and not edisi_lain(v, nama, versi)]
             if not kena and not info.get('ditutup'):
                 continue
             for v in kena:
@@ -324,8 +344,16 @@ def _kerja(job, servers, key):
         job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])
     if job.get('jadwal'):
         gagal = [h['server'] for h in job.get('hasil') or [] if not h.get('ok')] or ([] if job['status'] == 'selesai' else job['server'])
-        if gagal and _kirim_tg:
-            _kirim_tg(f"⚠️ <b>Scan CMS terjadwal gagal</b>: {html.escape(', '.join(gagal))} ({html.escape(str(job.get('error') or 'SSH'))}).")
+        if _kirim_tg:
+            # gerbang notif: hitungan gagal berturut-turut per server (KIRIM bila 3x atau >24 jam), reset bila berhasil
+            import gerbang_notif
+            for h in job.get('hasil') or []:
+                if h.get('ok'):
+                    gerbang_notif.sukses('cms_gagal', h['server'])
+            for nama in gagal:
+                galat = next((h.get('error') for h in job.get('hasil') or [] if h['server'] == nama), None) or job.get('error') or 'SSH'
+                _kirim_tg(f"⚠️ <b>Scan CMS terjadwal gagal</b>: {html.escape(nama)} ({html.escape(str(galat))}).",
+                          'cms_gagal', nama, '', {'error': str(galat)[:100]})
     _catat({k: job.get(k) for k in ('id', 'mulai', 'selesai', 'oleh', 'target', 'status', 'error', 'hasil', 'galat_api')})
 
 
@@ -350,9 +378,13 @@ def _notif_baru(nama, lama, baru):
     if not tambah:
         return
     kritis = sum(1 for v in tambah if v[3] == 'kritis')
+    import velocityguard  # impor lambat (hindari impor melingkar)
+    vp = sorted({v[4] for v in tambah if v[3] == 'kritis' and velocityguard.kandidat_patch(v[4])})
     _kirim_tg('\n'.join([f'🛡️ <b>VelocityGuard · Kerentanan CMS baru di {html.escape(nama)}</b>',
                          f'{len(tambah)} kerentanan kritis/tinggi baru: {kritis} kritis, {len(tambah) - kritis} tinggi',
-                         '', f'https://dash.velocity.ai.id/server/cms?s={urllib.parse.quote(nama)}', 'Perbarui plugin/tema terkait (manual).']))
+                         '', f'https://dash.velocity.ai.id/server/cms?s={urllib.parse.quote(nama)}', 'Perbarui plugin/tema terkait (manual).']
+                        + ([f'🧩 {len(vp)} kritis tanpa login (kandidat virtual patch WAF).'] if vp else [])),
+              'cms_baru', nama, '|'.join(vp)[:200], {'baru': len(tambah), 'kritis': kritis, 'kritis_vp': len(vp)})
 
 
 def _mulai(servers, key, oleh, target, jadwal=False):
@@ -472,7 +504,8 @@ def _gabung_akun(job, srv, user, inv):
     kamus = {**(lama.get('kerentanan') or {}), **kamus_baru}
     dipakai = {i for s in situs for x in s.get('temuan', []) for i in x['id']}
     data = {**lama, 'situs': situs, 'kerentanan': {i: kamus[i] for i in dipakai if i in kamus},
-            'diambil': int(time.time()), 'oleh': f"{job['oleh']} (scan ulang akun {user})",
+            # Waktu & pelaku scan server tetap milik scan penuh; 'diperbarui' = kunci cache halaman
+            'diambil': lama.get('diambil') or int(time.time()), 'oleh': lama.get('oleh') or job['oleh'], 'diperbarui': int(time.time()),
             'wp_terbaru': versi_wp_terbaru() or lama.get('wp_terbaru')}
     data['ringkas'] = _ringkas(data)
     HASIL_DIR.mkdir(parents=True, exist_ok=True)
@@ -525,6 +558,46 @@ def _kerja_perbaiki(job, srv, key, rencana):
     except Exception as e:  # noqa: BLE001
         job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])
     _catat({k: job.get(k) for k in ('id', 'jenis', 'mulai', 'selesai', 'oleh', 'target', 'user', 'status', 'error', 'hasil', 'akun', 'situs', 'galat_api')})
+
+
+def _kerja_akun(job, srv, key):
+    user = job['user']
+    try:
+        job['kemajuan'] = {'tahap': 'inventaris', 'ke': 0, 'dari': 1}
+        inv = _inventaris(srv, key, user)
+        if not inv.get('ok'):
+            raise RuntimeError(f"scan akun gagal: {inv.get('error')}")
+        data, galat = _gabung_akun(job, srv, user, inv)
+        sisa = [s for s in data['situs'] if s.get('user') == user]
+        job.update(status='selesai', selesai=int(time.time()), galat_api=len(galat),
+                   hasil=[{'host': srv['host'], 'server': srv['name'], 'ok': True, **data['ringkas']}],
+                   akun={'situs': len(sisa), 'rentan': sum(1 for s in sisa if any(x['id'] for x in s['temuan']))})
+    except Exception as e:  # noqa: BLE001
+        job.update(status='gagal', selesai=int(time.time()), error=str(e)[:200])
+    _catat({k: job.get(k) for k in ('id', 'jenis', 'mulai', 'selesai', 'oleh', 'target', 'user', 'status', 'error', 'hasil', 'akun', 'galat_api')})
+
+
+def scan_akun_mulai(payload):
+    """POST /api/servers/cms/scan/akun {server, user, oleh?}: scan ulang satu akun (hanya baca), mis. sesudah
+    dikerjakan manual di luar dashboard; hasilnya digabung ke berkas hasil server."""
+    srv = next((s for s in _daftar_server() if s['host'] == payload.get('server')), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}, 400
+    user = str(payload.get('user') or '')
+    if not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', user):
+        return {'error': 'akun_tidak_sah'}, 400
+    oleh = re.sub(r'[^\w .-]', '', str(payload.get('oleh') or ''))[:40].strip() or 'dashboard'
+    key = _ssh_key_file()
+    if not key:
+        return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
+    job = {'id': time.strftime('%Y%m%d-%H%M%S'), 'jenis': 'akun', 'mulai': int(time.time()), 'oleh': oleh, 'status': 'berjalan',
+           'target': srv['host'], 'server': [srv['name']], 'user': user}
+    with _kunci:
+        if any(j['status'] == 'berjalan' for j in _job.values()):
+            return {'error': 'scan_sedang_jalan'}, 409
+        _job[job['id']] = job
+    threading.Thread(target=_kerja_akun, args=(job, srv, key), daemon=True).start()
+    return job, 200
 
 
 def _validasi_perbaiki(payload):
@@ -600,7 +673,7 @@ def ringkasan():
         d = _baca_hasil(s['host'])
         item = {'host': s['host'], 'name': s['name']}
         if d:
-            item.update(diambil=d['diambil'], oleh=d.get('oleh'), ringkas=d.get('ringkas'), cpguard_jalan=d.get('cpguard_jalan'),
+            item.update(diambil=d['diambil'], diperbarui=d.get('diperbarui'), oleh=d.get('oleh'), ringkas=d.get('ringkas'), cpguard_jalan=d.get('cpguard_jalan'),
                         wp_terbaru=d.get('wp_terbaru'))
         out.append(item)
     berjalan = next((j for j in _job.values() if j['status'] == 'berjalan'), None)
@@ -608,10 +681,75 @@ def ringkasan():
     return {'servers': out, 'job': berjalan or terakhir, 'sumber': API, 'jadwal': jadwal_baca(), 'jam_jadwal': '%02d:%02d' % JAM_JADWAL}
 
 
+def _perbaikan_terakhir(host):
+    """{path: hasil perbaikan terakhir situs itu + id/waktu/oleh job} dari riwayat (baris lama ditimpa yang baru)."""
+    out = {}
+    try:
+        baris = RIWAYAT.read_text().splitlines()
+    except OSError:
+        return out
+    for b in baris:
+        try:
+            r = json.loads(b)
+        except ValueError:
+            continue
+        if r.get('jenis') != 'perbaiki' or r.get('target') != host:
+            continue
+        for h in r.get('situs') or []:
+            out[h.get('path')] = {**h, 'job': {k: r.get(k) for k in ('id', 'mulai', 'selesai', 'oleh', 'user', 'status', 'error')}}
+    return out
+
+
 def detail(host):
     if not any(s['host'] == host for s in _daftar_server()):
         return {'error': 'server_tidak_dikenal'}
-    return _baca_hasil(host) or {'host': host, 'belum': True}
+    return {**(_baca_hasil(host) or {'host': host, 'belum': True}), 'perbaikan': _perbaikan_terakhir(host)}
+
+
+_kunci_suspend = threading.Lock()
+
+
+def _cek_suspend(host, user=None):
+    """SSH baca user.conf (semua akun / satu akun), gabung ke simpanan. Kembalikan (data, kode)."""
+    srv = next((s for s in _daftar_server() if s['host'] == host), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}, 400
+    if user is not None and not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', user):
+        return {'error': 'akun_tidak_sah'}, 400
+    key = _ssh_key_file()
+    if not key:
+        return {'error': 'kunci_ssh_installer_tidak_ada'}, 500
+    r = _agen(srv, key, {'aksi': 'suspend', 'user': user} if user else {'aksi': 'suspend'})
+    if not r.get('ok'):
+        return {'host': host, 'error': r.get('error')}, 502
+    berkas = SUSPEND_DIR / f'{host}.json'
+    t = int(time.time())
+    with _kunci_suspend:
+        try:
+            data = json.loads(berkas.read_text()) if user else {}
+        except (OSError, ValueError):
+            data = {}
+        akun = data.setdefault('akun', {})
+        akun.update({u: {'s': bool(v), 't': t} for u, v in r['akun'].items()})
+        berkas.parent.mkdir(parents=True, exist_ok=True)
+        tmp = berkas.with_suffix('.tmp')
+        tmp.write_text(json.dumps(data, separators=(',', ':')))
+        tmp.replace(berkas)
+    return {'host': host, **data}, 200
+
+
+def suspend(host):
+    """GET /api/servers/cms/suspend?server=: status suspend tersimpan; cek penuh lewat SSH hanya bila belum pernah."""
+    try:
+        return {'host': host, **json.loads((SUSPEND_DIR / f'{host}.json').read_text())}
+    except (OSError, ValueError):
+        return _cek_suspend(host)[0]
+
+
+def suspend_cek(payload):
+    """POST /api/servers/cms/suspend/cek {server, user?}: cek ulang satu akun (atau semua bila tanpa user)."""
+    user = payload.get('user')
+    return _cek_suspend(str(payload.get('server') or ''), None if user is None else str(user))
 
 
 def riwayat(batas=100):

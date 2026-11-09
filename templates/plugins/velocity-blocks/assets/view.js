@@ -122,10 +122,14 @@
 		segarkan();
 
 		var detik = parseInt( w.getAttribute( 'data-vb-autoplay' ), 10 ) || 0;
-		if ( detik && ! hemat ) {
+		// Reduced-motion tetap bergeser (ke() melompat tanpa animasi): PC kantor dengan efek animasi
+		// Windows dimatikan membuat slider tampak mati (setyaenergy.com 2026-11-05).
+		if ( detik ) {
 			var jeda = false;
+			var lanjut;
 			[ 'mouseenter', 'focusin', 'touchstart' ].forEach( function ( e ) {
 				w.addEventListener( e, function () {
+					clearTimeout( lanjut );
 					jeda = true;
 				}, { passive: true } );
 			} );
@@ -134,6 +138,13 @@
 					jeda = false;
 				} );
 			} );
+			// Sentuhan di HP tidak punya mouseleave: tanpa ini satu sentuhan menghentikan slider selamanya.
+			w.addEventListener( 'touchend', function () {
+				clearTimeout( lanjut );
+				lanjut = setTimeout( function () {
+					jeda = false;
+				}, detik * 1000 );
+			}, { passive: true } );
 			setInterval( function () {
 				if ( ! jeda && ! document.hidden ) {
 					ke( kini() + 1 );

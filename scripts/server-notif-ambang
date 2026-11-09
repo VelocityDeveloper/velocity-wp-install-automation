@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """Notif Telegram saat server hosting melewati ambang (permintaan Afif, 15 Okt 2026).
 
-- CPU/RAM/disk server SERVER_USAGE (bawaan Wulan) > AMBANG% (bawaan 25) → satu notif saat mulai lewat + satu saat kembali normal.
+- CPU/RAM/disk server SERVER_USAGE (bawaan Sanke) > AMBANG% (bawaan 25) → satu notif saat mulai lewat + satu saat kembali normal.
   Mulai = N_MULAI sampel berturut di atas ambang, normal = N_PULIH sampel berturut di bawah
   (sampel tiap 5 mnt dari server-usage-catat) supaya CPU yang naik-turun tidak membanjiri.
 - Serangan: hit WAF per jam (/api/servers/firewall/waf) jam terakhir yang sudah penuh
   > (1 + LONJAK) × rata-rata per jam 7 hari sebelumnya dan selisihnya ≥ MIN_SELISIH.
   Kategori bot tidak dihitung; rata-rata mulai ulang saat versi Velocity WAF server berubah (18 Okt).
+- RAID: tiap jam `ssh <alias> /usr/local/sbin/velocity-raid-cek` (PERC + SMART) untuk RAID_SERVER;
+  notif saat ada masalah baru + saat semua pulih (24 Okt).
+- SELinux: tiap 5 mnt mode Sanke vs HARAPAN penjaga velocity-selinux-jaga + catatan journal penjaga baru
+  (mail root sanke = :blackhole:, jadi peringatannya ditarik ke sini; 26 Okt).
+- FPM: tiap 5 mnt catatan journal penjaga velocity-fpm-jaga Sanke (restart unit php-isolated-fpm active tanpa proses,
+  MENYERAH) + timer penjaga mati (27 Okt).
+- Dovecot: sama, penjaga velocity-dovecot-jaga Sanke (IMAP/LMTP tak menjawab 2x -> restart dovecot, MENYERAH; 28 Okt).
+- Formulir: journal velocityguard-form Sanke (>20 POST /keranjang/ per jam per domain) + timer pemantau mati (2 Nov).
 
 Opsi: --uji (cetak saja), --simulasi (hitung notif CPU/RAM/disk yang akan terkirim dari riwayat).
 """
-import argparse, json, os, sys, time, urllib.parse, urllib.request
+import argparse, json, os, subprocess, sys, time, urllib.parse, urllib.request
 from pathlib import Path
 
 RIWAYAT = Path("/var/lib/velocity/server-usage/riwayat.jsonl")
@@ -25,7 +33,8 @@ LONJAK = float(os.environ.get("NOTIF_LONJAK", 0.5))
 MIN_SELISIH = 100
 METRIK = {"cpu": "CPU", "ram": "RAM", "disk": "Disk"}
 LEWATI = {"PC Lokal", "PC Backup"}   # hanya server hosting
-SERVER_USAGE = set(filter(None, os.environ.get("NOTIF_SERVER_USAGE", "Wulan").split(",")))  # Afif: "batas 25% di wulan"
+SERVER_USAGE = set(filter(None, os.environ.get("NOTIF_SERVER_USAGE", "Sanke").split(",")))  # Afif: "batas 25% di wulan" (Wulan = Sanke sejak 23 Okt)
+RAID_SERVER = {"Sanke": "sanke"}  # nama tampil → alias SSH PC kantor
 
 
 def token():
@@ -109,8 +118,11 @@ def cek_serangan(st, uji):
     for s in d.get("servers", []):
         if not s.get("ok") or s.get("name") in LEWATI:
             continue
-        # bot (crawler SEO/AI) diblokir rutin, bukan serangan → tidak dihitung
-        per_jam = {int(t): sum(n for k, n in v.items() if k != "bot") for t, v in s.get("jam", [])}
+        # bot (crawler SEO/AI) diblokir rutin, bukan serangan → tidak dihitung; jam_blokir (26 Okt) juga
+        # membuang aturan yang cuma mencatat (Warning, mis. "Klien HTTP skrip (dicatat)" → Kiya +211% palsu)
+        rinci = {int(t): v for t, v in s.get("jam_blokir", [])}
+        per_jam = ({t: v["n"] for t, v in rinci.items()} if "jam_blokir" in s else
+                   {int(t): sum(n for k, n in v.items() if k != "bot") for t, v in s.get("jam", [])})
         selesai = jam_ini - 3600            # jam terakhir yang sudah penuh
         if not per_jam:
             continue
@@ -132,6 +144,10 @@ def cek_serangan(st, uji):
         if lonjak and not aktif:
             pesan.append(f"🔴 <b>{kunci}</b> WAF {n:,} hit jam {jam} · rata-rata {rata:,.0f}/jam "
                          f"(+{(n / rata - 1) * 100 if rata else 100:.0f}%)")
+            r = rinci.get(selesai)
+            if r:
+                atas = " · ".join(f"{a.replace('Velocity WAF - ', '').split(' (')[0][:40]} {m * 100 // r['n']}%" for a, m in r["aturan"][:2])
+                pesan.append(f"   {r['ip']:,} IP · {atas}")
         elif aktif and not lonjak:
             pesan.append(f"🟢 <b>{kunci}</b> serangan reda: {n:,} hit jam {jam} · rata-rata {rata:,.0f}/jam")
         st["serangan"][kunci] = lonjak
@@ -139,6 +155,195 @@ def cek_serangan(st, uji):
     if pesan:
         kirim("🛡 <b>Lonjakan serangan</b>\n" + "\n".join(pesan) +
               "\n\nCek: dash.velocity.ai.id/server/log", uji)
+
+
+def cek_raid(st, uji):
+    jam_ini = int(time.time() // 3600 * 3600)
+    if st.get("jam_raid") == jam_ini and not uji:
+        return
+    st["jam_raid"] = jam_ini
+    for nama, alias in RAID_SERVER.items():
+        try:
+            r = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias,
+                                "/usr/local/sbin/velocity-raid-cek"], capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            continue
+        # shortcut: SSH gagal/server mati tidak dinotif di sini (rc 255), cukup pemantau server; tambah bila perlu
+        if r.returncode == 255:
+            continue
+        masalah = sorted(set(filter(None, r.stdout.strip().splitlines())))
+        lama = st["raid"].get(nama, [])
+        baru = [m for m in masalah if m not in lama]
+        if baru:
+            teks = f"🔴 <b>{nama}: masalah RAID/disk</b>\n" + "\n".join(f"• {m}" for m in masalah)
+            if not kirim(teks, uji):
+                continue
+        elif lama and not masalah:
+            if not kirim(f"🟢 <b>{nama}: RAID/disk kembali sehat</b>", uji):
+                continue
+        st["raid"][nama] = masalah
+
+
+SELINUX_SERVER = {"Sanke": "sanke"}  # penjaga velocity-selinux-jaga (Pak Jamal, 26 Okt); mail root sanke = :blackhole:
+SELINUX_ULANG = 6 * 3600   # masalah mode yang belum beres diingatkan lagi tiap 6 jam (sama dengan penjaga)
+LABEL_JEDA = 3600          # catatan "label dipulihkan" dikumpulkan, paling sering sekali per jam
+# Satu SSH: mode (HARAPAN/runtime/config/cmdline/timer penjaga) + journal penjaga sejak cek terakhir.
+# Journal sanke volatil (tanpa /var/log/journal) → pakai --since detik, bukan cursor (hilang saat reboot).
+SELINUX_CMD = r"""h=$(. /etc/sysconfig/velocity-selinux-jaga 2>/dev/null; echo ${HARAPAN:-permissive})
+echo "H $h"; echo "R $(getenforce 2>/dev/null || echo Disabled)"
+echo "C $(awk -F= '/^SELINUX=/{print $2}' /etc/selinux/config 2>/dev/null)"
+echo "K $(grep -oE 'selinux=0|enforcing=0' /proc/cmdline | tr '\n' ' ')"
+echo "T $(systemctl is-active velocity-selinux-jaga.timer)"
+echo J; journalctl -t velocity-selinux-jaga --since "@$1" -o json --no-pager -q"""
+
+
+def _lvl(m):
+    return {"enforcing": 2, "permissive": 1}.get((m or "").strip().lower(), 0)
+
+
+def cek_selinux(st, uji):
+    """Mode SELinux ≠ HARAPAN → notif mulai, ulang 6 jam, pulih. Journal penjaga baru → turun/pulih singkat
+    di antara dua cek + "label dipulihkan" (dikumpulkan, maks sekali per jam). Tes: --uji + NOTIF_SELINUX_HARAPAN_UJI."""
+    sekarang = time.time()
+    for nama, alias in SELINUX_SERVER.items():
+        s = st["selinux"].setdefault(nama, {"masalah": [], "t_notif": 0, "t_pulih": 0, "t_label": 0, "label": []})
+        pertama = not s.get("journal_us")
+        sejak = int(s["journal_us"] / 1e6) if not pertama else int(sekarang) - 60
+        try:
+            r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias, f"bash -s -- {sejak}"],
+                               input=SELINUX_CMD, capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            continue
+        kepala, pisah, jurnal = r.stdout.partition("\nJ\n")
+        if r.returncode == 255 or not pisah:   # SSH gagal = urusan pemantau server
+            continue
+        v = {b[0]: b[2:].strip() for b in kepala.splitlines() if b[:1] in "HRCKT" and b[1:2] == " "}
+        harapan = (uji and os.environ.get("NOTIF_SELINUX_HARAPAN_UJI")) or v.get("H") or "permissive"
+        masalah = []
+        if _lvl(v.get("R")) < _lvl(harapan):
+            masalah.append(f"runtime={v.get('R')}")
+        if _lvl(v.get("C")) < _lvl(harapan):
+            masalah.append(f"config={v.get('C') or 'hilang'}")
+        if v.get("K"):
+            masalah.append(f"cmdline {v['K']}")
+        if v.get("T") != "active":
+            masalah.append(f"penjaga velocity-selinux-jaga.timer {v.get('T') or '?'}")
+        catatan, akhir_us = [], s.get("journal_us", 0)
+        for baris in jurnal.splitlines():
+            try:
+                e = json.loads(baris)
+            except ValueError:
+                continue
+            us = int(e.get("__REALTIME_TIMESTAMP", 0))
+            if us <= s.get("journal_us", 0):
+                continue
+            akhir_us = max(akhir_us, us)
+            if pertama:
+                continue   # cek pertama: riwayat lama tidak dikirim
+            pesan = e.get("MESSAGE", "")
+            if isinstance(pesan, list):
+                pesan = bytes(pesan).decode(errors="replace")
+            baris = f"{time.strftime('%H:%M', time.localtime(us / 1e6))} {pesan[:300]}"
+            if pesan.startswith("label dipulihkan"):
+                s["label"].append(baris)
+            elif not (masalah or s["masalah"]) and us / 1e6 > s["t_pulih"] + 600:
+                catatan.append(baris)   # turun/pulih yang lolos di antara dua cek; yang bertahan sudah dinotif lewat mode
+        if pertama:
+            akhir_us = max(akhir_us, int(sekarang * 1e6))
+        bagian = []
+        if masalah and (masalah != s["masalah"] or sekarang - s["t_notif"] >= SELINUX_ULANG):
+            bagian.append(f"🔴 <b>{nama}: SELinux tidak sesuai harapan ({harapan})</b>\n" +
+                          "\n".join(f"• {m}" for m in masalah) +
+                          "\nDetail: journalctl -t velocity-selinux-jaga. Urusan Pak Jamal (jangan reboot dari disabled tanpa /.autorelabel).")
+        elif s["masalah"] and not masalah:
+            bagian.append(f"🟢 <b>{nama}: SELinux kembali sesuai harapan ({harapan}, runtime {v.get('R')})</b>")
+        if catatan:
+            bagian.append(f"⚠️ <b>{nama}: catatan penjaga SELinux</b>\n" + "\n".join(f"• {c}" for c in catatan[-5:]))
+        label = s["label"] if s["label"] and (bagian or sekarang - s["t_label"] >= LABEL_JEDA) else []
+        if label:
+            lebih = f"\n(+{len(label) - 5} lainnya)" if len(label) > 5 else ""
+            bagian.append(f"🏷 <b>{nama}: label SELinux dipulihkan penjaga</b>\n" +
+                          "\n".join(f"• {c}" for c in label[-5:]) + lebih)
+        if uji:
+            print(f"selinux {nama}: harapan={harapan} R={v.get('R')} C={v.get('C')} T={v.get('T')} "
+                  f"masalah={masalah} catatan={len(catatan)} label_antre={len(s['label'])}")
+        if bagian and not kirim("\n\n".join(bagian), uji):
+            continue   # gagal kirim: state tidak dimajukan, dicoba lagi 5 mnt
+        if masalah and bagian and bagian[0].startswith("🔴"):
+            s["t_notif"] = sekarang
+        if s["masalah"] and not masalah:
+            s["t_pulih"] = sekarang
+        if label:
+            s["t_label"], s["label"] = sekarang, []
+        s["label"] = s["label"][-50:]
+        s["masalah"], s["journal_us"] = masalah, akhir_us
+
+
+FPM_SERVER = {"Sanke": "sanke"}  # penjaga velocity-fpm-jaga (27 Okt): unit php-isolated-fpm active tanpa proses → restart
+# penjaga di sanke yang dinotif lewat cek_fpm: kunci state -> (tag/timer, judul notif, akibat bila timer mati)
+PENJAGA = {"fpm": ("velocity-fpm-jaga", "penjaga FPM merestart unit menggantung", "unit FPM menggantung tidak dipulihkan otomatis"),
+           # 28 Okt: dovecot macet (config gagal dibuat sesudah SIGHUP beruntun) -> restart
+           "dovecot": ("velocity-dovecot-jaga", "penjaga dovecot merestart dovecot macet", "dovecot macet tidak dipulihkan otomatis"),
+           # 2 Nov (izin pemilik): VelocityGuard pemantau formulir - >20 POST /keranjang/ per jam per domain
+           "form": ("velocityguard-form", "VelocityGuard: lonjakan formulir pesanan", "ambang POST /keranjang/ tidak dipantau")}
+FPM_CMD = r"""echo "T $(systemctl is-active {tag}.timer)"
+echo J; journalctl -t {tag} --since "@$1" -o json --no-pager -q"""
+
+
+def cek_fpm(st, uji, jaga="fpm"):
+    """Catatan baru penjaga FPM sanke → satu pesan per cek (RUSAK = satu baris per unit per kejadian, MENYERAH,
+    jumlah PULIH). Timer penjaga mati → notif sekali per perubahan. Tes: --uji."""
+    tag, judul, akibat = PENJAGA[jaga]
+    for nama, alias in FPM_SERVER.items():
+        s = st[jaga].setdefault(nama, {"timer": "active"})
+        pertama = not s.get("journal_us")
+        sejak = int(s["journal_us"] / 1e6) if not pertama else int(time.time()) - 60
+        try:
+            r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias, f"bash -s -- {sejak}"],
+                               input=FPM_CMD.replace("{tag}", tag), capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            continue
+        kepala, pisah, jurnal = r.stdout.partition("\nJ\n")
+        if r.returncode == 255 or not pisah:
+            continue
+        timer = kepala.strip()[2:].strip() or "?"
+        rusak, pulih, akhir_us = [], 0, s.get("journal_us", 0)
+        for baris in jurnal.splitlines():
+            try:
+                e = json.loads(baris)
+            except ValueError:
+                continue
+            us = int(e.get("__REALTIME_TIMESTAMP", 0))
+            if us <= s.get("journal_us", 0):
+                continue
+            akhir_us = max(akhir_us, us)
+            pesan = e.get("MESSAGE", "")
+            if isinstance(pesan, list):
+                pesan = bytes(pesan).decode(errors="replace")
+            if pertama:
+                continue
+            if pesan.startswith("PULIH"):
+                pulih += 1
+            else:
+                rusak.append(f"{time.strftime('%H:%M', time.localtime(us / 1e6))} {pesan[:250]}")
+        if pertama:
+            akhir_us = max(akhir_us, int(time.time() * 1e6))
+        bagian = []
+        if rusak:
+            bagian.append(f"🔧 <b>{nama}: {judul}</b>\n" +
+                          "\n".join(f"• {c}" for c in rusak[-8:]) +
+                          (f"\n(+{len(rusak) - 8} lainnya)" if len(rusak) > 8 else "") +
+                          (f"\n✅ pulih: {pulih}" if pulih else "") +
+                          f"\nLog: /var/log/{tag}.log")
+        if timer != "active" and s["timer"] == "active":
+            bagian.append(f"🔴 <b>{nama}: timer {tag} {timer}</b> — {akibat}")
+        elif timer == "active" and s["timer"] != "active":
+            bagian.append(f"🟢 <b>{nama}: timer {tag} aktif lagi</b>")
+        if uji:
+            print(f"{jaga} {nama}: timer={timer} rusak={len(rusak)} pulih={pulih}")
+        if bagian and not kirim("\n\n".join(bagian), uji):
+            continue
+        s["timer"], s["journal_us"] = timer, akhir_us
 
 
 def simulasi():
@@ -166,11 +371,36 @@ def main():
     st = json.loads(STATE.read_text()) if STATE.exists() else {}
     st.setdefault("usage", {})
     st.setdefault("serangan", {})
+    st.setdefault("raid", {})
+    st.setdefault("selinux", {})
+    st.setdefault("fpm", {})
+    st.setdefault("dovecot", {})
+    st.setdefault("form", {})
     cek_usage(st, a.uji)
     try:
         cek_serangan(st, a.uji)
     except Exception as e:
         print(f"serangan: {e}", file=sys.stderr)
+    try:
+        cek_raid(st, a.uji)
+    except Exception as e:
+        print(f"raid: {e}", file=sys.stderr)
+    try:
+        cek_selinux(st, a.uji)
+    except Exception as e:
+        print(f"selinux: {e}", file=sys.stderr)
+    try:
+        cek_fpm(st, a.uji)
+    except Exception as e:
+        print(f"fpm: {e}", file=sys.stderr)
+    try:
+        cek_fpm(st, a.uji, "dovecot")
+    except Exception as e:
+        print(f"dovecot: {e}", file=sys.stderr)
+    try:
+        cek_fpm(st, a.uji, "form")
+    except Exception as e:
+        print(f"form: {e}", file=sys.stderr)
     if not a.uji:
         STATE.write_text(json.dumps(st))
 
