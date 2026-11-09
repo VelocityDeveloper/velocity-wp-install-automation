@@ -93,6 +93,12 @@ def sistem():
     if t:
         out['swap'] = {'total': t, 'used': t - f, 'persen': round((t - f) * 100 / t, 1)}
 
+    kode, perangkat = jalan(['lsblk', '-bdno', 'TYPE,SIZE'])
+    baris_disk = [b.split() for b in perangkat.splitlines() if b.split()[:1] == ['disk']]
+    if kode == 0 and baris_disk and all(len(b) == 2 and b[1].isdigit() for b in baris_disk):
+        out['disk_fisik_total'] = sum(int(b[1]) for b in baris_disk)
+
+
     disks = []
     _, teks = jalan(['df', '-PB1', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'overlay', '-x', 'squashfs',
                      '-x', 'efivarfs', '-x', 'fuse.sshfs'])
@@ -244,12 +250,21 @@ def penyimpanan():
     kode, t = jalan(['zpool', 'list', '-Hp', '-o', 'name,size,alloc,free,cap,health'], 10)
     if kode != 0 or not t.strip():
         return None
+    kode, daftar = jalan(['zfs', 'list', '-Hp', '-o', 'name,available'], 10)
+    tersedia = {}
+    if kode == 0:
+        for baris in daftar.splitlines():
+            bagian = baris.split('\t')
+            if len(bagian) == 2 and bagian[1].isdigit():
+                tersedia[bagian[0]] = int(bagian[1])
     pool = []
     for baris in t.strip().split('\n'):
         p = baris.split('\t')
         if len(p) == 6:
             pool.append({'nama': p[0], 'total': int(p[1]), 'used': int(p[2]), 'free': int(p[3]),
                          'persen': int(p[4]), 'health': p[5]})
+            if p[0] in tersedia:
+                pool[-1]['tersedia'] = tersedia[p[0]]
     _, s = jalan(['zfs', 'list', '-Hp', '-t', 'snapshot', '-o', 'name,creation', '-s', 'creation'], 15)
     snap = [b.split('\t') for b in s.strip().split('\n') if '\t' in b]
     return {'pool': pool, 'snapshot': len(snap),
@@ -333,4 +348,5 @@ def main():
     print(json.dumps(hasil))
 
 
-main()
+if __name__ == '__main__':
+    main()

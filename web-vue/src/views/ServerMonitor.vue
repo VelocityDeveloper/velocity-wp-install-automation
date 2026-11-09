@@ -426,10 +426,19 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
                 <div class="meter" :class="tingkatPersen(terpilih.sistem.swap.persen)"><i :style="{ width: `${terpilih.sistem.swap.persen}%` }" /></div>
                 <small class="redup">{{ ukuranBerkas(terpilih.sistem.swap.used) }} dari {{ ukuranBerkas(terpilih.sistem.swap.total) }}</small>
               </div>
+              <div v-if="terpilih.sistem.disk_fisik_total != null" class="res">
+                <div class="res-kepala"><span>Total disk fisik</span><b>{{ ukuranBerkas(terpilih.sistem.disk_fisik_total) }}</b></div>
+                <small class="redup">Gabungan kapasitas seluruh disk, sebelum RAID atau format</small>
+                <div v-for="pl in (terpilih.penyimpanan?.pool || []).filter((p) => p.tersedia != null)" :key="pl.nama">
+                  <div class="res-kepala"><span>Pool {{ pl.nama }} · alokasi</span><b>{{ pl.persen }}%</b></div>
+                  <div class="meter" :class="tingkatPersen(pl.persen)"><i :style="{ width: `${pl.persen}%` }" /></div>
+                  <small class="redup">Sisa tersedia {{ ukuranBerkas(pl.tersedia) }} · alokasi pool {{ ukuranBerkas(pl.used) }} dari {{ ukuranBerkas(pl.total) }}</small>
+                </div>
+              </div>
               <div v-for="d in terpilih.sistem.disks" :key="d.mount" class="res">
                 <div class="res-kepala"><span>Disk {{ d.mount }}</span><b>{{ d.persen }}%</b></div>
                 <div class="meter" :class="tingkatPersen(d.persen)"><i :style="{ width: `${d.persen}%` }" /></div>
-                <small class="redup">Sisa {{ ukuranBerkas(d.free) }} dari {{ ukuranBerkas(d.total) }}<template v-if="d.inode != null"> · inode {{ d.inode }}%</template></small>
+                <small class="redup">Sisa {{ ukuranBerkas(d.free) }} · Total {{ ukuranBerkas(d.total) }}<template v-if="d.inode != null"> · inode {{ d.inode }}%</template></small>
               </div>
             </div>
           </section>

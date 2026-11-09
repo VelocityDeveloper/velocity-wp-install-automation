@@ -2,6 +2,8 @@
 
 n8n-driven WordPress installer for DirectAdmin servers only. cPanel is not supported.
 
+Dashboard `/server/monitoring` menampilkan gabungan kapasitas mentah seluruh disk fisik (sebelum RAID atau format), serta sisa dan total tiap filesystem yang terpantau. Kapasitas mentah bukan ruang yang tersedia untuk digunakan. Untuk ZFS, meter menunjukkan alokasi pool, sedangkan sisa tersedia dibaca dari dataset akar; keduanya tidak saling melengkapi karena reservasi dan overhead ZFS.
+
 ## Arsitektur
 
 ```
