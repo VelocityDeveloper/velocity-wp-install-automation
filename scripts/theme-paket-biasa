@@ -56,8 +56,11 @@ PAKET_CUSTOM = ('paketg', 'paketportalberitacustom', 'pakettokoonlinecustom')
 # Tema yang berandanya diisi langkah sendiri (bukan adaptor AI): velocity-marketplace-child =
 # template "Marketplace: Home Page" + theme_mod vmc_*, diisi scripts/marketplace-biasa (2026-10-04).
 BERANDA_LANGKAH_SENDIRI = {'velocity-marketplace-child': 'marketplace-biasa'}
-# Tema yang slidernya diganti banner bertulisan: theme mod repeater + kolom ID gambar.
-SLIDER_BANNER = {'velocity-spa': ('spa_slider_repeater', 'image_id')}
+# Tema yang slidernya diganti banner bertulisan: theme mod repeater + kolom ID gambar (+ ukuran banner, pil ajakan).
+# velocity-kesehatan1 (user 2026-11-10, penerbitsenipustaka.com): kotak slider 40% (2,5:1) -> banner 1600x640 tanpa
+# pil ajakan, gambar dipaskan CSS (tema menampilkan gambar ukuran asli lalu memotong tengahnya).
+SLIDER_BANNER = {'velocity-spa': ('spa_slider_repeater', 'image_id'),
+                 'velocity-kesehatan1': ('home_slider_repeater', 'image_id', (1600, 640), False)}
 # Tema yang berandanya membaca CPT (langkah 6e): gambar unggulan CPT ikut diunggah, jadi kartu
 # layanan selalu bergambar (dulu layanan-* tidak diunggah karena tak dirujuk mods, satebuntelbadran.com 2026-10-28).
 CPT_BERANDA = {'velocity-spa'}
@@ -217,18 +220,23 @@ def banner_slider(foto, judul, teks, ajakan, warna, tujuan, lebar=1600, tinggi=9
         return baris + [kini] if kini else baris
 
     kiri, batas = int(lebar * 0.07), int(lebar * 0.55)
-    fj, ft, fa = huruf('NimbusSans-Bold.otf', 92), huruf('NimbusSans-Regular.otf', 46), huruf('NimbusSans-Bold.otf', 34)
-    bj, bt = bungkus(judul, fj, batas)[:3], bungkus(teks, ft, batas)[:3]
-    tinggi_isi = len(bj) * 104 + 30 + len(bt) * 60 + (110 if ajakan else 0)
+    sk = 1 if tinggi >= 800 else 0.72  # banner pendek (1600x640): huruf 92 px membuat judul 2 kata sebaris
+    fj, ft, fa = (huruf('NimbusSans-Bold.otf', round(92 * sk)), huruf('NimbusSans-Regular.otf', round(46 * sk)),
+                  huruf('NimbusSans-Bold.otf', 34))
+    maks_baris = 3 if tinggi >= 800 else 2  # banner pendek (kesehatan1 1600x640): 3+3 baris tidak muat
+    def pangkas(baris):
+        return baris if len(baris) <= maks_baris else baris[:maks_baris - 1] + [baris[maks_baris - 1].rstrip(',.;:') + '…']
+    bj, bt = pangkas(bungkus(judul, fj, batas)), pangkas(bungkus(teks, ft, batas))
+    tinggi_isi = round(len(bj) * 104 * sk) + 30 + round(len(bt) * 60 * sk) + (110 if ajakan else 0)
     y = (tinggi - tinggi_isi) // 2
     d.rectangle([kiri, y - 34, kiri + 110, y - 26], fill=aksen)
     for b in bj:
         d.text((kiri, y), b, font=fj, fill=(255, 255, 255))
-        y += 104
+        y += round(104 * sk)
     y += 30
     for b in bt:
         d.text((kiri, y), b, font=ft, fill=(235, 235, 235))
-        y += 60
+        y += round(60 * sk)
     if ajakan:
         y += 36
         w = d.textlength(ajakan, font=fa)
@@ -605,18 +613,27 @@ def daftar_kontak(k, alamat=True):
 
 # Situs yang sudah ter-deploy tetap memakai aturan kartu lama (feedback 2026-09-23); diisi main().
 SITUS_LAMA = False
+# Tema di LAYANAN_BERANDA_POKOK menampilkan semua kartu sebaris (4 layanan = 4 kartu, tidak dipotong jadi 3); diisi main().
+KARTU_SEMUA = False
 
 
 def kartu_beranda(layanan):
     """Kartu layanan di beranda: 4 layanan → 3 kartu saja (satu kartu sisa di baris kedua tampak
     ganjil); 5 = 3 + 2 di tengah, 6 = 3 + 3 lewat CSS. Halaman Layanan & widget tetap memuat semua
     (permintaan user 2026-09-30, lbhdkm.or.id)."""
-    return layanan[:3] if len(layanan) == 4 and not SITUS_LAMA else layanan
+    return layanan[:3] if len(layanan) == 4 and not SITUS_LAMA and not KARTU_SEMUA else layanan
 
 
 # Kartu layanan beranda maksimal per tema, apa pun jumlah layanannya (velocity-perusahaan1 mencetak
 # semua isi repeater: 5 layanan = 5 kartu; user 2026-10-02, marsealtic.com). Hanya instalasi baru.
 LAYANAN_BERANDA_MAKS = {'velocity-perusahaan1': 3}
+
+# Kartu layanan beranda yang lebih banyak dari ini diringkas jadi sekian "layanan pokok" yang mencakup SEMUA
+# layanan (bukan dipotong): velocity-kesehatan1 mencetak semua isi repeater sebaris (11 layanan = 7 + 4 kartu
+# sempit, user 2026-11-10, penerbitsenipustaka.com). Halaman Layanan tetap memuat semua. Hanya instalasi baru.
+LAYANAN_BERANDA_POKOK = {'velocity-kesehatan1': 4}
+# Adaptor yang menulis ikon kartu layanan kosong ("" = ikon bawaan tema, kesehatan1 heart-pulse) -> ikon per layanan.
+IKON_KOSONG_DIISI = {'velocity-kesehatan1'}
 
 # Ikon kartu layanan menurut kata di judul/teks layanan (user 2026-10-05, marsealtic.com: semua kartu
 # perusahaan1 berikon koper). Nama = Bootstrap Icons 1.11.3; urutan menentukan, yang pertama cocok menang.
@@ -645,8 +662,47 @@ IKON_LAYANAN = (
     (r'acara|event|wedding|pernikahan|organizer|dekorasi', 'calendar-event-fill'),
     (r'pertanian|tani|perkebunan|peternakan|perikanan|pupuk|bibit', 'tree-fill'),
     (r'produk|toko|jual|distribusi|supplier|grosir|barang', 'box-seam-fill'),
+    # Penerbitan/buku paling akhir: layanan penerbit yang menyebut desain/penelitian/pendidikan tetap berikon sendiri.
+    (r'penerbit|buku|naskah|pustaka|literasi|sastra|jurnal|publikasi', 'book-fill'),
 )
 IKON_BAWAAN = 'briefcase-fill'
+
+
+def layanan_pokok(daftar, n, nama):
+    """Ringkas daftar layanan konteks adaptor jadi n layanan pokok yang mencakup semuanya (Claude mengelompokkan;
+    gagal -> dibagi berurutan). Tiap kelompok memakai slug anggota pertama: foto layanan-<slug> dan jangkar
+    /layanan/#<slug> sudah ada."""
+    kelompok = None
+    try:
+        import claude_vision
+        prompt = (f'Kelompokkan layanan "{nama}" berikut menjadi TEPAT {n} layanan pokok yang bersama-sama mencakup '
+                  'SEMUA layanan (setiap nomor masuk tepat satu kelompok, urutan kelompok mengikuti nomor terkecilnya).\n'
+                  + '\n'.join(f'{i}. {l["judul"]}: {l["teks"]}' for i, l in enumerate(daftar, 1))
+                  + '\nJudul pokok maks 40 karakter, pakai "&" bila menggabung; teks 1 kalimat maks 100 karakter '
+                    'menyebut cakupannya, bahasa Indonesia, tanpa klaim berlebihan.\n'
+                    'Jawab HANYA JSON array: [{"judul": "...", "teks": "...", "anggota": [1, 2]}]')
+        jawab = claude_vision.tanya(prompt, [], timeout=300)
+        nomor = sorted(a for k in jawab or [] for a in (k.get('anggota') or []))
+        if isinstance(jawab, list) and len(jawab) == n and nomor == list(range(1, len(daftar) + 1)) \
+                and all(str(k.get('judul') or '').strip() for k in jawab):
+            kelompok = sorted(jawab, key=lambda k: min(k['anggota']))
+    except Exception as ex:
+        print(f'tampilan: layanan_pokok_ai_gagal:{type(ex).__name__}')
+    if not kelompok:
+        print('tampilan: layanan_pokok_bagi_urut')
+        batas = [round(i * len(daftar) / n) for i in range(n + 1)]
+        kelompok = [{'judul': daftar[batas[i]]['judul'],
+                     'teks': ', '.join(l['judul'] for l in daftar[batas[i]:batas[i + 1]]),
+                     'anggota': list(range(batas[i] + 1, batas[i + 1] + 1))} for i in range(n)]
+    hasil = []
+    for k in kelompok:
+        anggota = [daftar[a - 1] for a in sorted(k['anggota'])]
+        l = {'slug': anggota[0]['slug'], 'judul': pendek(str(k['judul']).strip(), 60), 'teks': str(k.get('teks') or '').strip(),
+             'teks_pendek': pendek(str(k.get('teks') or '').strip(), 110),
+             'rincian': ', '.join(a['judul'] for a in anggota), 'link': anggota[0]['link']}
+        l['ikon'] = ikon_layanan(l)
+        hasil.append(l)
+    return hasil
 
 
 def ikon_layanan(layanan):
@@ -658,18 +714,20 @@ def ikon_layanan(layanan):
     return IKON_BAWAAN
 
 
-def ikon_per_layanan(mods, layanan):
+def ikon_per_layanan(mods, layanan, kosong_juga=False):
     """Repeater layanan yang ikonnya sama untuk semua butir (adaptor perusahaan1 menulis
     "velocity_icon": "briefcase-fill" tetap) diisi ikon menurut layanan masing-masing."""
     for nilai in mods.values():
         if not (isinstance(nilai, list) and nilai and len(nilai) == len(layanan)
                 and all(isinstance(x, dict) for x in nilai)):
             continue
-        if not any(x.get(k) == l['judul'] for x, l in zip(nilai, layanan) for k in x):
+        if not any(x.get(k) == l['judul'] or (kosong_juga and l['judul'] in str(x.get(k)))  # kesehatan1: "<h3>judul</h3>.."
+                   for x, l in zip(nilai, layanan) for k in x):
             continue
         for kunci in {k for x in nilai for k in x if re.search(r'icon|ikon', k, re.I)}:
             isi = [x.get(kunci) for x in nilai]
-            if len(set(isi)) == 1 and isinstance(isi[0], str) and re.fullmatch(r'(bi[- ])*[a-z0-9-]+', isi[0]):
+            if len(set(isi)) == 1 and isinstance(isi[0], str) and (re.fullmatch(r'(bi[- ])*[a-z0-9-]+', isi[0])
+                                                                 or (kosong_juga and isi[0] == '')):
                 awalan = re.match(r'(bi[- ])*', isi[0]).group(0)
                 for x, l in zip(nilai, layanan):
                     x[kunci] = awalan + l['ikon']
@@ -815,6 +873,11 @@ ul.vk-sosmed>li::before{content:none!important}
 /* velocity-mobil4 berlatar hitam + teks terang (site-finish LATAR_DEMO): kartu & ajakan putih membuat teksnya hilang
    (sungbin.co.id 2026-10-26) */
 .wp-child-theme-velocity-mobil4 .vk-kartu,.wp-child-theme-velocity-mobil4 .vk-ajakan{background:rgba(255,255,255,.06)}
+/* velocity-kesehatan1: gambar slider tampil ukuran asli lalu dipotong tengah di kotak 40% -> dipaskan; judul kartu layanan
+   (h3 warna heading gelap) putih di atas foto (penerbitsenipustaka.com 2026-11-10) */
+.wp-child-theme-velocity-kesehatan1 #velocityslider .velocity-slider-ratio .velocity-slider-media{width:100%;height:100%;min-width:0;min-height:0;object-fit:cover;left:0;top:0;transform:none}
+.wp-child-theme-velocity-kesehatan1 .velocity-service h3{color:#fff!important;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.wp-child-theme-velocity-kesehatan1 .velocity-service p{text-shadow:0 1px 3px rgba(0,0,0,.6)}
 .wp-child-theme-velocity-mobil4 .widget-area .vk-kontak a{color:#fff!important}
 .wp-child-theme-velocity-mobil4 .vk-kontak .bi{color:var(--bs-link-color)!important;opacity:1}
 .gallery{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:1rem 0!important}
@@ -2395,6 +2458,10 @@ def main():
         except Exception as e:
             print(f'tampilan: baca_tema_gagal:{e}')
     tema = (info or {}).get('tema', '')
+    global KARTU_SEMUA
+    KARTU_SEMUA = tema in LAYANAN_BERANDA_POKOK
+    if KARTU_SEMUA:  # ctx di atas dibuat sebelum tema diketahui (4 layanan sudah dipotong jadi 3 kartu)
+        ctx = konteks_adaptor(cfg, domain, isi, kontak, len(galeri), klien_judul)
     # Panduan pembuat tema (Paket F): widget sidebar, ukuran logo, jumlah galeri, petunjuk adaptor.
     panduan = None
     if info and tema not in at.BUKAN_ANAK:
@@ -2422,6 +2489,11 @@ def main():
     if maks and not SITUS_LAMA and len(ctx['daftar']['layanan']) > maks:
         print(f"tampilan: layanan_beranda_maks:{len(ctx['daftar']['layanan'])}->{maks}")
         ctx['daftar']['layanan'] = ctx['daftar']['layanan'][:maks]
+    pokok = LAYANAN_BERANDA_POKOK.get(tema)
+    if pokok and not SITUS_LAMA and len(ctx['daftar']['layanan']) > pokok:
+        n_awal = len(ctx['daftar']['layanan'])
+        ctx['daftar']['layanan'] = layanan_pokok(ctx['daftar']['layanan'], pokok, ctx['teks']['nama'])
+        print(f"tampilan: layanan_beranda_pokok:{n_awal}->{len(ctx['daftar']['layanan'])}")
     paksa_ai = '--paksa-ai' in sys.argv
     if tema in BERANDA_LANGKAH_SENDIRI:
         print(f'tampilan: adaptor_dilewati:beranda_oleh_{BERANDA_LANGKAH_SENDIRI[tema]}')
@@ -2431,7 +2503,7 @@ def main():
             ad = catatan_ai['adaptor']
             data['mods'][tema] = at.isi_nilai(ad['mods'], ctx)
             if not SITUS_LAMA:
-                ikon_per_layanan(data['mods'][tema], ctx['daftar']['layanan'])
+                ikon_per_layanan(data['mods'][tema], ctx['daftar']['layanan'], tema in IKON_KOSONG_DIISI)
             data['bawaan'][tema] = ad.get('bawaan') or {}
             data['template'][tema] = ad.get('template') or ''
             data['cadangan'] = True
@@ -2513,16 +2585,19 @@ def main():
             aset[kunci] = potong(aset[cadangan[i % len(cadangan)]], 800, 800, kerja / f'{kunci}.jpg')
     # Slider beranda = banner bertulisan (nama + layanan), bukan foto mentah (user 2026-10-28, satebuntelbadran.com).
     if tema in SLIDER_BANNER and isinstance(data['mods'].get(tema), dict):
-        mod, kolom = SLIDER_BANNER[tema]
+        mod, kolom, *opsi = SLIDER_BANNER[tema]
+        ukuran_banner = opsi[0] if opsi else (1600, 900)
+        pakai_ajakan = opsi[1] if len(opsi) > 1 else True
         wa = f"WhatsApp {kontak['wa_tampil']}" if kontak.get('wa') else 'Hubungi Kami'
         isi_slide = [('hero', data['nama'], isi.get('hero_teks') or isi.get('profil'), wa)]
-        isi_slide += [(f'layanan-{l["slug"]}', l['judul'], l.get('teks'), 'Lihat Layanan') for l in layanan[:2]]
+        isi_slide += [(f'layanan-{l["slug"]}', l['judul'], l.get('teks'), 'Lihat Layanan') for l in (ctx['daftar']['layanan'] if KARTU_SEMUA else layanan)[:2]]  # kesehatan1: layanan pokok
         if len(isi_slide) < 3:
             isi_slide.append(('tentang', f"Tentang {data['nama']}", isi.get('profil'), 'Selengkapnya'))
         slide = []
         for i, (kunci, j, t, a) in enumerate([s for s in isi_slide if s[0] in aset][:3], 1):
-            aset[f'slider-{i}'] = banner_slider(aset[kunci], pendek(j, 60), pendek(t, 120), a,
-                                                (isi.get('warna') or {}).get('utama'), kerja / f'slider-{i}.jpg')
+            aset[f'slider-{i}'] = banner_slider(aset[kunci], pendek(j, 60), pendek(t, 120), a if pakai_ajakan else '',
+                                                (isi.get('warna') or {}).get('utama'), kerja / f'slider-{i}.jpg',
+                                                *ukuran_banner)
             slide.append({kolom: '{{id:slider-%d}}' % i})
         if slide:
             data['mods'][tema][mod] = slide
@@ -2606,7 +2681,7 @@ def main():
     if tema in CPT_BERANDA:
         rujukan += json.dumps(data.get('cpt_isi'), ensure_ascii=False)
     dipakai = set(re.findall(r'\{\{(?:id|url):([a-z0-9-]+)\}\}', rujukan)) | set(iklan)
-    if data['situs_baru'] and not data['berita'] and tema not in SLIDER_BANNER:
+    if data['situs_baru'] and not data['berita'] and tema != 'velocity-spa':
         # velocity-spa menyembunyikan seksi Header Image; hero cukup jadi latar banner slider.
         dipakai.add('hero')  # Header Image tema (banner halaman dalam), lihat langkah 6c PHP
     if data['situs_baru'] and not data['berita']:
