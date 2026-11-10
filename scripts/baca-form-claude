@@ -164,11 +164,10 @@ def main():
     env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
     if DC.KUNCI_API.is_file() and DC.KUNCI_API.read_text().strip():
         env['ANTHROPIC_API_KEY'] = DC.KUNCI_API.read_text().strip()
-    opus = DC.opus_terbaru(env)
-    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus, ANTHROPIC_SMALL_FAST_MODEL=opus)
+    opus = 'sonnet'  # ekstraksi ke skema JSON cukup Sonnet (hemat, 10 Nov 2026)
     mulai = time.time()
     try:
-        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'opus', '--output-format', 'json',
+        run = subprocess.run([DC.CLAUDE, '-p', prompt, '--model', 'sonnet', '--output-format', 'json',
                               '--no-session-persistence', '--tools', '', '--json-schema', json.dumps(SKEMA)],
                              capture_output=True, text=True, timeout=600, env=env, cwd='/tmp')
         hasil = json.loads(run.stdout)

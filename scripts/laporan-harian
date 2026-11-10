@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Laporan harian malam: apa yang dipelajari, diperbaiki, dan masih kurang hari ini (permintaan user 2026-10-08).
 
-Bahan dikumpulkan dari jejak kerja hari itu (baca-saja), lalu dirangkum Claude (opus, tanpa alat):
+Bahan dikumpulkan dari jejak kerja hari itu (baca-saja), lalu dirangkum Claude (sonnet, tanpa alat):
   - memory Claude (~/.claude/projects/*/memory): baris yang bertambah dibanding cuplikan malam sebelumnya
   - transkrip sesi Claude (~/.claude/projects/*/*.jsonl): permintaan user + jawaban akhir per sesi, nama dari token.json
   - commit git hari itu di repo /opt, /home, /root
@@ -395,7 +395,7 @@ def catat_pemakaian(hasil, hari):
 
 
 def tanya_claude(prompt, skema, hari):
-    run = subprocess.run([CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+    run = subprocess.run([CLAUDE, '-p', '--model', 'sonnet', '--output-format', 'json', '--no-session-persistence',
                           '--tools', '', '--json-schema', json.dumps(skema)],
                          input=prompt, capture_output=True, text=True, timeout=1800, cwd='/tmp')
     try:

@@ -2068,7 +2068,7 @@ def _nilai_bahasa_claude(akun, sb, ss, mulai):
               '3 = netral sopan, 5 = hangat, jelas, menghargai klien), lalu rata-ratakan per kelompok. Pesan pendek '
               'yang wajar ("baik pak, kami cek dulu") itu 3–4, bukan buruk. Bahasa Indonesia sehari-hari.\n\n'
               f'SEBELUM:\n' + '\n'.join(f'- {t}' for t in pilih(sb_ok)) + '\n\nSESUDAH:\n' + '\n'.join(f'- {t}' for t in pilih(ss_ok)))
-    run = subprocess.run([CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+    run = subprocess.run([CLAUDE, '-p', '--model', 'sonnet', '--output-format', 'json', '--no-session-persistence',
                           '--tools', '', '--json-schema', json.dumps(SKEMA_BAHASA)],
                          input=prompt, capture_output=True, text=True, timeout=600, cwd='/tmp')
     hasil = json.loads(run.stdout)
@@ -2767,7 +2767,7 @@ def nilai(oleh='Claude'):
     prompt = PROMPT_NILAI.format(hari=date.today().isoformat(),
                                  data=json.dumps([_ringkas_untuk_claude(u) for u in aktif], ensure_ascii=False, indent=1))
     mulai = time.time()
-    run = subprocess.run([CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+    run = subprocess.run([CLAUDE, '-p', '--model', 'sonnet', '--output-format', 'json', '--no-session-persistence',
                           '--tools', '', '--json-schema', json.dumps(SKEMA_NILAI)],
                          input=prompt, capture_output=True, text=True, timeout=900, cwd='/tmp')
     hasil = json.loads(run.stdout)

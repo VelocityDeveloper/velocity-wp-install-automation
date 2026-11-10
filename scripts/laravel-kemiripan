@@ -169,7 +169,7 @@ Skala: 90+ hampir sama, 75–89 mirip dengan beda kecil, 50–74 beda jelas, <50
 
 {chr(10).join(baris)}
 """
-    perintah = [DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json', '--no-session-persistence',
+    perintah = [DC.CLAUDE, '-p', '--model', 'sonnet', '--output-format', 'json', '--no-session-persistence',
                 '--tools', 'Read', '--max-turns', '40', '--json-schema', json.dumps(SKEMA)]
     mulai = time.time()
     try:

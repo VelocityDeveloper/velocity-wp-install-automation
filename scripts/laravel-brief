@@ -798,6 +798,10 @@ def jalankan(DC, env, opus, slug, jenis, p):
     log(f'Bahan: brief v{dari}.')
     if jenis == 'contoh':
         return buat_contoh(DC, env, opus, slug, p, prompt, dari)
+    if jenis in ('saran', 'rangkuman', 'diagram'):  # rangkum/bandingkan/ERD cukup Sonnet (10 Nov 2026)
+        opus = 'claude-sonnet-5-5'
+        env = {k: v for k, v in env.items() if k not in ('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+                                                     'ANTHROPIC_SMALL_FAST_MODEL')}
     log(f"Claude ({opus}) {JUDUL_KERJA[jenis]}…")
     log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 2–6 menit.')
     # Gambar / PDF hasil scan dibaca Claude sendiri: alat Read saja, folder kerja = folder dokumen
@@ -808,7 +812,7 @@ def jalankan(DC, env, opus, slug, jenis, p):
     mulai = time.time()
     try:
         # prompt lewat stdin: sebagai argumen, bahan >128 KB ditolak kernel (Argument list too long)
-        run = subprocess.run([DC.CLAUDE, '-p', '--model', 'opus', '--output-format', 'json',
+        run = subprocess.run([DC.CLAUDE, '-p', '--model', opus, '--output-format', 'json',
                               '--no-session-persistence', '--tools', 'Read' if visual else '',
                               '--json-schema', json.dumps(SKEMA[jenis])],
                              input=prompt, capture_output=True, text=True, timeout=1500, env=env,
