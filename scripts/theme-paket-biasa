@@ -626,12 +626,14 @@ def kartu_beranda(layanan):
 
 # Kartu layanan beranda maksimal per tema, apa pun jumlah layanannya (velocity-perusahaan1 mencetak
 # semua isi repeater: 5 layanan = 5 kartu; user 2026-10-02, marsealtic.com). Hanya instalasi baru.
-LAYANAN_BERANDA_MAKS = {'velocity-perusahaan1': 3}
+# perusahaan1 pindah ke LAYANAN_BERANDA_POKOK (user 2026-11-11, sumurborservicepompaairpekanbaru.com: 3 kartu
+# terpotong menghilangkan layanan lain -> 3 layanan pokok yang mencakup semua).
+LAYANAN_BERANDA_MAKS = {}
 
 # Kartu layanan beranda yang lebih banyak dari ini diringkas jadi sekian "layanan pokok" yang mencakup SEMUA
 # layanan (bukan dipotong): velocity-kesehatan1 mencetak semua isi repeater sebaris (11 layanan = 7 + 4 kartu
 # sempit, user 2026-11-10, penerbitsenipustaka.com). Halaman Layanan tetap memuat semua. Hanya instalasi baru.
-LAYANAN_BERANDA_POKOK = {'velocity-kesehatan1': 4}
+LAYANAN_BERANDA_POKOK = {'velocity-kesehatan1': 4, 'velocity-perusahaan1': 3}
 # Adaptor yang menulis ikon kartu layanan kosong ("" = ikon bawaan tema, kesehatan1 heart-pulse) -> ikon per layanan.
 IKON_KOSONG_DIISI = {'velocity-kesehatan1'}
 

@@ -49,6 +49,11 @@ Semua WP-CLI/PHP berjalan sebagai user hosting situs. Database sudah dicadangkan
    halaman-halaman itu. **Jangan memasang plugin Meta Box** atau membuat CPT untuk daftar layanan
    (keputusan user 2026-10-01). CPT + Meta Box hanya bila data memang banyak atribut dan diminta
    (mis. paket tour lengkap), dan sebutkan alasannya di laporan.
+   **Kartu layanan BERANDA (repeater theme mod tema) jangan ditambah** melebihi isian installer: tema
+   `velocity-perusahaan1` maks 3 kartu, `velocity-kesehatan1` maks 4. Bila layanan lebih banyak, beranda tetap
+   berisi layanan POKOK yang bersama-sama mencakup semua layanan (judul gabungan mis. "Service & Pemasangan
+   Pompa Air", teks menyebut cakupannya, tautan ke halaman Layanan); daftar lengkap hanya di halaman Layanan
+   (user 2026-11-11).
 4. **Galeri foto** = **VD Gallery** velocity-addons: `update_option('velocity_gallery','1')`, satu post
    `vdgallery` (slug `galeri-situs`, buat bila belum ada) dengan meta `vdgaleri` =
    `['media' => [ID lampiran...], 'gallery_use_global_options' => '1', 'slideshow_use_global_options' => '1']`,
