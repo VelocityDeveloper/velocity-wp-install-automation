@@ -32,3 +32,48 @@ binokularbot
 sogou web spider
 # JANGAN pakai pola berawalan "(compatible; " di sini: @pmFromFile LiteSpeed lalu gagal mencocokkan UA lain
 # berawalan sama (uji 16 Okt: "(compatible; SemrushBot" dan "(compatible; QlyzeBot" lolos). Lihat aturan 7700109.
+# Ditambah 13 Nov 2026 (ukur sanke 24 jam, request PHP lolos): scraper direktori/lead/monitor domain & pemindai.
+# Bot iklan kontekstual (IAS, Proximic/comScore, Sirdata, Criteo, Audigent) & media monitoring SENGAJA tidak masuk:
+# memengaruhi iklan/kontrak situs berita.
+bizdirectasiabot
+domainmetadatabot
+ibou-search
+cms-checker
+fresh-domain-watch
+cyber-asset-fetch
+visionheight.com/scan
+modatscanner
+amle-sitecheck
+halobot
+netapi/
+seltzsitemapfetcher
+kaupr/
+t2bot
+ousanbot
+webxtrendbot
+bigcrawl
+twingly
+jeviddomaincontactmonitor
+palo alto networks
+projectopsleadscanner
+recordedfuture
+pterodactylscan
+cms-scanner
+internetdata.io
+stratagy-scanner
+zcrawl
+bitsoftleadscan
+domains-distillery
+monitord-discovery
+brightedge
+neticle
+livelapbot
+nameserver-checker
+hubspot crawler
+hubspot domain check
+certstr-monitor
+kasirscaner
+newscrawler
+terncrawler
+wpbot/
+headlesschrome

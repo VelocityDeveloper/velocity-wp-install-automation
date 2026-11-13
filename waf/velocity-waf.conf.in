@@ -19,9 +19,15 @@ SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
 # catatan di sana) dan nolog: tak dihitung BFM agar IP rumahan/CGNAT pengunjung asli tak ikut diblokir CSF.
 @SEO@SecRule REQUEST_HEADERS:User-Agent "@streq mozilla/5.0 (compatible; crawler)" \
 @SEO@    "id:7700109,phase:1,t:none,t:lowercase,@AKSI429@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scraper UA generik (compatible; crawler)'"
+# Scraper/scanner tanpa identitas: UA HANYA "Mozilla/5.0 (compatible; <nama>crawler|spider|scraper|scanner[/versi])"
+# tanpa URL/kontak (TernCrawler, crawler-news, WP-Safe-Scanner, sitios-scanner…; ukur sanke 13 Nov ±7 rb request PHP/hari).
+# Bot sah selalu mencantumkan URL info (+https://…), jadi tidak kena. nolog seperti 7700109 (proxy residensial).
+@SEO@SecRule REQUEST_HEADERS:User-Agent "@rx ^mozilla/5\.0 \(compatible; [a-z0-9_.-]*(?:crawler|spider|scraper|scanner)[a-z0-9_.-]*(?:/[0-9.]+)?\)$" \
+@SEO@    "id:7700114,phase:1,t:none,t:lowercase,@AKSI429@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Scraper UA generik tanpa identitas'"
 # Crawler AI Meta: IP-nya dipakai bersama facebookexternalhit (pratinjau link FB/WA) → hanya ditolak di WAF,
 # id terpisah agar tidak dihitung Brute Force (blokir IP CSF akan mematikan pratinjau share).
-@AI@SecRule REQUEST_HEADERS:User-Agent "@contains meta-externalagent" \
+# 13 Nov: + meta-webindexer/meta-externalads (crawler indeks/iklan Meta, ±16 rb request PHP/hari lolos di sanke).
+@AI@SecRule REQUEST_HEADERS:User-Agent "@pm meta-externalagent meta-webindexer meta-externalads" \
 @AI@    "id:7700107,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI Meta (tanpa blokir IP)'"
 @AI@SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai.txt" \
 @AI@    "id:7700103,phase:1,t:none,t:lowercase,@AKSI429@,log,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Crawler AI'"
@@ -30,6 +36,13 @@ SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-jahat.txt" \
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
     "id:7700106,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Bot AI pencarian palsu (IP bukan milik OpenAI/Perplexity)',chain"
     SecRule REMOTE_ADDR "!@ipMatchFromFile @DIR@/ip-ai-pencarian.txt" "t:none"
+# Googlebot/Bingbot PALSU: UA mesin pencari dari IP di luar daftar resmi Google/Bing (scripts/velocity-waf-ip-mesin).
+# Sanke 13 Nov: ±790 request/hari dari ±300 IP (GCP 34.x, VPS) mengaku Googlebot. IP server sendiri dikecualikan
+# (alat cek ?vcek= tim memakai UA Googlebot dari IP server). Tag eksploit → dihitung BFM.
+SecRule REQUEST_HEADERS:User-Agent "@rx googlebot|bingbot|adidxbot|bingpreview" \
+    "id:7700115,phase:1,t:none,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Googlebot/Bingbot palsu (IP bukan milik Google/Microsoft)',chain"
+    SecRule REMOTE_ADDR "!@ipMatchFromFile @DIR@/ip-mesin-pencari.txt" "t:none,chain"
+        SecRule REMOTE_ADDR "!@streq %{SERVER_ADDR}" "t:none"
 # Bot AI pencarian asli tak butuh REST API/oEmbed (±1.300 request PHP/hari di detikperkara) → ditolak tanpa log:
 # nolog agar tak dihitung BFM (IP OpenAI dipakai juga untuk ChatGPT-User membuka halaman) dan tak meramaikan log.
 SecRule REQUEST_HEADERS:User-Agent "@pmFromFile @DIR@/bot-ai-pencarian.txt" \
@@ -58,6 +71,16 @@ SecRule REQUEST_FILENAME "@rx \.php$" \
 SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" \
     "id:7700111,phase:1,t:none,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - Akses PHP dengan User-Agent kosong',chain"
     SecRule REQUEST_FILENAME "@rx \.php$" "t:none,t:lowercase"
+# Tanpa UA / UA kosong ke halaman dinamis selain .php (permalink, /?s=, /?p=): sanke 13 Nov ±1.200 request/hari lolos ke PHP,
+# hampir semua scraper (mis. penyalin artikel berita lewat /feed/ lalu permalink). Dikecualikan: beranda "/" (monitor
+# uptime klien tanpa UA, mis. 36.94.26.156 → rssantaanna.com tiap 12 dtk), berkas statis, feed (pembaca RSS lama),
+# REST API, wp-cron/xmlrpc/admin-ajax, robots.txt & sitemap. nolog: tidak dihitung BFM.
+SecRule &REQUEST_HEADERS:User-Agent "@eq 0" \
+    "id:7700113,phase:1,t:none,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Halaman dinamis tanpa User-Agent',chain"
+    SecRule REQUEST_FILENAME "!@rx ^/$|(?:\.(?:css|js|mjs|map|jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|eot|otf|mp4|webm|mp3|pdf|zip|txt|xml|xsl)|/feed/?|/wp-json/.*|/(?:wp-cron|xmlrpc|admin-ajax)\.php)$" "t:none,t:urlDecodeUni,t:lowercase"
+SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*-?\s*$" \
+    "id:7700116,phase:1,t:none,@AKSI403@,nolog,noauditlog,tag:'velocity-waf',tag:'bot',msg:'Velocity WAF - Halaman dinamis dengan User-Agent kosong',chain"
+    SecRule REQUEST_FILENAME "!@rx ^/$|(?:\.(?:css|js|mjs|map|jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|eot|otf|mp4|webm|mp3|pdf|zip|txt|xml|xsl)|/feed/?|/wp-json/.*|/(?:wp-cron|xmlrpc|admin-ajax)\.php)$" "t:none,t:urlDecodeUni,t:lowercase"
 # Klien skrip (Go-http-client dkk.) ke berkas PHP selain titik masuk WordPress = probe webshell/brute force
 # (136.80.167.62 18 Okt: 3.040 request/75 dtk ke 64 domain di Farnaz). Callback sah (Duitku dkk.) lewat /wp-json/
 # atau index.php/admin-ajax.php, jadi tetap lolos. Tag eksploit → dihitung BFM (blokir IP).

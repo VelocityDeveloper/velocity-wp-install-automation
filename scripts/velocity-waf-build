@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 AKAR = Path(__file__).resolve().parent.parent / 'waf'
-DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt']
+DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt', 'ip-mesin-pencari.txt']
 
 
 def rakit(mode='deteksi', direktori='/etc/velocity-waf', seo=True, ai=True, perplexity='blokir', oai_maks=30, xmlrpc=10, login=10):

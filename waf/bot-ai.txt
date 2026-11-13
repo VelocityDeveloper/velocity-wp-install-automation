@@ -28,3 +28,11 @@ chatglm-spider
 deepseekbot
 grokbot
 cohere-ai
+elevenlabscrawler
+# Ditambah 13 Nov 2026 (ukur sanke 24 jam, request PHP lolos): crawler/indeks AI baru.
+reflectionbot
+riverbot
+tokenfoundrybot
+aiwebindex
+lhrsearchbot
+amzn-searchbot

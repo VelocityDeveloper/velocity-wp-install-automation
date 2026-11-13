@@ -16,7 +16,7 @@ from pathlib import Path
 AKAR = Path(__file__).resolve().parent.parent
 SETELAN_BERKAS = Path('/var/lib/velocity/server-waf/setelan.json')
 SETELAN_BAWAAN = {'seo': True, 'ai': True, 'perplexity': 'blokir', 'oai_maks': 30, 'xmlrpc': 10, 'login': 10, 'ip_putih': []}
-DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt']
+DATA = ['bot-jahat.txt', 'bot-seo.txt', 'bot-ai.txt', 'bot-ai-pencarian.txt', 'klien-skrip.txt', 'ip-putih.txt', 'ip-ai-pencarian.txt', 'ip-mesin-pencari.txt']
 
 REMOTE = r'''
 import base64, glob, json, os, re, shutil, subprocess, time

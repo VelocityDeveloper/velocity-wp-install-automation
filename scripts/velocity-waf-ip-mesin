@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Perbarui waf/ip-mesin-pencari.txt dari daftar IP resmi Googlebot & Bingbot.
+
+Dipakai aturan Velocity WAF 7700115: UA Googlebot/Bingbot dari IP di luar daftar ini = bot palsu (403).
+Satu sumber gagal / kosong → berkas TIDAK diubah (lebih baik daftar lama daripada Googlebot asli ikut terblokir).
+Berkas berubah → sidik WAF berubah → dashboard Server > WAF menandai "Perlu diperbarui"; pasang ulang manual.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from importlib.machinery import SourceFileLoader  # noqa: E402
+
+ipai = SourceFileLoader('velocity_waf_ip_ai', str(Path(__file__).resolve().parent / 'velocity-waf-ip-ai')).load_module()
+
+BERKAS = Path(__file__).resolve().parent.parent / 'waf' / 'ip-mesin-pencari.txt'
+G = 'https://developers.google.com/static/search/apis/ipranges/'
+SUMBER = {
+    'Googlebot': G + 'googlebot.json',
+    'Google crawler khusus (AdsBot, Inspection Tool)': G + 'special-crawlers.json',
+    'Google fetcher dipicu pengguna': G + 'user-triggered-fetchers.json',
+    'Google fetcher dipicu pengguna (Google)': G + 'user-triggered-fetchers-google.json',
+    'Bingbot': 'https://www.bing.com/toolbox/bingbot.json',
+}
+
+
+def main():
+    baris = ['# IP resmi Googlebot & Bingbot — DIBUAT OTOMATIS oleh scripts/velocity-waf-ip-mesin, jangan disunting.',
+             '# UA Googlebot/Bingbot dari IP di luar daftar ini (dan bukan IP server sendiri) = palsu (aturan 7700115).']
+    for nama, url in SUMBER.items():
+        try:
+            ip = ipai.ambil(url)
+        except Exception as e:  # noqa: BLE001
+            raise SystemExit(f'gagal ambil {nama} ({url}): {e} — berkas tidak diubah')
+        if not ip:
+            raise SystemExit(f'{nama}: daftar kosong — berkas tidak diubah')
+        baris += [f'# {nama}: {url}'] + sorted(set(ip))
+    baru = '\n'.join(baris) + '\n'
+    lama = BERKAS.read_text() if BERKAS.exists() else ''
+    if baru == lama:
+        print(f'{BERKAS.name}: tidak berubah')
+        return 0
+    BERKAS.write_text(baru)
+    print(f'{BERKAS.name}: diperbarui ({sum(1 for b in baris if not b.startswith("#"))} prefiks)')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
