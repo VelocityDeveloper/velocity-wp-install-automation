@@ -49,10 +49,18 @@ watch(jumlahHal, (n) => { if (hal.value > n) hal.value = n }) // data segar bisa
 const tab = ref(localStorage.getItem('limit-tab') === 'setting' ? 'setting' : 'monitoring')
 watch(tab, (t) => localStorage.setItem('limit-tab', t))
 
-// Monitoring: GET /api/servers/limit/pakai?server=host (agen aksi 'pakai', sampel 3 dtk, cache backend 30 dtk)
+// Monitoring: GET /api/servers/limit/pakai?server=host[&live=1] (agen aksi 'pakai'; cache backend bersama 30 dtk, live 4 dtk)
+// Mode segar: '30' (default, tiap 30 dtk) | 'live' (tiap 5 dtk, mati sendiri sesudah 15 mnt) | 'mati'. Tab tersembunyi = berhenti.
 const pakai = { data: ref(null), galat: ref(null) }
 const pakaiSegar = ref(false)
-const otomatis = ref(true)
+const MODE = { live: 5000, 30: 30000 }
+const LIVE_MAKS = 15 * 60 * 1000
+const modeSegar = ref('30')
+const liveSisa = ref(0)
+let liveSampai = 0
+let timerPakai = null
+let timerSisa = null
+const sebelum = ref({}) // {user: cpu} ukuran sebelumnya → panah naik/turun
 let nomorMinta = 0
 async function muatPakai(segar = false) {
   const host = terpilih.value?.host
@@ -60,20 +68,47 @@ async function muatPakai(segar = false) {
   const n = ++nomorMinta
   if (segar) pakaiSegar.value = true
   try {
-    const d = await minta(`/api/servers/limit/pakai?server=${encodeURIComponent(host)}${segar ? '&segar=1' : ''}`)
-    if (n === nomorMinta) { pakai.data.value = d; pakai.galat.value = null }
+    const d = await minta(`/api/servers/limit/pakai?server=${encodeURIComponent(host)}${segar ? '&segar=1' : ''}${modeSegar.value === 'live' ? '&live=1' : ''}`)
+    if (n === nomorMinta) {
+      const lama = pakai.data.value
+      if (lama?.host === d.host && lama.diambil !== d.diambil) sebelum.value = Object.fromEntries((lama.users || []).map((u) => [u.user, u.cpu]))
+      else if (lama?.host !== d.host) sebelum.value = {}
+      pakai.data.value = d; pakai.galat.value = null
+    }
   } catch (e) {
     if (n === nomorMinta) pakai.galat.value = e
   } finally {
     if (segar) pakaiSegar.value = false
   }
 }
+// setTimeout berantai (bukan setInterval): jadwal berikut dihitung sesudah jawaban datang, jadi permintaan tidak menumpuk
+function jadwalPakai() {
+  clearTimeout(timerPakai)
+  const jeda = MODE[modeSegar.value]
+  if (!jeda) return
+  timerPakai = setTimeout(async () => {
+    if (modeSegar.value === 'live' && Date.now() > liveSampai) { modeSegar.value = '30'; return }
+    if (!document.hidden) await muatPakai()
+    jadwalPakai()
+  }, jeda)
+}
+watch(modeSegar, (m) => {
+  clearInterval(timerSisa)
+  if (m === 'live') {
+    liveSampai = Date.now() + LIVE_MAKS
+    const hitung = () => { liveSisa.value = Math.max(0, Math.ceil((liveSampai - Date.now()) / 60000)) }
+    hitung(); timerSisa = setInterval(hitung, 15000)
+    muatPakai()
+  }
+  jadwalPakai()
+})
+jadwalPakai()
+onBeforeUnmount(() => { clearTimeout(timerPakai); clearInterval(timerSisa) })
 const segarPakai = () => muatPakai(true)
+const arah = (u) => { const a = sebelum.value[u.user]; return a == null ? '' : u.cpu - a >= 10 ? 'naik' : a - u.cpu >= 10 ? 'turun' : '' }
 // data milik server lain tidak ditampilkan saat pindah server
 const pk = computed(() => (pakai.data.value?.host === terpilih.value?.host ? pakai.data.value : null))
 watch(() => [terpilih.value?.host, tab.value, terpilih.value?.terpasang], () => muatPakai(), { immediate: true })
-const timerPakai = setInterval(() => { if (otomatis.value && !document.hidden) muatPakai() }, 30000)
-onBeforeUnmount(() => clearInterval(timerPakai))
 
 const cariP = ref('')
 const urutP = ref('cpu')
@@ -342,10 +377,14 @@ async function terapkan() {
                 <option value="ram">Pernah mentok RAM / OOM</option>
               </select>
               <span class="isi" />
-              <label class="pilih kecil-l"><input v-model="otomatis" type="checkbox"> Segarkan tiap 30 dtk</label>
+              <div class="tab tab-kecil" role="radiogroup" aria-label="Segarkan otomatis">
+                <button type="button" role="radio" :aria-checked="modeSegar === 'live'" :class="{ aktif: modeSegar === 'live' }" title="Ukur tiap 5 detik, berhenti sendiri sesudah 15 menit" @click="modeSegar = 'live'"><span class="titik-live" :class="{ nyala: modeSegar === 'live' }" aria-hidden="true" /> Live</button>
+                <button type="button" role="radio" :aria-checked="modeSegar === '30'" :class="{ aktif: modeSegar === '30' }" @click="modeSegar = '30'">30 dtk</button>
+                <button type="button" role="radio" :aria-checked="modeSegar === 'mati'" :class="{ aktif: modeSegar === 'mati' }" @click="modeSegar = 'mati'">Mati</button>
+              </div>
               <button type="button" class="tombol garis kecil" :disabled="pakaiSegar" @click="segarPakai"><Ikon nama="ulang" :ukuran="14" /> {{ pakaiSegar ? 'Mengukur…' : 'Ukur sekarang' }}</button>
             </div>
-            <p class="redup kecil-p">Diukur {{ waktuJam(pk.diambil) }} · CPU & IO = rata-rata {{ pk.jeda }} dtk terakhir; 100% = 1 core. Akun tanpa proses berjalan tidak tampil.</p>
+            <p class="redup kecil-p" aria-live="polite">Diukur {{ waktuJam(pk.diambil) }}<template v-if="modeSegar === 'live'"> · <b class="teks-live">Live tiap 5 dtk</b>, mati sendiri ±{{ liveSisa }} mnt lagi</template> · CPU & IO = rata-rata {{ pk.jeda }} dtk terakhir; 100% = 1 core; ▲▼ = CPU berubah ≥10 poin dari ukuran sebelumnya. Akun tanpa proses berjalan tidak tampil.</p>
 
             <div class="tabel-wadah">
               <table class="tabel">
@@ -353,7 +392,7 @@ async function terapkan() {
                 <tbody>
                   <tr v-for="u in pakaiTampil" :key="u.user">
                     <td><b>{{ u.user }}</b></td>
-                    <td class="sel-bar"><div class="bar" :class="kelasBar(u.cpu, u.cpu_max)"><i :style="{ width: lebar(u.cpu, u.cpu_max) }" /></div>{{ u.cpu }}%<small class="kecil">batas {{ u.cpu_max == null ? '∞' : `${u.cpu_max}%` }}</small></td>
+                    <td class="sel-bar"><div class="bar" :class="kelasBar(u.cpu, u.cpu_max)"><i :style="{ width: lebar(u.cpu, u.cpu_max) }" /></div>{{ u.cpu }}%<span v-if="arah(u)" class="arah" :class="arah(u)" :title="`sebelumnya ${sebelum[u.user]}%`">{{ arah(u) === 'naik' ? '▲' : '▼' }}</span><small class="kecil">batas {{ u.cpu_max == null ? '∞' : `${u.cpu_max}%` }}</small></td>
                     <td class="sel-bar"><div class="bar" :class="kelasBar(u.mem, u.mem_max)"><i :style="{ width: lebar(u.mem, u.mem_max) }" /></div>{{ mem(u.mem) }}<small class="kecil">puncak {{ mem(u.mem_peak) }} · batas {{ mem(u.mem_max) }}</small></td>
                     <td>{{ u.proses ?? '—' }}<small class="kecil">batas {{ u.proses_max ?? '∞' }}</small></td>
                     <td>{{ laju(u.io_baca) }}<small class="kecil">tulis {{ laju(u.io_tulis) }}</small></td>
@@ -497,6 +536,16 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 .tab { display: inline-flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); margin-bottom: 14px; }
 .tab button { display: inline-flex; gap: 6px; align-items: center; border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; }
 .tab button.aktif { background: var(--aksen); color: #fff; }
+.tab-kecil { margin-bottom: 0; }
+.tab-kecil button { padding: 5px 10px; font-size: 12px; }
+.titik-live { width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }
+.titik-live.nyala { background: #ff4d4f; animation: kedip 1.2s ease-in-out infinite; }
+@keyframes kedip { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .titik-live.nyala { animation: none; } }
+.teks-live { color: var(--bahaya); }
+.arah { margin-left: 4px; font-size: 11px; }
+.arah.naik { color: var(--bahaya); }
+.arah.turun { color: var(--baik); }
 .ringkas-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .ringkas-k { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--garis); border-radius: 12px; }
 .ringkas-k small { color: var(--teks-3); font-size: 12px; }

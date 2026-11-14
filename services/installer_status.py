@@ -2552,8 +2552,9 @@ def server_limit(paksa=False):
     return data
 
 
-def limit_pakai(host, paksa=False):
-    # Monitoring pemakaian per akun (agen aksi 'pakai', ±5 dtk di Sanke); per server, cache 30 dtk agar tab terbuka banyak tidak menumpuk SSH
+def limit_pakai(host, paksa=False, live=False):
+    # Monitoring pemakaian per akun (agen aksi 'pakai', ±1 dtk CPU & 11 MB di Sanke per ukur). Satu cache per server dipakai
+    # bersama semua penonton: biasa 30 dtk, live 4 dtk (sampel 2 dtk) → paling sering 1 SSH per ±5 dtk per server berapa pun tab terbuka.
     srv = next((s for s in _daftar_server() if s['host'] == host), None)
     if not srv:
         return {'error': 'server_tidak_dikenal'}
@@ -2562,8 +2563,8 @@ def limit_pakai(host, paksa=False):
         key = ssh_key_file()
         if not key:
             return {'error': 'kunci_ssh_installer_tidak_ada'}
-        return _bfm_satu(srv, key, {'aksi': 'pakai', 'jeda': 3}, 60, LIMIT_AGEN)
-    return _cache_limit.ambil('pakai:' + host, ambil, 30, paksa)
+        return _bfm_satu(srv, key, {'aksi': 'pakai', 'jeda': 2 if live else 3}, 60, LIMIT_AGEN)
+    return _cache_limit.ambil('pakai:' + host, ambil, 4 if live else 30, paksa)
 
 
 def _limit_kerja(job, srv, key, perintah):
@@ -4661,7 +4662,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/servers/limit':
                 self._send_json(server_limit('segar' in q))
             elif path == '/api/servers/limit/pakai':
-                self._send_json(limit_pakai((q.get('server') or [''])[0], 'segar' in q))
+                self._send_json(limit_pakai((q.get('server') or [''])[0], 'segar' in q, 'live' in q))
             else:
                 self._send_json(limit_job((q.get('id') or [''])[0]))
             return
