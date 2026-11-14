@@ -80,21 +80,33 @@ def override(u):
 IO = ('IOReadBandwidthMax', 'IOWriteBandwidthMax', 'IOReadIOPSMax', 'IOWriteIOPSMax')
 
 
-def slice_nyata(uid):
-    cmd = ['systemctl', 'show', 'user-%d.slice' % uid, '-p', 'CPUQuotaPerSecUSec', '-p', 'MemoryMax', '-p', 'TasksMax']
-    for k in IO:
-        cmd += ['-p', k]
-    _, o = sh(cmd, 30)
+def slice_semua(uids):
+    """{uid: properti slice} — satu `systemctl show` per 500 slice (dulu 1 proses per user: 2.330 user Sanke = 35 dtk, kini ±3 dtk)."""
     out = {}
-    for b in o.splitlines():
-        k, _, v = b.partition('=')
-        if k in IO:  # baris berulang per device: ambil batas /home ("/home 25000000")
-            dev, _, n = v.rpartition(' ')
-            if dev == '/home':
-                out[k] = n
-        elif k:
-            out[k] = v
+    uids = list(uids)
+    for i in range(0, len(uids), 500):
+        cmd = ['systemctl', 'show'] + ['user-%d.slice' % u for u in uids[i:i + 500]]
+        for k in ('Id', 'CPUQuotaPerSecUSec', 'MemoryMax', 'TasksMax') + IO:
+            cmd += ['-p', k]
+        _, o = sh(cmd, 120)
+        for blok in o.split('\n\n'):  # satu blok per unit, dipisah baris kosong
+            s = {}
+            for b in blok.splitlines():
+                k, _, v = b.partition('=')
+                if k in IO:  # baris berulang per device: ambil batas /home ("/home 25000000")
+                    dev, _, n = v.rpartition(' ')
+                    if dev == '/home':
+                        s[k] = n
+                elif k:
+                    s[k] = v
+            m = re.match(r'user-(\d+)\.slice$', s.pop('Id', ''))
+            if m:
+                out[int(m.group(1))] = s
     return out
+
+
+def slice_nyata(uid):
+    return slice_semua([uid]).get(uid, {})
 
 
 def _cpu(v):  # '1s' / '1.500000s' / '500ms' / 'infinity' → persen
@@ -183,14 +195,17 @@ def daftar_user(inf):
             return True
         return v == ('0' if kecuali else aktif.get(k))
     out = []
+    pengguna = []
     for d in sorted(glob.glob(USERS + '/*/user.conf')):
         u = d.split('/')[-2]
         try:
-            uid = pwd.getpwnam(u).pw_uid
+            pengguna.append((u, pwd.getpwnam(u).pw_uid))
         except KeyError:
             continue
+    slices = slice_semua(uid for _, uid in pengguna)
+    for u, uid in pengguna:
         conf = user_conf(u)
-        nyata = _nyata(slice_nyata(uid))
+        nyata = _nyata(slices.get(uid, {}))
         kecuali = u in inf.get('kecuali', [])
         # akun MariaDB milik user: USER dan USER_* (nama user DA tanpa '_')
         akun = akun_user(sql, u)

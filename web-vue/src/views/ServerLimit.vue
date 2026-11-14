@@ -29,6 +29,20 @@ const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const oleh = namaAkun
 
+// Daftar akun: Sanke 2.330 akun — render semua sekaligus bikin halaman berat. Cari + saring + tampil bertahap.
+const LANGKAH = 100
+const cari = ref('')
+const saring = ref('semua') // semua | belum | khusus
+const batas = ref(LANGKAH)
+const akunTersaring = computed(() => {
+  const k = cari.value.trim().toLowerCase()
+  return (terpilih.value?.users || []).filter((u) => (!k || u.user.includes(k))
+    && (saring.value === 'semua' || (saring.value === 'belum' ? !u.sesuai : u.kecuali || Object.keys(u.override || {}).length || u.kustom.length)))
+})
+const akunTampil = computed(() => akunTersaring.value.slice(0, batas.value))
+const jumlahBelum = computed(() => (terpilih.value?.users || []).filter((u) => !u.sesuai).length)
+watch(() => [cari.value, saring.value, terpilih.value?.host], () => { batas.value = LANGKAH })
+
 const PRESET = [
   { k: 'kecil', label: 'Kecil', ket: 'Situs company profile / blog ringan' },
   { k: 'sedang', label: 'Sedang', ket: 'Toko online / berita dengan trafik sedang' },
@@ -252,12 +266,21 @@ async function terapkan() {
             <button type="button" class="tombol" :disabled="berjalan || !dipilih || dipilih === terpilih.preset" @click="terapkan">Terapkan preset {{ dipilih }}</button>
           </div>
 
-          <h3 class="sub">Akun ({{ terpilih.users.length }})</h3>
+          <h3 class="sub">Akun ({{ terpilih.users.length }}<template v-if="jumlahBelum"> · {{ jumlahBelum }} belum diterapkan</template>)</h3>
+          <div class="saring-akun">
+            <input v-model="cari" type="search" placeholder="Cari user DA…" aria-label="Cari user DA">
+            <select v-model="saring" aria-label="Saring akun">
+              <option value="semua">Semua akun</option>
+              <option value="belum">Belum diterapkan</option>
+              <option value="khusus">Per akun / kustom / dikecualikan</option>
+            </select>
+            <span class="redup">{{ akunTersaring.length }} cocok</span>
+          </div>
           <div class="tabel-wadah">
             <table class="tabel">
               <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">EP</th><th scope="col">MySQL</th><th scope="col">Status</th><th scope="col">Atur</th></tr></thead>
               <tbody>
-                <tr v-for="u in terpilih.users" :key="u.user">
+                <tr v-for="u in akunTampil" :key="u.user">
                   <td><b>{{ u.user }}</b> <span v-if="u.kecuali" class="lencana abu">dikecualikan</span><span v-if="Object.keys(u.override || {}).length" class="lencana ungu" title="Limit khusus akun ini (bukan preset)">per akun</span><span v-else-if="u.kustom.length" class="lencana ungu" :title="u.kustom.join(', ')">kustom</span></td>
                   <td>{{ u.nyata.cpu == null ? 'tanpa batas' : `${u.nyata.cpu}%` }}</td>
                   <td>{{ mem(u.nyata.mem) }}</td>
@@ -274,6 +297,10 @@ async function terapkan() {
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div v-if="akunTersaring.length > batas" class="aksi">
+            <button type="button" class="tombol garis kecil" @click="batas += LANGKAH * 5">Tampilkan {{ Math.min(LANGKAH * 5, akunTersaring.length - batas) }} lagi</button>
+            <span class="redup">{{ akunTampil.length }} dari {{ akunTersaring.length }} ditampilkan</span>
           </div>
         </template>
       </section>
@@ -312,6 +339,9 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 @keyframes putar { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .putar { animation: none; } }
 .aksi-u { white-space: nowrap; }
+.saring-akun { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.saring-akun input { flex: 1 1 220px; max-width: 320px; }
+.aksi .redup { align-self: center; font-size: 13px; }
 .aksi-u .tombol + .tombol { margin-left: 6px; }
 .form-limit { display: grid; gap: 12px; }
 .form-limit .dua { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
