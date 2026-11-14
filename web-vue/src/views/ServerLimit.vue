@@ -46,7 +46,7 @@ watch(() => [cari.value, saring.value, terpilih.value?.host], () => { hal.value 
 watch(jumlahHal, (n) => { if (hal.value > n) hal.value = n }) // data segar bisa memendekkan daftar
 
 // ---- Tab: Monitoring (pemakaian nyata dari cgroup) | Setting (preset & limit per akun) ----
-const tab = ref(localStorage.getItem('limit-tab') === 'setting' ? 'setting' : 'monitoring')
+const tab = ref(['setting', 'sering'].includes(localStorage.getItem('limit-tab')) ? localStorage.getItem('limit-tab') : 'monitoring')
 watch(tab, (t) => localStorage.setItem('limit-tab', t))
 
 // Monitoring: GET /api/servers/limit/pakai?server=host[&live=1] (agen aksi 'pakai'; cache backend bersama 30 dtk, live 4 dtk)
@@ -143,6 +143,62 @@ function aturDariMonitor(user) {
   const u = terpilih.value?.users?.find((x) => x.user === user)
   if (u && !u.kecuali) bukaForm(u)
   else cari.value = user
+}
+
+// ---- Tab Sering Kena Batas: GET /api/servers/limit/sering?server=host&hari=N (rekap timer server-limit-riwayat tiap 5 mnt) ----
+const sering = { data: ref(null), galat: ref(null), memuat: ref(false) }
+const hariS = ref(7)
+const cariS = ref('')
+const urutS = ref('jam')
+const saringS = ref('semua')
+const halS = ref(1)
+async function muatSering() {
+  const host = terpilih.value?.host
+  if (!host || tab.value !== 'sering') return
+  sering.memuat.value = true
+  try {
+    const d = await minta(`/api/servers/limit/sering?server=${encodeURIComponent(host)}&hari=${hariS.value}`)
+    if (host === terpilih.value?.host) { sering.data.value = d; sering.galat.value = null }
+  } catch (e) {
+    sering.galat.value = e
+  } finally {
+    sering.memuat.value = false
+  }
+}
+watch(() => [terpilih.value?.host, tab.value, hariS.value], muatSering, { immediate: true })
+const timerSering = setInterval(() => { if (tab.value === 'sering' && !document.hidden) muatSering() }, 300000)
+onBeforeUnmount(() => clearInterval(timerSering))
+const sr = computed(() => (sering.data.value?.host === terpilih.value?.host ? sering.data.value : null))
+const limitAkun = computed(() => Object.fromEntries((terpilih.value?.users || []).map((u) => [u.user, u])))
+const URUT_S = { jam: (u) => u.jam_kena * 1e9 + u.tahan_dtk, tahan: (u) => u.tahan_dtk, ram: (u) => u.oom * 1e6 + u.mem, proses: (u) => u.proses, terakhir: (u) => u.terakhir }
+const seringTersaring = computed(() => {
+  const k = cariS.value.trim().toLowerCase()
+  const f = { semua: () => true, cpu: (u) => u.tahan_dtk >= 60 || u.mentok, ram: (u) => u.mem || u.oom, proses: (u) => u.proses }[saringS.value]
+  const urut = URUT_S[urutS.value]
+  return (sr.value?.users || []).filter((u) => (!k || u.user.includes(k)) && f(u)).sort((a, b) => urut(b) - urut(a))
+})
+const jumlahHalS = computed(() => Math.max(1, Math.ceil(seringTersaring.value.length / UKURAN)))
+const seringTampil = computed(() => seringTersaring.value.slice((halS.value - 1) * UKURAN, halS.value * UKURAN))
+watch(() => [cariS.value, urutS.value, saringS.value, hariS.value, terpilih.value?.host], () => { halS.value = 1 })
+watch(jumlahHalS, (n) => { if (halS.value > n) halS.value = n })
+// "jam kena" dibanding jam yang benar-benar terekam (riwayat baru dimulai → pembagi tidak 24×hari)
+const jamTerekam = computed(() => Math.max(1, Math.round(((sr.value?.ukur || 0) * (sr.value?.interval_mnt || 5)) / 60)))
+const cukupRiwayat = computed(() => jamTerekam.value >= 6) // < 6 jam: persentase belum mewakili, hanya OOM/RAM yang ditandai
+const parah = (u) => (u.oom || (cukupRiwayat.value && u.jam_kena / jamTerekam.value >= 0.5) ? 'merah'
+  : u.mem || (cukupRiwayat.value && u.jam_kena / jamTerekam.value >= 0.2) ? 'kuning' : '')
+const hitS = computed(() => {
+  const d = sr.value?.users || []
+  return { total: d.length, sering: d.filter((u) => parah(u) === 'merah').length, ram: d.filter((u) => u.mem || u.oom).length, proses: d.filter((u) => u.proses).length }
+})
+const maksHarian = (u) => Math.max(1, ...u.harian)
+const tglPendek = (t) => new Date(`${t}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+const waktuLengkap = (t) => (t ? new Date(t * 1000).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
+const labelLimit = (user) => {
+  const u = limitAkun.value[user]
+  if (!u) return ''
+  if (u.kecuali) return 'dikecualikan'
+  if (Object.keys(u.override || {}).length) return 'per akun'
+  return u.kustom.length ? 'kustom' : `preset ${terpilih.value?.preset || ''}`
 }
 
 const PRESET = [
@@ -341,6 +397,7 @@ async function terapkan() {
         </div>
         <div class="tab" role="tablist" aria-label="Bagian Limit Resource">
           <button type="button" role="tab" :aria-selected="tab === 'monitoring'" :class="{ aktif: tab === 'monitoring' }" @click="tab = 'monitoring'"><Ikon nama="pantau" :ukuran="14" /> Monitoring</button>
+          <button type="button" role="tab" :aria-selected="tab === 'sering'" :class="{ aktif: tab === 'sering' }" @click="tab = 'sering'"><Ikon nama="peringatan" :ukuran="14" /> Sering Kena Batas</button>
           <button type="button" role="tab" :aria-selected="tab === 'setting'" :class="{ aktif: tab === 'setting' }" @click="tab = 'setting'"><Ikon nama="sunting" :ukuran="14" /> Setting</button>
         </div>
         <p v-if="!terpilih.ok" class="pesan-status bahaya">Tidak bisa dibaca: {{ pesanGalat(terpilih.error) }} {{ terpilih.pesan || '' }}</p>
@@ -417,6 +474,76 @@ async function terapkan() {
                 <button type="button" class="tombol garis kecil" :disabled="halP <= 1" @click="halP--">Sebelumnya</button>
                 <button type="button" class="tombol garis kecil" :disabled="halP >= jumlahHalP" @click="halP++">Berikutnya</button>
                 <button type="button" class="tombol garis kecil" :disabled="halP >= jumlahHalP" @click="halP = jumlahHalP">Akhir</button>
+              </span>
+            </div>
+          </template>
+        </template>
+
+        <!-- ===== Sering kena batas (riwayat) ===== -->
+        <template v-else-if="tab === 'sering'">
+          <p v-if="!sr && sering.galat.value" class="pesan-status bahaya">Gagal membaca riwayat: {{ pesanGalat(sering.galat.value.message) }}</p>
+          <p v-else-if="!sr" class="redup" role="status">Membaca riwayat kena batas…</p>
+          <template v-else>
+            <div class="ringkas-grid">
+              <div class="ringkas-k"><small>Akun pernah kena batas</small><b>{{ hitS.total }}</b><span class="redup">dari {{ sr.akun_terukur }} akun aktif terukur</span></div>
+              <div class="ringkas-k" :class="{ bahaya: hitS.sering }"><small>Sangat sering (≥50% jam / OOM)</small><b>{{ hitS.sering }}</b><span class="redup">kandidat naik limit / cek situs</span></div>
+              <div class="ringkas-k" :class="{ bahaya: hitS.ram }"><small>Kena batas RAM / OOM</small><b>{{ hitS.ram }}</b><span class="redup">akun</span></div>
+              <div class="ringkas-k" :class="{ waspada: hitS.proses }"><small>Kena batas proses</small><b>{{ hitS.proses }}</b><span class="redup">akun</span></div>
+            </div>
+
+            <div class="saring-akun">
+              <input v-model="cariS" type="search" placeholder="Cari user DA…" aria-label="Cari user DA (riwayat)">
+              <select v-model="urutS" aria-label="Urutkan riwayat">
+                <option value="jam">Urut paling sering</option>
+                <option value="tahan">Urut lama CPU ditahan</option>
+                <option value="ram">Urut kena RAM / OOM</option>
+                <option value="proses">Urut kena batas proses</option>
+                <option value="terakhir">Urut terakhir kena</option>
+              </select>
+              <select v-model="saringS" aria-label="Saring riwayat">
+                <option value="semua">Semua batas</option>
+                <option value="cpu">CPU</option>
+                <option value="ram">RAM / OOM</option>
+                <option value="proses">Proses</option>
+              </select>
+              <span class="isi" />
+              <div class="tab tab-kecil" role="radiogroup" aria-label="Rentang riwayat">
+                <button v-for="h in [1, 7, 30]" :key="h" type="button" role="radio" :aria-checked="hariS === h" :class="{ aktif: hariS === h }" @click="hariS = h">{{ h === 1 ? 'Hari ini' : `${h} hari` }}</button>
+              </div>
+            </div>
+            <p class="redup kecil-p">Dicatat tiap {{ sr.interval_mnt }} menit sejak {{ sr.mulai ? tglPendek(sr.mulai) : '—' }} ({{ sr.ukur }} ukuran ≈ {{ jamTerekam }} jam terekam di rentang ini). <b>Jam kena</b> = jumlah jam yang akun itu menyentuh batas CPU, RAM, atau proses. Grafik kecil = lama CPU ditahan per hari.</p>
+            <p v-if="!cukupRiwayat" class="pesan-status waspada">Riwayat baru {{ jamTerekam }} jam — label "sangat sering" baru dihitung sesudah 6 jam terekam; makin lama makin akurat.</p>
+
+            <div class="tabel-wadah">
+              <table class="tabel">
+                <thead><tr><th scope="col">User</th><th scope="col">Jam kena</th><th scope="col">CPU ditahan</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">Puncak</th><th scope="col">Terakhir kena</th><th scope="col" /></tr></thead>
+                <tbody>
+                  <tr v-for="u in seringTampil" :key="u.user">
+                    <td><b>{{ u.user }}</b><small class="kecil">{{ labelLimit(u.user) }}</small></td>
+                    <td><span class="lencana" :class="parah(u) === 'merah' ? 'merah' : parah(u) === 'kuning' ? 'kuning' : 'abu'">{{ u.jam_kena }} jam</span><small class="kecil">{{ persen(u.jam_kena, jamTerekam) }}% · {{ u.hari_kena }} hari</small></td>
+                    <td>
+                      <div class="spark" :title="sr.tanggal.map((t, i) => `${tglPendek(t)}: ${durasi(u.harian[i])}`).join('\n')" aria-hidden="true">
+                        <i v-for="(v, i) in u.harian" :key="i" :style="{ height: `${Math.max(v ? 8 : 2, Math.round((v / maksHarian(u)) * 100))}%` }" :class="{ nol: !v }" />
+                      </div>
+                      {{ durasi(u.tahan_dtk) }}<small class="kecil">{{ u.mentok }}× mentok saat diukur</small>
+                    </td>
+                    <td><span v-if="u.oom" class="lencana merah">OOM {{ u.oom }}</span><span v-if="u.mem" class="lencana kuning">{{ u.mem }}×</span><span v-if="!u.oom && !u.mem" class="redup">—</span></td>
+                    <td><span v-if="u.proses" class="lencana kuning">{{ u.proses }}×</span><span v-else class="redup">—</span></td>
+                    <td>CPU {{ u.cpu_puncak }}%<small class="kecil">RAM {{ u.mem_puncak }}% batas</small></td>
+                    <td>{{ waktuLengkap(u.terakhir) }}</td>
+                    <td><button type="button" class="tombol garis kecil" @click="aturDariMonitor(u.user)">Atur</button></td>
+                  </tr>
+                  <tr v-if="!seringTersaring.length"><td colspan="8" class="redup">{{ sr.users.length ? 'Tidak ada akun yang cocok.' : 'Belum ada akun yang kena batas di rentang ini.' }}</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="seringTersaring.length > UKURAN" class="paginasi">
+              <span class="redup">{{ (halS - 1) * UKURAN + 1 }}–{{ Math.min(halS * UKURAN, seringTersaring.length) }} dari {{ seringTersaring.length }} akun · halaman {{ halS }}/{{ jumlahHalS }}</span>
+              <span>
+                <button type="button" class="tombol garis kecil" :disabled="halS <= 1" @click="halS = 1">Awal</button>
+                <button type="button" class="tombol garis kecil" :disabled="halS <= 1" @click="halS--">Sebelumnya</button>
+                <button type="button" class="tombol garis kecil" :disabled="halS >= jumlahHalS" @click="halS++">Berikutnya</button>
+                <button type="button" class="tombol garis kecil" :disabled="halS >= jumlahHalS" @click="halS = jumlahHalS">Akhir</button>
               </span>
             </div>
           </template>
@@ -536,6 +663,9 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 .tab { display: inline-flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); margin-bottom: 14px; }
 .tab button { display: inline-flex; gap: 6px; align-items: center; border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; }
 .tab button.aktif { background: var(--aksen); color: #fff; }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 22px; width: 90px; margin-bottom: 4px; }
+.spark i { flex: 1; min-width: 2px; background: var(--bahaya); border-radius: 2px 2px 0 0; opacity: .8; }
+.spark i.nol { background: var(--garis); opacity: 1; }
 .tab-kecil { margin-bottom: 0; }
 .tab-kecil button { padding: 5px 10px; font-size: 12px; }
 .titik-live { width: 8px; height: 8px; border-radius: 50%; background: var(--teks-3); }

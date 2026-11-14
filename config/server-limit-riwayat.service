@@ -1,0 +1,8 @@
+[Unit]
+Description=Catat akun yang kena batas Limit Resource VelocityGuard (tab Sering Kena Batas di /server/limit)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/velocity-wp-install-automation/scripts/server-limit-riwayat
+TimeoutStartSec=120
+Nice=10

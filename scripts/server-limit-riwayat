@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Riwayat akun yang kena batas Limit Resource VelocityGuard (timer server-limit-riwayat, tiap 5 menit).
+
+Tiap server DirectAdmin non-CloudLinux yang memakai velocity-cg diukur lewat agen limit aksi 'pakai'
+(scripts/server_limit_agent.py, hanya baca cgroup v2, ±1 dtk CPU per ukur di Sanke). Hitungan cgroup bersifat kumulatif
+sejak slice user aktif dan hilang saat slice mati, jadi yang disimpan = SELISIH terhadap ukuran sebelumnya (state.json):
+- tahan_us : waktu CPU ditahan (cpu.stat throttled_usec) → akun mentok batas CPU
+- mem      : memory.events max (menyentuh batas RAM, reclaim paksa) · oom: memory.events oom_kill (proses dimatikan)
+- proses   : pids.events max (fork ditolak karena batas proses)
+- mentok   : jumlah ukuran yang sedang ditahan CPU saat sampel 2 dtk
+Slice baru (tak ada di state padahal server sudah pernah diukur) dihitung penuh; nilai turun = slice dibuat ulang.
+Rekap harian per server: /var/lib/velocity/server-limit/kena/<host>/<YYYY-MM-DD>.json, disimpan 35 hari.
+Dibaca GET /api/servers/limit/sering (installer_status.limit_sering) untuk tab "Sering Kena Batas" di /server/limit.
+"""
+import fcntl
+import json
+import sys
+import threading
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'services'))
+import installer_status as ist  # noqa: E402
+
+DIR = Path('/var/lib/velocity/server-limit/kena')
+STATE = DIR / 'state.json'
+SIMPAN_HARI = 35
+LEWATI_DTK = 6 * 3600  # server tak didukung (CloudLinux/bukan DA/velocity-cg belum terpasang) dicek ulang tiap 6 jam
+
+
+def _tulis(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, separators=(',', ':')))
+    tmp.replace(path)
+
+
+def _baca(path, bawaan):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return bawaan
+
+
+def rekam(host, hasil, state, sekarang):
+    lama = state.get(host, {}).get('users')
+    pertama = lama is None
+    lama = lama or {}
+    baru = {}
+    tanggal = time.strftime('%Y-%m-%d', time.localtime(sekarang))
+    jam = time.localtime(sekarang).tm_hour
+    f = DIR / host / (tanggal + '.json')
+    hari = _baca(f, {'host': host, 'name': hasil.get('name'), 'tanggal': tanggal, 'ukur': 0, 'users': {}})
+    hari['ukur'] += 1
+    hari['terakhir'] = sekarang
+    for u in hasil.get('users') or []:
+        n = {'tahan_us': u.get('cpu_tahan_us', 0), 'mem': u.get('mem_kena', 0), 'oom': u.get('oom', 0), 'proses': u.get('proses_kena', 0)}
+        baru[u['user']] = n
+        p = lama.get(u['user'])
+        if p is None:
+            d = {k: 0 for k in n} if pertama else dict(n)  # ukuran pertama server = patokan; slice baru = dihitung penuh
+        else:
+            d = {k: (v - p.get(k, 0)) if v >= p.get(k, 0) else v for k, v in n.items()}  # turun = slice dibuat ulang
+        mentok = 1 if u.get('cpu_kena') else 0
+        r = hari['users'].setdefault(u['user'], {'ukur': 0, 'tahan_us': 0, 'mem': 0, 'oom': 0, 'proses': 0, 'mentok': 0,
+                                                  'cpu_puncak': 0, 'mem_puncak': 0, 'jam': [], 'terakhir': 0})
+        r['ukur'] += 1
+        for k in ('tahan_us', 'mem', 'oom', 'proses'):
+            r[k] += d[k]
+        r['mentok'] += mentok
+        r['cpu_puncak'] = max(r['cpu_puncak'], u.get('cpu') or 0)
+        if u.get('mem') and u.get('mem_max'):
+            r['mem_puncak'] = max(r['mem_puncak'], round(u['mem'] * 100 / u['mem_max']))
+        r['cpu_max'] = u.get('cpu_max')
+        if d['tahan_us'] >= 1e6 or d['mem'] or d['oom'] or d['proses'] or mentok:
+            r['terakhir'] = sekarang
+            if jam not in r['jam']:
+                r['jam'].append(jam)
+    _tulis(f, hari)
+    state[host] = {'users': baru, 't': sekarang}
+
+
+def bersihkan(sekarang):
+    batas = time.strftime('%Y-%m-%d', time.localtime(sekarang - SIMPAN_HARI * 86400))
+    for f in DIR.glob('*/*.json'):
+        if f.stem < batas:
+            f.unlink(missing_ok=True)
+
+
+def main():
+    key = ist.ssh_key_file()
+    if not key:
+        sys.exit('kunci SSH installer tidak ada')
+    DIR.mkdir(parents=True, exist_ok=True)
+    with open(DIR / '.kunci', 'w') as kunci:
+        try:
+            fcntl.flock(kunci, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # putaran sebelumnya masih jalan
+        state = _baca(STATE, {})
+        lewati = state.setdefault('_lewati', {})
+        sekarang = int(time.time())
+        servers = [s for s in ist._daftar_server() if lewati.get(s['host'], 0) < sekarang]
+        hasil = [None] * len(servers)
+
+        def kerja(i):
+            hasil[i] = ist._bfm_satu(servers[i], key, {'aksi': 'pakai', 'jeda': 2}, 60, ist.LIMIT_AGEN)
+        utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(servers))]
+        for t in utas:
+            t.start()
+        for t in utas:
+            t.join(70)
+        for s, h in zip(servers, hasil):
+            if not h:
+                continue
+            if h.get('ok') and h.get('didukung') is False:
+                lewati[s['host']] = sekarang + LEWATI_DTK
+            elif h.get('ok') and h.get('didukung'):
+                rekam(s['host'], h, state, int(h.get('diambil') or sekarang))
+            # gagal SSH/timeout: state lama dibiarkan, selisih dihitung di putaran berikutnya
+        _tulis(STATE, state)
+        bersihkan(sekarang)
+
+
+if __name__ == '__main__':
+    main()

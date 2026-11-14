@@ -1,0 +1,9 @@
+[Unit]
+Description=Catat akun yang kena batas Limit Resource tiap 5 menit
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*:2/5
+
+[Install]
+WantedBy=timers.target

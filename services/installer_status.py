@@ -2567,6 +2567,48 @@ def limit_pakai(host, paksa=False, live=False):
     return _cache_limit.ambil('pakai:' + host, ambil, 4 if live else 30, paksa)
 
 
+LIMIT_KENA_DIR = Path('/var/lib/velocity/server-limit/kena')
+
+
+def limit_sering(host, hari='7'):
+    # Rekap akun yang kena batas dari rekap harian timer server-limit-riwayat (tiap 5 mnt). Hanya baca berkas lokal.
+    if not any(s['host'] == host for s in _daftar_server()):
+        return {'error': 'server_tidak_dikenal'}
+    try:
+        hari = min(max(int(hari), 1), 35)
+    except ValueError:
+        hari = 7
+    sekarang = time.time()
+    tanggal = [time.strftime('%Y-%m-%d', time.localtime(sekarang - i * 86400)) for i in range(hari - 1, -1, -1)]
+    tersedia = sorted(f.stem for f in (LIMIT_KENA_DIR / host).glob('*.json'))
+    users, ukur = {}, 0
+    for i, tg in enumerate(tanggal):
+        try:
+            d = json.loads((LIMIT_KENA_DIR / host / f'{tg}.json').read_text())
+        except (OSError, ValueError):
+            continue
+        ukur += d.get('ukur', 0)
+        for u, r in (d.get('users') or {}).items():
+            kena = r['tahan_us'] >= 1e6 or r['mem'] or r['oom'] or r['proses'] or r['mentok']
+            a = users.setdefault(u, {'user': u, 'tahan_dtk': 0, 'mem': 0, 'oom': 0, 'proses': 0, 'mentok': 0, 'ukur': 0,
+                                     'hari_kena': 0, 'jam_kena': 0, 'cpu_puncak': 0, 'mem_puncak': 0, 'terakhir': 0,
+                                     'harian': [0] * hari, 'cpu_max': None})
+            a['tahan_dtk'] += r['tahan_us'] / 1e6
+            for k in ('mem', 'oom', 'proses', 'mentok', 'ukur'):
+                a[k] += r.get(k, 0)
+            a['hari_kena'] += 1 if kena else 0
+            a['jam_kena'] += len(r.get('jam') or [])
+            a['cpu_puncak'] = max(a['cpu_puncak'], r.get('cpu_puncak', 0))
+            a['mem_puncak'] = max(a['mem_puncak'], r.get('mem_puncak', 0))
+            a['terakhir'] = max(a['terakhir'], r.get('terakhir', 0))
+            a['harian'][i] = round(r['tahan_us'] / 1e6)
+            a['cpu_max'] = r.get('cpu_max', a['cpu_max'])
+    daftar = [dict(a, tahan_dtk=round(a['tahan_dtk'])) for a in users.values() if a['jam_kena'] or a['tahan_dtk'] >= 60]
+    daftar.sort(key=lambda a: (-a['jam_kena'], -a['tahan_dtk']))
+    return {'host': host, 'hari': hari, 'tanggal': tanggal, 'ukur': ukur, 'mulai': tersedia[0] if tersedia else None,
+            'interval_mnt': 5, 'akun_terukur': len(users), 'users': daftar}
+
+
 def _limit_kerja(job, srv, key, perintah):
     hasil = _bfm_satu(srv, key, perintah, 1800, LIMIT_AGEN)  # > agen: tar 120 + --semua 300 + rollback per user
     job.update(status='selesai' if hasil.get('ok') else 'gagal', selesai=int(time.time()), hasil=hasil)
@@ -4654,7 +4696,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json(server_cms.ringkasan())
             return
-        if path in ('/api/servers/limit', '/api/servers/limit/job', '/api/servers/limit/pakai'):
+        if path in ('/api/servers/limit', '/api/servers/limit/job', '/api/servers/limit/pakai', '/api/servers/limit/sering'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
@@ -4663,6 +4705,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(server_limit('segar' in q))
             elif path == '/api/servers/limit/pakai':
                 self._send_json(limit_pakai((q.get('server') or [''])[0], 'segar' in q, 'live' in q))
+            elif path == '/api/servers/limit/sering':
+                self._send_json(limit_sering((q.get('server') or [''])[0], (q.get('hari') or ['7'])[0]))
             else:
                 self._send_json(limit_job((q.get('id') or [''])[0]))
             return

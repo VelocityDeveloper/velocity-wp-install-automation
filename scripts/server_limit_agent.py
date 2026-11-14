@@ -520,7 +520,7 @@ def pakai(p):
         s0 = a.get(uid, s)
         users.append({
             'user': u, 'cpu': round((s['cpu_us'] - s0['cpu_us']) / dt / 10000, 1), 'cpu_max': s['cpu_max'],
-            'cpu_kena': s['throttle_n'] - s0['throttle_n'], 'cpu_kena_total': s['throttle_n'], 'cpu_tahan_dtk': round(s['throttle_us'] / 1e6),
+            'cpu_kena': s['throttle_n'] - s0['throttle_n'], 'cpu_kena_total': s['throttle_n'], 'cpu_tahan_dtk': round(s['throttle_us'] / 1e6), 'cpu_tahan_us': s['throttle_us'],
             'mem': s['mem'], 'mem_peak': s['mem_peak'], 'mem_max': s['mem_max'], 'mem_kena': s['mem_kena'], 'oom': s['oom'],
             'proses': s['proses'], 'proses_max': s['proses_max'], 'proses_kena': s['proses_kena'],
             'io_baca': max(0, round((s['rb'] - s0['rb']) / dt)), 'io_tulis': max(0, round((s['wb'] - s0['wb']) / dt)),
