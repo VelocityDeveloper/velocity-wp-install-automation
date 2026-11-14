@@ -1052,6 +1052,10 @@ TANDA_DB_IOC = [('VD.DB.LocaleCache', 'Database: payload wp-locale-perf (opsi/cr
                 ('VD.DB.TriggerAdmin', 'Database: trigger MySQL pembuat admin', 'virus'),
                 ('VD.DB.WLHOpsi', 'Database: konfigurasi botnet WLH (opsi wlh_* / wp_<hex24> tersamar)', 'virus')]
 JENIS_IOC = {'opsi': 0, 'trigger': 1, 'wlh': 2}
+# Pecahan payload wp-locale-perf (_<hex20>, ±15 KB base64, 3 isi berulang) yang tertinggal sesudah opsi utama dihapus.
+# Tanpa tanda %: dipakai juga di dalam string berformat sql_ioc.
+LC_SISA = ("option_name REGEXP '^_[0-9a-f]{20}$' AND LENGTH(option_value) BETWEEN 4000 AND 65000 "
+           "AND option_value REGEXP '^[A-Za-z0-9+/=]+$'")
 
 # Kasino massal per penulis (Fahmi K 30 Okt: yayasan3 10.278, mitrame1 505, ponpesro 365 pos kasino multibahasa oleh admin
 # ID1 lewat app password PBN; tanggal pos dimundurkan → pakai juga post_modified). 1 temuan per penulis, bukan per pos.
@@ -1072,11 +1076,17 @@ def sql_massal(p, status="'publish','future','draft','pending','private'"):
 
 
 def sql_ioc(p):
-    return ("SELECT 'opsi', option_name, LEFT(option_value, 200) FROM `%soptions` WHERE option_name IN "
+    return (("SELECT 'opsi', option_name, LEFT(option_value, 200) FROM `%soptions` WHERE option_name IN "
             "('wp_user_scopes_crc32','_wp_user_scopes_crc32','wp_locale_cache_bootstrap','_wp_locale_cache_bootstrap',"
             "'ah_purge_hack_admins_report') OR (option_name = 'cron' AND option_value LIKE '%%wp_locale_cache_reconcile%%') "
             # Peta penanaman ulang (wp_secure_backup_seed_targets, wp_plugin_helper_seed_targets): JSON seeders/wires
             "OR (option_name LIKE '%%\\_seed\\_targets' AND option_value LIKE '%%\"seeders\"%%') "
+            # Sisa sesudah opsi utama dihapus (platmerah.net 14 Nov): entri plugin hantu + pecahan payload _<hex20>
+            "OR (option_name = 'active_plugins' AND (option_value LIKE '%%wp-locale-perf/%%' "
+            "OR option_value LIKE '%%widget-compat-helper/%%')) "
+            "UNION ALL SELECT 'opsi', 'pecahan_hex20', LEFT(CONCAT(COUNT(*), ' pecahan: ', "
+            "GROUP_CONCAT(option_name ORDER BY option_name SEPARATOR ' ')), 200) FROM `%soptions` WHERE " + LC_SISA +
+            " HAVING COUNT(*) >= 3 "
             "UNION ALL SELECT 'trigger', TRIGGER_NAME, LEFT(ACTION_STATEMENT, 200) FROM information_schema.TRIGGERS "
             "WHERE TRIGGER_SCHEMA = DATABASE() AND ACTION_STATEMENT LIKE '%%INSERT%%' "
             "AND (ACTION_STATEMENT LIKE '%%users`%%' OR ACTION_STATEMENT LIKE '%%capabilities%%') "
@@ -1085,7 +1095,7 @@ def sql_ioc(p):
             "FROM `%soptions` WHERE option_name LIKE 'wlh\\_%%' OR option_name REGEXP '^wp_[0-9a-f]{24}$' HAVING COUNT(*) >= 2 "
             # cron WLH yang tertinggal tanpa opsi (ponpes 2 Nov: wlh_health_event / jadwal wlh_15min)
             "UNION ALL SELECT 'wlh', 'cron', 'cron wlh_health_event' FROM `%soptions` WHERE option_name = 'cron' "
-            "AND option_value LIKE '%%wlh\\_health\\_event%%'" % (p, p, p))
+            "AND option_value LIKE '%%wlh\\_health\\_event%%'") % (p, p, p, p))
 
 
 def sql_admin(p):
@@ -1891,6 +1901,14 @@ def bersihkan_lc(k, pr, akar, h, oleh, lap):
     if any(RE_LC_UTAMA.match(b[0]) for b in baris):
         syarat = '%s OR %s' % (LC_OPSI, LC_ACAK)
         baris = mysql_baris(k, sql + syarat)
+    else:
+        # Opsi utama sudah hilang (dibersihkan manual) tapi pecahan tertinggal: hapus hanya yang berbentuk payload,
+        # dan hanya bila ≥3 pecahan atau plugin hantu wp-locale-perf masih tercatat aktif (platmerah.net 14 Nov)
+        n = mysql_baris(k, "SELECT (SELECT COUNT(*) FROM `{p}options` WHERE {s}), (SELECT COUNT(*) FROM `{p}options` "
+                           "WHERE option_name = 'active_plugins' AND option_value LIKE '%wp-locale-perf/%')".format(p=pr, s=LC_SISA))
+        if n and (int(n[0][0]) >= 3 or (int(n[0][0]) and n[0][1] != b'0')):
+            syarat = '%s OR (%s)' % (LC_OPSI, LC_SISA)
+            baris = mysql_baris(k, sql + syarat)
     # sha sama dengan temuan scan (LEFT 200); pecahan acak tidak pernah jadi temuan
     sha = {b[0].decode(): hashlib.sha256(b[1] if len(b) > 1 else b'').hexdigest() for b in baris if not RE_LC_ACAK.match(b[0])}
     if baris:

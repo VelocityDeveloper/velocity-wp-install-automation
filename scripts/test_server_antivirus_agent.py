@@ -146,7 +146,7 @@ for nama, harap in ((b'auto-bootstrap', ['VD.DB.AppPasswordPeretas']), (b'conten
 assert ag.admin_siluman('wpm_0dd1286a', 'audit@wp.local', 500)[0][0] == 'VD.DB.AdminSiluman'
 assert ag.admin_siluman('orion15570', 'orion15570@www.smpn1gbawai.com', 500)[0][0] == 'VD.DB.AdminSiluman'
 assert ag.admin_siluman('budi', 'budi2024@www.contoh.com', 500) is None and ag.admin_siluman('wpm_admin', 'a@contoh.com', 3) is None
-assert "wlh\\_health\\_event" in ag.sql_ioc('wp_') and ag.sql_ioc('wp_').count('`wp_options`') == 3
+assert "wlh\\_health\\_event" in ag.sql_ioc('wp_') and ag.sql_ioc('wp_').count('`wp_options`') == 4
 tanda_f = lambda nama, isi: {t['id'] for t in ag.periksa('/home/u/domains/d/public_html/' + nama, ag.ekstensi(os.path.basename(nama)), isi)}
 PH = (b"<?php\n/*\nPlugin Name: Site Performance Helper\nDescription: Optimizes search engine visibility and rankings.\n*/\n"
       b"define('WPM_ADMIN', base64_decode('d3BtXzcwNWZmZDNi'));\nadd_action('wp_loaded', 'wpm_ens_admin_36c6a2ad');")
