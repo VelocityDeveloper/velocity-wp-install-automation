@@ -14,6 +14,7 @@ Harus tetap jalan di Python 3.6. Aksi:
 - terapkan {preset}: cadangan → tulis preset → velocity-cg-default --semua → verifikasi slice; gagal → kembalikan.
 - atur_user {user, nilai}: override per akun /etc/velocity-cg/user/USER (menang atas preset; nilai None = kembali ke preset):
   cadangan → tulis override → velocity-cg-default USER → verifikasi; gagal → kembalikan.
+- pakai {jeda} (baca): pemakaian nyata per akun aktif dari /sys/fs/cgroup/user.slice (CPU %, RAM, proses, IO, kena batas).
 """
 import base64
 import fcntl
@@ -431,7 +432,111 @@ def atur_user(p):
                                                                   'baris': next((x for x in daftar_user(info() or inf) if x['user'] == u), None)}}
 
 
-AKSI = {'status': status, 'terapkan': terapkan, 'atur_user': atur_user}
+CG_USER = '/sys/fs/cgroup/user.slice'
+
+
+def _baca(f):
+    try:
+        with open(f) as h:
+            return h.read()
+    except OSError:
+        return ''
+
+
+def _kv(teks):  # "kunci nilai" per baris → {kunci: int}
+    out = {}
+    for b in teks.splitlines():
+        k, _, v = b.partition(' ')
+        if v.strip().isdigit():
+            out[k] = int(v)
+    return out
+
+
+def _int(teks):
+    t = teks.strip()
+    return int(t) if t.isdigit() else None  # 'max' = tanpa batas
+
+
+def _dev_home():  # "MAJ:MIN" perangkat /home (io.stat & batas IO hanya dihitung di sini, sama seperti slice_nyata)
+    try:
+        st = os.stat('/home')
+        return '%d:%d' % (os.major(st.st_dev), os.minor(st.st_dev))
+    except OSError:
+        return ''
+
+
+def _cuplik(dev):  # {uid: angka kumulatif + batas} semua slice user yang sedang aktif (punya proses)
+    out = {}
+    for d in glob.glob(CG_USER + '/user-*.slice'):
+        m = re.search(r'user-(\d+)\.slice$', d)
+        if not m:
+            continue
+        cpu = _kv(_baca(d + '/cpu.stat'))
+        ev = _kv(_baca(d + '/memory.events'))
+        io = {}
+        for b in _baca(d + '/io.stat').splitlines():
+            if b.startswith(dev + ' '):
+                io = {k: int(v) for k, _, v in (x.partition('=') for x in b.split()[1:]) if v.isdigit()}
+        cmax = _baca(d + '/cpu.max').split()
+        out[int(m.group(1))] = {
+            'cpu_us': cpu.get('usage_usec', 0), 'throttle_n': cpu.get('nr_throttled', 0), 'throttle_us': cpu.get('throttled_usec', 0),
+            'mem': _int(_baca(d + '/memory.current')), 'mem_peak': _int(_baca(d + '/memory.peak')),
+            'mem_max': _int(_baca(d + '/memory.max')), 'mem_kena': ev.get('max', 0), 'oom': ev.get('oom_kill', 0),
+            'proses': _int(_baca(d + '/pids.current')), 'proses_max': _int(_baca(d + '/pids.max')),
+            'proses_kena': _kv(_baca(d + '/pids.events')).get('max', 0),
+            'rb': io.get('rbytes', 0), 'wb': io.get('wbytes', 0),
+            'cpu_max': round(int(cmax[0]) * 100 / int(cmax[1])) if len(cmax) == 2 and cmax[0].isdigit() else None,
+        }
+    return out
+
+
+def pakai(p):
+    """Pemakaian nyata per akun DA dari cgroup v2: dua cuplikan berjarak `jeda` detik → CPU % & IO B/dtk; sisanya nilai saat ini
+    dan hitungan 'kena batas' kumulatif sejak slice aktif (slice hilang saat akun tanpa proses → hitungan mulai dari 0)."""
+    alasan = didukung()
+    if alasan:
+        return {'ok': True, 'didukung': False, 'alasan': alasan}
+    if not os.path.isdir(CG_USER):
+        return {'ok': False, 'error': 'cgroup_v2_tidak_ada'}
+    jeda = min(max(float(p.get('jeda') or 3), 1), 10)
+    nama = {}
+    for d in glob.glob(USERS + '/*/user.conf'):
+        u = d.split('/')[-2]
+        try:
+            nama[pwd.getpwnam(u).pw_uid] = u
+        except KeyError:
+            pass
+    dev = _dev_home()
+    a = _cuplik(dev)
+    t0 = time.time()
+    time.sleep(jeda)
+    b = _cuplik(dev)
+    dt = time.time() - t0
+    users = []
+    for uid, s in b.items():
+        u = nama.get(uid)
+        if not u:
+            continue
+        s0 = a.get(uid, s)
+        users.append({
+            'user': u, 'cpu': round((s['cpu_us'] - s0['cpu_us']) / dt / 10000, 1), 'cpu_max': s['cpu_max'],
+            'cpu_kena': s['throttle_n'] - s0['throttle_n'], 'cpu_kena_total': s['throttle_n'], 'cpu_tahan_dtk': round(s['throttle_us'] / 1e6),
+            'mem': s['mem'], 'mem_peak': s['mem_peak'], 'mem_max': s['mem_max'], 'mem_kena': s['mem_kena'], 'oom': s['oom'],
+            'proses': s['proses'], 'proses_max': s['proses_max'], 'proses_kena': s['proses_kena'],
+            'io_baca': max(0, round((s['rb'] - s0['rb']) / dt)), 'io_tulis': max(0, round((s['wb'] - s0['wb']) / dt)),
+        })
+    users.sort(key=lambda x: (-x['cpu'], -(x['mem'] or 0)))
+    try:
+        load = [float(x) for x in open('/proc/loadavg').read().split()[:3]]
+    except (OSError, ValueError):
+        load = []
+    mi = _kv(re.sub(r':\s+', ' ', re.sub(r' kB', '', _baca('/proc/meminfo'))))
+    return {'ok': True, 'didukung': True, 'diambil': int(time.time()), 'jeda': round(dt, 1), 'akun_total': len(nama),
+            'load': load, 'cpu_inti': os.cpu_count(), 'ram_total': mi.get('MemTotal', 0) * 1024,
+            'ram_tersedia': mi.get('MemAvailable', 0) * 1024, 'users': users}
+
+
+AKSI = {'status': status, 'terapkan': terapkan, 'atur_user': atur_user, 'pakai': pakai}
 
 
 def jalankan(kode):

@@ -45,6 +45,71 @@ const jumlahBelum = computed(() => (terpilih.value?.users || []).filter((u) => !
 watch(() => [cari.value, saring.value, terpilih.value?.host], () => { hal.value = 1 })
 watch(jumlahHal, (n) => { if (hal.value > n) hal.value = n }) // data segar bisa memendekkan daftar
 
+// ---- Tab: Monitoring (pemakaian nyata dari cgroup) | Setting (preset & limit per akun) ----
+const tab = ref(localStorage.getItem('limit-tab') === 'setting' ? 'setting' : 'monitoring')
+watch(tab, (t) => localStorage.setItem('limit-tab', t))
+
+// Monitoring: GET /api/servers/limit/pakai?server=host (agen aksi 'pakai', sampel 3 dtk, cache backend 30 dtk)
+const pakai = { data: ref(null), galat: ref(null) }
+const pakaiSegar = ref(false)
+const otomatis = ref(true)
+let nomorMinta = 0
+async function muatPakai(segar = false) {
+  const host = terpilih.value?.host
+  if (!host || tab.value !== 'monitoring' || !terpilih.value.terpasang) return
+  const n = ++nomorMinta
+  if (segar) pakaiSegar.value = true
+  try {
+    const d = await minta(`/api/servers/limit/pakai?server=${encodeURIComponent(host)}${segar ? '&segar=1' : ''}`)
+    if (n === nomorMinta) { pakai.data.value = d; pakai.galat.value = null }
+  } catch (e) {
+    if (n === nomorMinta) pakai.galat.value = e
+  } finally {
+    if (segar) pakaiSegar.value = false
+  }
+}
+const segarPakai = () => muatPakai(true)
+// data milik server lain tidak ditampilkan saat pindah server
+const pk = computed(() => (pakai.data.value?.host === terpilih.value?.host ? pakai.data.value : null))
+watch(() => [terpilih.value?.host, tab.value, terpilih.value?.terpasang], () => muatPakai(), { immediate: true })
+const timerPakai = setInterval(() => { if (otomatis.value && !document.hidden) muatPakai() }, 30000)
+onBeforeUnmount(() => clearInterval(timerPakai))
+
+const cariP = ref('')
+const urutP = ref('cpu')
+const saringP = ref('semua')
+const halP = ref(1)
+const mentokCpu = (u) => u.cpu_kena > 0
+const mentokRam = (u) => u.mem_kena > 0 || u.oom > 0
+const KUNCI_URUT = { cpu: (u) => u.cpu, mem: (u) => u.mem || 0, io: (u) => u.io_baca + u.io_tulis, proses: (u) => u.proses || 0, tahan: (u) => u.cpu_tahan_dtk }
+const pakaiTersaring = computed(() => {
+  const k = cariP.value.trim().toLowerCase()
+  const f = { semua: () => true, cpu: mentokCpu, ram: mentokRam, mentok: (u) => mentokCpu(u) || mentokRam(u) || u.proses_kena > 0 }[saringP.value]
+  const urut = KUNCI_URUT[urutP.value]
+  return (pk.value?.users || []).filter((u) => (!k || u.user.includes(k)) && f(u)).sort((a, b) => urut(b) - urut(a))
+})
+const jumlahHalP = computed(() => Math.max(1, Math.ceil(pakaiTersaring.value.length / UKURAN)))
+const pakaiTampil = computed(() => pakaiTersaring.value.slice((halP.value - 1) * UKURAN, halP.value * UKURAN))
+watch(() => [cariP.value, urutP.value, saringP.value, terpilih.value?.host], () => { halP.value = 1 })
+watch(jumlahHalP, (n) => { if (halP.value > n) halP.value = n })
+const hitungMentok = computed(() => (pk.value?.users || []).filter(mentokCpu).length)
+const hitungRam = computed(() => (pk.value?.users || []).filter(mentokRam).length)
+const hitungProses = computed(() => (pk.value?.users || []).filter((u) => u.proses_kena > 0).length)
+
+const persen = (a, b) => (b ? Math.round((a / b) * 100) : 0)
+const gb = (b) => `${(b / 1073741824).toFixed(1)} GB`
+const lebar = (v, maks) => `${maks ? Math.min(100, Math.round(((v || 0) / maks) * 100)) : 0}%`
+const kelasBar = (v, maks) => { const p = maks ? (v || 0) / maks : 0; return p >= 0.9 ? 'merah' : p >= 0.7 ? 'kuning' : '' }
+const laju = (b) => (!b ? '0' : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB/dtk` : `${Math.max(1, Math.round(b / 1024))} KB/dtk`)
+const durasi = (s) => (s >= 3600 ? `${Math.floor(s / 3600)} j ${Math.round((s % 3600) / 60)} m` : s >= 60 ? `${Math.round(s / 60)} m` : `${s} dtk`)
+const waktuJam = (t) => (t ? new Date(t * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—')
+function aturDariMonitor(user) {
+  tab.value = 'setting'
+  const u = terpilih.value?.users?.find((x) => x.user === user)
+  if (u && !u.kecuali) bukaForm(u)
+  else cari.value = user
+}
+
 const PRESET = [
   { k: 'kecil', label: 'Kecil', ket: 'Situs company profile / blog ringan' },
   { k: 'sedang', label: 'Sedang', ket: 'Toko online / berita dengan trafik sedang' },
@@ -239,8 +304,86 @@ async function terapkan() {
             <span v-if="terpilih.terpasang" class="lencana hijau">Preset aktif: {{ terpilih.preset }}</span>
           </h2>
         </div>
+        <div class="tab" role="tablist" aria-label="Bagian Limit Resource">
+          <button type="button" role="tab" :aria-selected="tab === 'monitoring'" :class="{ aktif: tab === 'monitoring' }" @click="tab = 'monitoring'"><Ikon nama="pantau" :ukuran="14" /> Monitoring</button>
+          <button type="button" role="tab" :aria-selected="tab === 'setting'" :class="{ aktif: tab === 'setting' }" @click="tab = 'setting'"><Ikon nama="sunting" :ukuran="14" /> Setting</button>
+        </div>
         <p v-if="!terpilih.ok" class="pesan-status bahaya">Tidak bisa dibaca: {{ pesanGalat(terpilih.error) }} {{ terpilih.pesan || '' }}</p>
         <p v-else-if="!terpilih.terpasang" class="pesan-status waspada">{{ PESAN.velocity_cg_belum_terpasang }}</p>
+
+        <!-- ===== Monitoring pemakaian ===== -->
+        <template v-else-if="tab === 'monitoring'">
+          <p v-if="!pk && pakai.galat.value" class="pesan-status bahaya">Gagal membaca pemakaian: {{ pesanGalat(pakai.galat.value.message) }}</p>
+          <p v-else-if="pk?.ok === false || pk?.error" class="pesan-status bahaya">Gagal membaca pemakaian: {{ pesanGalat(pk.error) }} {{ pk.pesan || '' }}</p>
+          <p v-else-if="!pk" class="redup" role="status">Mengukur pemakaian akun di {{ terpilih.name }} (sampel 3 detik)…</p>
+          <template v-else>
+            <div class="ringkas-grid">
+              <div class="ringkas-k"><small>Load server</small><b>{{ pk.load?.[0] ?? '—' }}</b><span class="redup">{{ pk.cpu_inti }} inti · 15 mnt {{ pk.load?.[2] }}</span></div>
+              <div class="ringkas-k"><small>RAM server terpakai</small><b>{{ persen(pk.ram_total - pk.ram_tersedia, pk.ram_total) }}%</b><span class="redup">{{ gb(pk.ram_total - pk.ram_tersedia) }} / {{ gb(pk.ram_total) }}</span></div>
+              <div class="ringkas-k"><small>Akun aktif</small><b>{{ pk.users.length }}</b><span class="redup">dari {{ pk.akun_total }} akun (punya proses)</span></div>
+              <div class="ringkas-k" :class="{ waspada: hitungMentok }"><small>Sedang mentok CPU</small><b>{{ hitungMentok }}</b><span class="redup">ditahan saat sampel</span></div>
+              <div class="ringkas-k" :class="{ bahaya: hitungRam }"><small>Pernah mentok RAM / OOM</small><b>{{ hitungRam }}</b><span class="redup">sejak slice aktif</span></div>
+              <div class="ringkas-k" :class="{ waspada: hitungProses }"><small>Pernah mentok proses</small><b>{{ hitungProses }}</b><span class="redup">sejak slice aktif</span></div>
+            </div>
+
+            <div class="saring-akun">
+              <input v-model="cariP" type="search" placeholder="Cari user DA…" aria-label="Cari user DA (monitoring)">
+              <select v-model="urutP" aria-label="Urutkan">
+                <option value="cpu">Urut CPU</option>
+                <option value="mem">Urut RAM</option>
+                <option value="io">Urut IO</option>
+                <option value="proses">Urut proses</option>
+                <option value="tahan">Urut lama CPU ditahan</option>
+              </select>
+              <select v-model="saringP" aria-label="Saring monitoring">
+                <option value="semua">Semua akun aktif</option>
+                <option value="mentok">Kena batas apa saja</option>
+                <option value="cpu">Sedang mentok CPU</option>
+                <option value="ram">Pernah mentok RAM / OOM</option>
+              </select>
+              <span class="isi" />
+              <label class="pilih kecil-l"><input v-model="otomatis" type="checkbox"> Segarkan tiap 30 dtk</label>
+              <button type="button" class="tombol garis kecil" :disabled="pakaiSegar" @click="segarPakai"><Ikon nama="ulang" :ukuran="14" /> {{ pakaiSegar ? 'Mengukur…' : 'Ukur sekarang' }}</button>
+            </div>
+            <p class="redup kecil-p">Diukur {{ waktuJam(pk.diambil) }} · CPU & IO = rata-rata {{ pk.jeda }} dtk terakhir; 100% = 1 core. Akun tanpa proses berjalan tidak tampil.</p>
+
+            <div class="tabel-wadah">
+              <table class="tabel">
+                <thead><tr><th scope="col">User</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Proses</th><th scope="col">IO baca / tulis</th><th scope="col">Kena batas</th><th scope="col" /></tr></thead>
+                <tbody>
+                  <tr v-for="u in pakaiTampil" :key="u.user">
+                    <td><b>{{ u.user }}</b></td>
+                    <td class="sel-bar"><div class="bar" :class="kelasBar(u.cpu, u.cpu_max)"><i :style="{ width: lebar(u.cpu, u.cpu_max) }" /></div>{{ u.cpu }}%<small class="kecil">batas {{ u.cpu_max == null ? '∞' : `${u.cpu_max}%` }}</small></td>
+                    <td class="sel-bar"><div class="bar" :class="kelasBar(u.mem, u.mem_max)"><i :style="{ width: lebar(u.mem, u.mem_max) }" /></div>{{ mem(u.mem) }}<small class="kecil">puncak {{ mem(u.mem_peak) }} · batas {{ mem(u.mem_max) }}</small></td>
+                    <td>{{ u.proses ?? '—' }}<small class="kecil">batas {{ u.proses_max ?? '∞' }}</small></td>
+                    <td>{{ laju(u.io_baca) }}<small class="kecil">tulis {{ laju(u.io_tulis) }}</small></td>
+                    <td>
+                      <span v-if="u.cpu_kena" class="lencana kuning" :title="`${u.cpu_kena} periode CPU ditahan selama sampel`">CPU</span>
+                      <span v-if="u.oom" class="lencana merah" :title="`${u.oom} proses dimatikan OOM sejak slice aktif`">OOM {{ u.oom }}</span>
+                      <span v-else-if="u.mem_kena" class="lencana merah" :title="`${u.mem_kena}× menyentuh batas RAM sejak slice aktif`">RAM {{ u.mem_kena }}×</span>
+                      <span v-if="u.proses_kena" class="lencana kuning" :title="`${u.proses_kena}× menyentuh batas proses (fork ditolak) sejak slice aktif`">Proses {{ u.proses_kena }}×</span>
+                      <small v-if="u.cpu_tahan_dtk" class="kecil" title="Total waktu CPU ditahan sejak slice aktif">ditahan {{ durasi(u.cpu_tahan_dtk) }}</small>
+                      <span v-if="!u.cpu_kena && !u.mem_kena && !u.oom && !u.proses_kena && !u.cpu_tahan_dtk" class="redup">—</span>
+                    </td>
+                    <td><button type="button" class="tombol garis kecil" @click="aturDariMonitor(u.user)">Atur</button></td>
+                  </tr>
+                  <tr v-if="!pakaiTersaring.length"><td colspan="7" class="redup">Tidak ada akun yang cocok.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="pakaiTersaring.length > UKURAN" class="paginasi">
+              <span class="redup">{{ (halP - 1) * UKURAN + 1 }}–{{ Math.min(halP * UKURAN, pakaiTersaring.length) }} dari {{ pakaiTersaring.length }} akun · halaman {{ halP }}/{{ jumlahHalP }}</span>
+              <span>
+                <button type="button" class="tombol garis kecil" :disabled="halP <= 1" @click="halP = 1">Awal</button>
+                <button type="button" class="tombol garis kecil" :disabled="halP <= 1" @click="halP--">Sebelumnya</button>
+                <button type="button" class="tombol garis kecil" :disabled="halP >= jumlahHalP" @click="halP++">Berikutnya</button>
+                <button type="button" class="tombol garis kecil" :disabled="halP >= jumlahHalP" @click="halP = jumlahHalP">Akhir</button>
+              </span>
+            </div>
+          </template>
+        </template>
+
+        <!-- ===== Setting (preset & per akun) ===== -->
         <template v-else>
           <div class="tabel-wadah">
             <table class="tabel">
@@ -347,7 +490,28 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 @media (prefers-reduced-motion: reduce) { .putar { animation: none; } }
 .aksi-u { white-space: nowrap; }
 .saring-akun { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
-.saring-akun input { flex: 1 1 220px; max-width: 320px; }
+.saring-akun input[type=search] { flex: 1 1 220px; max-width: 320px; width: auto; }
+.saring-akun select { flex: 0 0 auto; width: auto; }
+.saring-akun .pilih { white-space: nowrap; }
+.saring-akun input[type=checkbox] { width: auto; }
+.tab { display: inline-flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--kartu-2); margin-bottom: 14px; }
+.tab button { display: inline-flex; gap: 6px; align-items: center; border: 0; background: transparent; color: var(--teks-2); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+.tab button.aktif { background: var(--aksen); color: #fff; }
+.ringkas-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.ringkas-k { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--garis); border-radius: 12px; }
+.ringkas-k small { color: var(--teks-3); font-size: 12px; }
+.ringkas-k b { font-size: 20px; }
+.ringkas-k span { font-size: 12px; }
+.ringkas-k.waspada { border-color: color-mix(in srgb, var(--waspada, #d99a00) 55%, transparent); }
+.ringkas-k.bahaya { border-color: color-mix(in srgb, var(--bahaya) 55%, transparent); }
+.saring-akun .isi { flex: 1; }
+.kecil-l { font-weight: 500; font-size: 13px; }
+.sel-bar { min-width: 130px; }
+.bar { height: 5px; border-radius: 3px; background: var(--kartu-2); margin-bottom: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--aksen); }
+.bar.kuning i { background: var(--waspada, #d99a00); }
+.bar.merah i { background: var(--bahaya); }
+.tabel td .lencana + .lencana { margin-left: 4px; }
 .paginasi { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .paginasi span:last-child { display: flex; gap: 8px; flex-wrap: wrap; }
 .aksi-u .tombol + .tombol { margin-left: 6px; }

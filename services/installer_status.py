@@ -2552,6 +2552,20 @@ def server_limit(paksa=False):
     return data
 
 
+def limit_pakai(host, paksa=False):
+    # Monitoring pemakaian per akun (agen aksi 'pakai', ±5 dtk di Sanke); per server, cache 30 dtk agar tab terbuka banyak tidak menumpuk SSH
+    srv = next((s for s in _daftar_server() if s['host'] == host), None)
+    if not srv:
+        return {'error': 'server_tidak_dikenal'}
+
+    def ambil():
+        key = ssh_key_file()
+        if not key:
+            return {'error': 'kunci_ssh_installer_tidak_ada'}
+        return _bfm_satu(srv, key, {'aksi': 'pakai', 'jeda': 3}, 60, LIMIT_AGEN)
+    return _cache_limit.ambil('pakai:' + host, ambil, 30, paksa)
+
+
 def _limit_kerja(job, srv, key, perintah):
     hasil = _bfm_satu(srv, key, perintah, 1800, LIMIT_AGEN)  # > agen: tar 120 + --semua 300 + rollback per user
     job.update(status='selesai' if hasil.get('ok') else 'gagal', selesai=int(time.time()), hasil=hasil)
@@ -4639,13 +4653,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json(server_cms.ringkasan())
             return
-        if path in ('/api/servers/limit', '/api/servers/limit/job'):
+        if path in ('/api/servers/limit', '/api/servers/limit/job', '/api/servers/limit/pakai'):
             if not _check_auth(self):
                 self._send_json({'error': 'unauthorized'}, 401)
                 return
             q = parse_qs(parsed.query)
             if path == '/api/servers/limit':
                 self._send_json(server_limit('segar' in q))
+            elif path == '/api/servers/limit/pakai':
+                self._send_json(limit_pakai((q.get('server') or [''])[0], 'segar' in q))
             else:
                 self._send_json(limit_job((q.get('id') or [''])[0]))
             return
