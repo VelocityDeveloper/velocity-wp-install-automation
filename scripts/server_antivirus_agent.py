@@ -76,7 +76,9 @@ RE_SUPERGLOBAL = r(r'\$_(?:POST|GET|REQUEST|FILES|COOKIE)\b')
 RE_KOMENTAR_PHP = re.compile(rb'/\*.*?\*/|//[^\n]*|#[^\n]*|<\?php|\?>', re.S)
 RE_JAGA_PHP = re.compile(rb"\s*if\s*\(\s*!\s*defined\s*\(\s*\\*['\"]\w+\\*['\"]\s*\)\s*\)\s*(?:exit|die)\s*(?:\(\s*\))?\s*;"
                          # SureMails uploads/suremails: `http_response_code( 403 ); exit;` (positif palsu 24 Okt, tukangmesinbakso.com)
-                         rb"|\s*http_response_code\s*\(\s*\d{3}\s*\)\s*;|\s*(?:exit|die)\s*(?:\(\s*\))?\s*;")
+                         rb"|\s*http_response_code\s*\(\s*\d{3}\s*\)\s*;|\s*(?:exit|die)\s*(?:\(\s*\))?\s*;"
+                         # BackWPup uploads/backwpup*/index.php: header status 404 saja (positif palsu 14 Nov, loketppob.id)
+                         rb"|\s*header\s*\(\s*(?:\$_SERVER\s*\[\s*['\"]SERVER_PROTOCOL['\"]\s*\]\s*\.\s*)?['\"]\s*(?:Status:\s*)?\d{3}[A-Za-z ]*['\"]\s*\)\s*;")
 RE_LISENSI_TERLARANG = r(r'\b(?:assert|create_function|file_put_contents|fwrite|fputs|curl_exec|include|require)(?:_once)?\s*\(|\bgzinflate\b|\bstr_rot13\b')
 RE_HACKED = r(r'<title>[^<]{0,60}hack(?:ed|3d)\s*by')
 RE_LOCALE = r(r'wp-locale-perf|Locale Performance Cache|wp-cachepress|craft-harvester-jet|widget-compat-helper|wp_locale_cache_\w+|locale-cache-(?:db|oc)\b|Anti-DB-wipe MU loader')

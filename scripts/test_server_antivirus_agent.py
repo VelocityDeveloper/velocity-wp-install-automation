@@ -13,6 +13,7 @@ def tanda(nama, isi):
 
 WPC = b"<?php\ndefine( 'DB_NAME', '%s' );\ndefine( 'DB_USER', 'u' );\ndefine( 'DB_PASSWORD', 'x' );\ndefine( 'DB_HOST', '%s' );\n"
 KENA = [
+    ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( 'Location: https://x.example/' );\n", 'VD.PHP.DiUploads'),
     ('3PJcpMFsD8B.php', b'<?php\n$h= \t\tfunction ($c) {\r\n    EVAL \t\t($c);\r\n};', 'VD.PHP.EvalClosure'),
     ('x/index.php', b"<?php define('O0O0O0', 'O0O00O');$GLOBALS[O0O0O0] = explode('|H|Z|8', 'ini_set|H|Z|8eval');", 'VD.PHP.GlobalsExplode'),
     ('wp-content/index.php', b'<?php\n$O00OO_0_O_=urldecode("%6E1%7A%62");$O000OOO___=$O00OO_0_O_{38};', 'VD.PHP.VariabelO0'),
@@ -49,6 +50,7 @@ for nama, isi, harap in KENA:
     assert harap in tanda(nama, isi), (nama, harap, tanda(nama, isi))
 
 AMAN = [
+    ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( $_SERVER['SERVER_PROTOCOL'] . ' 404 Not Found' );\nheader( 'Status: 404 Not Found' );\n"),
     ('wp-content/plugins/x/a.php', b"<?php $f = function ($x) { return eval_helper($x); }; $GLOBALS['wp_filter'] = explode(',', $s);"),
     ('wp-content/plugins/x/b.php', b"<?php $hash = '7068705f'; $s = strrev($nama); $p = str_split($teks, 1);"),
     ('.htaccess', b'<FilesMatch "\\.(?i:php[0-9]?|phtml|phar)$">\n    Require all denied\n</FilesMatch>'),
