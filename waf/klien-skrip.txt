@@ -7,3 +7,5 @@ aiohttp
 okhttp
 java/
 httpclient
+python-httpx
+scrapy/
