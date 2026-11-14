@@ -29,19 +29,21 @@ const pilih = pilihServer()
 const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value[0] || null)
 const oleh = namaAkun
 
-// Daftar akun: Sanke 2.330 akun — render semua sekaligus bikin halaman berat. Cari + saring + tampil bertahap.
-const LANGKAH = 100
+// Daftar akun: Sanke 2.330 akun — render semua sekaligus bikin halaman berat. Cari + saring + paginasi.
+const UKURAN = 50
 const cari = ref('')
 const saring = ref('semua') // semua | belum | khusus
-const batas = ref(LANGKAH)
+const hal = ref(1)
 const akunTersaring = computed(() => {
   const k = cari.value.trim().toLowerCase()
   return (terpilih.value?.users || []).filter((u) => (!k || u.user.includes(k))
     && (saring.value === 'semua' || (saring.value === 'belum' ? !u.sesuai : u.kecuali || Object.keys(u.override || {}).length || u.kustom.length)))
 })
-const akunTampil = computed(() => akunTersaring.value.slice(0, batas.value))
+const jumlahHal = computed(() => Math.max(1, Math.ceil(akunTersaring.value.length / UKURAN)))
+const akunTampil = computed(() => akunTersaring.value.slice((hal.value - 1) * UKURAN, hal.value * UKURAN))
 const jumlahBelum = computed(() => (terpilih.value?.users || []).filter((u) => !u.sesuai).length)
-watch(() => [cari.value, saring.value, terpilih.value?.host], () => { batas.value = LANGKAH })
+watch(() => [cari.value, saring.value, terpilih.value?.host], () => { hal.value = 1 })
+watch(jumlahHal, (n) => { if (hal.value > n) hal.value = n }) // data segar bisa memendekkan daftar
 
 const PRESET = [
   { k: 'kecil', label: 'Kecil', ket: 'Situs company profile / blog ringan' },
@@ -298,9 +300,14 @@ async function terapkan() {
               </tbody>
             </table>
           </div>
-          <div v-if="akunTersaring.length > batas" class="aksi">
-            <button type="button" class="tombol garis kecil" @click="batas += LANGKAH * 5">Tampilkan {{ Math.min(LANGKAH * 5, akunTersaring.length - batas) }} lagi</button>
-            <span class="redup">{{ akunTampil.length }} dari {{ akunTersaring.length }} ditampilkan</span>
+          <div v-if="akunTersaring.length > UKURAN" class="paginasi">
+            <span class="redup">{{ (hal - 1) * UKURAN + 1 }}–{{ Math.min(hal * UKURAN, akunTersaring.length) }} dari {{ akunTersaring.length }} akun · halaman {{ hal }}/{{ jumlahHal }}</span>
+            <span>
+              <button type="button" class="tombol garis kecil" :disabled="hal <= 1" @click="hal = 1">Awal</button>
+              <button type="button" class="tombol garis kecil" :disabled="hal <= 1" @click="hal--">Sebelumnya</button>
+              <button type="button" class="tombol garis kecil" :disabled="hal >= jumlahHal" @click="hal++">Berikutnya</button>
+              <button type="button" class="tombol garis kecil" :disabled="hal >= jumlahHal" @click="hal = jumlahHal">Akhir</button>
+            </span>
           </div>
         </template>
       </section>
@@ -341,7 +348,8 @@ th.aktif, td.aktif { background: var(--aksen-lembut); }
 .aksi-u { white-space: nowrap; }
 .saring-akun { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
 .saring-akun input { flex: 1 1 220px; max-width: 320px; }
-.aksi .redup { align-self: center; font-size: 13px; }
+.paginasi { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.paginasi span:last-child { display: flex; gap: 8px; flex-wrap: wrap; }
 .aksi-u .tombol + .tombol { margin-left: 6px; }
 .form-limit { display: grid; gap: 12px; }
 .form-limit .dua { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
