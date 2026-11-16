@@ -190,6 +190,11 @@ def daftar_user(inf):
             nilai_preset.setdefault(k, set()).add(v)
     aktif = inf['daftar'][inf['preset']]
     sql = mysql_akun()
+    # indeks sekali {USER: akun MariaDB USER & USER_*} — akun_user() per user = 8 juta startswith di Sanke (±4 dtk)
+    milik = {}
+    for a, v in (sql or {}).items():
+        if not SISTEM_SQL.match(a):
+            milik.setdefault(a.split('_', 1)[0], []).extend(v)
 
     def cocok(k, v, kecuali):  # nilai preset aktif (atau tanpa batas bila dikecualikan); nilai di luar preset = kustom, selalu sah
         if v not in nilai_preset.get(k, ()) and not (v == '0' and not kecuali):
@@ -209,7 +214,7 @@ def daftar_user(inf):
         nyata = _nyata(slices.get(uid, {}))
         kecuali = u in inf.get('kecuali', [])
         # akun MariaDB milik user: USER dan USER_* (nama user DA tanpa '_')
-        akun = akun_user(sql, u)
+        akun = [] if sql is None else milik.get(u, [])
         ep = ep_user(u)
         ov = {} if kecuali else override(u)
         # ep kosong = konfigurasi FPM tak terbaca → tidak sesuai. admin: EP tetap ikut default global (php_fpm_max_children_default berlaku untuk semua pool), tidak dinilai

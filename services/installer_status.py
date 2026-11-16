@@ -2525,8 +2525,24 @@ def bfm_riwayat(batas=300):
 LIMIT_AGEN = Path(__file__).resolve().parent.parent / 'scripts' / 'server_limit_agent.py'
 LIMIT_RIWAYAT = Path('/var/lib/velocity/server-limit/riwayat.jsonl')
 _cache_limit = CacheLatar()
+# Benih cache dari disk supaya buka pertama sesudah restart layanan tidak menunggu SSH (status ±5 dtk, pakai ±5 dtk):
+# status.json ditulis tiap ambil status, pakai/<host>.json ditulis timer server-limit-riwayat (tiap 5 mnt).
+LIMIT_BENIH_DIR = Path('/var/lib/velocity/server-limit')
+_limit_hapus_t = 0  # benih lebih tua dari aksi terakhir tidak dipakai (nilai limit sudah berubah)
 _limit_job = {}
 _limit_kunci = threading.Lock()
+
+
+def _limit_benih(kunci, berkas):
+    if kunci in _cache_limit.data:
+        return
+    try:
+        d = json.loads(berkas.read_text())
+    except (OSError, ValueError):
+        return
+    t = d.get('diambil') or 0
+    if t > _limit_hapus_t:  # umur > TTL → CacheLatar menjawab benih seketika lalu menyegarkan di latar
+        _cache_limit.data.setdefault(kunci, (t, d))
 
 
 def server_limit(paksa=False):
@@ -2544,8 +2560,16 @@ def server_limit(paksa=False):
             t.start()
         for t in utas:
             t.join(65)
-        return {'servers': [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
+        data = {'servers': [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'}
                             for h, s in zip(hasil, servers)], 'diambil': int(time.time())}
+        try:
+            tmp = LIMIT_BENIH_DIR / 'status.json.tmp'
+            tmp.write_text(json.dumps(data, separators=(',', ':')))
+            tmp.replace(LIMIT_BENIH_DIR / 'status.json')
+        except OSError:
+            pass
+        return data
+    _limit_benih('status', LIMIT_BENIH_DIR / 'status.json')
     data = _cache_limit.ambil('status', ambil, BFM_TTL, paksa)
     if isinstance(data, dict) and not data.get('error'):
         data = {**data, 'job': [j for j in _limit_job.values() if j['status'] == 'berjalan']}
@@ -2564,6 +2588,7 @@ def limit_pakai(host, paksa=False, live=False):
         if not key:
             return {'error': 'kunci_ssh_installer_tidak_ada'}
         return _bfm_satu(srv, key, {'aksi': 'pakai', 'jeda': 2 if live else 3}, 60, LIMIT_AGEN)
+    _limit_benih('pakai:' + host, LIMIT_BENIH_DIR / 'pakai' / f'{host}.json')
     return _cache_limit.ambil('pakai:' + host, ambil, 4 if live else 30, paksa)
 
 
@@ -2621,6 +2646,8 @@ def _limit_kerja(job, srv, key, perintah):
                             'preset': perintah.get('preset'), 'user': perintah.get('user'), 'nilai': perintah.get('nilai'),
                             'ok': bool(hasil.get('ok')), 'error': hasil.get('error'),
                             'cadangan': (hasil.get('hasil') or {}).get('cadangan')}, ensure_ascii=False) + '\n')
+    global _limit_hapus_t
+    _limit_hapus_t = time.time()
     _cache_limit.hapus()
 
 

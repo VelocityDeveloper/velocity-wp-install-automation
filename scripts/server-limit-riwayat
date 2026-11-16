@@ -13,6 +13,7 @@ Berkas harian v>=2 memakai kriteria ini; 'ukur_jam' = jumlah ukuran sejak kriter
 Slice baru (tak ada di state padahal server sudah pernah diukur) dihitung penuh; nilai turun = slice dibuat ulang.
 Rekap harian per server: /var/lib/velocity/server-limit/kena/<host>/<YYYY-MM-DD>.json, disimpan 35 hari.
 Dibaca GET /api/servers/limit/sering (installer_status.limit_sering) untuk tab "Sering Kena Batas" di /server/limit.
+Hasil 'pakai' terakhir per server juga disimpan di /var/lib/velocity/server-limit/pakai/<host>.json (benih cache Monitoring).
 """
 import fcntl
 import json
@@ -126,6 +127,7 @@ def main():
                 lewati[s['host']] = sekarang + LEWATI_DTK
             elif h.get('ok') and h.get('didukung'):
                 rekam(s['host'], h, state, int(h.get('diambil') or sekarang))
+                _tulis(DIR.parent / 'pakai' / (s['host'] + '.json'), h)  # benih cache halaman Monitoring sesudah restart
             # gagal SSH/timeout: state lama dibiarkan, selisih dihitung di putaran berikutnya
         _tulis(STATE, state)
         bersihkan(sekarang)

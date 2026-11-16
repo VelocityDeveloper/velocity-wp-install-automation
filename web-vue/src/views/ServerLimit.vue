@@ -62,6 +62,8 @@ let timerPakai = null
 let timerSisa = null
 const sebelum = ref({}) // {user: cpu} ukuran sebelumnya → panah naik/turun
 let nomorMinta = 0
+let timerTua = null
+let ulangTua = 0
 async function muatPakai(segar = false) {
   const host = terpilih.value?.host
   if (!host || tab.value !== 'monitoring' || !terpilih.value.terpasang) return
@@ -74,6 +76,10 @@ async function muatPakai(segar = false) {
       if (lama?.host === d.host && lama.diambil !== d.diambil) sebelum.value = Object.fromEntries((lama.users || []).map((u) => [u.user, u.cpu]))
       else if (lama?.host !== d.host) sebelum.value = {}
       pakai.data.value = d; pakai.galat.value = null
+      // data benih (cache dari disk sesudah restart, ≤5 mnt) → backend menyegarkan di latar; minta ulang cepat, maks 3×
+      clearTimeout(timerTua)
+      ulangTua = d.diambil && Date.now() / 1000 - d.diambil > 60 && ulangTua < 3 ? ulangTua + 1 : 0
+      if (ulangTua) timerTua = setTimeout(() => { if (!document.hidden) muatPakai() }, 6000)
     }
   } catch (e) {
     if (n === nomorMinta) pakai.galat.value = e
@@ -103,7 +109,7 @@ watch(modeSegar, (m) => {
   jadwalPakai()
 })
 jadwalPakai()
-onBeforeUnmount(() => { clearTimeout(timerPakai); clearInterval(timerSisa) })
+onBeforeUnmount(() => { clearTimeout(timerPakai); clearTimeout(timerTua); clearInterval(timerSisa) })
 const segarPakai = () => muatPakai(true)
 const arah = (u) => { const a = sebelum.value[u.user]; return a == null ? '' : u.cpu - a >= 10 ? 'naik' : a - u.cpu >= 10 ? 'turun' : '' }
 // data milik server lain tidak ditampilkan saat pindah server
