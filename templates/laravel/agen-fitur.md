@@ -45,7 +45,9 @@ Fitur yang SUDAH selesai sebelumnya (jangan dirusak; boleh dipakai ulang):
    sticky di form panjang, select panjang tidak menabrak, halaman masuk bervariasi (bukan form polos), field konten
    pakai `RichTextEditor` (textarea hanya untuk teks polos), isi halaman publik diatur lewat `Setting`, tidak ada
    yang bisa menghapus akunnya sendiri dan minimal satu super admin selalu tersisa, WhatsApp mengambang dengan logo resmi (label disembunyikan di HP) + tombol kembali ke atas
-   di sampingnya di halaman publik). Gambar unggahan disimpan sebagai WebP (lihat **Unggahan** di CLAUDE.md); app dengan banyak
+   di sampingnya di halaman publik). Ikon pakai Lucide (`@lucide/vue`); chart pakai Chart.js (`vue-chartjs`) atau
+   ApexCharts (`vue3-apexcharts`) lewat komponen bersama — bukan SVG/CSS buatan sendiri (lihat **Ikon** &
+   **Chart/grafik** di CLAUDE.md). Gambar unggahan disimpan sebagai WebP (lihat **Unggahan** di CLAUDE.md); app dengan banyak
    gambar kelolaan admin memakai **Pustaka media** (spatie/laravel-medialibrary + `Asset`, pola hotel-booking).
    Pengaturan > Aplikasi (nama, deskripsi, logo, favicon; prop `site`) dan footer "Design by Velocity Developer"
    dari installer WAJIB tetap ada dan berfungsi — saat mengganti layout/halaman depan/halaman masuk, pakai lagi

@@ -55,6 +55,12 @@ di pesan commit.
   (`@/routes`, `@/actions`), bukan URL ditulis tangan. Jangan pakai `Route::redirect`/`Route::permanentRedirect`/
   `Route::any` (mendaftarkan verb QUERY yang belum dikenal Wayfinder → `vue-tsc` gagal); pengalihan pakai
   `Route::get('a', fn () => to_route('b'))`.
+- **Ikon**: semua ikon pakai **Lucide** (`@lucide/vue`, bawaan starter kit) — jangan emoji, SVG ditulis tangan,
+  atau pustaka ikon lain (Font Awesome, Heroicons, dll.). Pengecualian hanya logo brand (mis. `WhatsAppIcon.vue`).
+- **Chart/grafik**: bila app butuh chart (statistik dashboard, laporan, tren), pakai pustaka chart —
+  **Chart.js** (`chart.js` + `vue-chartjs`) atau **ApexCharts** (`apexcharts` + `vue3-apexcharts`), cukup SATU
+  pustaka per app. Jangan menggambar chart manual dengan SVG/CSS/div. Bungkus dalam komponen bersama
+  (mis. `components/charts/`) yang mengikuti warna DESIGN.md dan mode gelap, lalu dipakai ulang di semua halaman.
 - **Unggahan**: whitelist `extensions` + `mimes`, simpan di disk privat dan sajikan lewat controller yang
   memeriksa hak akses. Jangan simpan berkas pengguna di `public/`.
   **Gambar yang diunggah (jpg/png/gif/bmp) WAJIB disimpan sebagai WebP**: konversi di satu layanan bersama
