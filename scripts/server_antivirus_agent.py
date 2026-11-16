@@ -458,6 +458,12 @@ def inti_wp_asli(path, st):
     return True
 
 
+# Berkas kecil yang hanya bertanda 'curiga' (base64_decode di fbimg.php plugin Open Graph wonderm00n, positif palsu 16 Nov
+# jurnalpembangunanonline.com) lolos bila md5-nya sama dengan checksum resmi wordpress.org (inti WP / plugin wp.org).
+def curiga_asli_wporg(path, st, tanda):
+    return bool(tanda) and all(t['tingkat'] == 'curiga' for t in tanda) and inti_wp_asli(path, st)
+
+
 # ThemeGrill Demo Importer menyalin config paket demo ke uploads/tg-demo-pack/ (positif palsu 16 Nov, hariansorotpost.com):
 # sah hanya bila kodenya cuma larik + panggilan yang diizinkan — tanpa superglobal, variabel-fungsi, atau backtick.
 DEMO_TG_PANGGIL = {b'defined', b'tg_demo_importer_config', b'array', b'array_merge', b'add_filter', b'if', b'return'}
@@ -1530,6 +1536,9 @@ def scan(p):
                         besar.append({'path': path, 'user': user, 'ukuran': st.st_size, 'mtime': int(st.st_mtime),
                                       'ctime': int(st.st_ctime), 'izin': oct(st.st_mode & 0o777)[2:], 'batas': maks,
                                       'sebagian': 'bersih'})
+                if tanda and not tersembunyi and curiga_asli_wporg(path, st, tanda):
+                    hit['aman'] += 1
+                    continue
                 if tanda:
                     try:
                         sha = hash_berkas(path) if sebagian else hashlib.sha256(teks).hexdigest()
@@ -2356,7 +2365,10 @@ def periksa_ulang(p):
             ext = 'php'
         elif teks.startswith(b'\x7fELF'):
             ext = 'elf'
-        hasil[path] = {'ada': True, 'sha256': sha, 'tanda': [x['id'] for x in saring_putih(path, putih, periksa(path, ext, teks))]}
+        tanda = saring_putih(path, putih, periksa(path, ext, teks))
+        if not tersembunyi and curiga_asli_wporg(path, st, tanda):
+            tanda = []
+        hasil[path] = {'ada': True, 'sha256': sha, 'tanda': [x['id'] for x in tanda]}
     simpan_inti_cache()
     return {'ok': True, 'hasil': hasil}
 

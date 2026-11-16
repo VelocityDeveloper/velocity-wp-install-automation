@@ -189,6 +189,13 @@ HOME = (b"<?php\nfunction is_google_bot() {\n$agents = array(\"Googlebot\", \"Go
         b"$bot_content = file_get_contents('.well-known/index.php');\necho $bot_content;\nexit;\n} else {\ninclude('wp-user.php');\n}")
 assert 'VD.SEO.Cloaking' in tanda_f('home.php', HOME)
 assert tanda_f('.well-known/-/get-sitemap.php', b'') == {'VD.PHP.DiWellKnown'} and not tanda_f('.well-known/acme-challenge/x', b'tok')
+# 16 Nov: berkas kecil cocok checksum wp.org lolos hanya bila semua tandanya 'curiga' (fbimg.php wonderm00n)
+_asli, ag.inti_wp_asli = ag.inti_wp_asli, lambda path, st: True
+assert ag.curiga_asli_wporg('x', None, [{'tingkat': 'curiga'}]) and not ag.curiga_asli_wporg('x', None, [])
+assert not ag.curiga_asli_wporg('x', None, [{'tingkat': 'curiga'}, {'tingkat': 'virus'}])
+ag.inti_wp_asli = lambda path, st: False
+assert not ag.curiga_asli_wporg('x', None, [{'tingkat': 'curiga'}])
+ag.inti_wp_asli = _asli
 print('ok: %d sampel kena, %d sampel aman, karantina/pulih inti' % (len(KENA), len(AMAN)))
 
 # Bersihkan WP opsi plugin: dropper lf_sync_mu di plugins/ dan salinannya di mu-plugins/ ikut dikarantina
