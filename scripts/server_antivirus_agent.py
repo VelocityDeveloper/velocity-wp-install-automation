@@ -465,7 +465,7 @@ DEMO_TG_PANGGIL = {b'defined', b'tg_demo_importer_config', b'array', b'array_mer
 
 def demo_themegrill(teks):
     kode = RE_KOMENTAR_PHP.sub(b'', teks)
-    if b'themegrill_demo_importer_config' not in kode or re.search(rb'\$_|\$\w+\s*\(|\$\{|`|\binclude|\brequire', kode):
+    if b'themegrill_demo_importer_config' not in kode or re.search(rb'\$_|\$\w+\s*\(|\$\{|`|\b(?:include|require)(?:_once)?\b', kode):
         return False
     return {m.lower() for m in re.findall(rb'\b(\w+)\s*\(', kode)} <= DEMO_TG_PANGGIL
 
