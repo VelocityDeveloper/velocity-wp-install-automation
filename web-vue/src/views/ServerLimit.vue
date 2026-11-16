@@ -173,7 +173,7 @@ const limitAkun = computed(() => Object.fromEntries((terpilih.value?.users || []
 const URUT_S = { jam: (u) => u.jam_kena * 1e9 + u.tahan_dtk, tahan: (u) => u.tahan_dtk, ram: (u) => u.oom * 1e6 + u.mem, proses: (u) => u.proses, terakhir: (u) => u.terakhir }
 const seringTersaring = computed(() => {
   const k = cariS.value.trim().toLowerCase()
-  const f = { semua: () => true, cpu: (u) => u.tahan_dtk >= 60 || u.mentok, ram: (u) => u.mem || u.oom, proses: (u) => u.proses }[saringS.value]
+  const f = { semua: () => true, cpu: (u) => u.tahan_dtk >= 60, ram: (u) => u.mem || u.oom, proses: (u) => u.proses }[saringS.value]
   const urut = URUT_S[urutS.value]
   return (sr.value?.users || []).filter((u) => (!k || u.user.includes(k)) && f(u)).sort((a, b) => urut(b) - urut(a))
 })
@@ -181,8 +181,8 @@ const jumlahHalS = computed(() => Math.max(1, Math.ceil(seringTersaring.value.le
 const seringTampil = computed(() => seringTersaring.value.slice((halS.value - 1) * UKURAN, halS.value * UKURAN))
 watch(() => [cariS.value, urutS.value, saringS.value, hariS.value, terpilih.value?.host], () => { halS.value = 1 })
 watch(jumlahHalS, (n) => { if (halS.value > n) halS.value = n })
-// "jam kena" dibanding jam yang benar-benar terekam (riwayat baru dimulai → pembagi tidak 24×hari)
-const jamTerekam = computed(() => Math.max(1, Math.round(((sr.value?.ukur || 0) * (sr.value?.interval_mnt || 5)) / 60)))
+// "jam kena" dibanding jam yang terekam dengan kriteria jam kena sekarang (ukur_jam; riwayat baru → pembagi tidak 24×hari)
+const jamTerekam = computed(() => Math.max(1, Math.round(((sr.value?.ukur_jam ?? sr.value?.ukur ?? 0) * (sr.value?.interval_mnt || 5)) / 60)))
 const cukupRiwayat = computed(() => jamTerekam.value >= 6) // < 6 jam: persentase belum mewakili, hanya OOM/RAM yang ditandai
 const parah = (u) => (u.oom || (cukupRiwayat.value && u.jam_kena / jamTerekam.value >= 0.5) ? 'merah'
   : u.mem || (cukupRiwayat.value && u.jam_kena / jamTerekam.value >= 0.2) ? 'kuning' : '')
@@ -511,7 +511,7 @@ async function terapkan() {
                 <button v-for="h in [1, 7, 30]" :key="h" type="button" role="radio" :aria-checked="hariS === h" :class="{ aktif: hariS === h }" @click="hariS = h">{{ h === 1 ? 'Hari ini' : `${h} hari` }}</button>
               </div>
             </div>
-            <p class="redup kecil-p">Dicatat tiap {{ sr.interval_mnt }} menit sejak {{ sr.mulai ? tglPendek(sr.mulai) : '—' }} ({{ sr.ukur }} ukuran ≈ {{ jamTerekam }} jam terekam di rentang ini). <b>Jam kena</b> = jumlah jam yang akun itu menyentuh batas CPU, RAM, atau proses. Grafik kecil = lama CPU ditahan per hari.</p>
+            <p class="redup kecil-p">Dicatat tiap {{ sr.interval_mnt }} menit sejak {{ sr.mulai ? tglPendek(sr.mulai) : '—' }} ({{ sr.ukur }} ukuran ≈ {{ jamTerekam }} jam terekam di rentang ini). <b>Jam kena</b> = jumlah jam yang akun itu ditahan CPU ≥30 detik dalam 5 menit, atau menyentuh batas RAM / proses ({{ jamTerekam }} jam terekam dengan kriteria ini). Grafik kecil = lama CPU ditahan per hari.</p>
             <p v-if="!cukupRiwayat" class="pesan-status waspada">Riwayat baru {{ jamTerekam }} jam — label "sangat sering" baru dihitung sesudah 6 jam terekam; makin lama makin akurat.</p>
 
             <div class="tabel-wadah">
@@ -525,7 +525,7 @@ async function terapkan() {
                       <div class="spark" :title="sr.tanggal.map((t, i) => `${tglPendek(t)}: ${durasi(u.harian[i])}`).join('\n')" aria-hidden="true">
                         <i v-for="(v, i) in u.harian" :key="i" :style="{ height: `${Math.max(v ? 8 : 2, Math.round((v / maksHarian(u)) * 100))}%` }" :class="{ nol: !v }" />
                       </div>
-                      {{ durasi(u.tahan_dtk) }}<small class="kecil">{{ u.mentok }}× mentok saat diukur</small>
+                      {{ durasi(u.tahan_dtk) }}<small class="kecil">{{ u.mentok }}× sempat ditahan saat sampel</small>
                     </td>
                     <td><span v-if="u.oom" class="lencana merah">OOM {{ u.oom }}</span><span v-if="u.mem" class="lencana kuning">{{ u.mem }}×</span><span v-if="!u.oom && !u.mem" class="redup">—</span></td>
                     <td><span v-if="u.proses" class="lencana kuning">{{ u.proses }}×</span><span v-else class="redup">—</span></td>

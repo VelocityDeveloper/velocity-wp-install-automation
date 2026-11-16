@@ -2581,15 +2581,17 @@ def limit_sering(host, hari='7'):
     sekarang = time.time()
     tanggal = [time.strftime('%Y-%m-%d', time.localtime(sekarang - i * 86400)) for i in range(hari - 1, -1, -1)]
     tersedia = sorted(f.stem for f in (LIMIT_KENA_DIR / host).glob('*.json'))
-    users, ukur = {}, 0
+    users, ukur, ukur_jam = {}, 0, 0
     for i, tg in enumerate(tanggal):
         try:
             d = json.loads((LIMIT_KENA_DIR / host / f'{tg}.json').read_text())
         except (OSError, ValueError):
             continue
         ukur += d.get('ukur', 0)
+        v2 = d.get('v', 1) >= 2  # berkas lama: jam kena berkriteria longgar → tidak dihitung, tahan/RAM/proses tetap
+        ukur_jam += d.get('ukur_jam', 0) if v2 else 0
         for u, r in (d.get('users') or {}).items():
-            kena = r['tahan_us'] >= 1e6 or r['mem'] or r['oom'] or r['proses'] or r['mentok']
+            kena = r['tahan_us'] >= 60e6 or r['mem'] or r['oom'] or r['proses']  # >= 1 mnt ditahan sehari
             a = users.setdefault(u, {'user': u, 'tahan_dtk': 0, 'mem': 0, 'oom': 0, 'proses': 0, 'mentok': 0, 'ukur': 0,
                                      'hari_kena': 0, 'jam_kena': 0, 'cpu_puncak': 0, 'mem_puncak': 0, 'terakhir': 0,
                                      'harian': [0] * hari, 'cpu_max': None})
@@ -2597,15 +2599,16 @@ def limit_sering(host, hari='7'):
             for k in ('mem', 'oom', 'proses', 'mentok', 'ukur'):
                 a[k] += r.get(k, 0)
             a['hari_kena'] += 1 if kena else 0
-            a['jam_kena'] += len(r.get('jam') or [])
+            a['jam_kena'] += len(r.get('jam') or []) if v2 else 0
             a['cpu_puncak'] = max(a['cpu_puncak'], r.get('cpu_puncak', 0))
             a['mem_puncak'] = max(a['mem_puncak'], r.get('mem_puncak', 0))
             a['terakhir'] = max(a['terakhir'], r.get('terakhir', 0))
             a['harian'][i] = round(r['tahan_us'] / 1e6)
             a['cpu_max'] = r.get('cpu_max', a['cpu_max'])
-    daftar = [dict(a, tahan_dtk=round(a['tahan_dtk'])) for a in users.values() if a['jam_kena'] or a['tahan_dtk'] >= 60]
+    daftar = [dict(a, tahan_dtk=round(a['tahan_dtk'])) for a in users.values()
+             if a['jam_kena'] or a['tahan_dtk'] >= 60 or a['mem'] or a['oom'] or a['proses']]
     daftar.sort(key=lambda a: (-a['jam_kena'], -a['tahan_dtk']))
-    return {'host': host, 'hari': hari, 'tanggal': tanggal, 'ukur': ukur, 'mulai': tersedia[0] if tersedia else None,
+    return {'host': host, 'hari': hari, 'tanggal': tanggal, 'ukur': ukur, 'ukur_jam': ukur_jam, 'mulai': tersedia[0] if tersedia else None,
             'interval_mnt': 5, 'akun_terukur': len(users), 'users': daftar}
 
 

@@ -7,7 +7,9 @@ sejak slice user aktif dan hilang saat slice mati, jadi yang disimpan = SELISIH 
 - tahan_us : waktu CPU ditahan (cpu.stat throttled_usec) → akun mentok batas CPU
 - mem      : memory.events max (menyentuh batas RAM, reclaim paksa) · oom: memory.events oom_kill (proses dimatikan)
 - proses   : pids.events max (fork ditolak karena batas proses)
-- mentok   : jumlah ukuran yang sedang ditahan CPU saat sampel 2 dtk
+- mentok   : jumlah ukuran yang sedang ditahan CPU saat sampel 2 dtk (sekadar info: lonjakan 2 worker dalam 100 ms pun terhitung)
+Jam kena (r['jam']) hanya dari selisih nyata: CPU ditahan >= KENA_TAHAN_US dalam satu interval, atau RAM/OOM/proses kena.
+Berkas harian v>=2 memakai kriteria ini; 'ukur_jam' = jumlah ukuran sejak kriteria ini (pembagi persen jam kena).
 Slice baru (tak ada di state padahal server sudah pernah diukur) dihitung penuh; nilai turun = slice dibuat ulang.
 Rekap harian per server: /var/lib/velocity/server-limit/kena/<host>/<YYYY-MM-DD>.json, disimpan 35 hari.
 Dibaca GET /api/servers/limit/sering (installer_status.limit_sering) untuk tab "Sering Kena Batas" di /server/limit.
@@ -25,6 +27,8 @@ import installer_status as ist  # noqa: E402
 DIR = Path('/var/lib/velocity/server-limit/kena')
 STATE = DIR / 'state.json'
 SIMPAN_HARI = 35
+KENA_TAHAN_US = 30e6  # >= 30 dtk ditahan per interval 5 mnt (±10%); di bawah itu throttle sesaat yang wajar
+VERSI = 2
 LEWATI_DTK = 6 * 3600  # server tak didukung (CloudLinux/bukan DA/velocity-cg belum terpasang) dicek ulang tiap 6 jam
 
 
@@ -51,7 +55,12 @@ def rekam(host, hasil, state, sekarang):
     jam = time.localtime(sekarang).tm_hour
     f = DIR / host / (tanggal + '.json')
     hari = _baca(f, {'host': host, 'name': hasil.get('name'), 'tanggal': tanggal, 'ukur': 0, 'users': {}})
+    if hari.get('v', 1) < VERSI:  # jam lama memakai kriteria longgar (hampir semua akun 24 jam) → mulai ulang
+        hari['v'], hari['ukur_jam'] = VERSI, 0
+        for r in hari['users'].values():
+            r['jam'] = []
     hari['ukur'] += 1
+    hari['ukur_jam'] += 1
     hari['terakhir'] = sekarang
     for u in hasil.get('users') or []:
         n = {'tahan_us': u.get('cpu_tahan_us', 0), 'mem': u.get('mem_kena', 0), 'oom': u.get('oom', 0), 'proses': u.get('proses_kena', 0)}
@@ -72,7 +81,7 @@ def rekam(host, hasil, state, sekarang):
         if u.get('mem') and u.get('mem_max'):
             r['mem_puncak'] = max(r['mem_puncak'], round(u['mem'] * 100 / u['mem_max']))
         r['cpu_max'] = u.get('cpu_max')
-        if d['tahan_us'] >= 1e6 or d['mem'] or d['oom'] or d['proses'] or mentok:
+        if d['tahan_us'] >= KENA_TAHAN_US or d['mem'] or d['oom'] or d['proses']:
             r['terakhir'] = sekarang
             if jam not in r['jam']:
                 r['jam'].append(jam)
