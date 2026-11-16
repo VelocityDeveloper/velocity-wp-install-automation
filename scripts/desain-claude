@@ -200,7 +200,54 @@ def jalankan_alat(env, *argumen, timeout=1500):
     return run.returncode, run.stdout + run.stderr
 
 
-def siapkan(cfg, folder):
+PHP_FOTO_DRAF = r'''
+require_once ABSPATH . 'wp-admin/includes/file.php';
+require_once ABSPATH . 'wp-admin/includes/media.php';
+require_once ABSPATH . 'wp-admin/includes/image.php';
+$hasil = array();
+foreach ($d as $nama => $b64) {
+    $nama = sanitize_file_name((string) $nama);
+    $ada = get_posts(array('post_type' => 'attachment', 'post_status' => 'inherit', 'numberposts' => 1,
+        'fields' => 'ids', 'meta_key' => '_velocity_foto_draf', 'meta_value' => $nama));
+    if ($ada) { $hasil[$nama] = wp_get_attachment_url($ada[0]); continue; }
+    $tmp = wp_tempnam($nama);
+    file_put_contents($tmp, base64_decode((string) $b64));
+    $id = media_handle_sideload(array('name' => $nama, 'tmp_name' => $tmp), 0);
+    if (is_wp_error($id)) { @unlink($tmp); $hasil[$nama] = ''; continue; }
+    update_post_meta($id, '_velocity_foto_draf', $nama);
+    $hasil[$nama] = wp_get_attachment_url($id);
+}
+vfse_keluar($hasil);
+'''
+
+
+def draf_klien(ref):
+    """Folder desain draf klien (referensi file:// dari referensi_desain.desain_lokal), atau None."""
+    from urllib.parse import unquote, urlparse
+    url = str(ref.get('url') or '')
+    if not url.startswith('file://'):
+        return None
+    draf = Path(unquote(urlparse(url).path)).parent
+    return draf if draf.is_dir() else None
+
+
+def siapkan_draf(cfg, kerja, draf):
+    """Draf klien = materi final (ptmitragaransiniaga.com 2026-11-11: "materi gunakan yang sama seperti
+    di desain contoh"). Agen tidak boleh membaca /home, jadi HTML/CSS draf disalin ke kerja/draf/ dan
+    foto draf diunggah ke Media Library (sekali per berkas, penanda _velocity_foto_draf)."""
+    import base64
+    tujuan = kerja / 'draf'
+    tujuan.mkdir(parents=True, exist_ok=True)
+    for berkas in list(draf.glob('*.html')) + list(draf.glob('*.css')):
+        shutil.copy2(berkas, tujuan / berkas.name)
+    foto = {p.name: base64.b64encode(p.read_bytes()).decode() for p in sorted(draf.rglob('*'))
+            if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp') and p.stat().st_size < 3_000_000}
+    peta = FA.Situs(cfg).php(PHP_FOTO_DRAF, foto, timeout=600) if foto else {}
+    (kerja / 'foto-draf.json').write_text(json.dumps(peta, ensure_ascii=False, indent=1))
+    return peta
+
+
+def siapkan(cfg, folder, ref=None):
     """Bahan kerja agen. Titik awal (kerja/awal) hanya dibuat sekali: run berikutnya melanjutkan."""
     kerja = folder / 'claude' / 'kerja'
     awal = kerja / 'awal'
@@ -214,6 +261,9 @@ def siapkan(cfg, folder):
     (kerja / 'palet.json').write_text(json.dumps(bahan.pop('palet'), ensure_ascii=False, indent=1))
     (kerja / 'isi.json').write_text(json.dumps(bahan, ensure_ascii=False, indent=1))
     (kerja / 'velocity-blocks.md').write_text(ringkasan_vb(cfg))
+    draf = draf_klien(ref or {})
+    if draf:
+        bahan['foto_draf'] = siapkan_draf(cfg, kerja, draf)
     return bahan
 
 
@@ -284,7 +334,33 @@ footer & `gaya.css` sudah kamu susun di tahap tema: pertahankan dan lanjutkan da
 }
 
 
-def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False, donasi=False):
+DRAF_TEKS = """
+## Referensi = DRAF DESAIN MILIK KLIEN — situs harus SAMA PERSIS dengan draf (pengecualian aturan 1 & 3)
+
+Referensi situs ini bukan website orang lain, melainkan draf desain yang dibuat untuk klien ini dan
+sudah direview/disetujui klien. Pemilik minta hasilnya **sama persis dengan draf**. Karena itu:
+- **Tampilan sama persis**: urutan seksi, jumlah seksi, tata kolom, kartu, ikon/nomor, tombol, latar
+  (terang/gelap/foto), banner judul halaman, header (topbar, logo, menu, tombol ajakan) dan footer
+  per halaman mengikuti draf. Bandingkan potret draf (`potret-ref file://...<halaman>.html`) dengan
+  potret situs per seksi, desktop & HP, sampai tidak ada beda yang terlihat selain logo & warna yang
+  sudah ditetapkan di situs.
+- **Materi sama persis**: semua judul, paragraf, daftar, label tombol, angka, nama layanan, visi-misi,
+  profil pengurus, kontak, dan alamat disalin kata per kata dari HTML draf di `kerja/draf/*.html`.
+  Teks draf menang atas teks generator di `kerja/awal/`. Jangan merangkum, menambah, atau mengubah redaksi.
+  Seksi generator yang TIDAK ada di draf (mis. galeri, artikel, FAQ, statistik buatan generator) dibuang
+  dari halaman itu.
+- Padanan halaman: index.html → beranda, tentang.html → tentang-kami, layanan.html → layanan,
+  kontak.html → hubungi-kami; halaman draf lain dibuat installer dengan slug sama (visi-misi.html →
+  visi-misi, training.html → training, konsultasi.html → konsultasi) — WAJIB tulis `<slug>.html`-nya.
+  Hubungi Kami tetap memuat blok wajib (kontak, form, peta) di posisi yang sedekat mungkin dengan draf.
+- **Foto draf** sudah diunggah ke Media Library: peta nama berkas → URL di `kerja/foto-draf.json`.
+  Pakai di posisi yang sama seperti di draf (lihat `img/<nama>` di HTML/CSS draf).
+- Elemen demo TIDAK diambil: bilah pratinjau, pengalih warna `tema.js`, toast. Form memakai `velocity/form-kirim`.
+- `kerja/draf/style.css` = acuan ukuran, jarak, font, radius, bayangan. Salin nilainya ke atribut blok/`gaya.css`.
+"""
+
+
+def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False, donasi=False, foto_draf=None):
     blok_tema = ', '.join(f'velocity/{p.name}' for p in sorted((TEMA / 'blocks').iterdir()) if (p / 'block.json').is_file())
     blok_tema += ', Velocity Blocks: ' + ', '.join(j['name'] for j in blok_vb(cfg))
     target = sorted({p.stem for p in folder.glob('*.html') if '.' not in p.stem and p.stem != 'menu'})
@@ -302,6 +378,8 @@ def prompt_tugas(cfg, domain, folder, putaran, referensi, vd_store=False, donasi
     prompt = prompt.replace('{{BERITA}}', BERITA.read_text() if portal_berita(domain) else '')
     # Plugin Velocity Donasi terpasang (Paket G + form meminta donasi, permintaan user 2026-10-16).
     prompt = prompt.replace('{{DONASI}}', DONASI.read_text() if donasi else '')
+    if foto_draf is not None:
+        prompt += DRAF_TEKS
     for k, v in ganti.items():
         prompt = prompt.replace(k, v)
     return prompt
@@ -626,7 +704,7 @@ def main():
 def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
     (folder / 'claude').mkdir(parents=True, exist_ok=True)
     try:
-        bahan = siapkan(cfg, folder)
+        bahan = siapkan(cfg, folder, ref)
     except Exception as e:
         log(f'gagal:bahan:{type(e).__name__}:{e}'[:300], tanpa_waktu=True)
         return 2
@@ -654,7 +732,8 @@ def kerja(cfg, domain, folder, env, ref, opsi, putaran, menit):
         simpan_tema_lama(folder)
     log(f'agen mulai (skor awal {awal}, maks {putaran} putaran / {menit} menit)')
     kode, durasi, hasil = jalankan_claude(folder, env, menit, prompt_tugas(cfg, domain, folder, putaran, ref['url'],
-                                                                         bool(bahan.get('vd_store')), bool(bahan.get('donasi'))))
+                                                                         bool(bahan.get('vd_store')), bool(bahan.get('donasi')),
+                                                                         bahan.get('foto_draf')))
     catat_pemakaian(domain, hasil)
     minta = hasil.get('permintaan_per_model') or {}
     log(f"agen selesai kode={kode} menit={durasi} model={','.join(hasil.get('modelUsage') or minta) or '-'} "

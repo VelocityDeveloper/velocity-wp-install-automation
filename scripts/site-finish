@@ -1168,14 +1168,19 @@ def main():
     # Alamat untuk peta & footer: alamat KANTOR di company profile lebih dulu (data_klien
     # sudah memilihnya), baru alamat biodata FORM ISIAN. solusicerdasconsulting.com sempat
     # memetakan Bekasi (rumah pemilik) padahal kantornya Jakarta Selatan (2026-09-18).
-    address = ''
+    # Manifest `alamat_web=` (alamat yang diminta klien untuk web) menang atas semuanya.
+    address = (cfg.get('alamat_web') or '').strip()
     try:
+        if address:
+            raise StopIteration
         import importlib.machinery
         import importlib.util
         _l = importlib.machinery.SourceFileLoader('velocity_child_theme', str(Path(__file__).resolve().parent / 'velocity-child-theme'))
         _m = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
         _l.exec_module(_m)
         address = (_m.data_klien(domain, title).get('ALAMAT') or '').strip()
+    except StopIteration:
+        pass
     except Exception:
         address = ''
     # Manifest `alamat_publik=`: alamat biodata pemilik yang sudah disetujui user untuk tampil

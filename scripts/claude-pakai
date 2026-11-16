@@ -571,7 +571,8 @@ def catat_sesi_hidup():
         for ln in open(p):
             try:
                 r = json.loads(ln)
-                sudah.add((r["sid"], r.get("pid")))
+                if "email" in r:  # baris lama (tanpa email) dicatat ulang sekali agar akun desktop terbaca
+                    sudah.add((r["sid"], r.get("pid")))
             except (ValueError, KeyError):
                 pass
     except OSError:
@@ -587,7 +588,10 @@ def catat_sesi_hidup():
             env = baca_env(pid)
         except (OSError, ValueError, KeyError):
             continue
-        r = {"sid": sid, "pid": pid, "akun": akun, "entrypoint": d.get("entrypoint"), "dicatat": time.time()}
+        # Desktop app membawa akun yang dipakainya di env (CLAUDE_CODE_USER_EMAIL), bisa beda dari folder config
+        email = env.get("CLAUDE_CODE_USER_EMAIL", "")
+        akun = next((x["kunci"] for x in info_akun() if email and x["email"] == email), akun)
+        r = {"sid": sid, "pid": pid, "akun": akun, "email": email, "entrypoint": d.get("entrypoint"), "dicatat": time.time()}
         conn = (koneksi_jembatan(pid) or env.get("SSH_CONNECTION", "")).split()
         if len(conn) >= 2:
             r["ip"] = conn[0]
@@ -623,14 +627,16 @@ def sesi_aktif():
 
 
 def akun_sesi():
-    """{sid: akun} untuk akun selain akun 1, dari sesi.jsonl dan history.jsonl tiap folder akun."""
+    """{sid: [(t, akun), ...]} urut waktu, dari sesi.jsonl (tiap proses sesi) dan history.jsonl akun selain 1.
+    Sesi bot & resume bisa pindah akun di tengah jalan, jadi akun dicatat per waktu, bukan per sesi."""
     hasil = {}
     for akun, d in AKUN[1:]:
         try:
             for ln in open(d / "history.jsonl"):
                 try:
-                    hasil[json.loads(ln)["sessionId"]] = akun
-                except (ValueError, KeyError):
+                    r = json.loads(ln)
+                    hasil.setdefault(r["sessionId"], []).append((r["timestamp"] / 1000, akun))
+                except (ValueError, KeyError, TypeError):
                     pass
         except OSError:
             pass
@@ -638,13 +644,27 @@ def akun_sesi():
         for ln in open(DATA / "sesi.jsonl"):
             try:
                 r = json.loads(ln)
-                if r.get("akun") and r["akun"] != "1":
-                    hasil[r["sid"]] = r["akun"]
+                hasil.setdefault(r["sid"], []).append((r["dicatat"], r.get("akun") or "1"))
             except (ValueError, KeyError):
                 pass
     except OSError:
         pass
+    for x in hasil.values():
+        x.sort()
     return hasil
+
+
+def akun_hari(jejak, tgl):
+    """Akun sesi pada tanggal WIB tgl: terbanyak di hari itu, kalau tak ada jejak = jejak terakhir sebelumnya
+    (atau pertama sesudahnya). shortcut: per hari, sesi yang pindah akun di hari yang sama ikut akun mayoritas;
+    pecah per jam bila selisihnya terasa."""
+    if not jejak:
+        return "1"
+    hari = [a for t, a in jejak if datetime.fromtimestamp(t, WIB).strftime("%Y-%m-%d") == tgl]
+    if hari:
+        return max(set(hari), key=hari.count)
+    sebelum = [a for t, a in jejak if datetime.fromtimestamp(t, WIB).strftime("%Y-%m-%d") < tgl]
+    return sebelum[-1] if sebelum else jejak[0][1]
 
 
 def info_akun():
@@ -815,11 +835,15 @@ def main():
                 nama = "Belum teridentifikasi (" + ("desktop" if jalur == "desktop" else "terminal") + ")"
                 asal = "sebelum pencatat identitas dipasang" if not h else "tanpa SSH (lokal/tmux)"
         o = orang.setdefault(nama, {"nama": nama, "divisi": divisi.get(nama, ""), "sesi": []})
-        o["sesi"].append({
-            "sid": s["sid"], "akun": akun_per.get(s["sid"], "1"), "jalur": jalur, "asal": asal, "judul": s["judul"] or "",
-            "jenis": koreksi.get(s["sid"]) or tebak_jenis(s), "mulai": s["mulai"], "akhir": s["akhir"],
-            "aktif": s["sid"] in aktif, "hari": {t: {m: v for m, v in pm.items()} for t, pm in s["hari"].items()},
-        })
+        per_akun = {}  # sesi yang pindah akun dipecah: bagian akun 1 tetap sid asli, bagian lain sid:<akun>
+        for t, pm in s["hari"].items():
+            per_akun.setdefault(akun_hari(akun_per.get(s["sid"]), t), {})[t] = {m: v for m, v in pm.items()}
+        for ak, hari in sorted(per_akun.items()):
+            o["sesi"].append({
+                "sid": s["sid"] if ak == min(per_akun) else f"{s['sid']}:{ak}", "akun": ak, "jalur": jalur, "asal": asal,
+                "judul": s["judul"] or "", "jenis": koreksi.get(s["sid"]) or tebak_jenis(s), "mulai": s["mulai"], "akhir": s["akhir"],
+                "aktif": s["sid"] in aktif, "hari": hari,
+            })
 
     # Run agent = sid transkrip folder kerjanya; pinjam judulnya (awal tugas) supaya isi sesi terbaca
     judul_kerja = {x["sid"]: x["judul"] for n in orang.values() for x in n["sesi"]

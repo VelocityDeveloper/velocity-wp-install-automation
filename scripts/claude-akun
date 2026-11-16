@@ -2,8 +2,9 @@
 """Pembungkus `claude` untuk agen installer: pilih langganan Claude yang masih punya kuota.
 
 Dua langganan (5 Okt 2026): akun 1 = /root/.claude (bantuanvdc), akun 2 = /root/.claude-2 (revisiweb).
-Akun 1 selalu didahulukan; pindah ke akun 2 kalau akun 1 mendekati batas atau baru saja kena limit,
-kembali ke akun 1 begitu kuotanya pulih.
+Akun utama didahulukan (13 Nov 2026: akun 2, dulu akun 1; ubah lewat CLAUDE_AKUN_UTAMA=1|2);
+pindah ke akun lain kalau akun utama mendekati batas atau baru saja kena limit, kembali ke akun
+utama begitu kuotanya pulih.
 
 Pilihan akun:
   - Proaktif: batas 5 jam & mingguan tiap akun dari /brain/limit.json & limit-2.json (claude-limit).
@@ -43,13 +44,14 @@ LIMIT = {"1": BRAIN / "limit.json", "2": BRAIN / "limit-2.json"}
 CLAUDE_LIMIT = Path(__file__).resolve().parent / "claude-limit"
 DATA = Path("/var/lib/velocity/claude-akun")
 STATUS = BRAIN / "claude-akun.json"
+UTAMA = os.environ.get("CLAUDE_AKUN_UTAMA", "").strip() or "2"  # 13 Nov 2026: installer pindah ke Claude 2
 AMBANG = float(os.environ.get("CLAUDE_AKUN_AMBANG") or 95)
 SEGAR = 180       # detik: umur maksimal data batas sebelum disegarkan
 BASI = 1800       # detik: data batas lebih tua dari ini tidak dipercaya (anggap akun masih bisa)
 POLA_LIMIT = re.compile(r"usage limit reached|hit your (?:usage )?limit|(?:5-hour|weekly|session) limit reached"
                         r"|limit reached\s*[·∙|]|out of (?:extra )?usage", re.I)
 # "specified API usage limits" (22 Okt 2026): batas belanja bulanan kunci API tercapai, sama-sama ke paket.
-POLA_KREDIT = re.compile(r"credit balance is too low|reached your specified API usage limits", re.I)
+POLA_KREDIT = re.compile(r"credit balance is too low|reached your specified API usage limits|invalid api key|invalid x-api-key", re.I)  # 13 Nov 2026: kunci API ditolak juga -> pakai paket
 KREDIT = DATA / "api-kredit-habis.json"
 KREDIT_JEDA = 3600  # detik: lama kunci API dilewati sesudah kredit habis
 
@@ -95,12 +97,12 @@ def pilih(kecuali=()):
     if paksa in AKUN:
         return paksa, "dipaksa CLAUDE_AKUN"
     segarkan()
-    calon = [a for a in AKUN if a not in kecuali] or list(AKUN)
+    calon = sorted([a for a in AKUN if a not in kecuali] or list(AKUN), key=lambda a: a != UTAMA)
     info = {a: keadaan(a) for a in calon}
     for a in calon:
         persen, _, alasan = info[a]
         if persen is None or persen < AMBANG:
-            return a, alasan if a == "1" else f"Claude 1 penuh ({keadaan('1')[2]}); Claude 2 {alasan}"
+            return a, alasan if a == UTAMA else f"Claude {UTAMA} penuh ({keadaan(UTAMA)[2]}); Claude {a} {alasan}"
     a = min(calon, key=lambda x: info[x][0] if info[x][0] is not None else 0)
     return a, "semua akun penuh, pakai yang paling longgar (" + ", ".join(f"Claude {x} {info[x][2]}" for x in calon) + ")"
 

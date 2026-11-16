@@ -28,7 +28,7 @@ SETELAN = GUARD_DIR / 'setelan.json'  # {celah_server: [host], terakhir: 'YYYY-M
 INSIDEN = GUARD_DIR / 'insiden.jsonl'
 CMS_HASIL = Path('/var/lib/velocity/server-cms/hasil')
 JAM_LAPORAN = (7, 0)  # WIB, sesudah scan antivirus 01:30 & CMS 02:00
-SERVER_BAWAAN = ['157.66.55.81', '103.103.175.182']  # Sanke & Farnaz: server uji tanpa cPGuard
+SERVER_BAWAAN = ['157.66.55.81', '103.103.175.182']  # Sanke & Shiro (dulu Farnaz, IP sama): server uji tanpa cPGuard
 BATAS_SSH = 900
 # Jenis kerentanan tanpa login yang polanya bisa ditahan di WAF (virtual patch) sampai plugin diperbarui
 POLA_PATCH = re.compile(r'(?i)(remote code|code execution|code injection|sql injection|file upload|file inclusion|'

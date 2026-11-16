@@ -84,6 +84,8 @@ PY
 notify() {
   # Notifikasi tidak boleh menggagalkan instalasi.
   [[ "$MODE" == "apply" ]] || return 0
+  # NOTIF_GAGAL=0 (run manual) = notif FAILED tidak dikirim; status tetap tercatat di log/state.
+  [[ "$1" == "FAILED" && "${NOTIF_GAGAL:-1}" == "0" ]] && return 0
   /usr/bin/python3 "$SCRIPTS/notify-telegram.py" "$DOMAIN" "$1" "${2:-}" >> "$LOG" 2>&1 || true
 }
 # Kepemilikan wp-content dikembalikan ke user situs di akhir setiap run (scripts/pemilik_wp.py;

@@ -14,6 +14,7 @@ disimpan sebagai <berkas>.<waktu>.bak supaya suntingan PM tidak hilang. Model = 
 (sama dengan agen desain); pemakaian token ke usage.jsonl peran laravel_brief.
 """
 import fcntl
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -802,6 +803,22 @@ def jalankan(DC, env, opus, slug, jenis, p):
         opus = 'claude-sonnet-5-5'
         env = {k: v for k, v in env.items() if k not in ('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
                                                      'ANTHROPIC_SMALL_FAST_MODEL')}
+    # Hemat token (10 Nov 2026): bahan + model sama persis dengan run sukses terakhir dan hasilnya masih ada
+    # -> Claude tidak dijalankan ulang. BRIEF_PAKSA=1 memaksa jalan.
+    dok = L.folder_dok(slug)
+    stat = sorted((x.name, x.stat().st_size, int(x.stat().st_mtime)) for x in dok.iterdir() if x.is_file()) if dok.is_dir() else []
+    sidik = hashlib.md5(f'{jenis}\0{opus}\0{prompt}\0{stat}'.encode()).hexdigest()
+    keluaran = {'saran': 'saran.json', 'rangkuman': 'rangkuman.json', 'susun': 'PRD.md', 'diagram': 'DATABASE.md',
+                'estimasi': 'fitur.json'}.get(jenis)
+    if (os.environ.get('BRIEF_PAKSA') != '1' and keluaran and (L.folder(slug) / keluaran).is_file()
+            and (p.get('brief_md5') or {}).get(jenis) == sidik):
+        log(f'{JUDUL_KERJA[jenis]}: bahan sama persis dengan run sebelumnya, Claude tidak dijalankan ulang (hemat token).')
+        try:  # dihitung pantau-hemat-model
+            with open('/var/lib/velocity/laravel/brief-lewati.jsonl', 'a') as fl:
+                fl.write(json.dumps({'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'proyek': slug, 'jenis': jenis}) + '\n')
+        except OSError:
+            pass
+        return 0
     log(f"Claude ({opus}) {JUDUL_KERJA[jenis]}…")
     log(f'Panjang bahan: {len(prompt):,} karakter. Biasanya 2–6 menit.')
     # Gambar / PDF hasil scan dibaca Claude sendiri: alat Read saja, folder kerja = folder dokumen
@@ -903,6 +920,7 @@ def jalankan(DC, env, opus, slug, jenis, p):
         for f in fitur:
             log(f"  {f['id']} {f['judul']} — {len(f['kriteria'])} kriteria, agen {f['jam_agen']} j, webmaster {f['jam_webmaster']} j")
         L.catat(slug, 'Claude', f'memecah PRD jadi {len(fitur)} fitur')
+    L.ubah_proyek(slug, lambda x: x.setdefault('brief_md5', {}).__setitem__(jenis, sidik))
     return 0
 
 

@@ -1,11 +1,10 @@
 <script setup>
 // Monitoring sistem & keamanan server hosting (sub-menu Server). Data: GET /api/servers/monitor
 // (installer_status.py → scripts/server_monitor_agent.py lewat SSH, hanya baca, cache 60 dtk).
-// Dasar modul keamanan sendiri pengganti cPGuard; angka cPGuard ditampilkan sebagai pembanding.
+// Dasar modul keamanan sendiri pengganti cPGuard.
 import PilihServer from '../components/PilihServer.vue'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import Ikon from '../components/Ikon.vue'
-import Info from '../components/Info.vue'
 import GrafikGaris from '../components/GrafikGaris.vue'
 import { minta, pakaiPolling, ukuranBerkas, waktuLalu, angka } from '../api.js'
 import { tabUrl } from '../laravel.js'
@@ -73,6 +72,9 @@ const GRAFIK = [
   { id: 'req', judul: 'Request per detik', ket: 'LiteSpeed', sumbu: angkaPendek, seri: [{ kunci: 'req', label: 'Req', warna: '#5b8cff' }], format: (v) => `${angkaPendek(v)}/s`, ruang: 80 },
   { id: 'conn', judul: 'Koneksi live', ket: 'koneksi HTTP/HTTPS aktif', seri: [{ kunci: 'conn', label: 'Koneksi', warna: '#5b8cff' }], format: angkaPendek, ruang: 88 },
   { id: 'disk', judul: 'Disk', ket: 'partisi terpenuh', seri: [{ kunci: 'disk', label: 'Disk', warna: '#a679e6' }], format: persen, persen: true },
+  // iDRAC (Dell, IPMI in-band): hanya server fisik yang punya BMC
+  { id: 'watt', judul: 'Daya listrik', ket: 'iDRAC · watt', seri: [{ kunci: 'watt', label: 'Daya', warna: '#5b8cff' }], format: (v) => `${Math.round(v)} W`, ruang: 88, idrac: true, sejak: '16 Nov' },
+  { id: 'inlet', judul: 'Suhu udara masuk', ket: 'iDRAC · garis putus = batas waspada', seri: [{ kunci: 'inlet', label: 'Suhu masuk', warna: '#cc7a33' }], format: (v) => `${Math.round(v)}°C`, ruang: 118, acuanInlet: true, idrac: true, sejak: '16 Nov' },
 ]
 // Puncak sumbu "rapi" (1/2/4/6/8 × 10^n, terbagi 4 dengan angka bulat) di atas nilai tertinggi
 function maksRapi(v) {
@@ -89,11 +91,14 @@ function grafikServer(host, jenis) {
   const sis = servers.value.find((s) => s.host === host)?.sistem || {}
   // VPS tanpa sensor suhu (mis. KVM) → grafik suhu tidak ditampilkan sama sekali
   const tanpaSensor = sis.suhu == null && !titik.some((q) => q.suhu != null)
-  return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id) && !(gr.id === 'suhu' && tanpaSensor)).map((gr) => {
+  const idr = servers.value.find((s) => s.host === host)?.idrac
+  const tanpaIdrac = !idr && !titik.some((q) => q.watt != null)
+  return GRAFIK.filter((gr) => !(GRAFIK_DISEMBUNYIKAN[jenis] || []).includes(gr.id) && !(gr.id === 'suhu' && tanpaSensor) && !(gr.idrac && tanpaIdrac)).map((gr) => {
     // Seri tanpa data sama sekali (mis. Swap di server tanpa swap) tidak digambar
     const seri = gr.seri.filter((sr) => titik.some((q) => q[sr.kunci] != null))
     const acuan = gr.acuanCore && core ? { nilai: core, label: `${core} core` }
-      : gr.acuanSuhu && sis.suhu_batas ? { nilai: sis.suhu_batas, label: `${sis.suhu_batas}°C` } : null
+      : gr.acuanSuhu && sis.suhu_batas ? { nilai: sis.suhu_batas, label: `${sis.suhu_batas}°C` }
+      : gr.acuanInlet && idr?.inlet_waspada ? { nilai: idr.inlet_waspada, label: `${idr.inlet_waspada}°C` } : null
     const tinggi = Math.max(0, ...seri.map((sr) => puncak(titik, sr.kunci)), acuan?.nilai || 0)
     const satu = (sr) => `sekarang ${gr.format(nilaiAkhir(titik, sr.kunci) ?? 0)} · rata ${gr.format(rata(titik, sr.kunci))} · puncak ${gr.format(puncak(titik, sr.kunci))}`
     return { ...gr, seri, ada: seri.length > 0, maks: gr.persen ? 100 : maksRapi(tinggi), acuan,
@@ -162,6 +167,19 @@ function tingkatSuhu(sis) {
   return sis.suhu >= batas ? 'bahaya' : sis.suhu >= batas - 10 ? 'waspada' : ''
 }
 
+// Sensor iDRAC: ambang waspada/kritis dari BMC (R630: masuk 42/47, buang 70/75 °C)
+function tingkatIdrac(idr, k) {
+  const v = idr?.[k]
+  if (v == null) return ''
+  return idr[`${k}_kritis`] && v >= idr[`${k}_kritis`] ? 'bahaya' : idr[`${k}_waspada`] && v >= idr[`${k}_waspada`] ? 'waspada' : ''
+}
+const tglBmc = (t) => { if (!t) return '?'; const d = new Date(t * 1000); return `${d.getDate()} ${BULAN[d.getMonth()]} ${d.getFullYear()}` }
+const RESTORE = { previous: 'ikut kondisi sebelum listrik putus', 'always-on': 'selalu menyala', 'always-off': 'tetap mati, harus dinyalakan manual' }
+const waktuBmc = (t) => (t ? `${tglBmc(t)} ${dua(new Date(t * 1000).getHours())}.${dua(new Date(t * 1000).getMinutes())}` : '?')
+const kipasMati = (idr) => (idr?.kipas || []).filter((k) => !k.ok)
+const psuTanpaCadangan = (idr) => (idr?.psu || []).some((p) => p.masalah) || /Lost/i.test(idr?.psu_redundansi || '')
+const kwhPerHari = (idr) => (idr?.kwh != null && idr.kwh_sejak ? idr.kwh / Math.max(1, (Date.now() / 1000 - idr.kwh_sejak) / 86400) : null)
+
 // Aturan peringatan per server → { judul, teks, tingkat: bahaya|waspada|info }
 function periksa(s) {
   if (!s.ok) return [{ judul: 'Tidak tersambung', teks: s.error || 'SSH gagal', tingkat: 'bahaya' }]
@@ -186,6 +204,13 @@ function periksa(s) {
   if (sis.iowait >= 20) tambah('waspada', `I/O wait ${sis.iowait}%`, 'disk jadi penghambat')
   const ts = tingkatSuhu(sis)
   if (ts) tambah(ts, `CPU ${Math.round(sis.suhu)}°C`, `batas panas ${sis.suhu_batas || BATAS_SUHU}°C, cek kipas/pendingin ruangan`)
+  for (const [k, label] of [['inlet', 'Suhu udara masuk'], ['exhaust', 'Suhu udara buang']]) {
+    const t = tingkatIdrac(s.idrac, k)
+    if (t) tambah(t, `${label} ${Math.round(s.idrac[k])}°C`, `iDRAC: batas waspada ${s.idrac[`${k}_waspada`]}°C, kritis ${s.idrac[`${k}_kritis`]}°C, cek pendingin ruang server`)
+  }
+  if (kipasMati(s.idrac).length) tambah('bahaya', `Kipas bermasalah: ${kipasMati(s.idrac).map((k) => k.nama).join(', ')}`, 'iDRAC: RPM 0 atau status tidak normal')
+  if (s.idrac?.chassis?.gangguan?.length) tambah('bahaya', 'Gangguan perangkat keras', `iDRAC chassis: ${s.idrac.chassis.gangguan.join(', ')}`)
+  if (s.idrac?.chassis?.intrusion === 'active') tambah('waspada', 'Casing server terbuka', 'iDRAC: Chassis Intrusion aktif')
   const fw = s.firewall
   const backup = s.jenis === 'backup'
   const pc = pcKantor(s)
@@ -203,7 +228,7 @@ function periksa(s) {
   else {
     if (fw.TESTING === '1') tambah('bahaya', 'CSF mode TESTING', 'aturan firewall dihapus otomatis tiap 5 menit')
     if (fw.LF_DAEMON !== '1') tambah('bahaya', 'LFD nonaktif di csf.conf', 'LF_DAEMON bukan 1, brute force tidak diblokir')
-    if (fw.DENY_IP_LIMIT && fw.deny_permanen >= Number(fw.DENY_IP_LIMIT)) tambah('info', 'Daftar blokir permanen penuh', `${fw.deny_permanen}/${fw.DENY_IP_LIMIT}, IP lama tergeser keluar`)
+    if (fw.DENY_IP_LIMIT && fw.deny_permanen >= Number(fw.DENY_IP_LIMIT)) tambah('info', 'Daftar blokir permanen berputar', `${fw.deny_permanen}/${fw.DENY_IP_LIMIT}: IP terlama dilepas otomatis (normal, IP bot cepat berganti)`)
   }
   const k = s.keamanan || {}
   if (k.ssh_permitrootlogin === 'yes' && k.ssh_passwordauthentication === 'yes') tambah('waspada', 'Root SSH boleh pakai sandi', `port ${k.ssh_port}, sebaiknya kunci SSH saja`)
@@ -220,8 +245,6 @@ function periksa(s) {
   else if (satuTerbanyak >= 100) tambah('waspada', `Antrean email ${angka(satuTerbanyak)} dari satu pengirim`, teratas)
   else if (antreanAkun >= 300) tambah('info', `Antrean email akun ${angka(antreanAkun)}`, `tersebar (terbanyak ${teratas}), kemungkinan ditunda server penerima`)
   if (h.antrean_sistem >= 300) tambah('info', `Antrean surat sistem ${angka(h.antrean_sistem)}`, 'alert/bounce ke root macet, cek alias root di /etc/aliases')
-  if (s.cpguard && Object.values(s.cpguard.proses || {}).some((v) => !v)) tambah('waspada', 'Proses cPGuard berhenti', Object.entries(s.cpguard.proses).filter(([, v]) => !v).map(([n]) => n).join(', '))
-  if (s.cpguard?.malware) tambah('bahaya', `cPGuard: ${s.cpguard.malware} malware 24 jam`, 'cek Malware Scanner cPGuard')
   for (const [bagian, g] of Object.entries(s.galat || {})) tambah('info', `Data ${bagian} gagal dibaca`, g)
   const urut = { bahaya: 0, waspada: 1, info: 2 }
   return p.sort((a, b) => urut[a.tingkat] - urut[b.tingkat])
@@ -247,7 +270,6 @@ const ringkas = computed(() => {
     blokir: s?.firewall?.blokir_24j || 0,
     gagal: s?.firewall?.gagal_24j || 0,
     akun: s?.hosting?.akun || 0,
-    cpg: s?.cpguard || null,
   }
 })
 
@@ -261,7 +283,7 @@ const PEMICU = {
 const pemicu = (k) => PEMICU[k] || k.replace(/^LF_/, '')
 
 function modulKeamanan(s) {
-  const k = s.keamanan || {}, fw = s.firewall, cpg = s.cpguard
+  const k = s.keamanan || {}, fw = s.firewall
   const m = []
   if (s.jenis === 'lokal') {
     const f2b = (s.layanan || []).find((l) => l.nama === 'fail2ban')
@@ -292,10 +314,6 @@ function modulKeamanan(s) {
   m.push({ judul: 'WAF ModSecurity', teks: k.modsecurity === 'yes' ? (ruleset ? `ruleset ${k.modsecurity_ruleset}` : 'aktif, ruleset belum dipasang') : 'mati', st: k.modsecurity === 'yes' && ruleset ? 'baik' : 'waspada', ikon: 'perisai' })
   m.push({ judul: 'Kernel & paket', teks: k.perlu_reboot ? 'perlu reboot agar pembaruan dipakai' : k.perlu_reboot === false ? 'tidak perlu reboot' : 'status tidak diketahui', st: k.perlu_reboot ? 'waspada' : 'baik', ikon: 'ulang' })
   m.push({ judul: 'SELinux', teks: k.selinux || 'tidak diketahui', st: 'info', ikon: 'kunci' })
-  if (cpg) {
-    const mati = Object.entries(cpg.proses || {}).filter(([, v]) => !v).map(([n]) => n)
-    m.push({ judul: 'cPGuard (pembanding)', teks: `v${cpg.versi || '?'} · ${mati.length ? `berhenti: ${mati.join(', ')}` : 'proses berjalan'}`, st: mati.length ? 'waspada' : 'baik', ikon: 'pantau' })
-  }
   return m
 }
 const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO' }
@@ -318,7 +336,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
     <div v-if="monitor.memuat.value && !monitor.data.value" class="skeleton" aria-busy="true">
       <p class="redup status-muat" role="status">Memeriksa semua server lewat SSH (±5–10 detik)…</p>
       <div class="ringkas">
-        <div v-for="i in 4" :key="i" class="kartu tile"><span class="sk sk-ikon" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks pendek" /></div></div>
+        <div v-for="i in 3" :key="i" class="kartu tile"><span class="sk sk-ikon" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks pendek" /></div></div>
       </div>
       <div class="sk-menu"><span v-for="i in 6" :key="i" class="sk sk-pil" /></div>
       <section class="kartu sk-banner"><span class="sk sk-ikon besar" /><div><span class="sk sk-teks" /><span class="sk sk-angka" /><span class="sk sk-teks panjang" /><span class="sk sk-teks panjang" /></div><span class="sk sk-cincin" /></section>
@@ -347,13 +365,6 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
           <div class="kartu tile">
             <span class="tile-ikon ungu"><Ikon nama="perisai" :ukuran="20" /></span>
             <div><span class="redup">IP diblokir · 24 jam</span><b>{{ angka(ringkas.blokir) }}</b><small class="redup">{{ angka(ringkas.gagal) }} percobaan login gagal</small></div>
-          </div>
-          <div class="kartu tile">
-            <span class="tile-ikon" :class="ringkas.cpg?.malware ? 'merah' : 'hijau'"><Ikon nama="pantau" :ukuran="20" /></span>
-            <div><span class="redup">cPGuard · 24 jam <Info label="Tentang angka cPGuard" rata="kanan"><p>Angka dari database cPGuard sebagai pembanding selama modul keamanan sendiri dibangun (jalan paralel).</p></Info></span>
-              <template v-if="ringkas.cpg"><b>{{ angka(ringkas.cpg.malware || 0) }} malware</b><small class="redup">{{ angka(ringkas.cpg.waf || 0) }} kejadian WAF</small></template>
-              <template v-else><b>–</b><small class="redup">tidak terpasang</small></template>
-            </div>
           </div>
         </div>
 
@@ -446,6 +457,63 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
                 <small class="redup">Sisa {{ ukuranBerkas(d.free) }} · Total {{ ukuranBerkas(d.total) }}<template v-if="d.inode != null"> · inode {{ d.inode }}%</template></small>
               </div>
             </div>
+          </section>
+
+          <section v-if="terpilih.idrac" class="kartu" aria-labelledby="judul-idrac">
+            <div class="kartu-judul"><h2 id="judul-idrac"><Ikon nama="daya" :ukuran="16" /> iDRAC</h2><span class="redup">sensor BMC Dell lewat IPMI</span></div>
+            <div class="resource">
+              <div v-if="terpilih.idrac.watt != null" class="res">
+                <div class="res-kepala"><span>Daya listrik</span><b>{{ terpilih.idrac.watt }} W</b></div>
+                <div class="meter"><i :style="{ width: `${Math.min(100, (terpilih.idrac.watt / (terpilih.idrac.puncak_watt || terpilih.idrac.watt)) * 100)}%` }" /></div>
+                <small class="redup">≈ {{ angkaPendek((terpilih.idrac.watt * 24) / 1000) }} kWh/hari pada beban ini<template v-if="terpilih.idrac.puncak_watt"> · puncak {{ terpilih.idrac.puncak_watt }} W ({{ tglBmc(terpilih.idrac.puncak_waktu) }})</template></small>
+              </div>
+              <div v-if="terpilih.idrac.kwh != null" class="res">
+                <div class="res-kepala"><span>Energi terpakai</span><b>{{ angka(Math.round(terpilih.idrac.kwh)) }} kWh</b></div>
+                <small class="redup">sejak {{ tglBmc(terpilih.idrac.kwh_sejak) }} · rata {{ angkaPendek(kwhPerHari(terpilih.idrac)) }} kWh/hari</small>
+              </div>
+              <div v-for="[k, label] in [['inlet', 'Suhu udara masuk'], ['exhaust', 'Suhu udara buang']].filter(([k]) => terpilih.idrac[k] != null)" :key="k" class="res">
+                <div class="res-kepala"><span>{{ label }}</span><b>{{ Math.round(terpilih.idrac[k]) }}°C</b></div>
+                <div class="meter" :class="tingkatIdrac(terpilih.idrac, k)"><i :style="{ width: `${Math.min(100, (terpilih.idrac[k] / (terpilih.idrac[`${k}_kritis`] || 100)) * 100)}%` }" /></div>
+                <small class="redup">batas waspada {{ terpilih.idrac[`${k}_waspada`] ?? '?' }}°C · kritis {{ terpilih.idrac[`${k}_kritis`] ?? '?' }}°C</small>
+              </div>
+              <div v-if="terpilih.idrac.cpu?.length" class="res">
+                <div class="res-kepala"><span>Suhu prosesor</span><b>{{ Math.round(Math.max(...terpilih.idrac.cpu)) }}°C</b></div>
+                <small class="redup">{{ terpilih.idrac.cpu.map((v, i) => `CPU${i + 1} ${Math.round(v)}°C`).join(' · ') }}</small>
+              </div>
+              <div v-for="ps in terpilih.idrac.psu" :key="ps.nama" class="res">
+                <div class="res-kepala"><span>Power supply {{ ps.nama }}</span><b :class="{ 'teks-bahaya': ps.masalah }">{{ ps.masalah ? 'Tanpa listrik' : ps.volt != null ? `${ps.volt} V · ${ps.amp ?? '?'} A` : 'OK' }}</b></div>
+                <small class="redup">{{ ps.status || 'status tidak terbaca' }}</small>
+              </div>
+              <div v-if="terpilih.idrac.psu?.length" class="res">
+                <div class="res-kepala"><span>Cadangan PSU</span><b :class="{ 'teks-bahaya': psuTanpaCadangan(terpilih.idrac) }">{{ psuTanpaCadangan(terpilih.idrac) ? 'Tidak ada' : 'Ada' }}</b></div>
+                <small class="redup">{{ psuTanpaCadangan(terpilih.idrac) ? 'jalan dengan satu PSU, PSU itu mati = server mati' : `${terpilih.idrac.psu.length} PSU menyala` }}</small>
+              </div>
+              <div v-if="terpilih.idrac.kipas?.length" class="res">
+                <div class="res-kepala"><span>Kipas</span><b :class="{ 'teks-bahaya': kipasMati(terpilih.idrac).length }">{{ terpilih.idrac.kipas.length - kipasMati(terpilih.idrac).length }}/{{ terpilih.idrac.kipas.length }} normal</b></div>
+                <small class="redup">{{ angka(Math.min(...terpilih.idrac.kipas.map((k) => k.rpm || 0))) }}–{{ angka(Math.max(...terpilih.idrac.kipas.map((k) => k.rpm || 0))) }} RPM<template v-if="terpilih.idrac.kipas_redundansi"> · {{ terpilih.idrac.kipas_redundansi }}</template><template v-if="kipasMati(terpilih.idrac).length"> · bermasalah: {{ kipasMati(terpilih.idrac).map((k) => k.nama).join(', ') }}</template></small>
+              </div>
+              <div v-if="terpilih.idrac.chassis" class="res">
+                <div class="res-kepala"><span>Status chassis</span><b :class="{ 'teks-bahaya': terpilih.idrac.chassis.gangguan.length }">{{ terpilih.idrac.chassis.gangguan.length ? 'Ada gangguan' : 'Normal' }}</b></div>
+                <small class="redup"><template v-if="terpilih.idrac.chassis.gangguan.length">{{ terpilih.idrac.chassis.gangguan.join(', ') }} · </template>casing {{ terpilih.idrac.chassis.intrusion === 'active' ? 'TERBUKA' : 'tertutup' }}</small>
+                <small class="redup" :class="{ 'teks-bahaya': terpilih.idrac.chassis.restore === 'always-off' }">Setelah listrik pulih: {{ RESTORE[terpilih.idrac.chassis.restore] || terpilih.idrac.chassis.restore || '?' }}</small>
+              </div>
+            </div>
+            <template v-if="terpilih.idrac.sel">
+              <div class="kartu-judul sel-judul"><b>Log kejadian iDRAC</b><span class="redup">{{ angka(terpilih.idrac.sel.entri) }} entri · {{ terpilih.idrac.sel.persen ?? '?' }}% penuh · 5 terbaru</span></div>
+              <p v-if="!terpilih.idrac.sel.terakhir.length" class="redup">Log kosong.</p>
+              <div v-else class="tabel-wadah">
+                <table class="tabel">
+                  <thead><tr><th scope="col">Waktu</th><th scope="col">Sensor</th><th scope="col">Kejadian</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(k, i) in terpilih.idrac.sel.terakhir" :key="i">
+                      <td class="redup">{{ waktuBmc(k.t) }}</td>
+                      <td>{{ k.sensor }}</td>
+                      <td>{{ k.kejadian }}<span class="redup"> · {{ k.arah === 'Deasserted' ? 'pulih' : 'terjadi' }}<template v-if="k.bacaan"> · {{ k.bacaan }}</template></span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
           </section>
 
           <section class="kartu" aria-labelledby="judul-layanan">
@@ -565,7 +633,6 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
                 <div><dt>MySQL thread · slow query</dt><dd>{{ terpilih.hosting?.mysql_threads ?? '–' }} · {{ angka(terpilih.hosting?.mysql_slow) }}</dd></div>
                 <div><dt>Koneksi web aktif</dt><dd>{{ angka(terpilih.hosting?.koneksi_web) }}</dd></div>
                 <div><dt>Web server · PHP</dt><dd>{{ terpilih.keamanan?.webserver }} · {{ [terpilih.keamanan?.php1_release, terpilih.keamanan?.php2_release].filter((v) => v && v !== 'no').join(', ') }}</dd></div>
-                <div v-if="terpilih.cpguard"><dt>cPGuard 24 jam</dt><dd>malware {{ terpilih.cpguard.malware ?? '–' }} · WAF {{ angka(terpilih.cpguard.waf) }} · brute force {{ angka(terpilih.cpguard.bruteforce) }}</dd></div>
               </dl>
               <template v-if="terpilih.hosting?.koneksi_ip_teratas?.length">
                 <p class="label-negara redup">IP dengan koneksi web terbanyak</p>
@@ -585,7 +652,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .halaman { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1100px; }
 .halaman > * { min-width: 0; }
 .kepala-aksi { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.ringkas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.ringkas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .kartu-judul h2 { display: inline-flex; align-items: center; gap: 8px; }
 .tile { display: flex; gap: 14px; align-items: center; }
 .tile > div { display: grid; gap: 3px; min-width: 0; }
@@ -605,6 +672,7 @@ const LABEL_MODUL = { baik: 'AKTIF', waspada: 'CEK', bahaya: 'MATI', info: 'INFO
 .blok { display: block; font-size: 11.5px; }
 .kanan { text-align: right; white-space: nowrap; }
 .teks-bahaya { color: var(--bahaya); }
+.sel-judul { margin-top: 18px; }
 /* Status ala cPGuard */
 .status-proteksi { --warna: var(--baik); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 20px; align-items: center;
   background: linear-gradient(120deg, color-mix(in srgb, var(--warna) 14%, var(--kartu)) 0%, var(--kartu) 60%); border-left: 4px solid var(--warna); }

@@ -34,7 +34,10 @@ MIN_SELISIH = 100
 METRIK = {"cpu": "CPU", "ram": "RAM", "disk": "Disk"}
 LEWATI = {"PC Lokal", "PC Backup"}   # hanya server hosting
 SERVER_USAGE = set(filter(None, os.environ.get("NOTIF_SERVER_USAGE", "Sanke").split(",")))  # Afif: "batas 25% di wulan" (Wulan = Sanke sejak 23 Okt)
-RAID_SERVER = {"Sanke": "sanke"}  # nama tampil → alias SSH PC kantor
+RAID_SERVER = {"Sanke": "sanke", "Shiro": "shiro"}  # nama tampil → alias SSH PC kantor (Shiro 11 Nov)
+# Hardware shiro (11 Nov 2026, DIMM A1 riwayat UE ECC): spool kejadian velocity-hw-cek di server (reboot tak terduga,
+# SEL iDRAC Memory/ECC/PSU baru, hitungan rasdaemon naik). Ditarik tiap 5 mnt; id maju hanya bila kirim berhasil.
+HW_SERVER = {"Shiro": "shiro"}
 
 
 def token():
@@ -182,6 +185,32 @@ def cek_raid(st, uji):
             if not kirim(f"🟢 <b>{nama}: RAID/disk kembali sehat</b>", uji):
                 continue
         st["raid"][nama] = masalah
+
+
+def cek_hw(st, uji):
+    for nama, alias in HW_SERVER.items():
+        akhir = st["hw"].get(nama)
+        try:
+            r = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias,
+                                f"/usr/local/sbin/velocity-hw-cek baca {int(akhir or 0)}"],
+                               capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            continue
+        if r.returncode != 0:   # 255 = SSH gagal/server mati → urusan pengawas-server
+            continue
+        baris = []
+        for b in r.stdout.splitlines():
+            p = b.split("\t", 2)
+            if len(p) == 3 and p[0].isdigit():
+                baris.append((int(p[0]), p[2].replace("\\n", "\n")))
+        if akhir is None and not uji:   # pertama kali: jadikan patokan, kejadian lama/uji tidak dikirim
+            st["hw"][nama] = max([i for i, _ in baris], default=0)
+            continue
+        for i, teks in baris:
+            if not kirim(teks, uji):
+                break
+            if not uji:
+                st["hw"][nama] = i
 
 
 SELINUX_SERVER = {"Sanke": "sanke"}  # penjaga velocity-selinux-jaga (Pak Jamal, 26 Okt); mail root sanke = :blackhole:
@@ -376,7 +405,12 @@ def main():
     st.setdefault("fpm", {})
     st.setdefault("dovecot", {})
     st.setdefault("form", {})
+    st.setdefault("hw", {})
     cek_usage(st, a.uji)
+    try:
+        cek_hw(st, a.uji)
+    except Exception as e:
+        print(f"hw: {e}", file=sys.stderr)
     try:
         cek_serangan(st, a.uji)
     except Exception as e:

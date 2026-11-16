@@ -390,6 +390,45 @@
         "chatbot-wa-web-konsep-skrining-b-queue"
       ],
       "catatan": "Dibuat installer Laravel 2026-11-08. Update: /root/chatbot-wa-web-konsep-skrining-b/deploy-dev.sh"
+    },
+    {
+      "id": "redesign-borobudursunrise-net-bo",
+      "nama": "redesign borobudursunrise.net: booking tur, 8 bahasa, bayar online, admin",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8320,
+      "folder": "/home/redesign-borobudursunrise-net-bo",
+      "layanan": [
+        "redesign-borobudursunrise-net-bo-dev",
+        "redesign-borobudursunrise-net-bo-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-11-11. Update: /root/redesign-borobudursunrise-net-bo/deploy-dev.sh"
+    },
+    {
+      "id": "web-pesan-menu-manosa-coffee-ala",
+      "nama": "web pesan menu Manosa Coffee ala Opaper + QR meja + QRIS + kasir struk",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8330,
+      "folder": "/home/web-pesan-menu-manosa-coffee-ala",
+      "layanan": [
+        "web-pesan-menu-manosa-coffee-ala-dev",
+        "web-pesan-menu-manosa-coffee-ala-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-11-14. Update: /root/web-pesan-menu-manosa-coffee-ala/deploy-dev.sh"
+    },
+    {
+      "id": "web-database-penerbitan-buku-nom",
+      "nama": "web database penerbitan buku + nomor induk buku (NIPB) + scan barcode",
+      "jenis": "klien",
+      "stack": "Laravel · Inertia/Vue",
+      "port": 8340,
+      "folder": "/home/web-database-penerbitan-buku-nom",
+      "layanan": [
+        "web-database-penerbitan-buku-nom-dev",
+        "web-database-penerbitan-buku-nom-queue"
+      ],
+      "catatan": "Dibuat installer Laravel 2026-11-16. Update: /root/web-database-penerbitan-buku-nom/deploy-dev.sh"
     }
   ]
 }

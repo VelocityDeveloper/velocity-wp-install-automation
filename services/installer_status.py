@@ -2709,7 +2709,7 @@ velocityguard.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_
 USAGE_RIWAYAT = Path('/var/lib/velocity/server-usage/riwayat.jsonl')
 RENTANG_USAGE = {'1j': (3600, 300), '24j': (86400, 300), '7h': (7 * 86400, 1800), '30h': (30 * 86400, 7200),
                  '90h': (90 * 86400, 21600), '180h': (180 * 86400, 43200)}
-USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out', 'suhu')
+USAGE_KOLOM = ('cpu', 'ram', 'swap', 'disk', 'load', 'req', 'conn', 'net_in', 'net_out', 'suhu', 'watt', 'inlet')
 
 
 _riwayat_cache = {}
@@ -2789,6 +2789,8 @@ rt=/tmp/lshttpd/.rtreport; [ -r $rt ] && { echo "W $(grep -m1 '^REQ_RATE \[\]' $
 [ -r $rt ] || curl -s -m 3 -H "Host: $(hostname)" http://127.0.0.1/nginx_status 2>/dev/null | awk 'NR==3 && $3 ~ /^[0-9]+$/ {print "R "$3}'
 echo "E $(ss -Htn state established '( sport = :80 or sport = :443 )' 2>/dev/null | wc -l)"
 dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p'); [ -n "$dev" ] && echo "N $(grep -E "^ *$dev:" /proc/net/dev | tr ':' ' ')"
+# iDRAC (Dell, IPMI in-band ±0,15 dtk): daya listrik (W) + suhu udara masuk; /usr/bin langsung, bukan pembungkus shutdown-guard
+if [ -c /dev/ipmi0 ] && [ -x /usr/bin/ipmitool ]; then timeout 5 /usr/bin/ipmitool sensor get "Pwr Consumption" "Inlet Temp" 2>/dev/null | awk -F: '/Sensor ID/ {k = ($2 ~ /Pwr/) ? "P" : "I"} /Sensor Reading/ {split($2, a, " "); print k " " a[1]}'; fi
 '''
 
 
@@ -2818,6 +2820,10 @@ def usage_sampel(srv, key):
                 out['req_total'] = int(isi)
             elif kode == 'T':
                 out['suhu'] = round(int(isi) / 1000, 1)  # inti CPU terpanas, °C
+            elif kode == 'P':
+                out['watt'] = float(isi)  # daya listrik iDRAC
+            elif kode == 'I':
+                out['inlet'] = float(isi)  # suhu udara masuk iDRAC, °C
             elif kode == 'N':
                 p = isi.split()  # iface rx_bytes … (kolom ke-9 dari data = tx_bytes)
                 out['net'] = {'rx': int(p[1]), 'tx': int(p[9])}
@@ -2834,7 +2840,8 @@ def usage_titik(r):
     """Kolom riwayat dari hasil usage_sampel (tanpa net_in/net_out: butuh selisih counter)."""
     return dict(cpu=r.get('cpu'), ram=(r.get('ram') or {}).get('persen'), swap=(r.get('swap') or {}).get('persen'),
                 disk=max((d['persen'] for d in r.get('disks') or []), default=None), load=(r.get('load') or [None])[0],
-                core=r.get('cpu_core'), req=r.get('req'), conn=r.get('conn', r.get('established')), suhu=r.get('suhu'))
+                core=r.get('cpu_core'), req=r.get('req'), conn=r.get('conn', r.get('established')), suhu=r.get('suhu'),
+                watt=r.get('watt'), inlet=r.get('inlet'))
 
 
 def usage_net(net, lama, now, maks_dt):

@@ -323,7 +323,8 @@ def potret(cfg, domain, folder, sasaran, hp, referensi=False):
     kerja = folder / 'claude' / 'kerja'
     kerja.mkdir(parents=True, exist_ok=True)
     if referensi:
-        if not re.match(r'^https?://', sasaran):
+        # file:// = draf desain milik klien (referensi_desain.desain_lokal)
+        if not re.match(r'^(https?://|file:///home/On%20Progress/)', sasaran):
             print('potret-ref: butuh URL lengkap')
             return 2
         url, cookie, hapus = sasaran, None, None

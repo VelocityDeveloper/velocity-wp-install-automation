@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Pantau hasil penghematan model Claude (permintaan user 10 Nov 2026) dan lapor ke Telegram.
+
+Bandingkan pemakaian KEMARIN (WIB) dengan rata-rata harian sebelum perubahan (27 Okt–9 Nov 2026):
+biaya per skrip yang diubah, model yang benar-benar terpakai, panggilan gagal, brief yang dilewati,
+error layanan saran-jawaban/kasus-support.
+
+  pantau-hemat-model [--tanggal YYYY-MM-DD] [--coba]   (--coba = cetak saja, tanpa kirim)
+Timer: pantau-hemat-model.timer 07:05 WIB.
+"""
+import json
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+USAGE = Path('/var/lib/velocity/ai/usage.jsonl')
+LEWATI = Path('/var/lib/velocity/laravel/brief-lewati.jsonl')
+ENV = Path('/etc/velocity/secrets/telegram.env')
+CHAT_ID = '785329499'  # diminta user 10 Nov 2026
+WIB = timezone(timedelta(hours=7))
+DASAR_MULAI, DASAR_SAMPAI = date(2026, 10, 27), date(2026, 11, 9)  # sebelum perubahan
+DIUBAH = {  # skrip -> model yang diharapkan sesudah 10 Nov
+    'baca-form-claude': 'sonnet', 'redaksi-klien': 'sonnet', 'laporan-harian': 'sonnet',
+    'laravel-kemiripan': 'sonnet', 'velocity_update.py': 'sonnet/haiku', 'laravel-brief': 'sonnet+opus',
+    'saran-jawaban': 'haiku', 'kasus-support': 'haiku', 'laravel-agen': 'opus (sonnet opt-in)',
+}
+
+
+def tgl_wib(ts):
+    return datetime.fromisoformat(ts).astimezone(WIB).date()
+
+
+def kumpul(hari):
+    """{(skrip): [n, biaya, gagal, {model}]} untuk hari itu dan jumlah dasar."""
+    kini = defaultdict(lambda: [0, 0.0, 0, set()])
+    dasar = defaultdict(lambda: [0, 0.0])
+    tot_kini = tot_dasar = 0.0
+    with USAGE.open() as f:
+        for baris in f:
+            try:
+                d = json.loads(baris)
+                t = tgl_wib(d['ts'])
+            except (ValueError, KeyError):
+                continue
+            b = float(d.get('biaya_usd') or 0)
+            s = d.get('script') or '?'
+            if t == hari:
+                x = kini[s]
+                x[0] += 1
+                x[1] += b
+                x[2] += 0 if d.get('ok', True) else 1
+                x[3].add(str(d.get('model') or '?').replace('claude-', '').replace('-5-5', ''))
+                tot_kini += b
+            elif DASAR_MULAI <= t <= DASAR_SAMPAI:
+                dasar[s][0] += 1
+                dasar[s][1] += b
+                tot_dasar += b
+    return kini, dasar, tot_kini, tot_dasar
+
+
+def galat_layanan(unit, hari):
+    try:
+        out = subprocess.run(['journalctl', '-u', unit, '--no-pager', '-o', 'cat',
+                              '--since', f'{hari} 00:00', '--until', f'{hari + timedelta(days=1)} 00:00'],
+                             capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    gagal = [b for b in out.splitlines() if 'Traceback' in b or 'gagal' in b.lower()]
+    limit = sum(1 for b in gagal if 'usage_limit' in b or 'limit' in b.lower() and 'hit your' in b)
+    return limit, len(gagal) - limit
+
+
+def brief_lewati(hari):
+    if not LEWATI.is_file():
+        return 0
+    n = 0
+    for baris in LEWATI.read_text().splitlines():
+        try:
+            n += tgl_wib(json.loads(baris)['ts']) == hari
+        except (ValueError, KeyError):
+            pass
+    return n
+
+
+def susun(hari):
+    kini, dasar, tot_kini, tot_dasar = kumpul(hari)
+    hari_dasar = (DASAR_SAMPAI - DASAR_MULAI).days + 1
+    rata = tot_dasar / hari_dasar
+    persen = (tot_kini - rata) / rata * 100 if rata else 0
+    baris = [f'Pantau hemat model Claude — {hari:%d %b %Y}',
+             f'Total ${tot_kini:.1f} vs rata-rata sebelum ${rata:.1f}/hari ({persen:+.0f}%)', '',
+             'Skrip yang diubah (kemarin | rata2 sebelum per hari, $/panggilan):']
+    peringatan = []
+    for s, harap in DIUBAH.items():
+        n, b, g, model = kini.get(s, [0, 0.0, 0, set()])
+        dn, db = dasar.get(s, [0, 0.0])
+        per_dasar = db / dn if dn else 0
+        per_kini = b / n if n else 0
+        baris.append(f'• {s}: {n}× ${b:.2f} | {dn / hari_dasar:.0f}×/hr ${db / hari_dasar:.2f}; '
+                     f'${per_kini:.3f} vs ${per_dasar:.3f}/pgl; model {",".join(sorted(model)) or "-"}')
+        if g:
+            peringatan.append(f'{s}: {g} panggilan gagal')
+        if 'opus' in model and harap in ('sonnet', 'haiku'):
+            peringatan.append(f'{s}: masih memakai Opus')
+    lain = sorted(((s, v) for s, v in kini.items() if s not in DIUBAH), key=lambda i: -i[1][1])[:5]
+    if lain:
+        baris += ['', 'Terbesar lainnya:'] + [f'• {s}: {v[0]}× ${v[1]:.2f} ({",".join(sorted(v[3]))})' for s, v in lain]
+    baris += ['', f'Brief Laravel dilewati (bahan sama): {brief_lewati(hari)}×']
+    for unit in ('saran-jawaban', 'kasus-support'):
+        g = galat_layanan(unit, hari)
+        if g is None:
+            baris.append(f'Log {unit}: tak terbaca')
+            continue
+        baris.append(f'Log {unit}: gagal {g[1]}×, kuota habis {g[0]}×')
+        if g[1]:
+            peringatan.append(f'{unit}: {g[1]} baris gagal di log (bukan kuota) — cek apakah Haiku kurang mampu')
+        if g[0]:
+            peringatan.append(f'{unit}: kuota Claude habis {g[0]}× (bukan soal model)')
+    if peringatan:
+        baris += ['', '⚠️ Perlu dicek:'] + [f'- {p}' for p in peringatan]
+    return '\n'.join(baris)
+
+
+def kirim(teks):
+    token = next(b.split('=', 1)[1].strip() for b in ENV.read_text().splitlines() if b.startswith('TELEGRAM_BOT_TOKEN='))
+    data = urllib.parse.urlencode({'chat_id': CHAT_ID, 'text': teks[:4000]}).encode()
+    with urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=30) as r:
+        return json.loads(r.read()).get('ok')
+
+
+def main():
+    a = sys.argv[1:]
+    hari = date.fromisoformat(a[a.index('--tanggal') + 1]) if '--tanggal' in a else datetime.now(WIB).date() - timedelta(days=1)
+    teks = susun(hari)
+    print(teks)
+    if '--coba' not in a:
+        print('terkirim' if kirim(teks) else 'GAGAL kirim')
+
+
+if __name__ == '__main__':
+    main()

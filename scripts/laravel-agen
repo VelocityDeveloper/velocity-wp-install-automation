@@ -386,14 +386,17 @@ def prompt_fitur(p, fitur, f, app_dir=None):
     return t
 
 
-def jalankan_claude(DC, app_dir, prompt, menit, env):
+def jalankan_claude(DC, app_dir, prompt, menit, env, model=''):
     env = {k: v for k, v in env.items() if k != 'ANTHROPIC_DEFAULT_OPUS_MODEL'}
     opus = DC.opus_terbaru(env)
-    env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus,
-               ANTHROPIC_SMALL_FAST_MODEL=opus, CLAUDE_CODE_SUBAGENT_MODEL=opus)
+    if model == 'sonnet':  # uji hemat token per project: proyek.json "model_agen": "sonnet" (10 Nov 2026)
+        opus = 'claude-sonnet-5-5'
+    else:
+        env.update(ANTHROPIC_DEFAULT_HAIKU_MODEL=opus, ANTHROPIC_DEFAULT_SONNET_MODEL=opus,
+                   ANTHROPIC_SMALL_FAST_MODEL=opus, CLAUDE_CODE_SUBAGENT_MODEL=opus)
     log(f'model agen: {opus}, batas {menit} menit')
     perintah = [
-        DC.CLAUDE, '-p', prompt, '--model', 'opus',
+        DC.CLAUDE, '-p', prompt, '--model', opus,
         '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
         '--permission-mode', 'acceptEdits', '--json-schema', json.dumps(SKEMA),
         '--allowedTools', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite',
@@ -533,7 +536,10 @@ def verifikasi(app, app_dir, pengguna, port):
     kode_http = '000'
     for _ in range(20):
         time.sleep(1)
-        _, kode_http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/login'], app_dir, 15)
+        for jalur in ('login', 'masuk'):  # app boleh memindah halaman masuk ke /masuk
+            _, kode_http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/{jalur}'], app_dir, 15)
+            if kode_http == '200':
+                break
         if kode_http == '200':
             break
     log(f'  dev /login HTTP {kode_http}')
@@ -571,7 +577,10 @@ def deploy_dev(slug, app, app_dir, port):
             galat = f'$ {skrip} (kode {kode})\n{ekor(keluar, 60)}'
     if not galat:
         for _ in range(20):
-            _, http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/login'], app_dir, 15)
+            for jalur in ('login', 'masuk'):  # app boleh memindah halaman masuk ke /masuk
+                _, http = sh(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', f'http://127.0.0.1:{port}/{jalur}'], app_dir, 15)
+                if http == '200':
+                    break
             if http == '200':
                 break
             time.sleep(1)
@@ -708,7 +717,8 @@ def main():
             except BlockingIOError:
                 log('Menunggu antrean agen Claude (agen lain sedang bekerja)…')
                 fcntl.flock(kunci, fcntl.LOCK_EX)
-            hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f, app_dir), menit, env)
+            hasil = jalankan_claude(DC, app_dir, prompt_fitur(p, fitur, f, app_dir), menit, env,
+                                    str(p.get('model_agen') or ''))
         catat_pemakaian(DC, slug, fid, hasil, adalah_revisi)
         hari_ini = datetime.now().strftime('%Y-%m-%d')
         L.ubah_fitur(slug, lambda fs: next(x for x in fs if x['id'] == fid).setdefault('riwayat_menit', []).append(

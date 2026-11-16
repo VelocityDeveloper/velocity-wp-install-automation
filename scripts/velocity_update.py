@@ -74,8 +74,8 @@ SESI_DETIK = 30 * 86400
 
 STATUS = ('berjalan', 'bagus', 'perlu_perhatian', 'selesai', 'dihentikan')
 SUMBER_TETAP = ('kasus_support', 'installer_wp', 'laravel', 'crm_konsep', 'konsep_wm', 'omzet', 'webmaster', 'kasus_tim', 'kasus_ai',
-                'kasus_harian', 'wa3_jalur', 'wa3_aicoid', 'konsep_hosting', 'am_followup', 'kasus_meeting', 'efisiensi_langganan', 'konsep_halaman', 'order_legalitas')
-SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|kasus_ai|kasus_harian|kasus_meeting|efisiensi_langganan|konsep_halaman|order_legalitas|wa3_jalur|wa3_aicoid|konsep_hosting|am_followup|ai:[A-Za-z ]{1,30}'
+                'kasus_harian', 'wa3_jalur', 'wa3_aicoid', 'konsep_hosting', 'am_followup', 'konsep_token', 'konsep_order', 'notif_klien', 'kasus_meeting', 'efisiensi_langganan', 'konsep_halaman', 'order_legalitas')
+SUMBER_RE = re.compile(r'^(kasus_support|installer_wp|installer_paket|laravel|crm_konsep|konsep_wm|omzet|webmaster|kasus_tim|kasus_ai|kasus_harian|kasus_meeting|efisiensi_langganan|konsep_halaman|order_legalitas|wa3_jalur|wa3_aicoid|konsep_hosting|am_followup|konsep_token|konsep_order|notif_klien|ai:[A-Za-z ]{1,30}'
                        r'|manual:[a-z0-9-]{1,40}|ai_orang:[A-Za-z .]{1,40}|bahasa:[a-z0-9-]{2,40}|harga_domain:[a-z.]{2,12}:\d{4,8}:\d{4,8})(@\d{4}-\d{2}-\d{2})?$')
 REKAM_ENV = Path('/etc/velocity/secrets/pengawas-wa.env')     # REKAM_URL & REKAM_KUNCI (dipinjam dari pengawas-wa)
 REPO = Path('/opt/velocity-wp-install-automation')
@@ -248,6 +248,9 @@ def sumber_tersedia():
          ('wa3_aicoid', 'Iklan AI.co.id (jasa AI automation, AI penuh di wa3)'),
          ('konsep_hosting', 'Web konsep: ditawari hosting lebih besar atau tidak'),
          ('am_followup', 'Data AM: follow up per jenis vs deal (wa-am + Lead AM CRM)'),
+         ('konsep_token', 'Biaya token cek konsep (dasar harga konsep)'),
+         ('konsep_order', 'Order pembuatan: konsep vs non-konsep'),
+         ('notif_klien', 'Terminate & email notifikasi klien (Automation new-vd)'),
          ('ai:semua', 'Pemakaian AI semua tim')]
     try:
         for dv in json.loads(TOKEN_JSON.read_text()).get('divisi') or []:
@@ -1449,6 +1452,44 @@ def _detik_jam_kerja(a, b):
 assert _detik_jam_kerja(datetime(2026, 1, 1, 21), datetime(2026, 1, 2, 8)) == 7200  # 21-22 + 07-08
 
 
+def lama_dari_pesan(ms, harga_tawar, tgl_penawaran):
+    """Inti _lama_konsep untuk SATU chat. ms = [(datetime lokal, dari_kami, teks)] urut waktu; tgl_penawaran 'YYYY-MM-DD'.
+    Dipakai juga setoran Konsep CRM (/opt/konsep-chat) dengan pesan dari cache lokalnya. None = pesan harga tak ditemukan."""
+    h, tgl = harga_tawar, date.fromisoformat(tgl_penawaran)
+    jt = f'{h / 1e6:g}'
+    pola = {f'{h:,}'.replace(',', '.'), f'{h:,}', str(h), f'{h // 1000}rb', f'{h // 1000} rb', f'{h // 1000}k'} | \
+           {f'{a}{b}' for a in (jt, jt.replace('.', ',')) for b in (' j', 'j')}
+    harga = next((w for w, kami, t in ms if kami and w.date() >= tgl - timedelta(days=1) and any(p in t.lower() for p in pola)), None) \
+        or next((w for w, kami, t in ms if kami and w.date() == tgl and re.search(r'rp|harga|biaya|juta|jt', t, re.I)), None)
+    if not harga:
+        return None
+    ss = [m for m in ms if m[0] <= harga]
+    i = len(ss) - 1
+    while i > 0 and not ((ss[i][0] - ss[i - 1][0]).days >= 7 and not ss[i][1]):
+        i -= 1
+    ss = ss[i:]
+    tim = klien = 0
+    terlama, contoh = 0, None
+    t0, nunggu, sejak = ss[0][0], not ss[0][1], (ss[0][0], 'klien', ss[0][2])
+    for w, kami, t in ss[1:]:
+        if nunggu:
+            tim += _detik_jam_kerja(t0, w)
+        else:
+            klien += (w - t0).total_seconds()
+        if kami:
+            if nunggu and _detik_jam_kerja(sejak[0], w) > terlama:
+                terlama, contoh = _detik_jam_kerja(sejak[0], w), (sejak[0], w, sejak[1], sejak[2])
+            nunggu = bool(JANJI_TIM_RE.search(t)) and not BUKAN_JANJI_RE.search(t)
+            if nunggu:
+                j = JANJI_TIM_RE.search(t)
+                sejak = (w, 'tim', ('…' if j.start() > 60 else '') + t[max(0, j.start() - 60):j.end() + 25].strip())
+        elif not nunggu and not TUTUP_KLIEN_RE.search(t.strip()):
+            nunggu, sejak = True, (w, 'klien', t)
+        t0 = w
+    return {'awal': ss[0][0], 'harga': harga, 'total': (harga - ss[0][0]).total_seconds() / 3600,
+            'tim': tim / 3600, 'klien': klien / 3600, 'terlama': terlama / 3600, 'contoh': contoh}
+
+
 def _lama_konsep(d):
     """{nomor: {...}} lama diskusi chat konsep dari pesan klien pertama sampai pesan harga (perekam WA), dipisah
     klien menunggu tim vs tim menunggu klien (arahan user 3 Nov: yang boleh lama hanya jawaban klien).
@@ -1473,39 +1514,9 @@ def _lama_konsep(d):
     hasil = {}
     for x in tw:
         ms = sorted(pesan.get((x.get('akun'), x['nomor'])) or [], key=lambda m: m[0])
-        h, tgl = x['harga_ditawarkan'], date.fromisoformat(x['tgl_penawaran'])
-        jt = f'{h / 1e6:g}'
-        pola = {f'{h:,}'.replace(',', '.'), f'{h:,}', str(h), f'{h // 1000}rb', f'{h // 1000} rb', f'{h // 1000}k'} | \
-               {f'{a}{b}' for a in (jt, jt.replace('.', ',')) for b in (' j', 'j')}
-        harga = next((w for w, kami, t in ms if kami and w.date() >= tgl - timedelta(days=1) and any(p in t.lower() for p in pola)), None) \
-            or next((w for w, kami, t in ms if kami and w.date() == tgl and re.search(r'rp|harga|biaya|juta|jt', t, re.I)), None)
-        if not harga:
-            continue
-        ss = [m for m in ms if m[0] <= harga]
-        i = len(ss) - 1
-        while i > 0 and not ((ss[i][0] - ss[i - 1][0]).days >= 7 and not ss[i][1]):
-            i -= 1
-        ss = ss[i:]
-        tim = klien = 0
-        terlama, contoh = 0, None
-        t0, nunggu, sejak = ss[0][0], not ss[0][1], (ss[0][0], 'klien', ss[0][2])
-        for w, kami, t in ss[1:]:
-            if nunggu:
-                tim += _detik_jam_kerja(t0, w)
-            else:
-                klien += (w - t0).total_seconds()
-            if kami:
-                if nunggu and _detik_jam_kerja(sejak[0], w) > terlama:
-                    terlama, contoh = _detik_jam_kerja(sejak[0], w), (sejak[0], w, sejak[1], sejak[2])
-                nunggu = bool(JANJI_TIM_RE.search(t)) and not BUKAN_JANJI_RE.search(t)
-                if nunggu:
-                    j = JANJI_TIM_RE.search(t)
-                    sejak = (w, 'tim', ('…' if j.start() > 60 else '') + t[max(0, j.start() - 60):j.end() + 25].strip())
-            elif not nunggu and not TUTUP_KLIEN_RE.search(t.strip()):
-                nunggu, sejak = True, (w, 'klien', t)
-            t0 = w
-        hasil[x['nomor']] = {'awal': ss[0][0], 'harga': harga, 'total': (harga - ss[0][0]).total_seconds() / 3600,
-                             'tim': tim / 3600, 'klien': klien / 3600, 'terlama': terlama / 3600, 'contoh': contoh}
+        L = lama_dari_pesan(ms, x['harga_ditawarkan'], x['tgl_penawaran'])
+        if L:
+            hasil[x['nomor']] = L
     return hasil
 
 HOSTING_BESAR_RE = re.compile(r'hosting\s*(?:lebih besar|unlimited|\d+(?:[.,]\d+)?\s*(?:gb|tb)\b|(?:[3-9]\d\d|\d{4,})\s*mb\b)', re.I)
@@ -1698,6 +1709,233 @@ def metrik_konsep_hosting(mulai):
                    'biaya/harga/total dan angka minimal Rp1 jt. Hosting besar = sejak tanggal mulai ada pesan tim yang menyebut '
                    'hosting lebih dari 250 MB (mis. 1 GB, 500 MB, unlimited) atau "hosting lebih besar". Harga = harga terakhir '
                    'yang dicatat di halaman Konsep.'}
+
+
+LANGGANAN_CLAUDE_BLN = 4_000_000   # Max 20x akun 1 (bantuanvdc) ±$200 + pajak, kata Muh 12 Nov
+USD_PER_PERSEN = 17.8              # setara API per 1% jatah mingguan Max 20x; diukur mini PC (crm-sync jatah-claude.json) Okt–Nov 16,9–19,8
+RP_PER_USD = LANGGANAN_CLAUDE_BLN * 12 / 52 / (100 * USD_PER_PERSEN)   # ±Rp500: biaya langganan per $1 setara API
+
+
+def _rp_jt(v):
+    return f'Rp{v / 1e6:.2f} jt'.replace('.', ',')
+
+
+def _rp_rb(v):
+    return f'Rp{round(v / 1000):,} rb'.replace(',', '.')
+
+
+def _rp(v):
+    return f'Rp{round(v):,}'.replace(',', '.')
+
+
+def metrik_konsep_token(mulai):
+    """Bahan meeting Toro 10 Nov: biaya token Claude untuk mengecek konsep, sebagai dasar harga konsep.
+    Cek konsep = laravel-brief (rangkuman/PRD/estimasi/preview per project installer) + konsep-chat (rangkum & status chat).
+    Pembangunan dihitung terpisah: laravel-agen (aplikasi custom) + installer WordPress (desain-claude, permintaan-claude,
+    paket-g-*, dll.) yang domainnya = nama_web order konsep. Dikerjakan manual di sesi Claude Code tidak tercatat per project."""
+    brief, agen, chat, awal = collections.defaultdict(float), collections.defaultdict(float), collections.defaultdict(float), {}
+    try:
+        r = subprocess.run([API_SH, '/api/api/konsep-chat?per_page=200'], capture_output=True, text=True, timeout=120)
+        kc = {x['proyek_slug']: x for x in json.loads(r.stdout.splitlines()[0])['data'] if x.get('proyek_slug')}
+    except Exception:  # noqa: BLE001 — tanpa CRM kolom hasil kosong
+        kc = {}
+    web = {(x.get('order') or {}).get('nama_web'): p for p, x in kc.items() if (x.get('order') or {}).get('nama_web')}
+    with open(AI_USAGE) as f:
+        for l in f:
+            if '"laravel-' not in l and '"konsep-chat"' not in l and not any(f'"{w}"' in l for w in web):
+                continue
+            try:
+                d = json.loads(l)
+            except ValueError:
+                continue
+            s, p, usd, bln = d.get('script'), d.get('domain') or '', d.get('biaya_usd') or 0, d['ts'][:7]
+            if s == 'laravel-brief' and p.startswith('project-'):
+                brief[p] += usd
+                awal[p] = min(awal.get(p, d['ts'][:10]), d['ts'][:10])
+            elif p.startswith('project-'):   # laravel-agen, laravel-kemiripan: sama dengan /token/proyek
+                agen[p] += usd
+            elif s == 'konsep-chat':
+                chat[bln] += usd
+            elif p in web:
+                agen[web[p]] += usd
+    bulan = sorted({t[:7] for t in awal.values() if t >= mulai.isoformat()})
+    ringkas_bln, tb_bln = [], []
+    for b in bulan:
+        ps = [p for p, t in awal.items() if t[:7] == b]
+        rp_brief = sum(brief[p] for p in ps) * RP_PER_USD
+        rp_chat = chat.get(b, 0) * RP_PER_USD
+        order = _konsep_bulan(b)
+        dib = [p for p in ps if agen[p] > 0]
+        rp_agen = sum(agen[p] for p in dib) * RP_PER_USD
+        tot = rp_brief + rp_chat
+        tb_bln.append([f'{BULAN_ID[int(b[5:]) - 1]} {b[:4]}', len(ps), _rp(rp_brief), _rp(rp_chat) if rp_chat else '–',
+                       _rp(tot), _rp(tot / len(ps)), len(order), _rp(tot / len(order)) if order else '–',
+                       f'{len(dib)} · {_rp(rp_agen / len(dib))}' if dib else '–'])
+        ringkas_bln.append((b, len(ps), tot, len(order)))
+    # 30 hari terakhir = biaya sesudah penghematan model (Sonnet & cache brief sejak ±19 Okt)
+    batas = (date.today() - timedelta(days=30)).isoformat()
+    baru = [p for p, t in awal.items() if t >= batas]
+    hari_chat = (date.today() - date(2026, 11, 2)).days or 1        # konsep-chat baru tercatat sejak 2 Nov
+    chat_per_konsep = sum(chat.values()) * RP_PER_USD / max(1, len([p for p, t in awal.items() if t >= '2026-11-02']))
+    brief_baru = [brief[p] * RP_PER_USD for p in baru]
+    med = statistics.median(brief_baru) if brief_baru else 0
+    rata = statistics.mean(brief_baru) if brief_baru else 0
+    deal_baru = [p for p in baru if (kc.get(p) or {}).get('hasil') == 'deal']
+    cek_per_deal = (sum(brief_baru) + chat_per_konsep * len(baru)) / len(deal_baru) if deal_baru else None
+    dibangun = [agen[p] * RP_PER_USD for p in agen if agen[p] > 0 and (kc.get(p) or {}).get('hasil') == 'deal']
+    bangun_baru = sum(agen[p] for p in baru) * RP_PER_USD
+    porsi = round(100 * (sum(brief_baru) + chat_per_konsep * len(baru) + bangun_baru) / LANGGANAN_CLAUDE_BLN, 1)
+    hasil = {'judul': 'Biaya token cek konsep (dasar harga konsep)',
+             'ringkas': (f'Dihitung dari langganan Claude {_rp(LANGGANAN_CLAUDE_BLN)}/bulan: 30 hari terakhir konsep memakai ±{str(porsi).replace(".", ",")}% '
+                         f'(cek + bangun ≈ {_rp(porsi * LANGGANAN_CLAUDE_BLN / 100)}). '
+                         f'{len(baru)} konsep dicek; biaya cek per konsep rata-rata {_rp(rata + chat_per_konsep)} '
+                         f'(median brief {_rp(med)} + pantau chat ±{_rp(chat_per_konsep)}). '
+                         + (f'{len(deal_baru)} jadi order → biaya cek semua konsep dibagi order = {_rp(cek_per_deal)} per order. ' if deal_baru else '')
+                         + (f'Membangun aplikasi konsep yang deal rata-rata {_rp(statistics.mean(dibangun))} per project.' if dibangun else '')),
+             'angka': [_angka('Biaya cek per konsep (30 hr)', None, round(rata + chat_per_konsep), 'Rp', 'turun'),
+                       _angka('Biaya cek konsep per order (30 hr)', None, round(cek_per_deal) if cek_per_deal else None, 'Rp', 'turun'),
+                       _angka('Porsi konsep dari langganan Claude (30 hr)', None, porsi, '%', None, f'cek + bangun dari {_rp(LANGGANAN_CLAUDE_BLN)}/bulan')],
+             'sorot': [{'label': 'Konsep dicek 30 hr', 'nilai': len(baru)}, {'label': 'Deal', 'nilai': len(deal_baru)},
+                       {'label': 'Bangun aplikasi / project', 'nilai': _rp(statistics.mean(dibangun)) if dibangun else '–'}],
+             'tabel': [{'judul': 'Per bulan (bulan = project konsep pertama dibuat di installer)',
+                        'kolom': ['Bulan', 'Konsep masuk', 'Cek konsep (brief)', 'Pantau chat konsep', 'Total cek', 'Cek per konsep',
+                                  'Order konsep CRM', 'Cek per order', 'Dibangun · per project'],
+                        'kanan': [1, 2, 3, 4, 5, 6, 7], 'baris': tb_bln}],
+             'ket': (f'Biaya = porsi langganan Claude, bukan harga API. Langganan {_rp(LANGGANAN_CLAUDE_BLN)}/bulan (Max 20x) '
+                     f'= {_rp(LANGGANAN_CLAUDE_BLN * 12 / 52)}/minggu untuk 100% jatah mingguan (akun ini selalu habis 100%). '
+                     f'1% jatah ≈ US${USD_PER_PERSEN} pemakaian setara API (diukur di mini PC), jadi $1 pemakaian ≈ {_rp(RP_PER_USD)}. '
+                     'Biaya tiap panggilan = biaya_usd di usage.jsonl × angka itu. Cek konsep = laravel-brief + konsep-chat '
+                     '(konsep-chat tercatat sejak 2 Nov). Cek per order = semua biaya cek (termasuk konsep yang tidak jadi) dibagi '
+                     'jumlah order. Bangun = laravel-agen + laravel-kemiripan + installer WordPress (domain = nama web order); '
+                     'dikerjakan manual di sesi Claude Code atau belum mulai = –. Sejak ±19 Okt brief pakai Sonnet + cache; '
+                     'pakai angka 30 hari terakhir.')}
+    assert all(len(r) == 9 for r in tb_bln)
+    return hasil
+
+
+def metrik_konsep_order(mulai):
+    """Bahan meeting Toro 10 Nov: order pembuatan (laporan/pembuatan CRM) konsep vs non-konsep per bulan; konsep
+    menaikkan rata-rata order. Order besar = dibayar ≥ Rp1,5 jt."""
+    besar_min = 1_500_000
+    bln, d = [], mulai.replace(day=1)
+    while d <= date.today():
+        bln.append(d.strftime('%Y-%m'))
+        d = (d + timedelta(days=32)).replace(day=1)
+    tb, besar = [], []
+    for b in bln:
+        try:
+            semua = _crm_cache(f'pembuatan:{b}', f'/api/api/laporan/pembuatan_bulanan/detail?bulan={b}&periode=total',
+                               6 * 3600 if b == bln[-1] else 30 * 86400)['data']
+            kon = {o['id'] for o in _konsep_bulan(b)}
+        except Exception as e:  # noqa: BLE001
+            return {'galat': f'CRM pembuatan {b}: {str(e)[:200]}'}
+        k = [o for o in semua if o['id'] in kon]
+        n = [o for o in semua if o['id'] not in kon]
+        rata = lambda xs: _rp_rb(statistics.mean(o['dibayar'] for o in xs)) if xs else '–'   # noqa: E731
+        bk = [o for o in k if o['dibayar'] >= besar_min]
+        bn = [o for o in n if o['dibayar'] >= besar_min]
+        tb.append([f'{BULAN_ID[int(b[5:]) - 1]} {b[:4]}', len(semua), rata(semua), len(k), rata(k), len(n), rata(n),
+                   f'{len(bk)} dari {len(bk) + len(bn)}', _rp_jt(sum(o['dibayar'] for o in k))])
+        if b == bln[-1]:
+            besar = sorted(bk + bn, key=lambda o: o['tgl_masuk'], reverse=True)
+            ini = (len(semua), len(k), len(bk), len(bn), sum(o['dibayar'] for o in semua), sum(o['dibayar'] for o in k))
+    nm = f'{BULAN_ID[date.today().month - 1]} (s.d. tgl {date.today().day})'
+    baris_besar = [[o['tgl_masuk'], o['nama_web'], f"Rp{o['dibayar']:,}".replace(',', '.'), 'Ya' if o['id'] in kon else 'Tidak',
+                    o.get('paket') or '–', o.get('via') or '–', o.get('kata_kunci') or o.get('kk_ads') or '–'] for o in besar]
+    tot, nk, bk, bn, rp, rpk = ini
+    return {'judul': 'Order pembuatan: konsep vs non-konsep (laporan/pembuatan)',
+            'ringkas': (f'{nm}: {tot} order pembuatan, {nk} konsep. Order ≥Rp1,5 jt: {bk + bn}, {bk} di antaranya konsep. '
+                        f'Konsep = {round(100 * nk / tot) if tot else 0}% order tapi {round(100 * rpk / rp) if rp else 0}% nominal.'),
+            'angka': [_angka('Order ≥1,5 jt yang konsep', None, round(100 * bk / (bk + bn)) if bk + bn else None, '%', 'naik',
+                             f'{bk} dari {bk + bn} order bulan ini')],
+            'sorot': [{'label': 'Order konsep bulan ini', 'nilai': nk}, {'label': 'Order ≥1,5 jt', 'nilai': bk + bn},
+                      {'label': '≥1,5 jt non-konsep', 'nilai': bn}],
+            'tabel': [{'judul': 'Per bulan (dibayar, laporan/pembuatan)',
+                       'kolom': ['Bulan', 'Order', 'Rata-rata', 'Konsep', 'Rata konsep', 'Non-konsep', 'Rata non-konsep',
+                                 '≥1,5 jt konsep', 'Nominal konsep'],
+                       'kanan': [1, 2, 3, 4, 5, 6, 8], 'baris': tb[::-1]},
+                      {'judul': f'Order ≥Rp1,5 jt bulan ini (terbaru dulu)',
+                       'kolom': ['Tanggal', 'Web', 'Dibayar', 'Konsep', 'Paket', 'Via', 'Kata kunci iklan'],
+                       'kanan': [2], 'baris': baris_besar}],
+            'ket': 'Order = halaman Laporan > Pembuatan CRM (semua sumber), nilai = kolom dibayar. Konsep = billing dengan '
+                   'toggle Web konsep (Rincian Transaksi > konsep). Kata kunci = kata kunci iklan yang tercatat di billing.'}
+
+
+KAPAN_EMAIL = {   # dari config/automation.php new-vd (hari_notifikasi_*, hari_pengingat, hari_domain_expired, hari_invoice)
+    'domain.renewal_notification': 'H-30, H-14, H-7, H-1 sebelum domain expired',
+    'hosting.renewal_notification': 'H-30, H-14, H-7, H-1 sebelum jatuh tempo hosting',
+    'invoice.created_notification': 'Saat invoice perpanjangan dibuat (H-30 jatuh tempo)',
+    'invoice.payment_reminder': 'Invoice belum lunas: H-3, hari H, H+3, H+7',
+    'hosting.suspend_notification': 'Saat hosting disuspend (H+1 lewat jatuh tempo)',
+    'domain.expired_notification': 'H+1 dan H+7 sesudah domain expired',
+    'invoice.payment_confirmation': 'Saat pembayaran diterima',
+    'domain.registration_confirmation': 'Saat registrasi/transfer domain selesai',
+    'domain.renewal_confirmation': 'Saat perpanjangan domain selesai',
+    'hosting.welcome_email': 'Saat akun hosting dibuat',
+}
+
+
+def _api_json(jalur):
+    r = subprocess.run([API_SH, jalur], capture_output=True, text=True, timeout=120)
+    return json.loads(r.stdout.splitlines()[0])
+
+
+def metrik_notif_klien(mulai):
+    """Bahan meeting Toro: terminate otomatis + pengaturan & format email notifikasi ke klien (Automation new-vd,
+    aktif sejak cutover WHMCS 10 Nov). Hanya membaca API CRM."""
+    try:
+        setel = {x['automation']: x for x in _api_json('/api/api/automation/settings')['data']}
+        tpl = _api_json('/api/api/automation/email-templates')
+        term7 = _api_json('/api/api/hosting/terminate-ringkasan?periode=7_hari')
+        bln = [date.today().replace(day=1), (date.today().replace(day=1) - timedelta(days=1)).replace(day=1)]
+        term_bln = [_api_json(f"/api/api/hosting/terminate-ringkasan?periode=bulan&bulan={b.strftime('%Y-%m')}")['ringkasan'] for b in bln]
+        dari = (date.today() - timedelta(days=6)).isoformat()
+        hitung = lambda j, s: _api_json(f'/api/api/automation/email-logs?per_page=1&dari={dari}&jenis={j}&status={s}')['total']  # noqa: E731
+        gagal = _api_json(f'/api/api/automation/email-logs?per_page=50&dari={dari}&status=failed')['data']
+    except Exception as e:  # noqa: BLE001
+        return {'galat': f'CRM automation: {str(e)[:200]}'}
+    aktif = lambda k: (setel.get(k) or {}).get('is_active') and (setel.get(k) or {}).get('mode') == 'nyata'  # noqa: E731
+    baris_tpl, kirim, gal = [], 0, 0
+    for t in tpl['data']:
+        j = t['automation']
+        s, f = (hitung(j, 'sent'), hitung(j, 'failed')) if aktif(j) else (0, 0)
+        kirim, gal = kirim + s, gal + f
+        isi = ' / '.join(x.strip() for x in t['isi'].replace('**', '').splitlines() if x.strip())
+        baris_tpl.append([t['label'], KAPAN_EMAIL.get(j, '–'), 'Ya' if aktif(j) else 'Tidak', t['subjek'], isi, s, f])
+    sebab = collections.Counter(re.sub(r'^.*?got code "(\d+)", with message "\d+ ', r'\1 ', g.get('error') or '')[:90].rstrip('".') for g in gagal)
+    sebab_utama = sebab.most_common(1)[0][0] if sebab else ''
+    t7 = term7['ringkasan']
+    baris_term = [[x['tanggal'], x['domain'], x.get('customer') or '–', x.get('next_due') or '–', x['keterangan'],
+                   x.get('domain_status') or '–'] for x in term7['data']]
+    nama_bln = lambda b: f'{BULAN_ID[b.month - 1]} {b.year}'   # noqa: E731
+    jadwal = [['Suspend hosting', f"H+1 lewat jatuh tempo, harian 01:30", 'Ya' if aktif('hosting.suspend') else 'Tidak'],
+              ['Terminate hosting (akun panel dihapus)', f"H+{term7['hari_terminate']} lewat jatuh tempo, harian {term7['jam_jadwal']}",
+               'Ya' if term7['otomatis_aktif'] and term7['mode'] == 'nyata' else term7['mode']],
+              ['Unsuspend', 'Otomatis sesudah tagihan lunas', 'Ya' if aktif('hosting.unsuspend') else 'Tidak'],
+              ['Invoice perpanjangan', 'Dibuat H-30 jatuh tempo, harian 06:10', 'Ya' if aktif('invoice.generate_renewal') else 'Tidak'],
+              ['Email terminate ke klien', 'Tidak ada template: klien tidak diberi tahu saat akun dihapus', '–']]
+    hasil = {'judul': 'Terminate & email notifikasi klien (Automation new-vd)',
+             'ringkas': (f"Terminate otomatis {'aktif' if term7['otomatis_aktif'] else 'mati'} (H+{term7['hari_terminate']}, {term7['jam_jadwal']}): "
+                         f"{t7['berhasil']} hosting di-terminate 7 hari terakhir, {term_bln[0]['berhasil']} bulan ini. "
+                         f"Email 7 hari: {kirim} terkirim, {gal} gagal"
+                         + (f" (sebab utama: {sebab_utama.strip()})" if gal and sebab_utama else '') + '.'),
+             'angka': [_angka('Email gagal kirim (7 hari)', None, round(100 * gal / (kirim + gal)) if kirim + gal else None, '%', 'turun',
+                              f'{gal} dari {kirim + gal} email')],
+             'sorot': [{'label': 'Terminate 7 hari', 'nilai': t7['berhasil']}, {'label': 'Email terkirim 7 hari', 'nilai': kirim},
+                       {'label': 'Email gagal 7 hari', 'nilai': gal, 'buruk': gal > 0}],
+             'tabel': [{'judul': 'Pengaturan otomatis', 'kolom': ['Proses', 'Kapan', 'Aktif'], 'baris': jadwal},
+                       {'judul': 'Terminate per bulan', 'kolom': ['Bulan', 'Berhasil', 'Gagal', 'Dilewati'], 'kanan': [1, 2, 3],
+                        'baris': [[nama_bln(b), r['berhasil'], r['gagal'], r['dilewati']] for b, r in zip(bln, term_bln)]},
+                       {'judul': f"Email notifikasi ke klien (pengirim {tpl.get('pengirim') or '–'}; jumlah 7 hari terakhir)",
+                        'kolom': ['Email', 'Kapan dikirim', 'Aktif', 'Subjek', 'Isi', 'Terkirim', 'Gagal'], 'kanan': [5, 6],
+                        'baris': baris_tpl},
+                       {'judul': 'Hosting di-terminate 7 hari terakhir', 'kolom': ['Tanggal', 'Domain', 'Klien', 'Jatuh tempo', 'Keterangan', 'Status domain'],
+                        'baris': baris_term}],
+             'ket': 'Sumber: menu Automation & Hosting new-vd (API baca saja). WHMCS berhenti suspend/terminate/kirim email ke klien '
+                    'sejak 7 Nov; sejak cutover 10 Nov semuanya dari new-vd (AUTOMATION_AKTIF). Isi email = template bawaan '
+                    '(variabel {nama}, {domain}, dst. diisi otomatis). Gagal = SMTP menolak; lihat menu Automation > Email Logs.'}
+    assert all(len(r) == 7 for r in baris_tpl)
+    return hasil
 
 
 def metrik_konsep_halaman(mulai):
@@ -2522,7 +2760,7 @@ def hitung_sumber(sumber, mulai):
         m['judul'] += f" · sejak {_tgl(jangkar).day} {_tgl(jangkar).strftime('%b')}"
         m['jangkar'] = jangkar
     if m.get('ringkas'):
-        m['ringkas'] = re.sub(r'(\d)\.(\d)', r'\1,\2', m['ringkas'])   # desimal gaya Indonesia
+        m['ringkas'] = re.sub(r'(\d)\.(?!\d{3}(?!\d))(\d)', r'\1,\2', m['ringkas'])   # desimal gaya Indonesia; titik ribuan (x.000) dibiarkan
         m['ringkas'] = re.sub(r'(\d),0(?!\d)', r'\1', m['ringkas'])
     return m
 
@@ -2633,6 +2871,12 @@ def _hitung_sumber(sumber, mulai):
         return metrik_wa3_jalur(mulai)
     if sumber == 'am_followup':
         return metrik_am_followup(mulai)
+    if sumber == 'konsep_token':
+        return metrik_konsep_token(mulai)
+    if sumber == 'notif_klien':
+        return metrik_notif_klien(mulai)
+    if sumber == 'konsep_order':
+        return metrik_konsep_order(mulai)
     if sumber == 'konsep_hosting':
         return metrik_konsep_hosting(mulai)
     if sumber == 'wa3_aicoid':

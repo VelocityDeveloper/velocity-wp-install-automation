@@ -108,7 +108,6 @@ RE_HOOK_BODY = r(r'add_action\s*\(\s*[\'"](?:wp_body_open|wp_head|wp_footer|admi
 RE_ECHO_UNDUH = r(r'\b(?:echo|print)\s*\(?\s*@?\s*(?:file_get_contents|wp_remote_retrieve_body\s*\(\s*wp_(?:safe_)?remote_get)\s*\(\s*[\'"]https?://')
 RE_SKRIP_PHP_LUAR = r(r'wp_enqueue_script\s*\(\s*[^;]{1,80}?,\s*[\'"]https?://[^\'"\s]+\.php[\'"?]')
 # Penghapus trash dimatikan (mitrame1/yayasan3 30 Okt, situs PBN): `wp post delete` = hapus permanen, pemulihan pos spam mustahil
-RE_TRASH_MATI = r(r'define\s*\(\s*[\'"]EMPTY_TRASH_DAYS[\'"]\s*,\s*[\'"]?0[\'"]?\s*\)')
 # Kampanye wp2shell (CVE-2026-63030, khankimi & bayarlis 22 Okt 2026): penanda alat, plugin/mu-plugin samaran, pintu TDS
 RE_SUFIKS_W2S = re.compile(r'__[0-9a-f]{7}$')
 RE_W2S = r(r'2DUAN_START|WP2SHELL::|WPBWORM::|Plugin Name:\s*(?:wp2shell|wpbatchworm)\b|FM_CACHE_IDX_INJECT|FM_CACHE_INDEX_CUSTOM_CODE'
@@ -167,6 +166,8 @@ RE_EVAL_APA = r(r'\b(?:eval|assert|create_function)\s*\(|\$GLOBALS\s*\[')
 RE_PREPEND = r(r'^\s*php_value\s+auto_(?:prepend|append)_file\s+\S+', re.I | re.M)
 RE_HANDLER = r(r'(?:AddType|AddHandler)\s+application/x-httpd-(?:php|ea-php|lsphp|alt-php)\S*\s+.*\.(?:jpe?g|png|gif|ico|txt|css)\b|SetHandler\s+application/x-httpd-php', re.I)
 RE_UPLOAD = r(r'move_uploaded_file\s*\(\s*\$_FILES')
+# Pengunggah panel admin sah mengecek login lebih dulu; tanpa cek ini = celah aplikasi atau backdoor
+RE_CEK_LOGIN = r(r'\$_SESSION\s*\[|is_user_logged_in|current_user_can|check_auth|require_auth|wp_verify_nonce')
 RE_JUDI = r(r'slot\s*gacor|situs\s*(?:slot|judi|toto|togel)|togel\s*(?:online|hari\s*ini)|judi\s*(?:online|slot|bola)|maxwin|scatter\s*hitam'
              r'|rtp\s*(?:live|slot)|bandar\s*(?:togel|slot|judi)|slot\s*(?:thailand|online|88|777|demo|dana|pulsa|zeus)'
              r'|toto\s*(?:togel|macau|slot)|sbobet|pragmatic\s*play|mahjong\s*ways|bocoran\s*(?:slot|rtp)|link\s*alternatif'
@@ -457,10 +458,24 @@ def inti_wp_asli(path, st):
     return True
 
 
+# ThemeGrill Demo Importer menyalin config paket demo ke uploads/tg-demo-pack/ (positif palsu 16 Nov, hariansorotpost.com):
+# sah hanya bila kodenya cuma larik + panggilan yang diizinkan — tanpa superglobal, variabel-fungsi, atau backtick.
+DEMO_TG_PANGGIL = {b'defined', b'tg_demo_importer_config', b'array', b'array_merge', b'add_filter', b'if', b'return'}
+
+
+def demo_themegrill(teks):
+    kode = RE_KOMENTAR_PHP.sub(b'', teks)
+    if b'themegrill_demo_importer_config' not in kode or re.search(rb'\$_|\$\w+\s*\(|\$\{|`|\binclude|\brequire', kode):
+        return False
+    return {m.lower() for m in re.findall(rb'\b(\w+)\s*\(', kode)} <= DEMO_TG_PANGGIL
+
+
 def php_di_uploads(teks, path):
     if '/wp-content/uploads/' not in path or any(x in path for x in UPLOADS_SAH):
         return None
     if '/uploads/redux/' in path and RE_REDUX_KONTROL.match(teks):
+        return None
+    if path.endswith('/uploads/tg-demo-pack/tg-demo-config.php') and demo_themegrill(teks):
         return None
     # Penjaga folder / template kosong (silence is golden, BWS Custom Code): hanya komentar + `if (!defined(..)) exit;`.
     # Isi dinilai sebagai kode walau tanpa tag <? atau berbentuk &lt;?php: berkas lain bisa eval(file_get_contents(..)).
@@ -545,7 +560,7 @@ def file_manager(teks, path):
 
 
 def uploader(teks, path):
-    if len(teks) < 4000 and RE_UPLOAD.search(teks) and b'wp_' not in teks:
+    if len(teks) < 4000 and RE_UPLOAD.search(teks) and b'wp_' not in teks and not RE_CEK_LOGIN.search(teks):
         return potong(teks, RE_UPLOAD.search(teks))
     return None
 
@@ -703,11 +718,6 @@ def body_inject(teks, path):
     return potong(teks, m) if m else None
 
 
-def trash_mati(teks, path):
-    m = RE_TRASH_MATI.search(teks) if path.endswith('/wp-config.php') else None
-    return potong(teks, m) if m else None
-
-
 def plugin_sembunyi(teks, path, skrip):
     # skrip=True: sembunyi diri + mencetak '<scr'.'ipt' (virus); False: sembunyi diri saja (curiga)
     m = RE_SEMBUNYI_DIRI.search(teks)
@@ -850,7 +860,6 @@ TANDA = [
     ('VD.WP.WLHRecovery', 'mu-plugin pemulih botnet WLH (pasang ulang wp-link-helper)', 'virus', 'php', cari(RE_WLH_REC), (b'wlh',)),
     ('VD.WP.BodyInject', 'Hook tampilan mencetak HTML/skrip dari domain luar (body-inject)', 'virus', TEKS_JUDI | {'php', 'js'}, body_inject,
      (b'bozuldum', b'wp_body_open', b'wp_head', b'wp_footer', b'admin_head', b'admin_footer')),
-    ('VD.WP.TrashMati', 'wp-config mematikan Trash (EMPTY_TRASH_DAYS 0, pola situs PBN)', 'curiga', {'php'}, trash_mati, (b'empty_trash_days',)),
     ('VD.WP.WpEngineKit', 'Plugin palsu "Wp Engine"/"wp-warden" (popup ClickFix Win+R/Ctrl+V)', 'virus', 'php', cari(RE_WPENGINE_KIT), (b'wlcms_wp_', b'_b64_')),
     ('VD.WP.SembunyiSkrip', 'Plugin menyembunyikan diri + mencetak skrip terpecah <scr.ipt', 'virus', 'php', lambda teks, path: plugin_sembunyi(teks, path, True), (b'all_plugins',)),
     ('VD.WP.SembunyiDiri', 'Plugin menyembunyikan diri dari daftar Plugins', 'curiga', 'php', lambda teks, path: plugin_sembunyi(teks, path, False), (b'all_plugins',)),
@@ -897,7 +906,7 @@ TANDA = [
     ('VD.PHP.KodePanjang', 'String terkode panjang + dekode', 'curiga', 'php', kode_panjang, (b'base64_decode', b'gzinflate', b'gzuncompress', b'str_rot13', b'strrev')),
     ('VD.PHP.Hex', 'Kode disamarkan \\x', 'curiga', 'php', hex_samar, (b'\\x',)),
     ('VD.PHP.FungsiString', 'Nama fungsi berbahaya dalam string', 'curiga', 'php', cari(RE_FUNGSI_STR), (b'base64_decode', b'str_rot13', b'gzinflate', b'gzuncompress', b'create_function', b'shell_exec', b'passthru')),
-    ('VD.PHP.Uploader', 'Pengunggah berkas kecil', 'curiga', 'php', uploader, (b'move_uploaded_file',)),
+    ('VD.PHP.Uploader', 'Pengunggah berkas kecil tanpa cek login (celah aplikasi atau backdoor)', 'curiga', 'php', uploader, (b'move_uploaded_file',)),
     ('VD.PHP.DiUploads', 'PHP di folder uploads', 'curiga', 'php', php_di_uploads, None),
     ('VD.Htaccess.Prepend', 'auto_prepend_file di .htaccess', 'curiga', {'htaccess'}, prepend, (b'auto_',)),
     ('VD.SEO.Judi', 'Spam SEO judi', 'curiga', TEKS_JUDI, judi, GERBANG_JUDI),

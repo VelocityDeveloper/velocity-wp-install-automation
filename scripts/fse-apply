@@ -581,7 +581,8 @@ def data_situs(cfg, domain, isi, vct, ref=None):
         # email_publik/alamat_publik): keputusannya ditulis di manifest `wa_publik=`.
         'wa': klien.get('WA', '') or cfg.get('wa_publik', ''),
         'telp': klien.get('TELP', ''),
-        'alamat': klien.get('ALAMAT', '') or cfg.get('alamat_publik', ''),
+        # `alamat_web=` = alamat yang diminta klien untuk web (mis. review draf), menang atas form.
+        'alamat': cfg.get('alamat_web', '') or klien.get('ALAMAT', '') or cfg.get('alamat_publik', ''),
         'area': '' if area == 'sekitarnya' else area,
         # Gaya beranda & font mengikuti referensi desain klien (referensi_desain).
         'gaya': (ref or {}).get('gaya') or 'klasik',
@@ -657,7 +658,8 @@ if (!is_array($lama) || (string) get_option('velocity_situs_md5') === md5(wp_jso
     $hasil[] = 'data_situs_ditulis';
 } else {
     // Suntingan PM dipertahankan; susunan rubrik/layanan tetap mengikuti installer.
-    foreach (array('jenis', 'rubrik', 'layanan') as $k) { $lama[$k] = $d['situs'][$k]; }
+    // + kunci yang dipaksa manifest (mis. alamat_web): keputusan manusia untuk situs ini.
+    foreach (array_merge(array('jenis', 'rubrik', 'layanan'), (array) ($d['paksa_situs'] ?? array())) as $k) { $lama[$k] = $d['situs'][$k]; }
     update_option('velocity_situs', $lama);
     $hasil[] = 'data_situs_disunting_dipertahankan';
 }
@@ -875,7 +877,7 @@ def langkah_tema(cfg, situs, coba):
     if ref.get('url'):
         print(f"fse: referensi={ref['url']} gaya={ref['gaya']} ({ref.get('sumber')}) "
               f"font={','.join(ref.get('fonts') or []) or '-'}" + (f" alasan={ref['alasan']}" if ref.get('alasan') else ''))
-    data = {'situs': data_situs(cfg, domain, isi, vct, ref),
+    data = {'situs': data_situs(cfg, domain, isi, vct, ref), 'paksa_situs': ['alamat'] if cfg.get('alamat_web') else [],
             'palet': hitung_palet(vct, primary, aksen, gelap=ref.get('gaya') == 'dealer',
                                   versi=palet_versi(cfg)),
             'desain': dict(token_desain(ref), tampilan_versi=palet_versi(cfg))}
@@ -3235,6 +3237,8 @@ def menu_referensi(info, sd):
     butir, dipakai = [], set()
     for m in pohon:
         slug = slug_jenis.get(m.get('jenis') or '')
+        if not slug and str(desain.get('url') or '').startswith('file://'):
+            slug = slug_teks(m.get('label') or '')  # halaman draf klien (halaman_menu_referensi)
         if not slug or slug in dipakai:
             continue
         label = re.sub(r'\s+', ' ', m.get('label') or '').strip()[:30]
@@ -3266,7 +3270,9 @@ def menu_referensi(info, sd):
     # dari menu utama (permintaan user 2026-09-18): referensi northseaaconsulting.com
     # punya "Locations"/"Resources" yang tidak cocok, sehingga Produk, Galeri, Berita,
     # dan Pemesanan sempat tidak pernah masuk menu.
-    for slug in ('produk', 'galeri', 'berita', 'pemesanan'):
+    # Draf desain milik klien: menu ikut draf + Produk saja (ptmitragaransiniaga.com 2026-11-11,
+    # user minta menu Produk dikembalikan); galeri/berita/pemesanan tidak ditambahkan.
+    for slug in ('produk',) if str(desain.get('url') or '').startswith('file://') else ('produk', 'galeri', 'berita', 'pemesanan'):
         if slug in dipakai or slug in tanpa:
             continue
         tambahan = halaman(slug, LABEL_MENU_BAKU.get(slug, slug.replace('-', ' ').title()))
@@ -3319,6 +3325,14 @@ def halaman_menu_referensi(desain, sd, isi):
         if len(tanya) >= 3:
             hasil['faq'] = ('FAQ', '\n\n'.join([paragraf('Jawaban atas pertanyaan yang sering diajukan seputar layanan kami.'),
                                                   akordeon(tanya, 'vf-akordeon-grup vf-faq-grup')]))
+    # Draf desain milik klien (referensi file://, ptmitragaransiniaga.com 2026-11-11 "sama persis dengan
+    # desain contoh"): menu draf tanpa padanan halaman baku (Visi & Misi, Training, Konsultasi) dibuat
+    # sebagai halaman sendiri. Isinya diisi agen desain-claude dari HTML draf; ini hanya kerangka.
+    if str(desain.get('url') or '').startswith('file://'):
+        for m in pohon:
+            label = re.sub(r'\s+', ' ', m.get('label') or '').strip()
+            if not m.get('jenis') and label and slug_teks(label) not in hasil:
+                hasil[slug_teks(label)] = (label, paragraf(esc(label)))
     return hasil
 
 
@@ -3361,6 +3375,17 @@ def tautan_menu(info, sd, slugs_ada):
 
 def susun_tautan_menu(info, sd, slugs_ada):
     """Menu utama: susunan menu klasik yang sudah disepakati (paket-g-setup) dibawa apa adanya."""
+    if info.get('urutan_menu'):
+        butir = []
+        for slug, label in info['urutan_menu']:
+            hal = info['semua'].get(slug)
+            if not hal:
+                continue
+            url = info['home'] if slug == 'beranda' else hal['url']
+            butir.append(blok('navigation-link', {'label': label or hal.get('judul') or slug.replace('-', ' ').title(),
+                                                  'type': 'page', 'id': hal['id'], 'url': url, 'kind': 'post-type'}))
+        if butir:
+            return '\n\n'.join(butir)
     if satu_halaman(info) and not (info.get('label_menu') or info.get('tanpa_halaman_manifest')):
         if jangkar_menu := menu_jangkar(info, sd):
             return jangkar_menu
@@ -3548,6 +3573,10 @@ def langkah_isi(cfg, situs, coba):
         tanpa_halaman.add('pemesanan')
     info['tanpa_halaman'] = tanpa_halaman
     info['tanpa_halaman_manifest'] = bool(str(cfg.get('tanpa_halaman', '')).strip())
+    # `urutan_menu=beranda:Home,tentang-kami:Tentang,...,hubungi-kami:Kontak` = susunan menu utama persis
+    # (ptmitragaransiniaga.com 2026-11-11: Home di depan, Produk di tengah, Kontak paling kanan).
+    info['urutan_menu'] = [tuple(x.strip() for x in (b + ':').split(':')[:2])
+                           for b in str(cfg.get('urutan_menu', '')).split(',') if b.strip()]
     info['label_menu'] = dict(tuple(x.strip() for x in bagian.split(':', 1))
                               for bagian in str(cfg.get('label_menu', '')).split(';') if ':' in bagian)
     kontak_dua = str(cfg.get('kontak_kolom', '')).strip() == '2'
