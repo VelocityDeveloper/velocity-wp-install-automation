@@ -304,6 +304,7 @@ RE_REDUX_KONTROL = re.compile(rb'\A<\?php\s*class\s+Redux_Customizer_Control_\w+
                               rb'\s*public\s+\$type\s*=\s*["\']redux-[\w-]+["\']\s*;\s*\}\s*\Z')
 
 
+RE_EXIT_SAJA = re.compile(rb'\s*(?:exit|die)\s*(?:\(\s*\))?\s*;?\s*')
 RE_HTML_AKTIF = re.compile(rb'<\?|<%|<script|<iframe|<object|<embed|<form|http-equiv|\bon\w+\s*=|javascript:', re.I)
 
 
@@ -469,8 +470,14 @@ def php_di_uploads(teks, path):
     # Penjaga folder ber-HTML (WP Content Copy Protection: komentar PHP, `?>`, lalu pesan "not authorized"):
     # sah hanya bila blok PHP cuma komentar dan HTML sesudahnya statis — tanpa <? lagi, skrip, iframe, atau meta refresh.
     kepala, tutup, ekor = isi.partition(b'?>')
-    if tutup and len(isi) < 4096 and not RE_KOMENTAR_PHP.sub(b'', kepala).strip() and not RE_HTML_AKTIF.search(ekor):
-        return None
+    if tutup and not RE_HTML_AKTIF.search(ekor):
+        kode = RE_KOMENTAR_PHP.sub(b'', kepala)
+        if len(isi) < 4096 and not kode.strip():
+            return None
+        # Data cache dijaga `<?php exit(); ?>` (WP Staging uploads/wp-staging/clone_options.cache.php, positif palsu
+        # 16 Nov, giliparadisetour.com): PHP berhenti sebelum data, dan data tanpa <? lagi → ukuran tak berpengaruh.
+        if RE_EXIT_SAJA.fullmatch(kode):
+            return None
     return 'berkas PHP di wp-content/uploads'
 
 

