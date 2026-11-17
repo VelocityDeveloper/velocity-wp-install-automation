@@ -36,3 +36,5 @@ tokenfoundrybot
 aiwebindex
 lhrsearchbot
 amzn-searchbot
+# 17 Nov 2026 (Jamal, ukur sanke 24 jam: 781 request PHP lolos, 0 diblok): scraper SERP/AI cloro.dev.
+crolbot
