@@ -5,7 +5,10 @@ timeout 7 hari yang diperbarui tiap kali IP terlihat lagi + satu aturan iptables
 - ringkasan(): kiriman terakhir (reputasi.json), tren jumlah IP terpilih, status ipset/aturan/paket ditolak per server.
 - daftar(): isi ipset satu server (`ipset save`, cache 5 mnt) + data 24 jam (hit, domain, server) dari kiriman terakhir;
   cari (awalan IP / CIDR), urut, halaman 100 baris. "Terakhir terlihat" dihitung dari sisa timeout.
+Cepat: isi dikirim ringkas (awk "ip sisa" + gzip: 6 MB/14 dtk → 1,3 MB/2 dtk); utas latar menyegarkan status & isi
+tiap server tiap SEGAR detik, request selalu dijawab dari cache (data lama dijawab dulu, penyegaran di belakang).
 """
+import gzip
 import ipaddress
 import json
 import subprocess
@@ -23,12 +26,14 @@ TTL = 7 * 86400
 PER_HALAMAN = 100
 CACHE_ISI = 300
 CACHE_STATUS = 120
+SEGAR = 240  # utas latar
 
 STATUS = f'''echo "isi=$(ipset list {SET} 2>/dev/null | grep -cE '^[0-9]+[.]')"
 r=$(iptables -L INPUT -v -n -x 2>/dev/null | grep "match-set {SET} " | head -1)
 [ -n "$r" ] && echo "aturan=ya paket=$(echo "$r" | awk '{{print $1}}') bita=$(echo "$r" | awk '{{print $2}}')" || echo "aturan=tidak"
 grep -q 'VELOCITYGUARD-REPUTASI MULAI' /usr/local/csf/bin/csfpre.sh 2>/dev/null && echo csfpre=ya || echo csfpre=tidak'''
-ISI = f'nice -n 10 ipset save {SET} 2>/dev/null || echo GAGAL_TIDAK_ADA'
+ISI = (f"ipset list -n {SET} >/dev/null 2>&1 || {{ echo GAGAL_TIDAK_ADA; exit 0; }}; "
+       f"nice -n 10 ipset save {SET} | awk '$1==\"add\"{{print $3, $5}}' | gzip -1")
 
 _daftar_server = _perintah_server = _ssh_key_file = None
 _cache = {}  # kunci → (waktu, nilai)
@@ -39,6 +44,26 @@ _kunci_umum = threading.Lock()
 def pasang(daftar_server, perintah_server, ssh_key_file):
     global _daftar_server, _perintah_server, _ssh_key_file
     _daftar_server, _perintah_server, _ssh_key_file = daftar_server, perintah_server, ssh_key_file
+    threading.Thread(target=_latar, daemon=True, name='reputasi-latar').start()
+
+
+def _latar():
+    """Hangatkan cache sejak API start lalu segarkan berkala, supaya halaman tidak menunggu SSH."""
+    time.sleep(5)
+    while True:
+        try:
+            st = _tersimpan('status', 0, _status_semua, True)
+            for x in st:
+                if x.get('ok'):
+                    srv = next((s for s in servers() if s['host'] == x['host']), None)
+                    if srv:
+                        try:
+                            _tersimpan(('isi', srv['host']), 0, lambda srv=srv: _isi_server(srv), True)
+                        except Exception:  # noqa: BLE001
+                            pass
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(SEGAR)
 
 
 def _json(p, bawaan):
@@ -63,9 +88,22 @@ def _ssh(srv, remote, batas=60):
 
 
 def _tersimpan(kunci, ttl, fn, paksa=False):
-    """Cache sederhana; satu pengambilan per kunci pada satu waktu (request kedua menunggu hasil yang sama)."""
+    """Cache; satu pengambilan per kunci pada satu waktu. Ada data (walau lama) & tidak paksa → dijawab seketika,
+    penyegaran jalan di belakang. Belum ada data → ditunggu."""
     with _kunci_umum:
         k = _kunci.setdefault(kunci, threading.Lock())
+    lama = _cache.get(kunci)
+    if lama and not paksa:
+        if time.time() - lama[0] >= ttl and k.acquire(blocking=False):
+            def segarkan():
+                try:
+                    _cache[kunci] = (time.time(), fn())
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    k.release()
+            threading.Thread(target=segarkan, daemon=True).start()
+        return lama[1]
     with k:
         lama = _cache.get(kunci)
         if lama and not paksa and time.time() - lama[0] < ttl:
@@ -129,16 +167,31 @@ def ringkasan(segar=False):
 
 
 def _isi_server(srv):
-    teks = _ssh(srv, ISI, 90)
-    if 'GAGAL_TIDAK_ADA' in teks:
+    r = subprocess.run(_perintah_server(srv, _ssh_key_file(), ISI), capture_output=True, timeout=90, check=False)
+    if r.returncode:
+        raise RuntimeError(((r.stderr or b'').decode(errors='replace').strip().splitlines() or [f'exit_{r.returncode}'])[-1][:200])
+    if r.stdout.startswith(b'GAGAL_TIDAK_ADA'):
         raise RuntimeError(f'ipset {SET} tidak ada di server')
     out = []
-    for b in teks.splitlines():
-        p = b.split()
-        if len(p) >= 3 and p[0] == 'add' and p[1] == SET:
-            sisa = int(p[4]) if len(p) >= 5 and p[3] == 'timeout' and p[4].isdigit() else 0
-            out.append((p[2], sisa))
-    return {'t': time.time(), 'ip': out}
+    for b in gzip.decompress(r.stdout).decode().splitlines():
+        ip, _, sisa = b.partition(' ')
+        out.append((ip, int(sisa) if sisa.isdigit() else 0))
+    out.sort(key=lambda x: -x[1])  # urutan bawaan (terbaru) sudah jadi; urutan lain di-cache per isi
+    return {'t': time.time(), 'ip': out, 'urut': {}}
+
+
+_info_cache = [0, None, {}]  # mtime reputasi.json, waktu, peta ip
+
+
+def _info():
+    try:
+        m = HASIL.stat().st_mtime
+    except OSError:
+        return {}, 0
+    if _info_cache[0] != m:
+        d = _json(HASIL, {})
+        _info_cache[:] = [m, m, d.get('ip') or {}]
+    return _info_cache[2], _info_cache[1]
 
 
 def _saring(q):
@@ -148,7 +201,7 @@ def _saring(q):
     if '/' in q:
         try:
             net = ipaddress.ip_network(q, strict=False)
-            return lambda ip: ipaddress.ip_address(ip) in net
+            return lambda ip: ':' not in ip and ipaddress.ip_address(ip) in net
         except ValueError:
             pass
     return lambda ip: ip.startswith(q) or q in ip
@@ -156,27 +209,33 @@ def _saring(q):
 
 def daftar(host='', q='', urut='terbaru', halaman=1, segar=False):
     daftar_srv = servers()
-    srv = next((s for s in daftar_srv if s['host'] == host), None) or (daftar_srv[0] if daftar_srv else None)
+    # host atau nama server; tanpa pilihan → server pertama yang isinya sudah ter-cache (halaman tak menunggu SSH)
+    srv = (next((s for s in daftar_srv if host and host in (s['host'], s['name'])), None)
+           or next((s for s in daftar_srv if ('isi', s['host']) in _cache), None)
+           or (daftar_srv[0] if daftar_srv else None))
     if not srv:
         return {'error': 'tidak_ada_server'}
     try:
         isi = _tersimpan(('isi', srv['host']), CACHE_ISI, lambda: _isi_server(srv), segar)
     except Exception as e:  # noqa: BLE001
         return {'error': str(e)[:200], 'host': srv['host'], 'name': srv['name']}
-    info = (_json(HASIL, {}).get('ip') or {})
+    info, akhir_t = _info()
     cocok = _saring(q)
-    try:
-        baris = [x for x in isi['ip'] if cocok is None or cocok(x[0])]
-    except ValueError:
-        baris = []
-    if urut == 'hit':
-        baris.sort(key=lambda x: (-(info.get(x[0]) or {}).get('hit', 0), -x[1]))
-    elif urut == 'lama':
-        baris.sort(key=lambda x: x[1])
-    elif urut == 'ip':
-        baris.sort(key=lambda x: tuple(int(p) for p in x[0].split('.')) if x[0].count('.') == 3 else (999,))
+    if urut in ('hit', 'lama', 'ip'):
+        siap = isi['urut'].get(urut)
+        if siap is None or siap[0] != akhir_t:
+            urutan = list(isi['ip'])
+            if urut == 'hit':
+                urutan.sort(key=lambda x: (-(info.get(x[0]) or {}).get('hit', 0), -x[1]))
+            elif urut == 'lama':
+                urutan.reverse()
+            else:
+                urutan.sort(key=lambda x: tuple(int(p) for p in x[0].split('.')) if x[0].count('.') == 3 else (999,))
+            siap = isi['urut'][urut] = (akhir_t, urutan)
+        sumber = siap[1]
     else:
-        baris.sort(key=lambda x: -x[1])
+        sumber = isi['ip']
+    baris = sumber if cocok is None else [x for x in sumber if cocok(x[0])]
     try:
         halaman = max(1, int(halaman))
     except (TypeError, ValueError):
@@ -190,6 +249,7 @@ def daftar(host='', q='', urut='terbaru', halaman=1, segar=False):
         potong.append({'ip': ip, 'sisa': max(0, int(sisa - (time.time() - diambil))),
                        'terlihat': int(diambil - (TTL - sisa)), 'aktif_24j': bool(i),
                        'hit': i.get('hit'), 'domain': i.get('domain'), 'server': i.get('server')})
-    return {'host': srv['host'], 'name': srv['name'], 'diambil': int(diambil), 'total': len(isi['ip']),
+    return {'host': srv['host'], 'name': srv['name'], 'diambil': int(diambil),
+            'servers': [{'host': s['host'], 'name': s['name']} for s in daftar_srv], 'total': len(isi['ip']),
             'tersaring': len(baris), 'halaman': halaman, 'per_halaman': PER_HALAMAN, 'baris': potong,
-            'aktif_24j': sum(1 for ip, _ in isi['ip'] if ip in info)}
+            'aktif_24j': len(info)}

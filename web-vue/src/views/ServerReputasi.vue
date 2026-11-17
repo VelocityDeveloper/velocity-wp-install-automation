@@ -12,7 +12,9 @@ import { pilihServer } from '../jenisServer.js'
 const ring = pakaiPolling('/api/servers/reputasi', 120000)
 const servers = computed(() => ring.data.value?.servers || [])
 const pilih = pilihServer()
-const terpilih = computed(() => servers.value.find((s) => s.name === pilih.value) || servers.value.find((s) => s.ok) || servers.value[0] || null)
+// Daftar IP dimuat bersamaan dengan ringkasan (tidak menunggunya): server dipilih lewat nama, backend memakai
+// server pertama yang sudah ter-cache bila nama tidak dikenal.
+const pilihanServer = computed(() => (servers.value.length ? servers.value.filter((s) => s.ok) : dft.data.value?.servers || []))
 
 const cariUrl = tabUrl('q', '')
 const cari = ref(cariUrl.value)
@@ -20,16 +22,14 @@ let tunda = null
 watch(cari, (v) => { clearTimeout(tunda); tunda = setTimeout(() => { cariUrl.value = v.trim() }, 400) })
 const urut = tabUrl('urut', 'terbaru')
 const halaman = ref(1)
-watch([cariUrl, urut, () => terpilih.value?.host], () => { halaman.value = 1 })
+watch([cariUrl, urut, pilih], () => { halaman.value = 1 })
 
-const urlDaftar = () => (terpilih.value
-  ? `/api/servers/reputasi/daftar?server=${encodeURIComponent(terpilih.value.host)}&q=${encodeURIComponent(cariUrl.value)}&urut=${urut.value}&halaman=${halaman.value}`
-  : null)
+const urlDaftar = () => `/api/servers/reputasi/daftar?server=${encodeURIComponent(pilih.value || '')}&q=${encodeURIComponent(cariUrl.value)}&urut=${urut.value}&halaman=${halaman.value}`
 const dft = pakaiPolling(urlDaftar, 300000)
+// Ganti server = tabel dikosongkan; ganti cari/urut/halaman = tabel lama tetap tampil sampai jawaban datang
+watch(pilih, () => { dft.data.value = null })
 watch(urlDaftar, (u, lama) => {
-  if (!u || u === lama) return
-  const gantiServer = !lama || !lama.startsWith(`/api/servers/reputasi/daftar?server=${encodeURIComponent(terpilih.value.host)}&`)
-  if (gantiServer) dft.data.value = null
+  if (u === lama) return
   dft.galat.value = null
   dft.muatUlang()
 })
@@ -63,7 +63,7 @@ const tren = computed(() => {
     </header>
 
     <p v-if="ring.galat.value && !ring.data.value" class="pesan-status bahaya">Gagal memuat ringkasan: {{ ring.galat.value.message }}</p>
-    <div v-else-if="!ring.data.value" aria-busy="true"><p class="redup" role="status">Memeriksa ipset di tiap server lewat SSH…</p><span v-for="i in 4" :key="i" class="sk sk-baris" /></div>
+    <div v-else-if="!ring.data.value" aria-busy="true"><p class="redup" role="status">Memuat ringkasan…</p><span v-for="i in 3" :key="i" class="sk sk-baris" /></div>
 
     <template v-else>
       <section class="kartu ringkas">
@@ -111,55 +111,56 @@ const tren = computed(() => {
         </div>
       </section>
 
-      <section class="kartu isi">
-        <h2>Daftar IP</h2>
-        <div class="alat">
-          <PilihServer v-if="servers.length" :servers="servers.filter((s) => s.ok)" :model-value="terpilih?.name" @update:model-value="pilih = $event" />
-          <label class="kotak-cari">
-            <Ikon nama="cari" :ukuran="16" />
-            <input v-model="cari" type="search" placeholder="Cari IP, awalan (45.138.) atau CIDR (45.138.0.0/16)" aria-label="Cari IP">
-          </label>
-          <label class="urut"><span class="redup">Urut</span>
-            <select v-model="urut"><option v-for="[k, l] in URUT" :key="k" :value="k">{{ l }}</option></select>
-          </label>
-        </div>
-
-        <div v-if="!d && !dft.galat.value" aria-busy="true">
-          <p class="redup" role="status">Membaca isi ipset {{ terpilih?.name }} (±15 detik untuk 100 ribu IP)…</p>
-          <span v-for="i in 8" :key="i" class="sk sk-baris" />
-        </div>
-        <p v-else-if="dft.galat.value" class="pesan-status bahaya">Gagal memuat daftar: {{ dft.galat.value.message }}</p>
-        <p v-else-if="d.error" class="pesan-status bahaya">{{ d.name || 'Server' }}: {{ d.error }}</p>
-        <template v-else>
-          <p class="redup jumlah" role="status">
-            {{ angka(d.tersaring) }} dari {{ angka(d.total) }} IP di {{ d.name }} · {{ angka(d.aktif_24j) }} aktif 24 jam · data ipset {{ waktuLalu(d.diambil) }}
-          </p>
-          <p v-if="!d.baris.length" class="redup">{{ cariUrl ? `IP ${cariUrl} tidak ada di daftar reputasi ${d.name}.` : 'Daftar kosong.' }}</p>
-          <div v-else class="tabel-wadah">
-            <table class="tabel">
-              <thead><tr><th scope="col">IP</th><th scope="col">24 jam terakhir</th><th scope="col">Terakhir diperbarui</th><th scope="col">Lepas otomatis dalam</th></tr></thead>
-              <tbody>
-                <tr v-for="b in d.baris" :key="b.ip">
-                  <td class="nowrap"><code>{{ b.ip }}</code></td>
-                  <td>
-                    <template v-if="b.aktif_24j"><span class="lencana merah">Aktif</span> <span class="redup">{{ angka(b.hit) }} hit · {{ b.domain }} domain · {{ b.server }} server</span></template>
-                    <span v-else class="redup">Tidak terlihat</span>
-                  </td>
-                  <td class="nowrap"><time :datetime="new Date(b.terlihat * 1000).toISOString()" :title="tanggalWaktu(b.terlihat)">{{ waktuLalu(b.terlihat) }}</time></td>
-                  <td class="nowrap">{{ sisaTeks(b.sisa) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <nav v-if="jumlahHalaman > 1" class="halaman-nav" aria-label="Halaman daftar">
-            <button type="button" class="tombol garis kecil" :disabled="halaman <= 1" @click="halaman--">‹ Sebelumnya</button>
-            <span class="redup">Halaman {{ angka(halaman) }} / {{ angka(jumlahHalaman) }}</span>
-            <button type="button" class="tombol garis kecil" :disabled="halaman >= jumlahHalaman" @click="halaman++">Berikutnya ›</button>
-          </nav>
-          <p class="redup catatan">"Terakhir diperbarui" = saat masa blokir terakhir di-reset ke {{ ring.data.value.ttl_hari }} hari (IP masih tercatat menyerang dalam 24 jam). IP dari daftar putih, Cloudflare, mesin pencari, dan server sendiri tidak pernah masuk. Isi ipset di-cache 5 menit.</p>
-        </template>
-      </section>
     </template>
+
+    <section class="kartu isi">
+      <h2>Daftar IP</h2>
+      <div class="alat">
+        <PilihServer v-if="pilihanServer.length" :servers="pilihanServer" :model-value="d?.name || pilih" @update:model-value="pilih = $event" />
+        <label class="kotak-cari">
+          <Ikon nama="cari" :ukuran="16" />
+          <input v-model="cari" type="search" placeholder="Cari IP, awalan (45.138.) atau CIDR (45.138.0.0/16)" aria-label="Cari IP">
+        </label>
+        <label class="urut"><span class="redup">Urut</span>
+          <select v-model="urut"><option v-for="[k, l] in URUT" :key="k" :value="k">{{ l }}</option></select>
+        </label>
+      </div>
+
+      <div v-if="!d && !dft.galat.value" aria-busy="true">
+        <p class="redup" role="status">Membaca isi ipset {{ pilih || '' }}…</p>
+        <span v-for="i in 8" :key="i" class="sk sk-baris" />
+      </div>
+      <p v-else-if="dft.galat.value" class="pesan-status bahaya">Gagal memuat daftar: {{ dft.galat.value.message }}</p>
+      <p v-else-if="d.error" class="pesan-status bahaya">{{ d.name || 'Server' }}: {{ d.error }}</p>
+      <template v-else>
+        <p class="redup jumlah" role="status">
+          {{ angka(d.tersaring) }} dari {{ angka(d.total) }} IP di {{ d.name }} · {{ angka(d.aktif_24j) }} aktif 24 jam · data ipset {{ waktuLalu(d.diambil) }}
+        </p>
+        <p v-if="!d.baris.length" class="redup">{{ cariUrl ? `IP ${cariUrl} tidak ada di daftar reputasi ${d.name}.` : 'Daftar kosong.' }}</p>
+        <div v-else class="tabel-wadah">
+          <table class="tabel">
+            <thead><tr><th scope="col">IP</th><th scope="col">24 jam terakhir</th><th scope="col">Terakhir diperbarui</th><th scope="col">Lepas otomatis dalam</th></tr></thead>
+            <tbody>
+              <tr v-for="b in d.baris" :key="b.ip">
+                <td class="nowrap"><code>{{ b.ip }}</code></td>
+                <td>
+                  <template v-if="b.aktif_24j"><span class="lencana merah">Aktif</span> <span class="redup">{{ angka(b.hit) }} hit · {{ b.domain }} domain · {{ b.server }} server</span></template>
+                  <span v-else class="redup">Tidak terlihat</span>
+                </td>
+                <td class="nowrap"><time :datetime="new Date(b.terlihat * 1000).toISOString()" :title="tanggalWaktu(b.terlihat)">{{ waktuLalu(b.terlihat) }}</time></td>
+                <td class="nowrap">{{ sisaTeks(b.sisa) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <nav v-if="jumlahHalaman > 1" class="halaman-nav" aria-label="Halaman daftar">
+          <button type="button" class="tombol garis kecil" :disabled="halaman <= 1" @click="halaman--">‹ Sebelumnya</button>
+          <span class="redup">Halaman {{ angka(halaman) }} / {{ angka(jumlahHalaman) }}</span>
+          <button type="button" class="tombol garis kecil" :disabled="halaman >= jumlahHalaman" @click="halaman++">Berikutnya ›</button>
+        </nav>
+        <p class="redup catatan">"Terakhir diperbarui" = saat masa blokir terakhir di-reset ke 7 hari (IP masih tercatat menyerang dalam 24 jam). IP dari daftar putih, Cloudflare, mesin pencari, dan server sendiri tidak pernah masuk. Isi ipset di-cache 5 menit.</p>
+      </template>
+    </section>
   </div>
 </template>
 
