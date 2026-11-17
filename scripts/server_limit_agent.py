@@ -313,7 +313,7 @@ def terapkan(p):
     # kembalikan: user.conf + preset lama, lalu terapkan ulang per user (mode satu = tanpa lewati; set-property menulis ulang drop-in)
     sh(['tar', 'xzf', cad + '/user-conf.tgz', '-C', '/'], 120)
     tulis_preset(lama)
-    for u in users:  # panggilan pertama ikut mengembalikan EP global (rewrite httpd + reload FPM) → batas longgar
+    for u in users:  # panggilan pertama ikut mengembalikan EP global (config-set + antrean rewrite per akun bertahap, tanpa rewrite global)
         try:
             subprocess.run([CG, u['user']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300, check=False, env=env)
         except subprocess.TimeoutExpired:
@@ -336,10 +336,13 @@ def _sql_batas(akun, nilai):  # nilai: {(akun, host): (koneksi, query)}
     return gagal
 
 
-def _fpm_ulang(uid):  # tulis ulang konfigurasi FPM (custom1) + reload pool user
-    sh(['bash', '-c', "echo 'action=rewrite&value=httpd' >> %s/data/task.queue && %s/directadmin taskq >/dev/null 2>&1; "
-        "systemctl list-units --no-legend --plain --state=active 'php-isolated-fpm*@%d.service' 'php-fpm*.service' "
-        "| awk '{print $1}' | xargs -r systemctl reload" % (DA, DA, uid)], 300)
+def _fpm_ulang(u, uid):  # tulis ulang konfigurasi FPM (custom1) AKUN INI SAJA + reload pool aktif user itu
+    # wajib &user=: rewrite global di sanke = ±2.300 akun + reload semua FPM (16 Nov 2026 hang total)
+    if not re.match(r'^[a-z0-9]+$', u):
+        return
+    sh(['bash', '-c', "echo 'action=rewrite&value=httpd&user=%s' >> %s/data/task.queue && %s/directadmin taskq >/dev/null 2>&1; "
+        "systemctl list-units --no-legend --plain --state=active 'php-isolated-fpm*@%d.service' "
+        "| awk '{print $1}' | xargs -r systemctl reload" % (u, DA, DA, uid)], 300)
 
 
 def _custom1_tanpa_ep(f):
@@ -410,7 +413,7 @@ def atur_user(p):
         os.remove(ov_f)
     if 'EP' in hapus and 'EP' in lama:
         _custom1_tanpa_ep(c1_f)
-        _fpm_ulang(uid)
+        _fpm_ulang(u, uid)
 
     env = dict(os.environ, VCG_TERKUNCI='1')
     try:
@@ -431,7 +434,7 @@ def atur_user(p):
         elif os.path.exists(f):
             os.remove(f)
     _sql_batas(akun, {(x['akun'], x['host']): (x['koneksi'], x['query']) for x in akun})
-    _fpm_ulang(uid)
+    _fpm_ulang(u, uid)
     subprocess.run([CG, u], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300, check=False, env=env)
     return {'ok': False, 'error': 'verifikasi_gagal', 'hasil': {**hasil, 'dikembalikan': True,
                                                                   'baris': next((x for x in daftar_user(info() or inf) if x['user'] == u), None)}}
