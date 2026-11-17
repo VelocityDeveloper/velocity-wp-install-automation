@@ -7,6 +7,8 @@ timeout 7 hari yang diperbarui tiap kali IP terlihat lagi + satu aturan iptables
   cari (awalan IP / CIDR), urut, halaman 100 baris. "Terakhir terlihat" dihitung dari sisa timeout.
 Cepat: isi dikirim ringkas (awk "ip sisa" + gzip: 6 MB/14 dtk → 1,3 MB/2 dtk); utas latar menyegarkan status & isi
 tiap server tiap SEGAR detik, request selalu dijawab dari cache (data lama dijawab dulu, penyegaran di belakang).
+Aturan WAF 7700002 (IP terblokir yang datang lewat Cloudflare): isi daftar dari reputasi.json 'waf' + hit 24 jam dari
+log error web server (utas latar sendiri, tiap CACHE_WAF).
 """
 import gzip
 import ipaddress
@@ -35,6 +37,38 @@ grep -q 'VELOCITYGUARD-REPUTASI MULAI' /usr/local/csf/bin/csfpre.sh 2>/dev/null 
 ISI = (f"ipset list -n {SET} >/dev/null 2>&1 || {{ echo GAGAL_TIDAK_ADA; exit 0; }}; "
        f"nice -n 10 ipset save {SET} | awk '$1==\"add\"{{print $3, $5}}' | gzip -1")
 
+# Hit aturan WAF 7700002 (IP reputasi/csf.deny yang datang lewat proxy, mis. Cloudflare) 24 jam dari log error web
+# server; lokasi log & pola sama dengan AMBIL di scripts/velocityguard-reputasi. Dibaca utas latar tiap CACHE_WAF.
+CACHE_WAF = 900
+WAF_HIT = r'''
+import glob, json, os, re, subprocess, time
+batas = time.time() - 86400
+calon = glob.glob('/usr/local/lsws/logs/error.log*') + glob.glob('/var/log/nginx/error.log*') + glob.glob('/var/log/nginx/error_log*') + glob.glob('/var/log/nginx/*/*error.log*')
+berkas = [f for f in calon if not f.endswith('.gz') and os.path.getmtime(f) >= batas]
+pola = re.compile(r'^(?:\[(\w{3} \w{3} +\d+ [\d:]+)\.\d+ (\d{4})\] \[error\] |(\d{4}/\d\d/\d\d [\d:]+) \[\w+\] \d+#\d+: (?:\*\d+ )?)'
+                  r'\[client ([0-9a-fA-F.:]+)\] ModSecurity: Access denied.*\[hostname "([^"]+)"\]')
+hit, ip, dom, akhir = 0, {}, {}, 0
+if berkas:
+    p = subprocess.run(['nice', '-n', '10', 'grep', '-haF', '[id "7700002"]'] + berkas, stdout=subprocess.PIPE)
+    for b in p.stdout.decode('utf-8', 'replace').splitlines():
+        m = pola.match(b)
+        if not m:
+            continue
+        try:
+            t = time.mktime(time.strptime(m.group(3), '%Y/%m/%d %H:%M:%S')) if m.group(3) else \
+                time.mktime(time.strptime(m.group(1) + ' ' + m.group(2), '%a %b %d %H:%M:%S %Y'))
+        except ValueError:
+            continue
+        if t < batas:
+            continue
+        hit += 1
+        akhir = max(akhir, t)
+        ip[m.group(4)] = ip.get(m.group(4), 0) + 1
+        dom[m.group(5)] = dom.get(m.group(5), 0) + 1
+atas = lambda d: sorted(d.items(), key=lambda x: -x[1])[:5]
+print(json.dumps({'hit': hit, 'ip': len(ip), 'domain': len(dom), 'akhir': int(akhir), 'ip_atas': atas(ip), 'domain_atas': atas(dom)}))
+'''
+
 _daftar_server = _perintah_server = _ssh_key_file = None
 _cache = {}  # kunci → (waktu, nilai)
 _kunci = {}
@@ -45,6 +79,18 @@ def pasang(daftar_server, perintah_server, ssh_key_file):
     global _daftar_server, _perintah_server, _ssh_key_file
     _daftar_server, _perintah_server, _ssh_key_file = daftar_server, perintah_server, ssh_key_file
     threading.Thread(target=_latar, daemon=True, name='reputasi-latar').start()
+    threading.Thread(target=_latar_waf, daemon=True, name='reputasi-waf').start()
+
+
+def _latar_waf():
+    """Hit aturan WAF 7700002 per server (baca log), utas sendiri agar tidak menunggu putaran isi ipset."""
+    time.sleep(10)
+    while True:
+        try:
+            _tersimpan('waf', 0, _waf_semua, True)
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(CACHE_WAF)
 
 
 def _latar():
@@ -79,9 +125,9 @@ def servers():
     return [x for x in _daftar_server() if x['host'] in hosts]
 
 
-def _ssh(srv, remote, batas=60):
+def _ssh(srv, remote, batas=60, masukan=None):
     r = subprocess.run(_perintah_server(srv, _ssh_key_file(), remote), capture_output=True, text=True, timeout=batas,
-                       check=False)
+                       input=masukan, check=False)
     if r.returncode:
         raise RuntimeError(((r.stderr or r.stdout).strip().splitlines() or [f'exit_{r.returncode}'])[-1][:200])
     return r.stdout
@@ -124,18 +170,48 @@ def _status_satu(srv):
             'paket': int(nilai.get('paket') or 0), 'bita': int(nilai.get('bita') or 0)}
 
 
-def _status_semua():
+def _paralel(fn, batas):
     daftar = servers()
     hasil = [None] * len(daftar)
 
     def kerja(i):
-        hasil[i] = _status_satu(daftar[i])
+        hasil[i] = fn(daftar[i])
     utas = [threading.Thread(target=kerja, args=(i,), daemon=True) for i in range(len(daftar))]
     for t in utas:
         t.start()
     for t in utas:
-        t.join(40)
+        t.join(batas)
     return [h or {'host': s['host'], 'name': s['name'], 'ok': False, 'error': 'timeout'} for h, s in zip(hasil, daftar)]
+
+
+def _status_semua():
+    return _paralel(_status_satu, 40)
+
+
+def _waf_satu(srv):
+    try:
+        teks = _ssh(srv, 'command -v python3 >/dev/null && exec python3 - || exec /usr/libexec/platform-python -', 90,
+                    WAF_HIT)
+        return {'host': srv['host'], 'ok': True, **json.loads(teks.strip().splitlines()[-1])}
+    except Exception as e:  # noqa: BLE001
+        return {'host': srv['host'], 'ok': False, 'error': str(e)[:200]}
+
+
+def _waf_semua():
+    return {x['host']: {'t': int(time.time()), **x} for x in _paralel(_waf_satu, 100)}
+
+
+def _waf_daftar(akhir):
+    """reputasi.json 'waf': {nama: 'isi=12000 tunggu_jeda'} → {nama: {'isi': 12000, 'muat': 'tunggu_jeda'}}."""
+    out = {}
+    for n, v in (akhir.get('waf') or {}).items():
+        v = str(v)
+        if v.startswith('isi='):
+            isi, _, muat = v[4:].partition(' ')
+            out[n] = {'isi': int(isi) if isi.isdigit() else None, 'muat': muat}
+        else:
+            out[n] = {'isi': None, 'muat': v}
+    return out
 
 
 def _riwayat(n=96):
@@ -163,6 +239,8 @@ def ringkasan(segar=False):
         'riwayat': _riwayat(),
         'servers': _tersimpan('status', CACHE_STATUS, _status_semua, segar),
         'ttl_hari': TTL // 86400,
+        'waf_daftar': _waf_daftar(akhir),  # isi ip-reputasi.txt (aturan 7700002) per nama server, kiriman terakhir
+        'waf_hit': (_cache.get('waf') or (0, {}))[1],  # diisi utas latar; kosong sampai pembacaan log pertama
     }
 
 

@@ -42,6 +42,14 @@ const bita = (n) => (n >= 1e9 ? `${(n / 1e9).toLocaleString('id-ID', { maximumFr
 const waktuDetik = (w) => (w ? Math.floor(new Date(w.replace(' ', 'T') + '+07:00').getTime() / 1000) : 0)
 const kirimGagal = computed(() => Object.entries(ring.data.value?.kirim || {}).filter(([, v]) => String(v).startsWith('gagal')))
 const isiMaks = computed(() => Math.max(0, ...servers.value.filter((s) => s.ok).map((s) => s.isi)))
+const wafDaftar = computed(() => ring.data.value?.waf_daftar || {})
+const wafHit = computed(() => ring.data.value?.waf_hit || {})
+const wafTotal = computed(() => Object.values(wafHit.value).filter((x) => x.ok).reduce((a, x) => ({ hit: a.hit + x.hit, ip: a.ip + x.ip }), { hit: 0, ip: 0 }))
+const wafTerbaca = computed(() => Object.values(wafHit.value).find((x) => x.ok)?.t)
+const MUAT = { dimuat: 'baru dimuat', tunggu_jeda: 'menunggu jeda 1 jam', tidak_perlu: 'sudah terbaru', aturan_belum_terpasang: 'aturan belum terpasang' }
+const muatTeks = (m) => MUAT[m] || m || ''
+const wafJudul = (w) => (w?.domain_atas?.length ? `Domain: ${w.domain_atas.map(([d, n]) => `${d} (${n})`).join(', ')}\nIP: ${w.ip_atas.map(([i, n]) => `${i} (${n})`).join(', ')}` : '')
+const kurang = computed(() => servers.value.filter((s) => s.ok && s.isi < isiMaks.value * 0.9))
 const sumber = computed(() => Object.fromEntries((ring.data.value?.sumber || []).map((x) => [x.host, x.ip])))
 const tren = computed(() => {
   const r = ring.data.value?.riwayat || []
@@ -79,6 +87,10 @@ const tren = computed(() => {
           <span class="redup">Paket ditolak</span><b>{{ angka(servers.reduce((a, s) => a + (s.paket || 0), 0)) }}</b>
           <small class="redup">semua server, sejak firewall terakhir dimuat ulang</small>
         </div>
+        <div class="angka-kotak" title="Aturan WAF 7700002: IP di daftar firewall/reputasi yang datang lewat proxy (Cloudflare), dicocokkan dengan IP asli pengunjung">
+          <span class="redup">Ditolak WAF 24 jam (lewat Cloudflare)</span><b>{{ angka(wafTotal.hit) }}</b>
+          <small class="redup">{{ angka(wafTotal.ip) }} IP · {{ wafTerbaca ? `log dibaca ${waktuLalu(wafTerbaca)}` : 'log belum dibaca' }}</small>
+        </div>
         <div v-if="tren" class="angka-kotak tren">
           <span class="redup">IP aktif per kiriman (24 jam terakhir)</span>
           <svg viewBox="0 0 100 30" preserveAspectRatio="none" role="img" :aria-label="`Tren jumlah IP aktif, terendah ${tren.min}, tertinggi ${tren.maks}`">
@@ -88,13 +100,14 @@ const tren = computed(() => {
         </div>
       </section>
 
+      <p v-for="s in kurang" :key="'k' + s.host" class="pesan-status waspada">Isi daftar {{ s.name }} hanya {{ angka(s.isi) }} IP, jauh di bawah server lain ({{ angka(isiMaks) }}). Kemungkinan daftar sempat hilang saat CSF dimuat ulang; minta Penjaga Benteng menyinkronkan.</p>
       <p v-for="[n, v] in kirimGagal" :key="n" class="pesan-status waspada">Kiriman terakhir ke {{ n }} gagal: {{ v.replace(/^gagal: /, '') }}</p>
 
       <section class="kartu">
         <h2>Per server</h2>
         <div class="tabel-wadah">
           <table class="tabel">
-            <thead><tr><th scope="col">Server</th><th scope="col" class="kanan">Isi daftar</th><th scope="col">Aturan DROP</th><th scope="col" class="kanan">Paket ditolak</th><th scope="col" class="kanan">IP eksploit 24 jam (sumber)</th></tr></thead>
+            <thead><tr><th scope="col">Server</th><th scope="col" class="kanan">Isi daftar</th><th scope="col">Aturan DROP</th><th scope="col" class="kanan">Paket ditolak</th><th scope="col" class="kanan">IP eksploit 24 jam (sumber)</th><th scope="col" class="kanan" title="Isi daftar aturan WAF 7700002: IP reputasi 24 jam + csf.deny">Daftar WAF</th><th scope="col" class="kanan" title="Request ditolak aturan WAF 7700002 dalam 24 jam (pengunjung lewat Cloudflare/proxy)">Ditolak WAF 24 jam</th></tr></thead>
             <tbody>
               <tr v-for="s in servers" :key="s.host">
                 <td><b>{{ s.name }}</b></td>
@@ -103,12 +116,23 @@ const tren = computed(() => {
                   <td><span class="lencana" :class="s.aturan && s.csfpre ? 'hijau' : 'merah'">{{ s.aturan ? (s.csfpre ? 'Aktif' : 'Aktif, csfpre hilang') : 'Tidak aktif' }}</span></td>
                   <td class="kanan">{{ angka(s.paket) }} <small class="redup">· {{ bita(s.bita) }}</small></td>
                   <td class="kanan">{{ sumber[s.host] != null ? angka(sumber[s.host]) : '-' }}</td>
+                  <td class="kanan">
+                    <template v-if="wafDaftar[s.name]?.isi != null">{{ angka(wafDaftar[s.name].isi) }} <small class="redup">· {{ muatTeks(wafDaftar[s.name].muat) }}</small></template>
+                    <span v-else-if="wafDaftar[s.name]" class="lencana kuning">{{ muatTeks(wafDaftar[s.name].muat) }}</span>
+                    <span v-else class="redup">-</span>
+                  </td>
+                  <td class="kanan" :title="wafJudul(wafHit[s.host])">
+                    <template v-if="wafHit[s.host]?.ok">{{ angka(wafHit[s.host].hit) }} <small class="redup">· {{ angka(wafHit[s.host].ip) }} IP · {{ angka(wafHit[s.host].domain) }} domain</small></template>
+                    <span v-else-if="wafHit[s.host]" class="redup" :title="wafHit[s.host].error">gagal dibaca</span>
+                    <span v-else class="redup">-</span>
+                  </td>
                 </template>
-                <td v-else colspan="4" class="bahaya-teks">Tidak terjangkau: {{ s.error }}</td>
+                <td v-else colspan="6" class="bahaya-teks">Tidak terjangkau: {{ s.error }}</td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p class="redup catatan">Firewall (DROP) memakai daftar penuh {{ ring.data.value.ttl_hari }} hari, tetapi tidak melihat IP asli pengunjung yang lewat Cloudflare. Untuk itu ada aturan WAF 7700002 yang memakai daftar lebih kecil (IP reputasi 24 jam + csf.deny), dimuat ulang paling sering 1× per jam. IPv6 belum tercakup. Arahkan kursor ke kolom "Ditolak WAF" untuk melihat domain dan IP teratas.</p>
       </section>
 
     </template>
