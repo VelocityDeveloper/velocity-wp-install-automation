@@ -16,6 +16,7 @@ const ServerCms = () => import('./views/ServerCms.vue')
 const ServerCpguard = () => import('./views/ServerCpguard.vue')
 const ServerGuard = () => import('./views/ServerGuard.vue')
 const ServerLog = () => import('./views/ServerLog.vue')
+const ServerReputasi = () => import('./views/ServerReputasi.vue')
 const ServerPantau = () => import('./views/ServerPantau.vue')
 const Installer = () => import('./views/Installer.vue')
 const Susulan = () => import('./views/Susulan.vue')
@@ -53,6 +54,7 @@ const routes = [
   { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS · VelocityGuard' } },
   { path: '/server/cpguard', component: ServerCpguard, meta: { judul: 'Kesiapan Copot cPGuard' } },
   { path: '/server/log', component: ServerLog, meta: { judul: 'Log · VelocityGuard' } },
+  { path: '/server/reputasi', component: ServerReputasi, meta: { judul: 'Reputasi IP · VelocityGuard' } },
   { path: '/server/pantau', component: ServerPantau, meta: { judul: 'Pantauan Realtime · VelocityGuard' } },
   { path: '/server/velocityguard', component: ServerGuard, meta: { judul: 'VelocityGuard' } },
   { path: '/security', component: Security, meta: { judul: 'Security' } },

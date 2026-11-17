@@ -2702,6 +2702,9 @@ server_pantau.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_
 # VelocityGuard: laporan celah harian, kandidat virtual patch, catatan insiden (services/velocityguard.py)
 import velocityguard  # noqa: E402
 velocityguard.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file(), kirim_telegram_server)
+# Reputasi IP VelocityGuard (ipset velocityguard_rep) untuk halaman /server/reputasi, logika di services/server_reputasi.py
+import server_reputasi  # noqa: E402
+server_reputasi.pasang(lambda: _daftar_server(), perintah_server, lambda: ssh_key_file())
 
 
 # Riwayat pemakaian untuk grafik /server/monitoring (GET /api/servers/riwayat?rentang=24j|7h|30h|90h|180h).
@@ -4700,6 +4703,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(velocityguard.insiden())
             else:
                 self._send_json(velocityguard.celah((parse_qs(parsed.query).get('tanggal') or [''])[0]))
+            return
+        if path in ('/api/servers/reputasi', '/api/servers/reputasi/daftar'):
+            if not _check_auth(self):
+                self._send_json({'error': 'unauthorized'}, 401)
+                return
+            q = parse_qs(parsed.query)
+            if path == '/api/servers/reputasi':
+                self._send_json(server_reputasi.ringkasan('segar' in q))
+            else:
+                self._send_json(server_reputasi.daftar(*((q.get(k) or [v])[0] for k, v in
+                                                         (('server', ''), ('q', ''), ('urut', 'terbaru'), ('halaman', '1'))),
+                                                       segar='segar' in q))
             return
         if path == '/api/servers/lonjakan':
             if not _check_auth(self):
