@@ -38,3 +38,5 @@ lhrsearchbot
 amzn-searchbot
 # 17 Nov 2026 (Jamal, ukur sanke 24 jam: 781 request PHP lolos, 0 diblok): scraper SERP/AI cloro.dev.
 crolbot
+# 18 Nov 2026 (Jamal, ukur sanke 24 jam: 1.151 request PHP lolos dari 1 IP 206.42.109.58, 17 domain berita): crawler AI sofya.co.
+sofyabot
