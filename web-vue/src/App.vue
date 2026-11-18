@@ -49,7 +49,6 @@ const NAV = [
     { ke: '/server/reputasi', label: 'Reputasi IP', ikon: 'daftar' },
     { ke: '/server/limit', label: 'Limit Resource', ikon: 'server' },
     { ke: '/server/log', label: 'Log', ikon: 'dokumen' },
-    { ke: '/server/cpguard', label: 'Kesiapan Copot cPGuard', ikon: 'daftar' },
   ] },
   { ke: '/security', label: 'Security', ikon: 'perisai' },
   { grup: 'installer', label: 'Installer', ikon: 'installer', anak: [

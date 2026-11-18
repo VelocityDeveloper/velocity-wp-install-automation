@@ -13,7 +13,6 @@ const ServerWaf = () => import('./views/ServerWaf.vue')
 const ServerBruteforce = () => import('./views/ServerBruteforce.vue')
 const ServerLimit = () => import('./views/ServerLimit.vue')
 const ServerCms = () => import('./views/ServerCms.vue')
-const ServerCpguard = () => import('./views/ServerCpguard.vue')
 const ServerGuard = () => import('./views/ServerGuard.vue')
 const ServerLog = () => import('./views/ServerLog.vue')
 const ServerReputasi = () => import('./views/ServerReputasi.vue')
@@ -52,7 +51,7 @@ const routes = [
   { path: '/server/bruteforce', component: ServerBruteforce, meta: { judul: 'Brute Force · VelocityGuard' } },
   { path: '/server/limit', component: ServerLimit, meta: { judul: 'Limit Resource · VelocityGuard' } },
   { path: '/server/cms', component: ServerCms, meta: { judul: 'Kerentanan CMS · VelocityGuard' } },
-  { path: '/server/cpguard', component: ServerCpguard, meta: { judul: 'Kesiapan Copot cPGuard' } },
+  { path: '/server/cpguard', redirect: '/server/velocityguard' },
   { path: '/server/log', component: ServerLog, meta: { judul: 'Log · VelocityGuard' } },
   { path: '/server/reputasi', component: ServerReputasi, meta: { judul: 'Reputasi IP · VelocityGuard' } },
   { path: '/server/pantau', component: ServerPantau, meta: { judul: 'Pantauan Realtime · VelocityGuard' } },
