@@ -282,6 +282,7 @@ const FILTER = computed(() => [
   { k: 'tinggi', label: 'Tinggi', n: situs.value.filter((s) => s.hitung.tinggi).length },
   { k: 'usang', label: 'Inti WP usang', n: situs.value.filter(intiUsang).length },
   { k: 'ditutup', label: 'Plugin ditutup', n: situs.value.filter((s) => s.ditutup.length).length },
+  { k: 'hilang', label: 'Berkas inti hilang', n: situs.value.filter((s) => s.inti_hilang?.length).length },
   { k: 'semua', label: 'Semua situs', n: situs.value.length },
 ])
 const situsTersaring = computed(() => {
@@ -289,7 +290,7 @@ const situsTersaring = computed(() => {
   const f = filter.value
   return situs.value
     .filter((s) => (f === 'semua' || (f === 'rentan' && s.ids.length) || (f === 'kritis' && s.hitung.kritis) || (f === 'tinggi' && s.hitung.tinggi)
-      || (f === 'usang' && intiUsang(s)) || (f === 'ditutup' && s.ditutup.length) || f === `aman-${s.aman.lv}`))
+      || (f === 'usang' && intiUsang(s)) || (f === 'ditutup' && s.ditutup.length) || (f === 'hilang' && s.inti_hilang?.length) || f === `aman-${s.aman.lv}`))
     .filter((s) => saringSuspend.value === 'semua' || !s.suspend)
     .filter((s) => !q || alamat(s).toLowerCase().includes(q) || s.user.includes(q)
       || s.temuan.some((t) => t.slug.includes(q) || (t.nama || '').toLowerCase().includes(q)))
@@ -606,6 +607,7 @@ const cacheHasil = new Map()
                       <td class="situs-sel">
                         <a :href="`https://${alamat(s)}`" target="_blank" rel="noopener noreferrer">{{ alamat(s) }}</a>
                         <span v-if="s.suspend" class="lencana merah" title="Akun hosting disuspend di DirectAdmin">SUSPEND</span>
+                        <span v-if="s.inti_hilang?.length" class="lencana merah" :title="`Berkas inti WordPress hilang: ${s.inti_hilang.join(', ')} (situs/login bisa 403/404)`">INTI HILANG: {{ s.inti_hilang.join(', ') }}</span>
                         <button type="button" class="cek-suspend" :disabled="mengecekSuspend.has(s.user)" :aria-busy="mengecekSuspend.has(s.user)"
                           :title="`Cek ulang suspend & scan ulang akun ${s.user}`" :aria-label="`Cek ulang suspend & scan ulang akun ${s.user}`" @click="cekSuspend(s.user)">
                           <span v-if="mengecekSuspend.has(s.user)" class="putar" aria-hidden="true" /><Ikon v-else nama="ulang" :ukuran="13" />

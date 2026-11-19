@@ -742,6 +742,32 @@ def php_well_known(teks, path):
     return '.well-known/' + path.split('/.well-known/', 1)[1][:80] if '/.well-known/' in path else None
 
 
+# .htaccess di folder plugin/tema yang MEMBUKA SEMUA .php (<FilesMatch "\.php$"> / <Files *.php> + Require all granted /
+# Allow from all) = penyangga webshell: menimpa penutupan PHP dari .htaccess induk/hosting. Kit "bbpress" palsu (style.css
+# "Author: Anything") katigain/smkgamam Kiya Agu–Okt 2026; tema vsstem img/ & inc/tgm/ sanke. Blok yang hanya membuka satu
+# berkas (Duplicator index.php, W3TC sns.php, UABB ^(index.php)$, webp-express wpc.php) TIDAK kena.
+RE_HT_BLOK_FILES = r(r'<(Files(?:Match)?)\s+([^>\n]{1,200})>(.*?)</\1\s*>', re.I | re.S)
+RE_HT_SEMUA_PHP = r(r'^\s*["\']?(?:\\\.|\.|\*\.|\^?\.\*\\\.)\(?(?:ph(?:p\d?|tml|ar)\|?)+[^"\'\w]*\$?\)?["\']?\s*$')
+RE_HT_IZINKAN = r(r'Require\s+all\s+granted|Allow\s+from\s+all')
+HT_PLUGIN_SAH = ('/plugins/backup-backup/includes/',)  # BackupBliss: <Files *.php> Require all granted bawaan paket
+
+
+def htaccess_plugin_buka_php(teks, path):
+    if '/wp-content/plugins/' not in path and '/wp-content/themes/' not in path:
+        return None
+    if any(s in path for s in HT_PLUGIN_SAH):
+        return None
+    for m in RE_HT_BLOK_FILES.finditer(teks):
+        if RE_HT_SEMUA_PHP.search(m.group(2)) and RE_HT_IZINKAN.search(m.group(3)):
+            return potong(teks, m, 160)
+    return None
+
+
+def htaccess_kit_prestashop(teks, path):
+    # Kit katigain/smkgamam: komentar "PrestaShop" di .htaccess folder plugin WordPress + buka semua PHP
+    return htaccess_plugin_buka_php(teks, path) if b'prestashop' in teks.lower() else None
+
+
 def js_suntik(teks, path):
     m = RE_JS_CHAR.search(teks)
     return potong(teks, m) if m and RE_JS_SUNTIK.search(teks) else None
@@ -915,6 +941,10 @@ TANDA = [
     ('VD.PHP.Uploader', 'Pengunggah berkas kecil tanpa cek login (celah aplikasi atau backdoor)', 'curiga', 'php', uploader, (b'move_uploaded_file',)),
     ('VD.PHP.DiUploads', 'PHP di folder uploads', 'curiga', 'php', php_di_uploads, None),
     ('VD.Htaccess.Prepend', 'auto_prepend_file di .htaccess', 'curiga', {'htaccess'}, prepend, (b'auto_',)),
+    ('VD.Htaccess.KitPluginPalsu', '.htaccess kit plugin palsu (PrestaShop) membuka semua PHP di folder plugin', 'virus', {'htaccess'},
+     htaccess_kit_prestashop, (b'prestashop',)),
+    ('VD.Htaccess.PluginBukaPHP', '.htaccess di folder plugin/tema membuka semua PHP (penyangga webshell?)', 'curiga', {'htaccess'},
+     htaccess_plugin_buka_php, (b'granted', b'allow from all')),
     ('VD.SEO.Judi', 'Spam SEO judi', 'curiga', TEKS_JUDI, judi, GERBANG_JUDI),
     ('VD.JS.AlihAtob', 'Pengalih TDS: script src dari atob()', 'virus', TEKS_JUDI | {'php', 'js'}, cari(RE_SRC_ATOB), (b'atob',)),
     ('VD.WP.SuntikRemote', 'Cetak .txt situs luar di wp_footer/wp_head', 'virus', 'php', suntik_remote, (b'wp_footer', b'wp_head')),

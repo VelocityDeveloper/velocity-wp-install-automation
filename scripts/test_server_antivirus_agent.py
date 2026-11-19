@@ -205,3 +205,26 @@ with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, 'wp-content', sub))
         open(os.path.join(d, 'wp-content', sub, 'elementor-classic-editor.php'), 'wb').write(isi)
     assert len(ag.plugin_samaran(d)) == 2, ag.plugin_samaran(d)
+
+# .htaccess folder plugin/tema yang membuka SEMUA PHP (kit bbpress palsu katigain/smkgamam Kiya, tema vsstem sanke, 19 Nov)
+HT_KIT = (b'# Pastikan index.php bisa diakses sebagai halaman utama\r\nDirectoryIndex index.php\r\n<FilesMatch "\\.php$">\r\n'
+          b'    Require all granted\r\n</FilesMatch>\r\n# Pastikan PrestaShop bisa menangani semua request dengan index.php\r\n')
+
+
+def tanda_ht(nama, isi):
+    return {t['id'] for t in ag.periksa('/home/u/domains/d/public_html/' + nama, 'htaccess', isi)}
+
+
+HT_VS = b'<IfModule mod_authz_core.c>\n    <FilesMatch "\\.php$">\n    Require all granted\n    </FilesMatch>\n</IfModule>\n'
+assert tanda_ht('wp-content/plugins/bbpress/.htaccess', HT_KIT) >= {'VD.Htaccess.KitPluginPalsu', 'VD.Htaccess.PluginBukaPHP'}
+assert 'VD.Htaccess.PluginBukaPHP' in tanda_ht('wp-content/themes/vsstem/img/.htaccess', HT_VS)
+assert 'VD.Htaccess.PluginBukaPHP' in tanda_ht('wp-content/plugins/x/.htaccess', b'<Files *.php>\nAllow from all\n</Files>')
+assert not tanda_ht('.htaccess', HT_VS)  # akar situs: bukan cakupan tanda ini
+for nama, isi in (('wp-content/plugins/backup-backup/includes/.htaccess', b'<Files *.php>\n Require all granted\n</Files>'),
+                  ('wp-content/plugins/duplicator/src/.htaccess', b'<Files index.php>\n Require all granted\n</Files>'),
+                  ('wp-content/plugins/w3-total-cache/pub/.htaccess', b'<Files "sns.php">\n Allow from all\n</Files>'),
+                  ('wp-content/plugins/bb-ultimate-addon/admin/.htaccess', b'<FilesMatch "^(index.php)$">\n Require all granted\n</FilesMatch>'),
+                  ('wp-content/plugins/webp-express/web-service/.htaccess', b'<FilesMatch "wpc\\.php$">\n Require all granted\n</FilesMatch>'),
+                  ('wp-content/plugins/x/.htaccess', b'<FilesMatch "\\.php$">\n Require all denied\n</FilesMatch>')):
+    assert not ({'VD.Htaccess.PluginBukaPHP', 'VD.Htaccess.KitPluginPalsu'} & tanda_ht(nama, isi)), nama
+print('ok: .htaccess plugin buka PHP')

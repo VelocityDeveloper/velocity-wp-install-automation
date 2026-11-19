@@ -37,6 +37,9 @@ RE_DEFINE = re.compile(r"""define\s*\(\s*['"](DB_NAME|DB_HOST)['"]\s*,\s*['"]([^
 RE_PREFIX = re.compile(r"""\$table_prefix\s*=\s*['"]([A-Za-z0-9_]+)['"]""")
 RE_SERIAL = re.compile(r's:\d+:"([^"]+)"')
 DA_MYCNF = '/usr/local/directadmin/conf/my.cnf'
+# Berkas pintu masuk inti WP; hilang satu saja = situs/login mati (cek isfile, tanpa membaca isi)
+INTI_WAJIB = ('index.php', 'wp-blog-header.php', 'wp-load.php', 'wp-settings.php', 'wp-login.php', 'wp-cron.php',
+              'wp-admin/index.php', 'wp-admin/admin-ajax.php')
 
 
 def baca_awal(path, n=BACA_HEADER):
@@ -133,8 +136,13 @@ def instalasi(akar, user, domain, sub):
         mu = sorted(f for f in os.listdir(os.path.join(wpc, 'mu-plugins')) if not f.startswith('.'))[:50]
     except OSError:
         mu = []
-    return {'path': akar, 'user': user, 'domain': domain, 'sub': sub, 'versi': m.group(1),
+    item = {'path': akar, 'user': user, 'domain': domain, 'sub': sub, 'versi': m.group(1),
             'plugin': daftar_plugin(wpc), 'tema': daftar_tema(wpc), 'mu_plugin': mu}
+    # Berkas pintu masuk inti yang hilang → situs 403/404 (katigain Kiya: index.php hilang ±Okt–19 Nov 2026 tanpa terdeteksi)
+    hilang = [f for f in INTI_WAJIB if not os.path.isfile(os.path.join(akar, f))]
+    if hilang:
+        item['inti_hilang'] = hilang
+    return item
 
 
 def cari_wp(akar, kedalaman):

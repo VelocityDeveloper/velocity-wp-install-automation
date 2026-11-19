@@ -274,7 +274,7 @@ def _cocokkan(job, inv):
 def _ringkas(data):
     kamus = data.get('kerentanan') or {}
     out = {'situs': 0, 'rentan': 0, 'kritis': 0, 'tinggi': 0, 'sedang': 0, 'rendah': 0, 'tidak_diketahui': 0,
-           'kerentanan': 0, 'inti_usang': 0, 'ditutup': 0, 'cpg_rentan': 0}
+           'kerentanan': 0, 'inti_usang': 0, 'ditutup': 0, 'cpg_rentan': 0, 'inti_hilang': 0}
     terbaru = urai_versi(data.get('wp_terbaru'))
     for s in data.get('situs') or []:
         out['situs'] += 1
@@ -290,6 +290,8 @@ def _ringkas(data):
         out['ditutup'] += sum(1 for t in s.get('temuan', []) if t.get('ditutup'))
         if terbaru and (urai_versi(s['versi']) or ()) < terbaru:
             out['inti_usang'] += 1
+        if s.get('inti_hilang') and not s.get('suspend'):
+            out['inti_hilang'] += 1
     for c in (data.get('cpguard') or {}).get('situs') or []:
         if str(c.get('rating') or 'safe').lower() != 'safe':
             out['cpg_rentan'] += 1
