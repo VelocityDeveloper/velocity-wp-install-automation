@@ -164,6 +164,8 @@ SecRule REQUEST_FILENAME "@rx ^/wp-json/(?:wp/v2/(?:posts|pages|users|media|cate
 # 23 Okt: batch anonim ber-cookie wordpress_logged_in_ palsu lolos 207 di 3 situs Kiya. Editor sah (apiFetch Gutenberg) selalu
 # kirim X-WP-Nonce; cookie tanpa nonce = 7700220, dicatat dulu (ukur dampak) → ganti pass ke @AKSI403@ bila 72 jam bersih.
 # shortcut: cookie & nonce tidak divalidasi (header palsu lolos); tambalan sebenarnya = update WP ≥ 6.9.5 / 7.0.2.
+# 19 Nov: 7700220 pass → blokir. Ukur 20 Okt–19 Nov: Kiya 9 hit (IP acak sekali-lewat, 0 editor), Wajar 1, Shiro/Sanke 0;
+# jejak exploit masih muncul s/d 17 Nov (bprmduco). Dikecualikan: nonce via ?_wpnonce=, header Authorization (Application Password).
 SecRule REQUEST_FILENAME "@rx /wp-json/+batch(?:/|$)" \
     "id:7700218,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - REST batch/v1 tanpa login (wp2shell CVE-2026-63030)',chain"
     SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in/ "@eq 0" "t:none"
@@ -171,9 +173,11 @@ SecRule ARGS:/^rest[^a-z0-9]route$/ "@rx ^/*batch(?:/|$)" \
     "id:7700219,phase:2,t:none,t:urlDecodeUni,t:removeWhitespace,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - REST batch/v1 tanpa login via rest_route (wp2shell CVE-2026-63030)',chain"
     SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in/ "@eq 0" "t:none"
 SecRule REQUEST_FILENAME|ARGS:/^rest[^a-z0-9]route$/ "@rx (?:/wp-json/+|^/*)batch(?:/|$)" \
-    "id:7700220,phase:2,t:none,t:urlDecodeUni,t:removeWhitespace,t:lowercase,pass,log,noauditlog,tag:'velocity-waf',tag:'ukur',msg:'Velocity WAF - REST batch/v1 cookie login tanpa X-WP-Nonce (ukur)',chain"
+    "id:7700220,phase:2,t:none,t:urlDecodeUni,t:removeWhitespace,t:lowercase,@AKSI403@,log,noauditlog,tag:'velocity-waf',tag:'eksploit',msg:'Velocity WAF - REST batch/v1 cookie login tanpa nonce (wp2shell CVE-2026-63030)',chain"
     SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in/ "@ge 1" "t:none,chain"
-    SecRule &REQUEST_HEADERS:X-WP-Nonce "@eq 0" "t:none"
+    SecRule &REQUEST_HEADERS:X-WP-Nonce "@eq 0" "t:none,chain"
+    SecRule &ARGS:_wpnonce "@eq 0" "t:none,chain"
+    SecRule &REQUEST_HEADERS:Authorization "@eq 0" "t:none"
 # wp-file-manager (elFinder, action mk_file_folder_manager): buat/ganti nama/unggah berkas .php atau simpan isi berkode PHP
 # = webshell (23 Okt montesso: admin bocor → mkfile search_template_*.php). Ukur access log 6 server: 2 hit, keduanya peretas.
 SecRule ARGS:action "@streq mk_file_folder_manager" \

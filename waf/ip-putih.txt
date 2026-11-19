@@ -1,6 +1,8 @@
 # IP/CIDR tepercaya — semua aturan Velocity WAF dilewati. Satu per baris.
 # Kantor Velocity (IP publik yang terlihat server saat SSH dari dashboard)
 202.59.194.129
+# Kantor Indibiz (IP keluar PC kantor sejak 17 Nov 2026; sebelumnya masuk ip-reputasi Kiya → semua situs 403)
+36.65.5.232
 # Jetpack / WordPress.com (memakai xmlrpc.php)
 192.0.64.0/18
 # localhost
