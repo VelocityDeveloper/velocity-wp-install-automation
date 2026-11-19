@@ -158,6 +158,26 @@ for nama, harap in ((b'auto-bootstrap', ['VD.DB.AppPasswordPeretas']), (b'conten
 assert ag.admin_siluman('wpm_0dd1286a', 'audit@wp.local', 500)[0][0] == 'VD.DB.AdminSiluman'
 assert ag.admin_siluman('orion15570', 'orion15570@www.smpn1gbawai.com', 500)[0][0] == 'VD.DB.AdminSiluman'
 assert ag.admin_siluman('budi', 'budi2024@www.contoh.com', 500) is None and ag.admin_siluman('wpm_admin', 'a@contoh.com', 3) is None
+# 19 Nov 2026: admin palsu eksploit wp2shell (rmpmotar, aksfood, gigacomp, jasabasm, juraganf, smpgitak, mekarasi, ...)
+for login, email in (('site_admin', 'itgkerr67@mediaholy.com'), ('Fx_cc7212e93524', 'wordpresssecurity1@protonmail.com'),
+                     ('support_admin', 'support_admin@wordpress.com'), ('w2s4db624ca62da', 'w2s4db624ca62da@proton.me'),
+                     ('worldpress-administrator31', 'worldpress-administrator31@wordpress.com'),
+                     ('backup_service', 'backup.service@hotmail.com'), ('wordpress_0b81e5054f6f', 'wordpress_0b81e5054f6f@wordpress.com'),
+                     ('wpsupport_7f6d8656f449', 'wpsupport_7f6d8656f449@wordpness.org'), ('bl_a4c6d263b02c', 'bl_a4c6d263b02c@bl.bl'),
+                     ('3rk_ba42a3c13e99', '3rk_ba42a3c13e99@3rkshell.invalid'), ('wp_admin_80febb', 'wp_admin_80febb@local.host'),
+                     ('id69_9ed2d2', 'x@contoh.com'), ('Bunk_9255933feb93', 'b@contoh.com'), ('wp2_0dcc24', 'w@contoh.com')):
+    assert ag.admin_siluman(login, email, 500)[0][0] == 'VD.DB.AdminSiluman', login
+assert ag.admin_siluman('adminuser', 'adminuser@gmail.com', 500)[0][0] == 'VD.DB.AdminCuriga'
+assert ag.admin_siluman('site_admin', 'it@sekolahku.sch.id', 500)[0][0] == 'VD.DB.AdminCuriga'
+# terdaftar bersamaan jejak request/parse wp2shell: nama wajar pun siluman; tanpa jejak tidak
+assert ag.admin_siluman('mekarasihrotan', 'mekarasihrotan@gmail.com', 100, True)[0][0] == 'VD.DB.AdminSiluman'
+assert ag.admin_siluman('mekarasihrotan', 'mekarasihrotan@gmail.com', 100) is None
+assert ag.jejak_dekat(1000, {997}) and not ag.jejak_dekat(1000, {996, 1004})
+assert "post_type = 'request'" in ag.sql_jejak_w2s('wp_') and '`wp_posts`' in ag.sql_jejak_w2s('wp_')
+for login, email in (('smkndlin', 'smk1dlingo@gmail.com'), ('juraganf', 'imamsaji@yahoo.com'), ('niagasin', 'carlossinaga62@gmail.com'),
+                     ('admin', 'admin@contoh.com'), ('wordpress', 'a@contoh.com'), ('blog_admin', 'b@contoh.com'),
+                     ('bl_ok', 'c@contoh.com'), ('fx_cc7212e93524x', 'd@contoh.com')):
+    assert ag.admin_siluman(login, email, 500) is None, login
 assert "wlh\\_health\\_event" in ag.sql_ioc('wp_') and ag.sql_ioc('wp_').count('`wp_options`') == 4
 tanda_f = lambda nama, isi: {t['id'] for t in ag.periksa('/home/u/domains/d/public_html/' + nama, ag.ekstensi(os.path.basename(nama)), isi)}
 PH = (b"<?php\n/*\nPlugin Name: Site Performance Helper\nDescription: Optimizes search engine visibility and rankings.\n*/\n"

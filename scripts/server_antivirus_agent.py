@@ -1028,9 +1028,15 @@ TANDA_DB = [('VD.DB.JudiTersembunyi', 'Database: link judi tersembunyi', 'virus'
 # Admin siluman: akun administrator buatan plugin samaran (wp-cachepress: backup_manager/cache_sync/maria@<domain>)
 # dan alat pembobol (w2s_xxxx@wp2shell.invalid). Pola nama "Roger"/roger013@yahoo.com bisa milik orang asli → curiga.
 # wp-reports (wartamenoreh, patriotbangsa: login dari IP asing) & sys_<hex8> (patriotbangsa, noreply@<domain>) — 29 Okt
-ADMIN_SILUMAN = {'backup_manager', 'cache_sync', 'wp-reports'}
-RE_ADMIN_EMAIL = re.compile(r'@(wordpress\.org|[\w.-]+\.invalid|wp\.local)$', re.I)
-RE_ADMIN_W2S = re.compile(r'^(?:w2s_[0-9a-f]{6,}|sys_[0-9a-f]{8}|wpm_[0-9a-f]{8})$')
+ADMIN_SILUMAN = {'backup_manager', 'cache_sync', 'wp-reports', 'backup_service'}
+# 19 Nov 2026 (wp2shell CVE-2026-63030, 14 situs Kiya/shiro/sanke): domain palsu/sekali pakai milik pembuat admin
+RE_ADMIN_EMAIL = re.compile(r'@(wordpress\.org|[\w.-]+\.invalid|wp\.local|wp2shell\.local|local\.host|mediaholy\.com|'
+                            r'word(?:pless|pness)\.org|bl\.bl)$|^wordpresssecurity\d*@proton', re.I)
+RE_ADMIN_W2S = re.compile(r'^(?:w2s_?[0-9a-f]{6,}|sys_[0-9a-f]{8}|wpm_[0-9a-f]{8}|wp2_[0-9a-f]{6,}|wp_admin_[0-9a-f]{6}|'
+                          r'(?:Fx|3rk|bl|Bunk)_[0-9a-f]{10,}|id69_[0-9a-f]{6}|(?:wordpress|wpbackup|wpsupport)_[0-9a-f]{10,}|'
+                          r'worldpress-administrator\d*)$')
+# Nama generik: ...@wordpress.com (alamat yang tak bisa dimiliki klien) = palsu; tanpa itu cukup curiga
+ADMIN_GENERIK = {'site_admin', 'support_admin', 'adminuser'}
 # Admin bootstrap WLH (sanke/Farnaz 3 Nov: orion15570@www.smpn1gbawai.com, sable74979@, zephyr3800@): kata+4-5 angka @www.<domain>
 RE_ADMIN_WWW = re.compile(r'^([a-z]{3,10}\d{4,5})@www\.[\w.-]+$')
 RE_ADMIN_NAMA = re.compile(r'^[A-Z][a-z]{2,11}$')
@@ -1041,12 +1047,23 @@ TANDA_ADMIN = [('VD.DB.AdminSiluman', 'Database: admin siluman (plugin samaran/p
                ('VD.DB.AdminCuriga', 'Database: admin baru pola nama+angka', 'curiga')]
 
 
-def admin_siluman(login, email, umur):
+def jejak_dekat(w, jejak, jarak=3):
+    return any(abs(w - j) <= jarak for j in jejak)
+
+
+def admin_siluman(login, email, umur, jejak_w2s=False):
+    # jejak_w2s: terdaftar bersamaan (±3 dtk) dengan post request/parse "reentry" sisa eksploit wp2shell → pasti dari eksploit
+    # walau nama/email tampak wajar (heru.ops, amen, jack52, rona, mekarasihrotan@gmail.com; 19 Nov 2026)
+    if jejak_w2s:
+        return TANDA_ADMIN[0], '%s <%s> · terdaftar bersamaan jejak eksploit wp2shell' % (login, email)
     """(tanda, bukti) atau None. umur = umur akun dalam hari."""
     mw = RE_ADMIN_WWW.match(email.lower())
     if login in ADMIN_SILUMAN or RE_ADMIN_EMAIL.search(email) or RE_ADMIN_W2S.match(login) or (mw and mw.group(1) == login.lower()) \
-            or (login == 'maria' and email.lower().startswith('maria@')):
+            or (login == 'maria' and email.lower().startswith('maria@')) \
+            or (login.lower() in ADMIN_GENERIK and email.lower().endswith('@wordpress.com')):
         return TANDA_ADMIN[0], '%s <%s>' % (login, email)
+    if login.lower() in ADMIN_GENERIK:
+        return TANDA_ADMIN[1], '%s <%s> · nama admin generik' % (login, email)
     if umur <= 120 and (RE_ADMIN_NAMA.match(login) and re.match(RE_ADMIN_EMAIL_NAMA % re.escape(login.lower()), email.lower())
                         or RE_ADMIN_ACAK.match(login)
                         # login = email (ponpeshpaicmerapi 25 Okt: ponpeshp@ponpeshpaicmerapi.com, kembaran admin asli)
@@ -1150,6 +1167,12 @@ def sql_ioc(p):
             # cron WLH yang tertinggal tanpa opsi (ponpes 2 Nov: wlh_health_event / jadwal wlh_15min)
             "UNION ALL SELECT 'wlh', 'cron', 'cron wlh_health_event' FROM `%soptions` WHERE option_name = 'cron' "
             "AND option_value LIKE '%%wlh\\_health\\_event%%'") % (p, p, p, p))
+
+
+def sql_jejak_w2s(p):
+    # post_type 'request' bawaan WP (permintaan data pribadi) tak pernah berstatus 'parse'/judul 'reentry'
+    return ("SELECT DISTINCT UNIX_TIMESTAMP(post_modified_gmt) FROM `%sposts` WHERE post_type = 'request' "
+            "AND (post_status = 'parse' OR post_title = 'reentry') LIMIT 2000" % p)
 
 
 def sql_admin(p):
@@ -1258,12 +1281,18 @@ def scan_db(user, wpconfig, hari, aman, hit):
             admin = mysql_baris(k, sql_admin(p))
         except Exception:
             admin = []
+        jejak = set()
+        if admin:
+            try:
+                jejak = {int(x[0]) for x in mysql_baris(k, sql_jejak_w2s(p)) if x and x[0].isdigit()}
+            except Exception:
+                jejak = set()
         for b in admin:
             if len(b) < 4:
                 continue
             uid, waktu, login, email = b[0].decode(), b[1].decode(), b[2].decode('utf-8', 'replace'), b[3].decode('utf-8', 'replace')
             w = int(waktu) if waktu.isdigit() else 0
-            cocok = admin_siluman(login, email, int((time.time() - w) / 86400) if w else 9999)
+            cocok = admin_siluman(login, email, int((time.time() - w) / 86400) if w else 9999, jejak and w and jejak_dekat(w, jejak))
             if not cocok:
                 continue
             (tid, nama, tingkat), bukti = cocok
