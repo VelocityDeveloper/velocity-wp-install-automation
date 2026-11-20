@@ -40,3 +40,7 @@ amzn-searchbot
 crolbot
 # 18 Nov 2026 (Jamal, ukur sanke 24 jam: 1.151 request PHP lolos dari 1 IP 206.42.109.58, 17 domain berita): crawler AI sofya.co.
 sofyabot
+# 20 Nov 2026 (Jamal, ukur 24 jam request PHP lolos 200: sanke 27.527 + shiro 8.062, 51 domain, 31 IP 62.83.32-35.x): crawler foto/AI estidraft.com.
+tphotobot
+# 20 Nov 2026 (Jamal, ukur 24 jam: sanke 2.805 + shiro 840 lolos 200, 2 IP OVH 15.204.230.148/40.160.87.44, situs berita): crawler AI echogrey.ai.
+echogreybot
