@@ -3,6 +3,15 @@
 202.59.194.129
 # Kantor Indibiz (IP keluar PC kantor sejak 17 Nov 2026; sebelumnya masuk ip-reputasi Kiya → semua situs 403)
 36.65.5.232
+# Indibiz: IP keluar baru sejak 19 Nov 16:2x (dinamis, tinjau sesudah migrasi Kiya→shiro)
+36.65.12.233
+# Kantor Indibiz (Afif), 19 Nov: sempat terblokir ip-reputasi (dulu hanya di server, disatukan 22 Nov)
+36.65.8.28
+# Kantor Velocity (Telkom), 21 Nov: terblokir ip-reputasi saat cek hatipena
+125.166.149.41
+# Dari ip-putih sanke (dipasang manual sebelumnya, disatukan 22 Nov agar tidak hilang saat paket baru)
+158.140.180.78
+182.10.35.109
 # Jetpack / WordPress.com (memakai xmlrpc.php)
 192.0.64.0/18
 # localhost

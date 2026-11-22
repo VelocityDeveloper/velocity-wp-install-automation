@@ -44,3 +44,15 @@ sofyabot
 tphotobot
 # 20 Nov 2026 (Jamal, ukur 24 jam: sanke 2.805 + shiro 840 lolos 200, 2 IP OVH 15.204.230.148/40.160.87.44, situs berita): crawler AI echogrey.ai.
 echogreybot
+# 22 Nov 2026 (Jamal, ukur 24 jam request PHP lolos 200/30x sanke+shiro): scraper/indeks AI & direktori baru.
+agenttrustbot
+giantcrawler
+nuffstoresshoppingbot
+apcosysbot
+epochal-search
+pagehubbot
+anticlonebot
+# 22 Nov 2026: penyalin artikel 1 IP ke 1 situs berita shiro (NusantaraNewsBot 76.13.22.54 → beritamerangin 2.052/hari;
+# PantauMediaBot 156.67.220.166 panel.ngawaltasik.id → klikjawabarat 524/hari). Bukan situs kita.
+nusantaranewsbot
+pantaumediabot
