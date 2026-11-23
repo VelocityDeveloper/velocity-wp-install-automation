@@ -56,3 +56,12 @@ anticlonebot
 # PantauMediaBot 156.67.220.166 panel.ngawaltasik.id → klikjawabarat 524/hari). Bukan situs kita.
 nusantaranewsbot
 pantaumediabot
+# 23 Nov 2026: ukur 24 jam lolos ke PHP (sanke d754 + shiro 32f7). VelenPublicWebCrawler (velen.io) ±10,5 rb/hari ke 9 situs
+# (shiro 9,9 rb ke 4 situs); CogBot cognition.ai ±940 ke 26 situs; SemanticVisionsBot 772 ke 1 situs; remotejobsiq-bot ±430,
+# CHPBot ±230, TechLeadsBot ±200 (penyisir direktori/lead, 1 IP ke puluhan situs).
+velenpublicwebcrawler
+cogbot/
+semanticvisionsbot
+remotejobsiq-bot
+chpbot/
+techleadsbot

@@ -77,3 +77,6 @@ newscrawler
 terncrawler
 wpbot/
 headlesschrome
+# 23 Nov 2026: webatlabot (webatla.com, ±250/hari ke ±190 situs), AbbySEOBot (±150/hari).
+webatlabot
+abbyseobot
