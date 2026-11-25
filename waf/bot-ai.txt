@@ -65,3 +65,21 @@ semanticvisionsbot
 remotejobsiq-bot
 chpbot/
 techleadsbot
+# Ditambah 25 Nov 2026 (ukur sanke+shiro 24 jam, request PHP lolos): ImageCrawler/0.1 tanpa URL info dari GCP 35.208-209.x
+# (±25 rb sanke, ±4 rb shiro); web-indexer-crawler AWS ±830; scraper lead/email/reputasi kecil (1 IP ke puluhan situs).
+imagecrawler/0.1
+web-indexer-crawler/
+pulsewatchbot/
+bitsightbot/
+sparixemailscraper
+spicombot/
+chakloonbot/
+findgbot/
+fowlguardbot/
+spiderworld-lab
+cariwebsitemonetbot/
+hexidebot/
+stakeholderbot/
+zoominfobot
+bomborabot
+firmablebot
