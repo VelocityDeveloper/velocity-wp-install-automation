@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 
 /**
- * Tombol "Bantuan" di header dashboard (installer Velocity, 25 Nov 2026): info kontak Tim Support.
+ * Tombol "Bantuan Support" di header dashboard (installer Velocity, 25 Nov 2026): info kontak Tim Support.
  * Nomor tetap (Tim Support Velocity), bukan pengaturan admin.
  */
 const nomorWa = '6287742295809';
@@ -29,7 +29,7 @@ const nomorTampil = '0877-4229-5809';
                 data-test="bantuan-support"
             >
                 <LifeBuoy class="size-4" />
-                <span class="max-sm:sr-only">Bantuan</span>
+                <span class="max-sm:sr-only">Bantuan Support</span>
             </Button>
         </DialogTrigger>
         <DialogContent class="sm:max-w-md">

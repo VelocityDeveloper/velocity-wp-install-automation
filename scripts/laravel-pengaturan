@@ -15,7 +15,7 @@ Sejak 10 Okt 2026: /sitemap.xml, /robots.txt, kode verifikasi Google Search Cons
    Sejak 13 Okt 2026: hapus akun sendiri dibuang (minimal satu super admin), Pengaturan > Tampilan dibuang
    (tombol mode gelap AppearanceToggle di header), header dashboard sticky di layar kecil, tombol
    "Lihat situs" (LihatSitusButton, halaman publik di tab baru) di header dashboard.
-   Sejak 25 Nov 2026: tombol "Bantuan" (BantuanSupportButton, dialog kontak Tim Support 6287742295809).
+   Sejak 25 Nov 2026: tombol "Bantuan Support" (BantuanSupportButton, dialog kontak Tim Support 6287742295809).
 3. Buat logo & favicon contoh dari inisial APP_NAME (.env): public/images/logo-contoh.png, favicon.ico,
    apple-touch-icon.png; favicon.svg Laravel dibuang.
 4. Rapikan dengan `vp check --fix` + Pint.
@@ -231,7 +231,7 @@ def tambal_akun_tampilan(app):
         (app / rel).unlink()
         print(f'  hapus {rel}')
     # 13 Okt 2026: tombol "Lihat situs" (halaman publik, tab baru) di sebelah tombol mode gelap
-    # 25 Nov 2026: tombol "Bantuan" (dialog kontak Tim Support) di kiri "Lihat situs"
+    # 25 Nov 2026: tombol "Bantuan Support" (dialog kontak Tim Support) di kiri "Lihat situs"
     toggle_import = ("import AppearanceToggle from '@/components/AppearanceToggle.vue';\n"
                      "import BantuanSupportButton from '@/components/BantuanSupportButton.vue';\n"
                      "import LihatSitusButton from '@/components/LihatSitusButton.vue';\n")

@@ -122,7 +122,7 @@ di pesan commit.
     tombol "Lihat situs" di header dashboard, di samping tombol mode gelap — `LihatSitusButton.vue` (dipasang
     installer, buka halaman publik `home()` di tab baru; di HP tinggal ikon). App tanpa situs publik (halaman
     depan langsung ke login) membuang tombol ini dari `AppSidebarHeader`/`AppHeader`.
-  - *Tombol "Bantuan"*: semua app wajib punya tombol "Bantuan" di header dashboard (kiri "Lihat situs") —
+  - *Tombol "Bantuan Support"*: semua app wajib punya tombol "Bantuan Support" di header dashboard (kiri "Lihat situs") —
     `BantuanSupportButton.vue` (dipasang installer): dialog "Jika perlu bantuan, silakan menghubungi Tim Support
     kami" + nomor Tim Support 0877-4229-5809 (wa.me/6287742295809). Jangan dibuang atau diganti nomor klien.
   - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
