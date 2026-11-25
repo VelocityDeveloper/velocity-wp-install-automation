@@ -124,7 +124,8 @@ di pesan commit.
     depan langsung ke login) membuang tombol ini dari `AppSidebarHeader`/`AppHeader`.
   - *Tombol "Bantuan Support"*: semua app wajib punya tombol "Bantuan Support" di header dashboard (kiri "Lihat situs") —
     `BantuanSupportButton.vue` (dipasang installer): dialog "Jika perlu bantuan, silakan menghubungi Tim Support
-    kami" + nomor Tim Support 0877-4229-5809 (wa.me/6287742295809). Jangan dibuang atau diganti nomor klien.
+    kami" + nomor Tim Support 0877-4229-5809 (wa.me/6287742295809). Tombol header berikon logo WhatsApp (SVG inline, bukan ikon lucide) + label "Bantuan Support";
+    tombol "Chat WhatsApp" di dialog juga berlogo WhatsApp. Jangan dibuang, diganti ikon lain, atau diganti nomor klien.
   - *Tombol Simpan sticky*: form panjang (Pengaturan dan form ber-field banyak) memakai bar aksi yang menempel
     di bawah layar (`sticky bottom-0`, latar kartu, garis atas tipis) berisi Simpan (+ Batal bila ada),
     sehingga tidak perlu menggulir ke bawah untuk menyimpan. Buat sekali sebagai komponen bersama, pakai ulang.
