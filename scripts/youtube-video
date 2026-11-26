@@ -3,7 +3,8 @@
 
 Pemakaian:
   youtube-video login [--manual]      sekali saja: izinkan akses channel, simpan refresh token
-  youtube-video login --akun=EMAIL    tambah channel cadangan (token youtube-token-<nama>.json)
+  youtube-video login --akun=EMAIL [--nama=NAMA]   tambah channel cadangan (token youtube-token-<nama>.json);
+                                      --nama wajib bila channel di email yang sama dengan channel utama
   youtube-video cek                   tampilkan akun & channel yang tersambung (utama + cadangan)
   youtube-video unggah <manifest|domain> [--privasi=unlisted] [--batas=12] [--coba]
   youtube-video daftar <domain>       video yang sudah diunggah untuk domain itu
@@ -616,9 +617,12 @@ def main():
     try:
         if perintah == 'login':
             akun = opsi('akun', '').strip().lower()
-            if akun and akun != AKUN.lower():
+            # --nama wajib untuk channel kedua di email yang sama (brand account), agar token utama tidak tertimpa.
+            nama = opsi('nama', '').strip().lower() or (akun.split('@')[0] if akun and akun != AKUN.lower() else '')
+            if akun:
                 AKUN = akun
-                pakai_token(TOKEN_UTAMA.parent / f"youtube-token-{re.sub(r'[^a-z0-9]+', '-', akun.split('@')[0])}.json")
+            if nama:
+                pakai_token(TOKEN_UTAMA.parent / f"youtube-token-{re.sub(r'[^a-z0-9]+', '-', nama)}.json")
             (login_manual if '--manual' in sys.argv else login_perangkat)('--paksa' in sys.argv)
             return 0
         if perintah == 'cek':
