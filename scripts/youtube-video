@@ -3,7 +3,8 @@
 
 Pemakaian:
   youtube-video login [--manual]      sekali saja: izinkan akses channel, simpan refresh token
-  youtube-video cek                   tampilkan akun & channel yang tersambung
+  youtube-video login --akun=EMAIL    tambah channel cadangan (token youtube-token-<nama>.json)
+  youtube-video cek                   tampilkan akun & channel yang tersambung (utama + cadangan)
   youtube-video unggah <manifest|domain> [--privasi=unlisted] [--batas=12] [--coba]
   youtube-video daftar <domain>       video yang sudah diunggah untuk domain itu
   youtube-video pasang <manifest> [--paksa]   tema klasik: seksi Video di halaman Galeri
@@ -33,6 +34,10 @@ diunggah dua kali, dan sesi upload yang terputus dilanjutkan dari byte terakhir.
 fse-apply membaca cache ini di video_klien(): video tegak ditulis sebagai URL /shorts/ supaya
 embed-nya memakai rasio 9:16.
 
+Channel cadangan (26 Nov 2026): kalau channel utama kena batas unggah harian (uploadLimitExceeded),
+`unggah` otomatis pindah ke token cadangan berikutnya (urut nama berkas). quotaExceeded = jatah API
+proyek Google Cloud, dipakai bersama semua channel, jadi tidak pindah channel.
+
 Kode keluar: 0 selesai/tidak ada yang perlu diunggah, 1 gagal, 2 salah pemakaian,
 3 kuota YouTube habis (lanjut otomatis di run berikutnya), 4 belum login.
 """
@@ -54,7 +59,8 @@ from folder_klien import folder_klien  # noqa: E402
 AKUN = os.environ.get('VELOCITY_YOUTUBE_AKUN') or 'mastoro12345@gmail.com'
 RAHASIA = Path('/etc/velocity/secrets')
 KLIEN_BERKAS = Path(os.environ.get('VELOCITY_YOUTUBE_KLIEN') or RAHASIA / 'youtube-client.json')
-TOKEN_BERKAS = Path(os.environ.get('VELOCITY_YOUTUBE_TOKEN') or RAHASIA / 'youtube-token.json')
+TOKEN_UTAMA = Path(os.environ.get('VELOCITY_YOUTUBE_TOKEN') or RAHASIA / 'youtube-token.json')
+TOKEN_BERKAS = TOKEN_UTAMA  # berganti ke token cadangan saat channel kena batas unggah (ganti_channel)
 CACHE_DIR = Path(os.environ.get('VELOCITY_YOUTUBE_CACHE') or '/var/lib/velocity/youtube')
 
 SCOPE = 'openid email https://www.googleapis.com/auth/youtube'
@@ -73,6 +79,10 @@ PRIVASI = ('unlisted', 'public', 'private')
 
 class KuotaHabis(Exception):
     pass
+
+
+class BatasChannel(KuotaHabis):
+    """Batas unggah harian satu channel; channel lain masih bisa dipakai."""
 
 
 class BelumLogin(Exception):
@@ -114,8 +124,12 @@ def alasan_galat(body):
 
 
 def cek_kuota(status, body):
-    if status == 403 and re.search(r'quotaExceeded|uploadLimitExceeded|rateLimitExceeded', alasan_galat(body)):
-        raise KuotaHabis(alasan_galat(body))
+    alasan = alasan_galat(body)
+    # uploadLimitExceeded datang dengan status 400 saat membuka sesi upload (speaksnatural 26 Nov), bukan 403.
+    if status in (400, 403) and 'uploadLimitExceeded' in alasan:
+        raise BatasChannel(alasan)
+    if status == 403 and re.search(r'quotaExceeded|rateLimitExceeded', alasan):
+        raise KuotaHabis(alasan)
 
 
 def klien():
@@ -216,6 +230,35 @@ def akses():
         raise BelumLogin(f'refresh token ditolak ({alasan_galat(body)}); jalankan youtube-video login lagi')
     _AKSES.update(token=body['access_token'], habis=time.time() + int(body.get('expires_in', 3600)) - 120)
     return _AKSES['token']
+
+
+def token_cadangan():
+    """Token channel cadangan (dibuat `login --akun=`), di folder yang sama dengan token utama."""
+    return sorted(TOKEN_UTAMA.parent.glob('youtube-token-*.json'))
+
+
+def akun_aktif():
+    try:
+        return json.loads(TOKEN_BERKAS.read_text()).get('email', '')
+    except (OSError, ValueError):
+        return ''
+
+
+def pakai_token(berkas):
+    global TOKEN_BERKAS
+    TOKEN_BERKAS = berkas
+    _AKSES.update(token='', habis=0.0)
+
+
+def ganti_channel():
+    """Pindah ke token sesudah token aktif (utama → cadangan urut nama); False kalau tidak ada lagi."""
+    semua = [TOKEN_UTAMA] + token_cadangan()
+    i = semua.index(TOKEN_BERKAS) if TOKEN_BERKAS in semua else len(semua)
+    if i + 1 >= len(semua):
+        return False
+    pakai_token(semua[i + 1])
+    print(f'youtube: pindah ke channel cadangan {akun_aktif() or TOKEN_BERKAS.name}', flush=True)
+    return True
 
 
 def tampilkan_channel(token=None):
@@ -365,8 +408,7 @@ def unggah(cfg, privasi, batas, coba):
     cache = baca_cache(domain)
     cache.setdefault('video', {})
     cache.setdefault('sesi', {})
-    akun_token = json.loads(TOKEN_BERKAS.read_text()).get('email', '') if TOKEN_BERKAS.is_file() else ''
-    baru = 0
+    baru, penuh = 0, False
     for path in daftar:
         rel = str(path.relative_to(folder))
         kunci = f'{rel}|{path.stat().st_size}'
@@ -407,15 +449,23 @@ def unggah(cfg, privasi, batas, coba):
                 mulai = lanjut
                 print(f'  lanjut dari {mulai * 100 // path.stat().st_size}%')
         if hasil is None:
-            if not sesi:
-                sesi = mulai_sesi(path, judul, deskripsi, privasi)
+            while not sesi:
+                try:
+                    sesi = mulai_sesi(path, judul, deskripsi, privasi)
+                except (BatasChannel, BelumLogin) as e:
+                    penuh = penuh or isinstance(e, BatasChannel)
+                    print(f'youtube: channel {akun_aktif() or TOKEN_BERKAS.name}: {e}', flush=True)
+                    if not ganti_channel():
+                        if penuh:
+                            raise KuotaHabis('semua channel kena batas unggah harian') from e
+                        raise
                 cache['sesi'][kunci] = sesi
                 tulis_cache(domain, cache)
             hasil = kirim(sesi, path, mulai)
         vid = hasil['id']
         privasi_jadi = (hasil.get('status') or {}).get('privacyStatus') or privasi
         cache['video'][kunci] = {'id': vid, 'url': url_video(vid, tegak), 'tegak': tegak, 'judul': judul,
-                                 'privasi': privasi_jadi, 'akun': akun_token,
+                                 'privasi': privasi_jadi, 'akun': akun_aktif(),
                                  'diunggah': datetime.now().isoformat(timespec='seconds')}
         cache['sesi'].pop(kunci, None)
         tulis_cache(domain, cache)
@@ -560,16 +610,29 @@ def opsi(nama, bawaan):
 
 
 def main():
+    global AKUN
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     perintah = args[0] if args else ''
     try:
         if perintah == 'login':
+            akun = opsi('akun', '').strip().lower()
+            if akun and akun != AKUN.lower():
+                AKUN = akun
+                pakai_token(TOKEN_UTAMA.parent / f"youtube-token-{re.sub(r'[^a-z0-9]+', '-', akun.split('@')[0])}.json")
             (login_manual if '--manual' in sys.argv else login_perangkat)('--paksa' in sys.argv)
             return 0
         if perintah == 'cek':
             simpanan = json.loads(TOKEN_BERKAS.read_text()) if TOKEN_BERKAS.is_file() else {}
             print(f"youtube: akun {simpanan.get('email') or '(belum login)'}, seharusnya {AKUN}")
-            return 0 if tampilkan_channel() else 1
+            ok = tampilkan_channel()
+            for berkas in token_cadangan():
+                pakai_token(berkas)
+                print(f'youtube: cadangan {akun_aktif() or berkas.name} ({berkas.name})')
+                try:
+                    tampilkan_channel()
+                except BelumLogin as e:
+                    print(f'youtube: {e}')
+            return 0 if ok else 1
         if perintah == 'daftar' and len(args) == 2:
             daftar(baca_sasaran(args[1])['domain'])
             return 0
