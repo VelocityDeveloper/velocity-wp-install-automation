@@ -80,3 +80,11 @@ headlesschrome
 # 23 Nov 2026: webatlabot (webatla.com, ±250/hari ke ±190 situs), AbbySEOBot (±150/hari).
 webatlabot
 abbyseobot
+# 26 Nov 2026 (ukur 24 jam shiro+sanke, request PHP lolos): WCAGRepairBot ±1.180, 360Spider ber-UA rusak "User-Agent:Mozilla…"
+# ±1.150 ke ±435 situs, DnBCrawler-Analytics ±500, InReachBot ±220, RepetivBot ±100, Orbbot ±115.
+wcagrepairbot
+360spider
+dnbcrawler-analytics
+inreachbot
+repetivbot
+orbbot/

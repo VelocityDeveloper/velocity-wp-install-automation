@@ -83,3 +83,7 @@ stakeholderbot/
 zoominfobot
 bomborabot
 firmablebot
+# 26 Nov 2026: DataLakeCrawler ±1.490, Epochal-Search ±1.040 (19 situs sanke), AgentDataBot ±160 (66 situs shiro).
+datalakecrawler
+epochal-search
+agentdatabot
