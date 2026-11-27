@@ -25,11 +25,24 @@ const d = ref(null)
 const pilihan = tabUrl('tab', '', { sendiri: true })  // tab yang dipilih manual (?tab=); kosong = tahap sekarang
 const galat = ref('')
 let timer = null
+let penuhTerakhir = 0  // ms; saat job jalan, detail penuh diambil hanya bila berkas berubah atau sudah 15 dtk
+let srvTerakhir = 0
 async function muat() {
   try {
-    d.value = await minta(`/api/laravel/p/${id.value}`)
+    const slug = id.value
+    let ringan = null
+    if (d.value?.job && d.value.slug === slug && Date.now() - penuhTerakhir < 15000) {
+      ringan = await minta(`/api/laravel/p/${slug}?ringan=1`)
+      if (id.value !== slug) return  // pindah project selama menunggu → watch(id) sudah memuat yang baru
+    }
+    if (ringan && ringan.job && ringan.versi_berkas === d.value.versi_berkas) {
+      d.value.job = ringan.job
+    } else {
+      d.value = await minta(`/api/laravel/p/${slug}`)
+      penuhTerakhir = Date.now()
+    }
     galat.value = ''
-    if (d.value.app) muatServer()
+    if (d.value.app && Date.now() - srvTerakhir >= 15000) muatServer()
   } catch (e) {
     galat.value = e.message === 'tidak_ada' ? 'Project tidak ditemukan.' : e.message
   }
@@ -98,6 +111,7 @@ const srv = ref(null)
 const srvLanIp = ref('')
 const menyalakan = ref(false)
 async function muatServer() {
+  srvTerakhir = Date.now()
   try {
     const r = await minta('/api/laravel/server')
     srv.value = (r.server || []).find((s) => s.id === d.value?.app) || null

@@ -200,6 +200,11 @@ def status_project(p, state=None):
 
 
 def status_semua():
+    # Dipoll banyak tab dashboard; tiap hitungan = 1 `systemctl show` per layanan (±3 dtk CPU) → cache 10 dtk.
+    return _tersimpan(('semua', ''), 10, _status_semua)
+
+
+def _status_semua():
     daftar, state = daftar_project(), baca_state()
     hasil = [None] * len(daftar)
 
@@ -257,6 +262,7 @@ def aksi(pid, jenis, oleh=''):
     with _kunci:
         for k in [k for k in _cache if k[1] == pid]:
             _cache.pop(k)
+        _cache.pop(('semua', ''), None)
     return status_project(p)
 
 

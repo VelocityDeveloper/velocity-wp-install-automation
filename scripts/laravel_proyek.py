@@ -528,11 +528,27 @@ def ip_lan():
     return _IP_LAN['nilai']
 
 
+def versi_detail(slug):
+    """Sidik murah isi detail(): mtime terbaru berkas di folder project + status install app-nya."""
+    jalur = [e.path for e in os.scandir(folder(slug))]
+    app = nama_app(slug)
+    if app:
+        jalur.append(str(DASAR / f'{app}.json'))
+    terbaru = 0
+    for j in jalur:
+        try:
+            terbaru = max(terbaru, os.stat(j).st_mtime_ns)
+        except OSError:
+            pass
+    return str(terbaru)
+
+
 def detail(slug):
     if not (folder(slug) / 'proyek.json').is_file():
         return None
     p = baca_json(folder(slug) / 'proyek.json', {})
     return {
+        'versi_berkas': versi_detail(slug),
         **ringkas(slug),
         'token_fitur': token_fitur(slug),
         'lan_ip': ip_lan(),
@@ -1848,6 +1864,11 @@ def handle(metode, path, query, payload):
                     if jenis not in ('saran', 'susun', 'diagram', 'estimasi', 'rangkuman', 'contoh', 'install', 'agen'):
                         raise ValueError('invalid_log')
                     return 200, {'log': log(bagian[1], jenis), 'job': pekerjaan(bagian[1])}
+                if 'ringan' in q:
+                    # Polling 3 dtk saat job jalan: detail penuh (±0,3-1 dtk CPU, ratusan KB) hanya bila versi berubah
+                    if not (folder(bagian[1]) / 'proyek.json').is_file():
+                        return 404, {'error': 'tidak_ada'}
+                    return 200, {'job': pekerjaan(bagian[1]), 'versi_berkas': versi_detail(bagian[1])}
                 d = detail(bagian[1])
                 return (200, d) if d else (404, {'error': 'tidak_ada'})
             if bagian == ['onprogress']:
