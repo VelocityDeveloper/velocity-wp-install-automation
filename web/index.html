@@ -44,12 +44,7 @@
         <article class="box service"><h3>[05] Manage Server</h3><p>Kelola dan pantau konfigurasi server internal.</p><a href="/server/">$ open /server/</a></article>
         <article class="box service"><h3>[06] Package Manager</h3><p>Tema &amp; plugin dari API Velocity, tersinkron otomatis ke installer.</p><a href="/packages/">$ open /packages/</a></article>
         <article class="box service"><h3>[07] Manage Model</h3><p>Kelola model AI (endpoint & API key) untuk generate konten.</p><a href="/ai/">$ open /ai/</a></article>
-        <article class="box service"><h3>[09] Claude Brain</h3><p>Peta skill &amp; memory Claude Code: apa yang diingat dan saling terhubung.</p><a href="/brain/">$ open /brain/</a></article>
         <article class="box service dev"><h3>[08] New VDNet <span class="badge">DEV ONLY</span></h3><p>CRM Velocity (Nuxt + Laravel) - dev di :3005/:8005.</p><p class="note">! Development purpose &mdash; masih dikembangkan, belum untuk dipakai tim.</p><a href="/newvdnet/">$ open /newvdnet/</a></article>
-      </div></section>
-      <section class="section" id="brain-sec" hidden><div class="section-title">claude brain</div><div class="box brain-box">
-        <iframe id="brain-mini" allow="fullscreen" allowfullscreen title="Graf otak Claude: memory, skill, proyek, sesi, tools" loading="lazy"></iframe>
-        <div class="brain-foot"><span class="detail">sel menyala saat Claude memakai memory, skill, proyek atau tool · zoom: tombol +/−, Ctrl+scroll, cubit</span><a href="/brain/">$ selengkapnya /brain/ &rarr;</a></div>
       </div></section>
       <section class="section"><div class="section-title">grafik pemakaian</div><div class="box">
         <div class="chart-head"><span class="detail" id="usage-info">Memuat...</span><div class="ranges"><button type="button" class="range on" data-range="1h">1 jam</button><button type="button" class="range" data-range="1d">1 hari</button><button type="button" class="range" data-range="7d">7 hari</button><button type="button" class="range" data-range="30d">30 hari</button></div></div>
@@ -130,8 +125,6 @@
       }catch{const m=document.getElementById('bk-msg');m.className='detail bad';m.textContent='Gagal memuat status backup'}
     };
     poll();cron();usage();backup();setInterval(usage,60000);setInterval(poll,3000);setInterval(cron,10000);setInterval(backup,15000);setInterval(()=>set('clock',new Date().toLocaleTimeString('id-ID')),1000);set('clock',new Date().toLocaleTimeString('id-ID'));
-    // Kartu Claude Brain: /brain/ hanya untuk jaringan kantor, jadi disembunyikan bila tidak bisa diakses
-    fetch('/brain/data.json',{method:'HEAD',cache:'no-store'}).then(r=>{if(!r.ok)return;document.getElementById('brain-mini').src='/brain/?mini=1';document.getElementById('brain-sec').hidden=false}).catch(()=>{});
   </script>
 </body>
 </html>

@@ -21,7 +21,6 @@ const Installer = () => import('./views/Installer.vue')
 const Susulan = () => import('./views/Susulan.vue')
 const InstallerLaravel = () => import('./views/InstallerLaravel.vue')
 const LaravelProyek = () => import('./views/LaravelProyek.vue')
-const Brain = () => import('./views/Brain.vue')
 const Paket = () => import('./views/Paket.vue')
 const AiModel = () => import('./views/AiModel.vue')
 const Token = () => import('./views/Token.vue')
@@ -82,7 +81,6 @@ const routes = [
   { path: '/pc-backup/restore', redirect: '/pc-backup/backup' },
   { path: '/report', component: Report, meta: { judul: 'Report Harian' } },
   { path: '/notif-email', component: NotifEmail, meta: { judul: 'Notif Email' } },
-  { path: '/brain', component: Brain, meta: { judul: 'Claude Brain' } },
   // Sengaja tidak ada di menu (NAV App.vue): dibuka lewat alamat langsung
   { path: '/velocity-update', component: VelocityUpdate, meta: { judul: 'Velocity Update' } },
   { path: '/profil', component: Profil, meta: { judul: 'Profil' } },

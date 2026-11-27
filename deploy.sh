@@ -12,7 +12,7 @@ python3 -m py_compile scripts/velocity-child-theme scripts/child-theme-apply scr
 node --check scripts/referensi-desain.js
 node --check scripts/potret-halaman
 node --check scripts/banding-potret
-python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/velocity-iklan scripts/theme-paket-biasa scripts/site-ssl scripts/permintaan-form scripts/baca-form-claude scripts/permintaan-claude scripts/permintaan-claude-alat scripts/brain-data scripts/brain-aktivitas scripts/claude-pakai scripts/claude-akun scripts/setor-status-ai
+python3 -m py_compile scripts/audit-susulan scripts/notify-telegram.py scripts/content_sanitize.py scripts/ai-content-generator.py scripts/pemilik_wp.py scripts/site-finish scripts/vd-store scripts/vd-store-settings scripts/paket-tour scripts/velocity-iklan scripts/theme-paket-biasa scripts/site-ssl scripts/permintaan-form scripts/baca-form-claude scripts/permintaan-claude scripts/permintaan-claude-alat scripts/claude-pakai scripts/claude-akun scripts/setor-status-ai
 python3 -m json.tool workflows/website-install-workflow.json >/dev/null
 # Penjaga tema FSE: markup blok templates/parts/patterns harus valid menurut parser
 # editor WordPress (kode 3 = alat node belum terpasang di mesin ini, dilewati).
@@ -45,7 +45,7 @@ fi
 if [[ "$(realpath scripts/ai-content-generator.py)" != "$(realpath "$INSTALL_ROOT/scripts/ai-content-generator.py")" ]]; then
   install -m 755 scripts/ai-content-generator.py "$INSTALL_ROOT/scripts/ai-content-generator.py"
 fi
-# Dashboard utama = aplikasi Vue (web-vue/, rute /installer /server /ai /paket /token /brain dilayani
+# Dashboard utama = aplikasi Vue (web-vue/, rute /installer /server /ai /paket /token dilayani
 # index.html-nya lewat try_files nginx). Dashboard HTML lama tetap ada di /lama/ dengan tautan
 # antarhalaman diarahkan ke /lama/… (2026-09-24).
 pasang_lama() {  # pasang_lama <sumber> <tujuan relatif web root>
@@ -68,10 +68,7 @@ rsync -a --delete web-vue/dist/v2-assets/ "$WEB_ROOT/v2-assets/"
 install -m 644 web-vue/dist/ikon.png "$WEB_ROOT/ikon.png"
 install -m 644 web-vue/dist/favicon.svg "$WEB_ROOT/favicon.svg"
 install -m 644 web-vue/dist/index.html "$WEB_ROOT/index.html"
-install -d -m 755 "$WEB_ROOT/brain"
-install -m 644 web/brain/index.html "$WEB_ROOT/brain/index.html"
-# data.json /brain/ ditulis brain-data.timer, aktivitas.json oleh brain-aktivitas.service (config/brain-*), bukan oleh deploy
-systemctl try-restart brain-aktivitas.service
+install -d -m 755 "$WEB_ROOT/brain"  # folder data JSON (token, limit, laporan harian, migrasi); halaman Brain dihapus 27 Nov
 
 # Tanpa langkah salin, restart hanya berarti kalau unit menunjuk file repo.
 # Kalau masih menunjuk salinan lama, deploy akan sukses tapi tidak mengubah apa pun.
